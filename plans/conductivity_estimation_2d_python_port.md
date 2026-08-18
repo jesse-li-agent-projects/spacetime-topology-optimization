@@ -1,18 +1,17 @@
 # Plan: Port `conductivity_estimation_2d` to Python
 
-> **Status (2026-08-19): Phase 0 in progress, paused on a MATLAB regression.** See
-> "Phase 0 progress / handoff" below for exactly what's done, what's written-but-unrun,
-> and what to do next. Short version: everything except actually *running* the MATLAB
-> fixture harness is done. MATLAB itself stopped working mid-session in a way deeper
-> than the original licensing/EPERM issue (Finding 1) — confirmed by the user
-> ("MATLAB issue is running deeper than expected"). Do not resume by re-deriving
-> context; read the handoff section first.
+> **Status (2026-08-19): Phase 0 complete.** All 11 fixtures are generated, committed,
+> and sanity-checked; `pytest` (Phase 0 scaffolding tests) passes. See "Phase 0 progress
+> / handoff" below for what was done and the pytest-invocation quirk to know about
+> before writing Phase 1+ tests. Next up: Phase 1 (`fem.py`), see "Phased implementation
+> plan" below.
 
 > **Note (superseded, kept for history):** MATLAB access from this sandbox was earlier
-> pending a sandbox update (license checkout failing — see Finding 1). That update did
-> land (see `matlab_sandbox_setup` memory) and MATLAB worked for simple calls as of
-> 2026-08-18/19, but see the Status note above for a newer, deeper regression found
-> while Phase 0 was running the real fixture harness.
+> pending a sandbox update (license checkout failing — see Finding 1), then hit a
+> second, apparently-transient hang while running the fixture harness later the same
+> day (see `matlab_sandbox_setup` memory) that didn't reproduce on retry. Both are
+> resolved as of this writing — MATLAB itself was never actually the blocker for
+> Phase 0's fixtures; the harness script had ordinary path bugs (see handoff below).
 
 ## Goal
 
@@ -211,10 +210,10 @@ Two complementary, language-agnostic kinds of unit test, plus one E2E test:
    This is the test that would actually catch "each piece is right in isolation but the
    orchestration in `optimize.py` wires them together wrong."
 
-## Phase 0 progress / handoff (2026-08-19)
+## Phase 0 progress / handoff (2026-08-19) — complete
 
-Work happened on branch `worktree-sttopt-phase0` (pushed; not merged, no PR opened yet
-since nothing is verified end-to-end). Everything below is committed on that branch.
+Work happened on branch `worktree-sttopt-phase0` (pushed). Everything below is
+committed on that branch and verified end-to-end; a PR is the natural next step.
 
 **Done and verified:**
 - `sttopt/conventions.md` — array-order (column-major, `order='F'`), fixture-format
@@ -232,63 +231,43 @@ since nothing is verified end-to-end). Everything below is committed on that bra
 - `tests/conftest.py` — `load_fixture()` (`.mat` loader) and `assert_close()` /
   `e2e_rtol()` tolerance-policy helpers, implementing conventions.md. Smoke-tested
   (`tests/test_scaffolding.py`, 3/3 passing).
-- **Sandbox quirk found and worked around:** running `pytest` with cwd = repo/worktree
-  root crashes on collection (`PermissionError` on the `personal` symlink, which
-  `claude` can't read but `jesse` can) — this happens for *any* pytest invocation from
-  repo root in this sandbox, regardless of `--rootdir`/`--confcutdir`/testpaths, because
-  pytest 9.1.1 always scandirs the invocation cwd. **Run pytest with cwd inside a
-  subdirectory instead**, e.g. `cd tests && /home/jesse/v/bin/python3 -m pytest .`.
-  Full detail in the `pytest-personal-symlink-quirk` memory.
-
-**Written and reviewed, but NOT YET RUN (this is where a future agent picks up):**
-- `tests/fixtures/generate_fixtures.m` — the MATLAB fixture-generation harness.
-  Runs the real problem on a small (`nelx=7, nely=5`, asymmetric per convention) grid
-  for `nloop=3` iterations, calling the actual `mmasub.m`/`subsolv.m` unmodified, with
+- **Sandbox quirk found and the actual fix (corrected from an earlier, insufficient
+  workaround):** running `pytest` crashes on collection (`PermissionError` on the
+  `personal` symlink at repo/worktree root, which `claude` can't read but `jesse` can)
+  unless **both** `--rootdir` and `--confcutdir` are passed explicitly, pointing at the
+  same subdirectory (e.g. `tests/`) — just `cd`ing into a subdirectory, or setting only
+  one of the two flags, is not sufficient once `pyproject.toml` has
+  `[tool.pytest.ini_options]` (it does, as of this phase). Full mechanism and the
+  correct invocation in the `pytest-personal-symlink-quirk` memory; short version:
+  ```
+  cd tests && /home/jesse/v/bin/python3 -m pytest . --rootdir=$(pwd) --confcutdir=$(pwd)
+  ```
+- `tests/fixtures/generate_fixtures.m` — the MATLAB fixture-generation harness. Runs
+  the real problem on a small (`nelx=7, nely=5`, asymmetric per convention) grid for
+  `nloop=3` iterations, calling the actual `mmasub.m`/`subsolv.m` unmodified, with
   `Cal_c_ce_whole`/`Cal_c_ce_for_gravity` duplicated verbatim as local functions (MATLAB
   can't call another script's local functions externally — this is a faithful copy of
-  lines ~605-665 of `conductivity_estimation_stto_main.m`, not a reimplementation).
-  Produces 9 fixture files under `tests/fixtures/`: `fem_setup.mat`, `fem_solve.mat`,
+  lines ~605-665 of `conductivity_estimation_stto_main.m`, not a reimplementation). Ran
+  successfully after fixing a path bug (it assumed `pwd` == repo root, but MATLAB's
+  `run()` cd's into the script's own directory — see commit `605dde4`). Produces 11
+  fixture files under `tests/fixtures/`: `fem_setup.mat`, `fem_solve.mat`,
   `filters.mat`, `gravity.mat`, `timefield.mat`, `conductivity_neighbors.mat`,
-  `compliance.mat`, `constraints.mat`, `conductivity.mat`, `mma.mat`, `e2e.mat` —
-  one per Phase 1-8 test module, so each `tests/test_*.py` can load its own eponymous
+  `compliance.mat`, `constraints.mat`, `conductivity.mat`, `mma.mat`, `e2e.mat` — one
+  per Phase 1-8 test module, so each `tests/test_*.py` can load its own eponymous
   fixture file (`conductivity_neighbors.mat` covers the Phase 6 neighbor-list COO
   triplets, including both `N_el`/`w_el` and `WE`, so the Trap 3 `WE == w_el` check can
   be tested directly against fixtures rather than assumed).
-  The script was read through twice for correctness against the original main script
-  (matched line-by-line) but **has never actually executed successfully** — MATLAB
-  hung indefinitely (no stdout after 5+ minutes; `TaskOutput` confirmed the process was
-  genuinely alive, not just invisible) partway through this session, and the user
-  confirmed it's a deeper regression than the licensing/EPERM issue in Finding 1 (see
-  the `matlab_sandbox_setup` memory's 2026-08-19 addendum). **Do not assume the script
-  is bug-free just because it reads correctly** — it has zero execution evidence.
 - `tests/fixtures/check_fixtures.tmp.py` — throwaway sanity-check script (per
-  `*.tmp.py` convention) that loads all 9 fixture files and prints keys/shapes/NaN
-  checks. Run this immediately after the harness succeeds, before trusting the fixtures.
+  `*.tmp.py` convention); loaded all 11 fixture files, shapes match expectations
+  (e.g. `conductivity_neighbors.mat`'s 551 COO pairs vs. 35×35=1225 all-pairs confirms
+  `rmin_cond=3` gives a non-trivial-but-not-all-to-all neighborhood, per the trap check
+  called out below), no NaNs.
 
-**Next steps for whoever picks this up:**
-1. Confirm MATLAB actually works again: `matlab -nodisplay -nosplash -batch "disp(1+1)"`
-   should return `2` in a few seconds. If *that* hangs or is slow, the regression is
-   still present — don't waste time on the harness script until this trivial call is
-   fast and reliable.
-2. Run the harness from the repo root:
-   `matlab -nodisplay -nosplash -batch "run('tests/fixtures/generate_fixtures.m')"`
-   (give it a generous timeout / run via `run_in_background` — expect it to be fast
-   once MATLAB itself is healthy, since the grid is tiny, but don't assume that without
-   evidence given today's hang).
-3. Sanity-check the output: `cd tests/fixtures && /home/jesse/v/bin/python3 check_fixtures.tmp.py`
-   (or wherever cwd needs to be to avoid the `personal`-symlink pytest issue, though
-   this particular script isn't run via pytest so that quirk shouldn't apply to it).
-4. If the harness errors, most likely causes given how it was built: a typo introduced
-   while transcribing `Cal_c_ce_whole`/`Cal_c_ce_for_gravity` verbatim, or an off-by-one
-   in the small-grid parameter choices (`rmin_cond=3` was chosen to keep conductivity
-   neighborhoods non-trivial-but-not-all-to-all on the 7x5 grid — verify this still
-   holds, i.e. that `coo_e1`/`coo_e2` in `conductivity_neighbors.mat` isn't just "every
-   element is every other element's neighbor").
-5. Once fixtures are generated and sanity-checked, commit them, mark Phase 0 complete,
-   and move to Phase 1 (`fem.py`) per the phased plan below. Phases 1-7 are described as
-   parallelizable once Phase 0 (and Phase 1 for anything depending on `fem.py`) lands —
-   worth delegating to subagents at that point rather than doing serially, unlike Phase
-   0 itself which benefited from one agent holding the whole MATLAB-source context.
+**Next steps:** move to Phase 1 (`fem.py`) per the phased plan below. Phases 1-7 are
+described as parallelizable once Phase 0 (and Phase 1 for anything depending on
+`fem.py`) lands — worth delegating to subagents at that point rather than doing
+serially, unlike Phase 0 itself which benefited from one agent holding the whole
+MATLAB-source context.
 
 ## Phased implementation plan
 
