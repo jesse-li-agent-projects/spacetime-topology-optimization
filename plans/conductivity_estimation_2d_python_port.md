@@ -1,5 +1,12 @@
 # Plan: Port `conductivity_estimation_2d` to Python
 
+> **Note:** MATLAB access from this sandbox is pending a sandbox update (currently
+> license checkout fails — see Finding 1, kept below for reference). This plan assumes
+> MATLAB *will* be available and treats fixture generation as an in-house Phase 0 task
+> rather than something handed off to the user. If the sandbox update hasn't landed by
+> the time Phase 0 starts, re-check with the steps in Finding 1 before falling back to
+> an out-of-sandbox generation step.
+
 ## Goal
 
 Port the MATLAB implementation of the Das2025 overheating-prevention space-time
@@ -31,22 +38,40 @@ independently-testable increments rather than one big translation pass.
 
 ## Two findings that affect the plan
 
-1. **MATLAB cannot run in this sandboxed job environment.** `/usr/local/bin/matlab`
-   is installed and progresses far enough to initialize its preferences directory,
-   but exits with code 1 and no output — consistent with a blocked network call to
-   a license server (this sandbox's network allowlist doesn't include one). This means
-   **fixture generation from MATLAB must happen outside this sandbox** — on the user's
-   own machine, or a future session without this network restriction. Phase 0 below
-   produces a self-contained MATLAB fixture-generation script for that purpose; someone
-   with a working MATLAB needs to actually run it and commit the outputs.
+1. **MATLAB could not run in this sandboxed job environment as of this writing** —
+   `/usr/local/bin/matlab` initializes its preferences directory but then exits with
+   code 1 and no output, consistent with a blocked network call to a license server.
+   You're working on a sandbox update to fix this; the plan now assumes MATLAB will be
+   available and Phase 0 owns fixture generation directly (see the note at the top of
+   this document). If MATLAB is still unusable when Phase 0 starts, re-run:
+   `HOME=$TMPDIR MATLAB_PREFDIR=$TMPDIR/mlprefs matlab -nodisplay -nojvm -batch "disp(1+1)"`
+   and fall back to generating fixtures out-of-sandbox if it still fails silently.
 
-2. **The main script's post-loop plotting call is broken as committed.** Line 577 calls
-   `draw_combination(xPhys,tPhys,nStage,1.0e-1)` — there is no `draw_combination.m` in
-   this directory, only `draw_combination1/2/3.m`. Either this resolves to something
-   on the original author's MATLAB path that isn't in this repo, or that line has never
-   actually run. **Question for you:** do you have the missing `draw_combination.m`, or
-   should the fixture-generation script (and the Python port) just treat this as a typo
-   for `draw_combination1` (the one actually saved/used a few lines later)?
+2. **The main script's post-loop plotting call is broken as committed, but the fix is
+   unambiguous.** Line 577 calls `draw_combination(xPhys,tPhys,nStage,1.0e-1)` — there
+   is no `draw_combination.m`, only `draw_combination1/2/3.m`. Comparing signatures:
+   - `draw_combination1(density, timing, eps)` colors elements by the raw `timing`
+     field (3 args, no stage-boundary overlay, no colorbar).
+   - `draw_combination2(density, temp, timing, Ns, eps)` and `draw_combination3(XPhys,
+     tPhys, T1)` both require a separate **temperature** field (`temp`/`T1`, distinct
+     from the time field) as input, and draw per-stage boundary lines.
+
+   The broken call at line 577 happens *before* `B = reshape(K_est, nely, nelx)` is
+   computed (that's line 581, after `toc`/`diary off`) — at that point in the script no
+   temperature field exists yet, only `xPhys`/`tPhys`. That rules out variants 2 and 3
+   outright; they need an input that doesn't exist yet at that call site. Variant 1 is
+   the only one whose required inputs are available, and its signature matches exactly
+   once the stray `nStage` argument is dropped — almost certainly copy-paste debris from
+   `draw_boundary(tPhys, nStage)` on the line directly above, which does take `nStage`.
+   The corrected call is also structurally identical to the two later, working calls in
+   the same script (`draw_combination1(xPhys, T, 1.0e-1)`, commented out, and
+   `draw_combination1(XPhys, T1, 1.0e-1)`, the one that actually runs at the very end).
+
+   **Resolution: treat line 577 as `draw_combination1(xPhys, tPhys, 1.0e-1)`** — a
+   preview plot of the structure colored by raw print-time, before binarization and
+   before the temperature-colored final plot. This is now settled, not an open question;
+   Phase 9 (viz) implements only `draw_combination1`'s behavior, consistent with the
+   existing Scope section above.
 
 ## Conventions to fix once, in Phase 0
 
@@ -158,12 +183,13 @@ tests/
 Two complementary, language-agnostic kinds of unit test, plus one E2E test:
 
 1. **Fixture-based (MATLAB-vs-Python) tests** — the primary defense against translation
-   bugs (indexing, array order, off-by-ones). A MATLAB harness script (Phase 0 deliverable)
-   calls each MATLAB function/code-block on small, asymmetric, fixed-seed inputs and dumps
-   inputs+outputs to `.mat`. Python tests load the same `.mat`, call the ported function,
-   and compare per the tolerance policy above. Requires someone to run the MATLAB harness
-   outside this sandbox (see Finding 1) — this is the one place in the plan with a real
-   external dependency, and it gates every phase's fixture-based tests.
+   bugs (indexing, array order, off-by-ones). A MATLAB harness script (Phase 0 deliverable,
+   run in-sandbox via `matlab -batch`) calls each MATLAB function/code-block on small,
+   asymmetric, fixed-seed inputs and dumps inputs+outputs to `.mat`. Python tests load
+   the same `.mat`, call the ported function, and compare per the tolerance policy above.
+   This assumes the sandbox MATLAB update has landed by Phase 0 (see Finding 1); if not,
+   this step falls back to an out-of-sandbox run and everything downstream of it slips
+   accordingly.
 
 2. **Finite-difference gradient checks** — pure-Python, no MATLAB dependency. Every
    function that returns an analytic sensitivity gets an FD check against its own value
@@ -186,11 +212,12 @@ from Phase 0, so they can proceed in parallel once Phase 0 and Phase 1 (fem — 
 compliance) land. MMA (Phase 7) is physics-agnostic and can start any time after Phase 0.
 
 - **Phase 0 — Infrastructure and conventions**
+  - Verify MATLAB actually runs in-sandbox (see Finding 1); if not, fall back to an
+    out-of-sandbox generation step before continuing.
   - Write `conventions.md` (array-order, indexing, tolerance policy) referenced by later
     modules.
-  - Write the MATLAB fixture-generation harness script; hand it to the user / a
-    non-sandboxed session to run and commit `tests/fixtures/*.mat`.
-  - Resolve the `draw_combination` question (Finding 2) with the user.
+  - Write the MATLAB fixture-generation harness script and run it directly (in-sandbox),
+    committing `tests/fixtures/*.mat`.
   - Set up `tests/conftest.py` with `.mat` fixture loading and an `assert_close` helper
     implementing the tolerance policy.
   - Package scaffolding (`pyproject.toml`, `sttopt/__init__.py`), pytest wired into
@@ -255,7 +282,7 @@ compliance) land. MMA (Phase 7) is physics-agnostic and can start any time after
     smoke tests that it runs without error on a small case, manual visual comparison
     against the MATLAB plots rather than pixel-exact fixtures.
 
-## Open question for you
+## Open items
 
-The `draw_combination` bug (Finding 2) — do you have the missing file, or should we
-treat it as a typo for `draw_combination1` throughout (harness script and Python port)?
+- Confirm the sandbox MATLAB update (Finding 1) has landed before Phase 0 starts;
+  otherwise fixture generation needs an out-of-sandbox step first.
