@@ -12,12 +12,14 @@
 % this script follows (nelx != nely, COO triplets for neighbor lists, plain
 % numeric arrays with an explicit iteration dimension instead of struct arrays).
 %
-% Run from the repo root:
+% Run from anywhere (paths are resolved relative to this script's own location):
 %   matlab -nodisplay -nosplash -batch "run('tests/fixtures/generate_fixtures.m')"
 
 clear; close all;
-addpath(fullfile(pwd, 'conductivity_estimation_2d'));
-out = fullfile(pwd, 'tests', 'fixtures');
+scriptDir = fileparts(mfilename('fullpath')); % .../tests/fixtures, regardless of cwd (run() cd's here)
+repoRoot = fileparts(fileparts(scriptDir));
+addpath(fullfile(repoRoot, 'conductivity_estimation_2d'));
+out = scriptDir;
 
 %% Problem size -- deliberately small, asymmetric (nelx != nely), fixed-seed.
 nelx = 7;
