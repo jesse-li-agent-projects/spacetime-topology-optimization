@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sttopt"
+version = "0.1.0"
+description = "Space-time topology optimization with an overheating-prevention constraint (Das et al., CMAME 2025) — Python port of conductivity_estimation_2d"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "jaxtyping",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+sttopt = "sttopt.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["sttopt*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
