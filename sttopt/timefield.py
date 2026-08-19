@@ -24,9 +24,8 @@ def _corner_distance_grid(
     """
     xpos = np.linspace(0, nelx, nelx)
     ypos = np.linspace(0, nely, nely)
-    xmesh, ymesh = np.meshgrid(
-        xpos, ypos
-    )  # default indexing='xy' matches MATLAB meshgrid
+    # default indexing='xy' matches MATLAB meshgrid
+    xmesh, ymesh = np.meshgrid(xpos, ypos)
     dist = np.sqrt((xmesh - corner[0]) ** 2 + (ymesh - corner[1]) ** 2)
     return dist / dist.max()
 

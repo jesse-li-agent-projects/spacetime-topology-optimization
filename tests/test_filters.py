@@ -74,9 +74,8 @@ def test_density_filter_window_and_cutoff_against_independent_reference():
 @pytest.mark.parametrize("beta,eta", [(1.0, 0.5), (4.0, 0.3), (0.5, 0.7)])
 def test_heaviside_projection_derivative_matches_fd(beta, eta):
     rng = np.random.default_rng(0)
-    xTilde = rng.uniform(
-        0.02, 0.98, size=(5, 7)
-    )  # asymmetric grid, away from 0/1 edges
+    # asymmetric grid, away from 0/1 edges
+    xTilde = rng.uniform(0.02, 0.98, size=(5, 7))
     h = 1e-6
     fd = (
         heaviside_projection(xTilde + h, beta, eta)
