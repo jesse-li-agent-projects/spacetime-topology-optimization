@@ -4,6 +4,10 @@ resources
 # Throwaway scripts
 *.tmp.py
 
+# Plots
+plot
+*.png
+
 .claude
 CLAUDE.local.md
 
