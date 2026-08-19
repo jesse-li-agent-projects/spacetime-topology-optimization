@@ -20,7 +20,9 @@ def load_fixture(name: str) -> dict:
     where the source used 1-indexing (e.g. COO neighbor-list triplets), unconverted.
     Callers subtract 1 when comparing against Python's 0-indexed arrays.
     """
-    return scipy.io.loadmat(FIXTURES_DIR / f"{name}.mat", squeeze_me=True)
+    return scipy.io.loadmat(
+        FIXTURES_DIR / f"{name}.mat", squeeze_me=True, spmatrix=False
+    )
 
 
 def e2e_rtol(
