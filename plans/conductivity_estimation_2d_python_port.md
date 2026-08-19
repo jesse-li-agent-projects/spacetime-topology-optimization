@@ -1,7 +1,7 @@
 # Plan: Port `conductivity_estimation_2d` to Python
 
-> **Status (2026-08-19): Phase 0 complete; Phases 1-8 complete and committed;
-> Phase 9 not started.** See "Phases 1-9 progress / handoff"
+> **Status (2026-08-19): All phases (0-9) complete and committed. The port is done.**
+> See "Phases 1-9 progress / handoff"
 > below (after the Phase 0 section) for exact commit hashes, what's left, and how to
 > resume if this session gets interrupted (e.g. a subagent session-limit) — that section
 > is the actual live status; the "Phased implementation plan" further down is the
@@ -323,11 +323,43 @@ phases are committed in whatever order they finish, not strictly 1→9.
   checks the 25th call's `factor` against an independent recomputation of
   `hotspot_constraint`'s own documented refresh recipe. Full suite (45 tests) green with
   `-W error` before commit.
+- Phase 9, `sttopt/viz.py` (`combination_plot`/`stage_boundary_plot`, porting
+  `draw_combination1.m`/`draw_boundary.m`) + `sttopt/cli.py` (production argparse entry
+  point) + `tests/test_viz.py`/`tests/test_cli.py` — the final phase. Executor caught and
+  fixed a real bug itself mid-task (via its own advisor consult): `draw_combination1`'s
+  and `draw_boundary`'s MATLAB coordinate frames are genuinely different (one y-flipped,
+  offset by a half-cell from the other), so composing both plots on one `Axes` naively
+  produced two disjoint, mirrored drawings; fixed with a verified affine remap
+  (`stage_boundary_plot(..., combination_coords=True)`), documented in `viz.py`'s module
+  docstring along with the inference needed for `draw_boundary`'s missing `draw_line.m`
+  dependency (not present anywhere in the source repo — ported as a plain black line
+  segment, the only reasonable reading of its call site). Independent reviewer
+  re-derived both functions' coordinate geometry from the MATLAB source by hand (not
+  just trusting the code's own docstring claims) and confirmed it correct, but found 3
+  real discrepancies in `cli.py`'s production-loop wiring the executor's own tests didn't
+  catch (none affect the actual optimization result, only the CLI's diagnostic output —
+  no earlier phase's numerics are implicated): (1) the per-iteration console line printed
+  `IterationRecord.obj` (whole-structure compliance only) where MATLAB's `disp` actually
+  prints the full MMA objective (`f0val`); (2) it printed `IterationRecord.vol`
+  (pre-update density) where MATLAB's `disp` reads the density *after* that iteration's
+  MMA update; (3) the closing plot's `K_est`/binarized structure used the state *after*
+  the final MMA step, one iteration ahead of what MATLAB's closing plot actually uses
+  (captured at the *top* of the last loop iteration, before its own update). Orchestrator
+  fixed all three directly (small, well-understood: track `prev_state`, print
+  `record.f0val`/`state.xPhys.mean()`) and added 2 regression tests neither the executor
+  nor the original test suite had (`test_cli_prints_full_objective_and_post_update_volume`,
+  `test_cli_closing_plot_uses_pre_final_update_state` — the latter needed a continuous
+  proxy quantity, `T1`, since the binarized `XPhys` alone turned out not to reliably
+  distinguish the two states on the test fixture). Full suite (53 tests) green with
+  `-W error` before commit.
 
 **In progress:** none.
 
-**Not started:** Phase 9 (`sttopt/viz.py` + `sttopt/cli.py` — depends on everything,
-lowest risk, do last).
+**Not started:** none — all phases complete. The port is done; see `sttopt/` for the
+package and `tests/` for its test suite (53 tests as of Phase 9). `sttopt/cli.py` is the
+production entry point (`python -m sttopt.cli --help`, or import `main`/`parse_args`
+directly) — full-scale runs (`nelx=180, nely=60, nloop=800`) were never executed in this
+sandbox per its resource rules; that's for the user to run.
 
 **Cross-phase findings worth knowing before starting a new phase:**
 - **jaxtyping symbolic-dim bug pattern**, found 3x independently (fem.py, filters.py,
