@@ -1,7 +1,7 @@
 # Plan: Port `conductivity_estimation_2d` to Python
 
-> **Status (2026-08-19): Phase 0 complete; Phases 1-4 and 7 complete and committed;
-> Phase 5 in progress; Phases 6, 8, 9 not started.** See "Phases 1-9 progress / handoff"
+> **Status (2026-08-19): Phase 0 complete; Phases 1-7 complete and committed;
+> Phases 8, 9 not started.** See "Phases 1-9 progress / handoff"
 > below (after the Phase 0 section) for exact commit hashes, what's left, and how to
 > resume if this session gets interrupted (e.g. a subagent session-limit) — that section
 > is the actual live status; the "Phased implementation plan" further down is the
@@ -292,27 +292,25 @@ phases are committed in whatever order they finish, not strictly 1→9.
 - `ea85b7d` — Phase 4, `sttopt/compliance.py` (SIMP compliance + sensitivities under fixed load and self-weight gravity)
 - `5905d15` — Phase 5, `sttopt/constraints.py` (global/continuity/start-point/per-stage constraints)
 - `6f342fb` — unrelated fixup: `*.tmp.py` was missing from `.gitignore`, untracked `check_fixtures.tmp.py`
+- Phase 6, `sttopt/conductivity.py` (neighbor-list COO, K_est, hotspot p-norm constraint
+  + df1/dt1 sensitivities) — committed after a session-limit `/clear`; the executor
+  subagent's output was found already sitting uncommitted in the worktree, reviewed
+  **in-session by the orchestrator directly against the inlined MATLAB source**
+  (line-by-line: `N_sub1`/`N_sub2` diagonal vs. off-diagonal cases, the `FT_ba`/`DFT_ba`
+  role-reversal via `find(n11==i)`, `WE`→symmetric `w`, `S1`/`S2` as per-`i` constants,
+  `scale` vs. `factor*numer1/denom1`) rather than by a fresh reviewer subagent — a
+  deliberate deviation from the Phase 1-5 process, noted here so it's visible if you want
+  a second independent pass. Full suite (40 tests) green with `-W error` before commit.
 
-**In progress:** Phase 6 (`sttopt/conductivity.py`) — executor subagent launched, not yet
-reviewed/committed as of this writing. This is the hardest phase (hotspot p-norm
-constraint sensitivity, where each element's gradient depends on its neighbors' own
-neighbor-lists pointing back — non-trivial to vectorize correctly). If you're resuming
-this session cold: check `git status`/`git diff` first — uncommitted
-`sttopt/conductivity.py` + `tests/test_conductivity.py` means the executor finished but
-review/fixup didn't happen yet; nothing there means it's still running or was lost. If
-you need to re-launch it, the full MATLAB ground truth (neighbor-list construction, K_est,
-hotspot constraint value + df1/dt1 sensitivities) plus a hand-derived, COO-pair-vectorized
-version of the sensitivity math (self-term vs. cross-term formulas, row-aggregation
-pattern) is in this session's transcript as the Phase 6 executor prompt — reconstructing
-that derivation from scratch is real work, worth searching the transcript for first.
-Known traps specific to this phase (see "Known traps" section below for full text):
-`factor` is stateful (Trap 2, must be an explicit function input, `factor=1` for all 3
-fixture iterations), `WE == w_el` should be tested explicitly before relying on it (Trap
-3), and `DFT(o)=0` at exact ties is a real, documented deviation an FD check will hit at
-every element's self-neighbor term (Trap 1) — expected, not a bug.
+**In progress:** none.
 
 **Not started:** Phase 8 (`sttopt/optimize.py` + E2E test — depends on all of 1-7),
 Phase 9 (`sttopt/viz.py` + `sttopt/cli.py` — depends on everything, lowest risk, do last).
+Phase 8 also owns the `factor` refresh path (MATLAB's `rem(loop,25)==0`, recompute
+`max((1-K_est)*xPhys**r)` and rescale) — `hotspot_constraint`'s docstring describes the
+recipe but nothing implements or tests it yet, since the Phase 0 fixture only covers 3
+iterations and `factor==1` throughout (`rem(loop,25)==0` never fires). Implement and
+FD/fixture-check it as part of Phase 8, not before — the 3-iteration fixture can't cover it.
 
 **Cross-phase findings worth knowing before starting a new phase:**
 - **jaxtyping symbolic-dim bug pattern**, found 3x independently (fem.py, filters.py,
