@@ -1,7 +1,7 @@
 # Plan: Port `conductivity_estimation_2d` to Python
 
-> **Status (2026-08-19): Phase 0 complete; Phases 1-7 complete and committed;
-> Phases 8, 9 not started.** See "Phases 1-9 progress / handoff"
+> **Status (2026-08-19): Phase 0 complete; Phases 1-8 complete and committed;
+> Phase 9 not started.** See "Phases 1-9 progress / handoff"
 > below (after the Phase 0 section) for exact commit hashes, what's left, and how to
 > resume if this session gets interrupted (e.g. a subagent session-limit) — that section
 > is the actual live status; the "Phased implementation plan" further down is the
@@ -292,25 +292,42 @@ phases are committed in whatever order they finish, not strictly 1→9.
 - `ea85b7d` — Phase 4, `sttopt/compliance.py` (SIMP compliance + sensitivities under fixed load and self-weight gravity)
 - `5905d15` — Phase 5, `sttopt/constraints.py` (global/continuity/start-point/per-stage constraints)
 - `6f342fb` — unrelated fixup: `*.tmp.py` was missing from `.gitignore`, untracked `check_fixtures.tmp.py`
-- Phase 6, `sttopt/conductivity.py` (neighbor-list COO, K_est, hotspot p-norm constraint
-  + df1/dt1 sensitivities) — committed after a session-limit `/clear`; the executor
-  subagent's output was found already sitting uncommitted in the worktree, reviewed
-  **in-session by the orchestrator directly against the inlined MATLAB source**
+- `32490c1` — Phase 6, `sttopt/conductivity.py` (neighbor-list COO, K_est, hotspot p-norm
+  constraint + df1/dt1 sensitivities) — committed after a session-limit `/clear`; the
+  executor subagent's output was found already sitting uncommitted in the worktree,
+  reviewed **in-session by the orchestrator directly against the inlined MATLAB source**
   (line-by-line: `N_sub1`/`N_sub2` diagonal vs. off-diagonal cases, the `FT_ba`/`DFT_ba`
   role-reversal via `find(n11==i)`, `WE`→symmetric `w`, `S1`/`S2` as per-`i` constants,
   `scale` vs. `factor*numer1/denom1`) rather than by a fresh reviewer subagent — a
   deliberate deviation from the Phase 1-5 process, noted here so it's visible if you want
   a second independent pass. Full suite (40 tests) green with `-W error` before commit.
+- Phase 8, `sttopt/optimize.py` (main-loop orchestration: `Problem`/`State`/
+  `IterationRecord` dataclasses, `build_problem`/`init_state`/`step`/`run`) +
+  `tests/test_e2e.py` — back to the full executor + independent reviewer subagent
+  pattern (session `/clear` resolved after Phase 6). Executor built the loop keeping the
+  raw-vs-filtered `x`/`t` state distinction explicit (see optimize.py's module docstring)
+  and a 3-layer test suite (iteration-1 objective/constraint assembly vs. `mma.mat`'s
+  snapshot, per-iteration `xmma`/`low`/`upp`/`lam` MMA-state threading vs. `mma.mat`'s
+  `*_all` columns — the first test anywhere to exercise `mmasub`'s stateful `low`/`upp`
+  across multiple calls — and the full `xPhys`/`tPhys`/`objf`/`vol`/`tru_max` trajectory
+  vs. `e2e.mat`). Reviewer did a full line-by-line pass against both
+  `generate_fixtures.m` and the original `conductivity_estimation_stto_main.m` (to rule
+  out the fixture generator itself having drifted) and found no discrepancies, but
+  flagged that the `loop % 25 == 0` hotspot-`factor`-refresh branch (implemented, per the
+  Phase 6 caveat below) had zero test coverage since `NLOOP=3` never reaches it —
+  orchestrator added `test_hotspot_factor_refresh_at_loop_25` directly (small,
+  well-understood addition) rather than re-delegating: drives 24 real iterations from
+  `init_state` (a fabricated `loop=24` state was tried first but produces stale
+  `low`/`upp`/`xold1`/`xold2` that makes `mmasub`'s inner Newton loop fail to converge —
+  an incidental warning, not a real bug, avoided by running real iterations instead) and
+  checks the 25th call's `factor` against an independent recomputation of
+  `hotspot_constraint`'s own documented refresh recipe. Full suite (45 tests) green with
+  `-W error` before commit.
 
 **In progress:** none.
 
-**Not started:** Phase 8 (`sttopt/optimize.py` + E2E test — depends on all of 1-7),
-Phase 9 (`sttopt/viz.py` + `sttopt/cli.py` — depends on everything, lowest risk, do last).
-Phase 8 also owns the `factor` refresh path (MATLAB's `rem(loop,25)==0`, recompute
-`max((1-K_est)*xPhys**r)` and rescale) — `hotspot_constraint`'s docstring describes the
-recipe but nothing implements or tests it yet, since the Phase 0 fixture only covers 3
-iterations and `factor==1` throughout (`rem(loop,25)==0` never fires). Implement and
-FD/fixture-check it as part of Phase 8, not before — the 3-iteration fixture can't cover it.
+**Not started:** Phase 9 (`sttopt/viz.py` + `sttopt/cli.py` — depends on everything,
+lowest risk, do last).
 
 **Cross-phase findings worth knowing before starting a new phase:**
 - **jaxtyping symbolic-dim bug pattern**, found 3x independently (fem.py, filters.py,
