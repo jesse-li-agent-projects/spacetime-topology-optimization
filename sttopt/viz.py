@@ -47,8 +47,16 @@ _BOUNDARY_LINEWIDTH = 1.5
 
 
 def _new_axes() -> Axes:
-    """A standalone `Axes` on a `Figure` that pyplot does not own, so it needs no
-    corresponding `plt.close()` (see this module's docstring).
+    """A standalone `Axes` on a `Figure` that pyplot does not own.
+
+    Nothing needs to close this figure, because `plt.close()` is a deregistration
+    rather than a destructor: pyplot holds a strong reference to every figure it
+    creates, and *that* reference, not the caller's, is what keeps it alive. A
+    directly-instantiated `Figure` never enters that registry, so it is reclaimed by
+    ordinary garbage collection once the returned `Axes` goes out of scope. Creating
+    `Figure` directly is matplotlib's documented route for library/application code
+    (see `matplotlib.figure`'s module docstring); pyplot stays the right choice for
+    interactive use, which callers reach by passing their own `ax` instead.
     """
     return Figure().add_subplot()
 
@@ -136,7 +144,9 @@ def stage_boundary_plot(
         y = row + 1.5
         segments.append([_pt(col + 0.5, y), _pt(col + 1.5, y)])
 
-    ax.add_collection(LineCollection(segments, colors="black", linewidths=_BOUNDARY_LINEWIDTH))
+    ax.add_collection(
+        LineCollection(segments, colors="black", linewidths=_BOUNDARY_LINEWIDTH)
+    )
     ax.set_aspect("equal")
     ax.autoscale_view()
     return ax
