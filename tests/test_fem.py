@@ -43,9 +43,8 @@ def test_assemble_and_solve():
     ndof = 2 * (nelx + 1) * (nely + 1)
 
     F = np.zeros(ndof)
-    F[2 * (nelx + 1) * (nely + 1) - 1] = (
-        -1.0
-    )  # MATLAB dof 2*(nelx+1)*(nely+1), 1-indexed
+    # MATLAB dof 2*(nelx+1)*(nely+1), 1-indexed
+    F[2 * (nelx + 1) * (nely + 1) - 1] = -1.0
     fixeddofs = np.arange(2 * (nely + 1))  # MATLAB 1:2*(nely+1), 1-indexed -> 0-indexed
     alldofs = np.arange(ndof)
     freedofs = np.setdiff1d(alldofs, fixeddofs)
@@ -72,9 +71,8 @@ def test_assemble_respects_column_major_element_order():
     K = fem.assemble_stiffness(
         fem.plane_stress_KE(0.3), xPhys, 0.0, 1.0, 3, edofMat, ndof
     )
-    element = (
-        i * nely + j
-    )  # Fortran-order (column-major) element index per conventions.md
+    # Fortran-order (column-major) element index per conventions.md
+    element = i * nely + j
     touched_dofs = np.unique(K.nonzero()[0])
     assert np.array_equal(touched_dofs, np.sort(edofMat[element]))
 
@@ -179,9 +177,8 @@ def test_uniaxial_tension_patch_graded_density(axis):
 
     F = np.zeros(ndof)
     if axis == "x":
-        density = np.array(
-            [0.3, 0.55, 1.0, 0.45, 0.8, 0.2]
-        )  # len == nelx, asymmetric, all > 0
+        # len == nelx, asymmetric, all > 0
+        density = np.array([0.3, 0.55, 1.0, 0.45, 0.8, 0.2])
         xPhys = np.tile(density[None, :], (nely, 1))
         _add_edge_traction(
             F, [_node_id(row, nelx, nely) for row in range(nely + 1)], (t, 0.0)
