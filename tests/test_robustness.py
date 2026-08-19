@@ -5,16 +5,17 @@ Nothing here is a MATLAB-vs-Python numerical discrepancy -- the sweep in
 where the port is faithful but fragile, and places where an existing test claims more
 than it checks.
 
-The two `xfail(strict=True)` tests below describe behaviour the port does *not* have
-today. They are written as the assertion the fixed code should satisfy, so removing
-the marker is the whole fix-verification step; `strict=True` means they also fail if
-someone fixes the underlying issue and forgets to unmark them.
+Two of these started life as `xfail(strict=True)` markers describing behaviour the port
+did not have -- the pyplot figure leak in `viz`, and the `0*inf = NaN` overflow in the
+neighbour sigmoid's derivative. Both are fixed now, so they are plain regression tests;
+each carries a companion test pinning the property the fix must not break (that a
+caller-supplied `Axes` is still honoured, and that the overflow-free sigmoid is a pure
+reformulation of the MATLAB expression rather than a change of value).
 """
 
-import warnings
+import io
 
 import numpy as np
-import pytest
 import scipy.sparse as sp
 from conftest import e2e_rtol, load_fixture
 
@@ -155,22 +156,17 @@ def test_subsolv_m_ge_n_solves_the_subproblem():
         assert np.all(y > 0) and z > 0 and np.all(lam > 0)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="FINDING: viz creates figures via plt.subplots() and never closes them, so "
-    "every call leaks one. Fix: build the Figure off the pyplot state machine "
-    "(matplotlib.figure.Figure) or document that callers own closing.",
-)
 def test_viz_does_not_accumulate_figures():
-    """`combination_plot`/`stage_boundary_plot` allocate through the pyplot *state
-    machine* (`plt.subplots()`) when no `ax` is passed, so every call registers a figure
-    that is never released. One call per process (the CLI's usage) is harmless, but any
-    loop over frames -- e.g. porting `fabrication.m`'s per-timestep animation, or simply
-    adding more viz tests -- grows memory without bound.
+    """Regression: `combination_plot`/`stage_boundary_plot` used to allocate through the
+    pyplot *state machine* (`plt.subplots()`) when no `ax` was passed, so every call
+    registered a figure that was never released. One call per process (the CLI's usage)
+    was harmless, but any loop over frames -- porting `fabrication.m`'s per-timestep
+    animation, say -- grew memory without bound, and matplotlib's warning at the 21st
+    open figure became a hard error under this project's `-W error` test invocation, so
+    the 21st viz test added to the suite would have failed for unrelated reasons.
 
-    It also interacts badly with this project's own `-W error` test invocation:
-    matplotlib warns at the 21st open figure, which becomes a hard error, so the 21st
-    viz test added to the suite would fail for reasons unrelated to what it tests.
+    No warning filter here on purpose: with the fix there is nothing to suppress, so a
+    regression trips this assertion *and*, under `-W error`, matplotlib's own warning.
     """
     import matplotlib.pyplot as plt
 
@@ -179,42 +175,53 @@ def test_viz_does_not_accumulate_figures():
     xPhys = rng.uniform(0, 1, (NELY, NELX))
     tPhys = rng.uniform(0, 1, (NELY, NELX))
     try:
-        with warnings.catch_warnings():
-            # Ignore matplotlib's own >20-figures warning so the assertion below is what
-            # reports the leak, rather than -W error tripping on the symptom first.
-            warnings.simplefilter("ignore")
-            for _ in range(25):
-                viz.combination_plot(xPhys, tPhys, eps=0.1)
+        for _ in range(25):
+            ax = viz.combination_plot(xPhys, tPhys, eps=0.1)
+            viz.stage_boundary_plot(tPhys, NSTAGE)
         assert (
-            len(plt.get_fignums()) <= 1
-        ), f"{len(plt.get_fignums())} figures left open after 25 calls"
+            len(plt.get_fignums()) == 0
+        ), f"{len(plt.get_fignums())} pyplot figures left open after 50 calls"
+        # A pyplot-free Figure must still render, or the fix would have broken the CLI.
+        buf = io.BytesIO()
+        ax.figure.savefig(buf, format="png")
+        assert buf.getbuffer().nbytes > 0
     finally:
         plt.close("all")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="FINDING: the neighbour sigmoid uses 1/(1+exp(z)) directly, so DFT evaluates "
-    "0*inf = NaN once rouf*dt > ~709. Faithful to MATLAB, but conventions.md claims "
-    "the port replaced this with a stable form -- it did not. Fix: compute DFT as "
-    "rouf*FT*(1-FT), which is algebraically identical and cannot overflow.",
-)
+def test_viz_still_honours_a_caller_supplied_axes():
+    """The escape hatch the fix relies on: callers who *want* a pyplot-managed figure
+    pass their own `ax`, and both functions must draw into exactly that one.
+    """
+    import matplotlib.pyplot as plt
+
+    plt.close("all")
+    tPhys = np.zeros((NELY, NELX))
+    tPhys[:, NELX // 2 :] = 1.0
+    try:
+        fig, ax = plt.subplots()
+        out = viz.combination_plot(np.ones((NELY, NELX)), tPhys, eps=0.1, ax=ax)
+        out2 = viz.stage_boundary_plot(tPhys, 2, ax=ax, combination_coords=True)
+        assert out is ax and out2 is ax
+        assert plt.get_fignums() == [fig.number]
+        assert len(ax.collections) == 2
+    finally:
+        plt.close("all")
+
+
 def test_hotspot_gradients_finite_for_large_rouf():
-    """`_pairwise_sigmoid_terms` computes `FT = 1/(1+exp(z))` and then
-    `DFT = FT**2 * rouf * exp(z)` with `z = rouf*(t_b - t_a)`. For `z > ~709` the
-    `exp(z)` overflows to `inf`, `FT` underflows to `0`, and `DFT` becomes `0*inf =
-    NaN` -- silently poisoning `dt1`, and through it the MMA constraint Jacobian.
+    """Regression: `_pairwise_sigmoid_terms` used to compute `FT = 1/(1+exp(z))` and
+    `DFT = FT**2 * rouf * exp(z)` with `z = rouf*(t_b - t_a)`, exactly as the MATLAB
+    source does. For `z > ~709` the `exp(z)` overflows to `inf`, `FT` underflows to `0`,
+    and `DFT` became `0*inf = NaN` -- silently poisoning `dt1` and, through it, the MMA
+    constraint Jacobian.
 
     Not reachable at the default `rouf=100` (with `tPhys` in [0, 1], `|z| <= 100`), but
     `rouf` is an exposed `build_problem` keyword with no validation, and sharpening the
-    print-causality mask is exactly the knob a user would reach for. MATLAB has the
-    identical failure, so this is a latent robustness gap rather than a port
-    discrepancy -- but `sttopt/conventions.md` explicitly lists "`(1+exp(z))^-1` as a
-    stable sigmoid instead of the mathematically-equivalent but overflow-prone form"
-    as a deliberate improvement the port made, and that claim is not true of the code
-    as written: it is the same expression as the MATLAB source.
+    print-causality mask is exactly the knob a user would reach for.
 
-    `DFT = rouf * FT * (1 - FT)` is the same quantity with no overflow.
+    No `errstate`/warning suppression on purpose: the point of the fix is that nothing
+    overflows, so a regression surfaces as a numpy overflow warning too.
     """
     nelx, nely = 5, 4
     rng = np.random.default_rng(1)
@@ -225,11 +232,75 @@ def test_hotspot_gradients_finite_for_large_rouf():
     Hs = np.ones(nelx * nely)
     dx = np.ones((nely, nelx))
 
-    with np.errstate(over="ignore", invalid="ignore"), warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        _, df1, dt1 = conductivity.hotspot_constraint(
-            xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, 0.8, 25.0, 3.0, 0.05, 2000.0
+    for rouf in [100.0, 800.0, 2000.0, 1e6]:
+        fval, df1, dt1 = conductivity.hotspot_constraint(
+            xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, 0.8, 25.0, 3.0, 0.05, rouf
         )
+        assert np.isfinite(fval)
+        assert np.all(
+            np.isfinite(df1)
+        ), f"rouf={rouf}: {np.isnan(df1).sum()} NaNs in df1"
+        assert np.all(
+            np.isfinite(dt1)
+        ), f"rouf={rouf}: {np.isnan(dt1).sum()} NaNs in dt1"
 
-    assert np.all(np.isfinite(df1)), f"{np.isnan(df1).sum()} NaNs in df1"
-    assert np.all(np.isfinite(dt1)), f"{np.isnan(dt1).sum()} NaNs in dt1"
+
+def test_stable_sigmoid_matches_the_matlab_expression():
+    """The overflow fix must be a pure reformulation over the range that matters, and
+    strictly better outside it.
+
+    Two regimes, asserted separately because the honest claim differs between them:
+
+    * `|z| <= 300` -- everything physically reachable (at the default `rouf=100` and
+      `tPhys` in [0, 1], `|z| <= 100`). Here the source's literal expressions are
+      well behaved and the new forms must agree with them to 1e-14. This is the
+      "no value change" guarantee.
+    * beyond that -- the source's forms degrade in two different ways: at `z ~ +700`
+      the intermediate `FT**2` underflows to 0 and drags the whole product to 0, and
+      past `z ~ +709` `exp(z)` overflows and the product becomes NaN. The new forms
+      stay finite and non-zero. So the fix is not merely equivalent out here, it is
+      more accurate, and pinning it against the source would pin the source's bug.
+    """
+    rng = np.random.default_rng(0)
+    z_safe = np.concatenate(
+        [
+            rng.uniform(-100, 100, 200_000),
+            rng.uniform(-1, 1, 20_000),
+            np.array([0.0, -50.0, 50.0, -300.0, 300.0]),
+        ]
+    )
+    z_extreme = np.array([-1e4, -745.0, -710.0, 400.0, 700.0, 710.0, 1e4])
+    z = np.concatenate([z_safe, z_extreme])
+    safe = np.arange(z.size) < z_safe.size
+
+    rouf = 3.7
+    t = np.concatenate([np.zeros(z.size), z / rouf])  # so t[b] - t[a] == z / rouf
+    a = np.arange(z.size)
+    b = a + z.size
+    FT, DFT = conductivity._pairwise_sigmoid_terms(t, a, b, rouf)
+
+    with np.errstate(over="ignore", invalid="ignore"):
+        FT_matlab = 1.0 / (1.0 + np.exp(z))
+        DFT_matlab = FT_matlab**2 * rouf * np.exp(z)
+
+    # `z == 0` is an exact print-time tie, where the source (and so this port) forces
+    # DFT to 0 rather than the true rouf/4 -- a documented deviation, not something the
+    # overflow fix introduced, so it is pinned separately from the comparison.
+    ties = z == 0.0
+    assert np.all(DFT[ties] == 0.0)
+
+    np.testing.assert_allclose(FT[safe], FT_matlab[safe], rtol=1e-14, atol=0)
+    compare = safe & ~ties
+    np.testing.assert_allclose(DFT[compare], DFT_matlab[compare], rtol=1e-14, atol=0)
+
+    # Extreme tail: finite everywhere, and still non-zero wherever the true value is
+    # representable -- past |z| ~ 745 it genuinely underflows, so 0 is the correct
+    # answer there and only |z| <= 745 can be asserted non-zero.
+    assert np.all(np.isfinite(FT)) and np.all(np.isfinite(DFT))
+    representable = ~safe & (np.abs(z) <= 745.0)
+    assert representable.any(), "sanity: need extreme-but-representable samples"
+    assert np.all(DFT[representable] > 0.0)
+    degraded = ~np.isfinite(DFT_matlab) | (DFT_matlab == 0.0)
+    assert degraded[
+        representable
+    ].any(), "sanity: the extreme samples should break the source form"
