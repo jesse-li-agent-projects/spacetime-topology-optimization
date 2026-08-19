@@ -22,6 +22,18 @@ correctness-fix commit happened to be in progress when they were noticed.
   anything else) instead of an enum. Magic ints duplicated between the docstring and the
   `if/elif` dispatch (`sttopt/timefield.py:49-64`); an `IntEnum` (or plain `Enum`) would
   make call sites self-documenting and give a real type to check instead of prose.
+- [ ] `_corner_distance_grid`/`timefield_edge` degenerate when `nelx==1` or `nely==1`
+  (found while adding `test_timefield_variants_span_0_to_1`, `tests/test_timefield.py`):
+  `nelx=nely=1` divides by `dist.max()==0`, producing `nan`/`nan` with a genuine
+  `RuntimeWarning: invalid value encountered in divide`; a lone `nely=1` (or `nelx=1`)
+  makes `timefield_opposite_corner` (or `timefield_edge`) never reach the corner/edge it
+  normalizes against, so the field is constant `1` (or `0`) instead of spanning `[0, 1]`
+  -- a consequence of the same `linspace(0, nel, nel)` endpoint-vs-single-sample behavior
+  the module docstring already flags as intentional for `nel>1`. `nelx`/`nely` are always
+  well above 1 in every real usage seen so far, so this is likely latent rather than
+  live, but it's undocumented and unguarded. Worth a decision: reject `nelx<2`/`nely<2`
+  explicitly (`ValueError`), or just document it as an assumption alongside the existing
+  `_corner_distance_grid` docstring note.
 
 ### `optimize.py` / `conductivity.py`
 
