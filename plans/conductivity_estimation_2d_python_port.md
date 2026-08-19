@@ -1,10 +1,12 @@
 # Plan: Port `conductivity_estimation_2d` to Python
 
-> **Status (2026-08-19): Phase 0 complete.** All 11 fixtures are generated, committed,
-> and sanity-checked; `pytest` (Phase 0 scaffolding tests) passes. See "Phase 0 progress
-> / handoff" below for what was done and the pytest-invocation quirk to know about
-> before writing Phase 1+ tests. Next up: Phase 1 (`fem.py`), see "Phased implementation
-> plan" below.
+> **Status (2026-08-19): Phase 0 complete; Phases 1-4 and 7 complete and committed;
+> Phase 5 in progress; Phases 6, 8, 9 not started.** See "Phases 1-9 progress / handoff"
+> below (after the Phase 0 section) for exact commit hashes, what's left, and how to
+> resume if this session gets interrupted (e.g. a subagent session-limit) — that section
+> is the actual live status; the "Phased implementation plan" further down is the
+> original static plan, kept unchanged as a reference. See "Phase 0 progress / handoff"
+> immediately below for the pytest-invocation quirk (needed for every phase's tests).
 
 > **Note (superseded, kept for history):** MATLAB access from this sandbox was earlier
 > pending a sandbox update (license checkout failing — see Finding 1), then hit a
@@ -268,6 +270,73 @@ described as parallelizable once Phase 0 (and Phase 1 for anything depending on
 `fem.py`) lands — worth delegating to subagents at that point rather than doing
 serially, unlike Phase 0 itself which benefited from one agent holding the whole
 MATLAB-source context.
+
+## Phases 1-9 progress / handoff (2026-08-19, live status — update as work proceeds)
+
+**Orchestration approach in use:** one orchestrator session running an executor
+subagent + an independent reviewer subagent per phase/module (per the user's explicit
+request that every new line of code get reviewed by a fresh subagent before landing).
+Executor writes the module + its tests, iterates until green, reports back; orchestrator
+skims the diff, spawns a reviewer with the MATLAB ground-truth pasted directly into its
+prompt (not just a file pointer — reviewers work faster and more reliably with the
+source inlined); orchestrator applies the reviewer's fixes directly (small, well-
+understood changes) rather than re-delegating; commits once tests are green again.
+Modules with no interdependency are executed/reviewed in parallel (disjoint files);
+phases are committed in whatever order they finish, not strictly 1→9.
+
+**Commits so far** (each is one phase, self-contained, independently reviewed):
+- `ff7f5cb` — Phase 1, `sttopt/fem.py` (plane-stress FEM core: KE, edofMat, assemble_stiffness, solve_fe)
+- `d62ddbb` — Phase 7, `sttopt/mma.py` (Svanberg MMA optimizer: mmasub, subsolv)
+- `0ba3cf5` — Phase 2, `sttopt/filters.py` (density/continuity filters, Heaviside projection) — also fixed a latent jaxtyping bug in `fem.py`'s `element_dof_map`, folded into this commit since it was found during this phase's review
+- `bc1b102` — Phase 3, `sttopt/timefield.py` + `sttopt/gravity.py` (3 tfield variants, gravity load matrix)
+- `ea85b7d` — Phase 4, `sttopt/compliance.py` (SIMP compliance + sensitivities under fixed load and self-weight gravity)
+
+**In progress:** Phase 5 (`sttopt/constraints.py`) — executor subagent launched, not yet
+reviewed/committed as of this writing. If you're resuming this session cold, check
+`git status`/`git diff` first: uncommitted `sttopt/constraints.py` +
+`tests/test_constraints.py` in the worktree means the executor finished but review/fixup
+didn't happen yet; nothing there means it's still running or was lost (re-launch it —
+see the Phase 5 executor prompt used, in this session's transcript, or reconstruct from
+the "Known traps"/module-decomposition sections below — the constraint math is quoted in
+full from `generate_fixtures.m`'s main-loop, which is unchanged and still the ground truth).
+
+**Not started:** Phase 6 (`sttopt/conductivity.py` — hardest phase, do it with full
+attention rather than parallel to other work), Phase 8 (`sttopt/optimize.py` + E2E test
+— depends on all of 1-7), Phase 9 (`sttopt/viz.py` + `sttopt/cli.py` — depends on
+everything, lowest risk, do last).
+
+**Cross-phase findings worth knowing before starting a new phase:**
+- **jaxtyping symbolic-dim bug pattern**, found 3x independently (fem.py, filters.py,
+  compliance.py) and now fixed everywhere it was found: a return/param annotation like
+  `Float[np.ndarray, "nelx*nely 8"]` only resolves if some OTHER array parameter in the
+  *same* function signature is itself shaped `"nely nelx"` (or similar) — jaxtyping binds
+  `nelx`/`nely` into its dim-memo from an actual array's shape, never from a plain `int`
+  parameter. A function whose only size-related params are `nelx: int, nely: int` (no
+  2D array in its own signature) must use a fresh dim name (e.g. `"n"`, `"nel"`) instead
+  of a symbolic product. Currently inert everywhere (no `--jaxtyping-packages` in
+  `pyproject.toml`, nothing wrapped in `@jaxtyped` yet) but will hard-fail the moment
+  runtime checking is switched on — check for this pattern in every new phase's code.
+- **scipy `spmatrix` deprecation warning**: fixed once in `tests/conftest.py`
+  (`load_fixture` now passes `spmatrix=False` to `scipy.io.loadmat`) — don't reintroduce
+  it by loading fixtures a different way.
+- **`e2e.mat`'s `xPhys_traj`/`tPhys_traj`** (shape `(nely,nelx,nloop+1)`) are the
+  standard way to get each loop iteration's *input* state for fixture tests, since the
+  per-module fixtures (`compliance.mat`, `constraints.mat`, etc.) only saved outputs.
+  Slice `k` (0-indexed) is loop iteration `k+1`'s input. Established in Phase 4, reused
+  in Phase 5; Phase 6/8 will need the same pattern (Phase 8's E2E test IS this trajectory).
+- **`rou`/`lam`/`lamda` = 10 for all of `loop=1,2,3`** in the fixture run (`generate_fixtures.m`'s
+  `if mod(loop,30)==0 && rou<50` never triggers for loop 1-3) — confirmed independently
+  by two different phases' reviewers; safe to reuse this fact without re-deriving it, but
+  the underlying script hasn't changed so it's easy to re-verify if in doubt.
+- **Tooling quirk**: subagents in this shared worktree have intermittently hit a
+  `Write`/`Edit` block ("parent bg session hasn't isolated yet") even when already in the
+  correct worktree directory. Workaround used successfully: `Bash` heredocs
+  (`cat > file <<'EOF' ... EOF`) for file writes/edits instead.
+- **Session-limit risk**: at least one reviewer subagent hit "session limit" mid-review
+  and had to be relaunched fresh (Phase 2's `filters.py` reviewer — first attempt's
+  partial output was discarded, a second full attempt completed normally). If a subagent
+  reports `status: failed` with a session-limit message, just relaunch the same prompt
+  as a fresh agent rather than trying to resume the failed one.
 
 ## Phased implementation plan
 
