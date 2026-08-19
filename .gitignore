@@ -1,11 +1,13 @@
+# Read-only local files
 resources
 
+# Throwaway scripts
+*.tmp.py
+
 .claude
+CLAUDE.local.md
 
 __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
-
-# Throwaway scripts (see CLAUDE.local.md's *.tmp.py convention) -- never committed.
-*.tmp.py
