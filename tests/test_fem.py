@@ -208,3 +208,49 @@ def test_uniaxial_tension_patch_graded_density(axis):
     else:
         expected[1::2] = -disp_at_boundary[node_row]
     np.testing.assert_allclose(U, expected, atol=1e-10)
+
+
+@pytest.mark.parametrize("nu", [0.0, 0.3, 0.45])
+def test_pure_shear_patch(nu):
+    """Rollers plus edge shear tractions on all four sides should reproduce simple shear:
+    u = -gamma*row (i.e. gamma*y), v = 0, with gamma = tau/G and G = E/(2*(1+nu)) the
+    plane-stress shear modulus. Unlike uniaxial tension this exercises the shear
+    ((1-nu)/2, off-diagonal) terms of `plane_stress_KE` -- the constant strain here is
+    entirely eps_xy, whereas tension's is entirely eps_x/eps_y.
+
+    A uniform shear stress state has nonzero traction on all four edges, not just one (its
+    stress tensor is off-diagonal, so every face normal picks up a component). u = v = 0
+    along the whole y=0 (row=0) line, though, so that edge's tractions are absorbed by
+    rollers there instead of applied explicitly; the other three edges get explicit
+    consistent-nodal shear tractions.
+    """
+    nelx, nely = 7, 5
+    tau = 1.0
+    ndof = 2 * (nelx + 1) * (nely + 1)
+    xPhys = np.ones((nely, nelx))
+    KE = fem.plane_stress_KE(nu)
+    edofMat = fem.element_dof_map(nelx, nely)
+    K = fem.assemble_stiffness(KE, xPhys, EMIN, EMAX, PENAL, edofMat, ndof)
+
+    # Rollers: both dofs = 0 along row=0 (matches the field's zeros there), plus v = 0
+    # along the other three edges (matches v == 0 everywhere).
+    fixeddofs = [d for col in range(nelx + 1) for d in _dofs(0, col, nely)]
+    fixeddofs += [_dofs(nely, col, nely)[1] for col in range(nelx + 1)]
+    fixeddofs += [_dofs(row, 0, nely)[1] for row in range(nely + 1)]
+    fixeddofs += [_dofs(row, nelx, nely)[1] for row in range(nely + 1)]
+    freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)
+
+    F = np.zeros(ndof)
+    _add_edge_traction(
+        F, [_node_id(nely, col, nely) for col in range(nelx + 1)], (-tau, 0.0)
+    )
+    U = fem.solve_fe(K, F, freedofs)
+
+    G = EMAX / (2 * (1 + nu))  # xPhys == 1 everywhere -> E == Emax regardless of penal
+    gamma = tau / G
+
+    num_nodes = (nelx + 1) * (nely + 1)
+    node_row = np.arange(num_nodes) % (nely + 1)
+    expected = np.zeros(ndof)
+    expected[0::2] = -gamma * node_row
+    np.testing.assert_allclose(U, expected, atol=1e-10)
