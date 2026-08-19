@@ -1,6 +1,7 @@
-"""Tests sttopt.mma against small optimization problems with closed-form optima --
-ground truth independent of the MATLAB port the rest of this codebase is validated
-against.
+"""Tests sttopt.mma against small optimization problems independent of the MATLAB
+port the rest of this codebase is validated against: two with closed-form optima
+(ground truth), and one (the 8-bar truss) as a regression/golden-value pin -- see its
+docstring for why no independent ground truth is available for it.
 """
 
 import warnings
@@ -159,3 +160,128 @@ def test_mmasub_quadratic_objective_linear_constraint_converges_to_analytic_opti
     np.testing.assert_allclose(x, x_star, atol=1e-6)
     np.testing.assert_allclose(f0val, f0_star, rtol=1e-6)
     assert infeas < 1e-6
+
+
+# Test problem 2 (8-bar truss), section 6: 8 elements from the fixed nodes to a single
+# free apex node (5), a linear-elastic space truss under one load case, weight
+# objective, +-100 N/mm^2 stress constraint per bar. Geometry/topology/load from
+# Figure 2 and its tables; the material is unstated in the paper's text but a density
+# of 7800 kg/m^3 (steel) reproduces the paper's stated starting weight (13.05 kg)
+# exactly, corroborating the geometry transcription below.
+_TRUSS_NODES = {
+    1: (-250.0, -250.0, 0.0),
+    2: (-250.0, 250.0, 0.0),
+    3: (250.0, 250.0, 0.0),
+    4: (250.0, -250.0, 0.0),
+    5: (0.0, 0.0, 375.0),  # free node; all 8 bars connect here
+    6: (-375.0, 0.0, 0.0),
+    7: (0.0, 375.0, 0.0),
+    8: (375.0, 0.0, 0.0),
+    9: (0.0, -375.0, 0.0),
+}
+_TRUSS_BASE_NODES = [1, 2, 3, 4, 6, 7, 8, 9]  # bar j's fixed end
+_TRUSS_FREE = np.array(_TRUSS_NODES[5])
+_TRUSS_L = np.array(
+    [np.linalg.norm(_TRUSS_FREE - np.array(_TRUSS_NODES[b])) for b in _TRUSS_BASE_NODES]
+)
+_TRUSS_E = np.array(
+    [
+        (_TRUSS_FREE - np.array(_TRUSS_NODES[b])) / L
+        for b, L in zip(_TRUSS_BASE_NODES, _TRUSS_L)
+    ]
+)
+_TRUSS_FORCE = np.array([40e3, 20e3, 200e3])  # N, at node 5
+_TRUSS_RHO = 7800e-9  # kg/mm^3
+_TRUSS_SIGMA_LIM = 100.0  # N/mm^2
+
+
+def _truss_stress(A):
+    """Member stresses (tension positive) and their Jacobian d(sigma)/d(A), for the
+    8-bar space truss under _TRUSS_FORCE.
+
+    All 8 bars share a common free node and Young's modulus, so E cancels out of the
+    force distribution: assembling K = sum_j (A_j/L_j) e_j e_j^T (E-free) and solving
+    K u = F for a "pseudo-displacement" u gives sigma_j = (e_j . u) / L_j directly (the
+    true displacement is u/E, and sigma_j = (E/L_j)*(e_j . (u/E)) -- E drops out).
+    Differentiating that solve gives d(sigma_j)/d(A_i) = -(sigma_i/L_j) * (e_j . Kinv .
+    e_i), verified against finite differences during development (see PR discussion).
+    """
+    Kp = (_TRUSS_E * (A / _TRUSS_L)[:, None]).T @ _TRUSS_E
+    Kpinv = np.linalg.inv(Kp)
+    sigma = (_TRUSS_E @ (Kpinv @ _TRUSS_FORCE)) / _TRUSS_L
+    M = _TRUSS_E @ Kpinv @ _TRUSS_E.T
+    dsigma = -(sigma[None, :] / _TRUSS_L[:, None]) * M
+    return sigma, dsigma
+
+
+def _truss_objective(A):
+    return _TRUSS_RHO * np.sum(A * _TRUSS_L), _TRUSS_RHO * _TRUSS_L
+
+
+def _truss_constraint(A):
+    """Two one-sided linearizable constraints per bar (sigma <= lim, -sigma <= lim)
+    rather than |sigma| <= lim, so every constraint stays smooth in A.
+    """
+    sigma, dsigma = _truss_stress(A)
+    fval = np.concatenate([sigma - _TRUSS_SIGMA_LIM, -sigma - _TRUSS_SIGMA_LIM])
+    dfdx = np.concatenate([dsigma, -dsigma], axis=0)
+    return fval, dfdx
+
+
+def test_truss_starting_weight_matches_paper():
+    """Independent check (not a golden value) that the truss geometry/topology/density
+    above was transcribed correctly: the paper reports 13.05 kg at x_j=400 for all j.
+    """
+    weight0, _ = _truss_objective(np.full(8, 400.0))
+    np.testing.assert_allclose(weight0, 13.05, atol=0.01)
+
+
+def test_mmasub_eight_bar_truss_matches_golden_regression_value():
+    """Unlike the other two tests in this file, this is a regression/golden-value
+    pin, not a check against independently derived ground truth: Table II's
+    per-iteration values used a different (Fletcher-Reeves dual) subproblem solver
+    (same caveat as test problem 1's Table I), and the paper only reports its final
+    optimum "approximately" (x1..x8 rounded to the nearest 10 mm^2, no digits given
+    for the objective) -- not precise enough to assert against directly. So instead
+    this pins mmasub's actual current output after 30 iterations at rtol=1e-6, to
+    catch future accidental behavior changes.
+
+    The regression target is still grounded in the paper: it lands close to the
+    paper's reported approximate optimum (x1..x4 near 880/720/260/520 mm^2, x5..x8 at
+    the 100 mm^2 lower bound, weight near 11.23 kg, all constrained bars near the
+    +-100 N/mm^2 stress limit) -- see test_truss_starting_weight_matches_paper and PR
+    discussion for how the geometry was cross-checked against the paper.
+    """
+    n, m = 8, 16
+
+    x = _run_mmasub(
+        n,
+        m,
+        xmin=np.full(n, 100.0),
+        xmax=np.full(n, 5000.0),
+        x0=np.full(n, 400.0),
+        a0=1.0,
+        a=np.zeros(m),
+        c=np.full(m, 1000.0),
+        d=np.zeros(m),
+        objective=_truss_objective,
+        constraint=_truss_constraint,
+        n_iterations=30,
+    )
+
+    golden_x = np.array(
+        [
+            849.94135375,
+            753.17038548,
+            231.47550478,
+            547.01510523,
+            100.0002238,
+            100.00022557,
+            100.00022551,
+            100.00022469,
+        ]
+    )
+    golden_f0val = 11.22874168217898
+
+    np.testing.assert_allclose(x, golden_x, rtol=1e-6)
+    np.testing.assert_allclose(_truss_objective(x)[0], golden_f0val, rtol=1e-6)
