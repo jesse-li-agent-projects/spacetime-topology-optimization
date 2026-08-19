@@ -4,9 +4,11 @@ plotting calls the main script actually exercises; see the plan's Scope section 
 Finding 2 for why `draw_combination2`/`3` and the broken `draw_combination` call at the
 old line 577 are out of scope / resolved to `draw_combination1`).
 
-Sets a non-interactive Agg backend at import time (no display in this sandbox, and
-nothing here ever calls `plt.show()`) -- import `matplotlib` and call `matplotlib.use(...)`
-yourself *before* importing this module if you need an interactive backend instead.
+When no `ax` is passed, both functions build their own `Figure` directly rather than
+going through `pyplot`, so importing or calling this module registers nothing in a
+global figure registry and leaves nothing for the caller to close -- `savefig` still
+works, picking its canvas from the output format. Pass your own `ax` (e.g. from
+`plt.subplots()`) to draw into a pyplot-managed, interactive figure instead.
 
 **Missing `draw_line` helper**: `draw_boundary.m` calls a `draw_line(V(e,:), 3, [0 0 0])`
 helper that does not exist anywhere in the source repo (confirmed by search) -- an
@@ -35,17 +37,28 @@ so both functions below build polygons/edges directly from `(row, col)` -- no
 `order='F'` flatten is needed (or used) anywhere in this module.
 """
 
-import matplotlib
-
-matplotlib.use("Agg")
-
-import matplotlib.pyplot as plt
 import numpy as np
 from jaxtyping import Float
 from matplotlib.axes import Axes
 from matplotlib.collections import LineCollection, PolyCollection
+from matplotlib.figure import Figure
 
 _BOUNDARY_LINEWIDTH = 1.5
+
+
+def _new_axes() -> Axes:
+    """A standalone `Axes` on a `Figure` that pyplot does not own.
+
+    Nothing needs to close this figure, because `plt.close()` is a deregistration
+    rather than a destructor: pyplot holds a strong reference to every figure it
+    creates, and *that* reference, not the caller's, is what keeps it alive. A
+    directly-instantiated `Figure` never enters that registry, so it is reclaimed by
+    ordinary garbage collection once the returned `Axes` goes out of scope. Creating
+    `Figure` directly is matplotlib's documented route for library/application code
+    (see `matplotlib.figure`'s module docstring); pyplot stays the right choice for
+    interactive use, which callers reach by passing their own `ax` instead.
+    """
+    return Figure().add_subplot()
 
 
 def combination_plot(
@@ -60,7 +73,7 @@ def combination_plot(
     interpolated from vertices, matching the MATLAB source's `FaceColor='flat'`).
     """
     if ax is None:
-        _, ax = plt.subplots()
+        ax = _new_axes()
 
     rows, cols = np.nonzero(xPhys >= eps)
     # Element (row, col) -> unit square x in [col, col+1], y in [-(row+1), -row].
@@ -107,7 +120,7 @@ def stage_boundary_plot(
     standalone, MATLAB-faithful boundary plot.
     """
     if ax is None:
-        _, ax = plt.subplots()
+        ax = _new_axes()
 
     tt = np.linspace(0.0, 1.0, nStage + 1)
     stage = np.zeros(tPhys.shape, dtype=int)
@@ -131,7 +144,9 @@ def stage_boundary_plot(
         y = row + 1.5
         segments.append([_pt(col + 0.5, y), _pt(col + 1.5, y)])
 
-    ax.add_collection(LineCollection(segments, colors="black", linewidths=_BOUNDARY_LINEWIDTH))
+    ax.add_collection(
+        LineCollection(segments, colors="black", linewidths=_BOUNDARY_LINEWIDTH)
+    )
     ax.set_aspect("equal")
     ax.autoscale_view()
     return ax

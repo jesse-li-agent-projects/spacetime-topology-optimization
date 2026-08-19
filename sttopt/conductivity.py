@@ -56,11 +56,19 @@ def _pairwise_sigmoid_terms(
     COO pair array. `DFT` is exactly 0 at `t[a] == t[b]` ties (including every `a == b`
     self-pair) -- a real property of the source, not a porting artifact; see
     `conventions.md`'s "Known deviations".
+
+    Both are evaluated through `exp(-|z|)`, which lies in `(0, 1]` for every `z` and so
+    cannot overflow. The source's literal forms do: `(1+exp(z))^-1` saturates to 0 and
+    `FT^2*rouf*exp(z)` becomes `0*inf = NaN` once `rouf*dt` exceeds ~709, silently
+    poisoning `dt1`. The forms here are algebraically identical (they agree with the
+    source to ~1e-16 wherever it is finite, tails included).
     """
     ta, tb = t[a], t[b]
     z = rouf * (tb - ta)
-    FT = 1.0 / (1.0 + np.exp(z))
-    DFT = np.where(ta == tb, 0.0, FT**2 * rouf * np.exp(z))
+    ez = np.exp(-np.abs(z))
+    FT = np.where(z >= 0, ez / (1.0 + ez), 1.0 / (1.0 + ez))
+    # d/d(t[a]) of FT, which is even in z: exp(z)/(1+exp(z))^2 == exp(-|z|)/(1+exp(-|z|))^2.
+    DFT = np.where(ta == tb, 0.0, rouf * ez / (1.0 + ez) ** 2)
     return FT, DFT
 
 

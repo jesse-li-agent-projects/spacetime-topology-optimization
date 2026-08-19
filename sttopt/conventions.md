@@ -30,9 +30,10 @@ arrays. Fixtures are saved as `.mat` v7 (`save(..., '-v7')`), readable directly 
 ## Tolerance policy
 
 Not bit-exactness — the port intentionally changes some implementations for numerical
-stability or performance (e.g. `(1+exp(z))^-1` as a stable sigmoid instead of the
-mathematically-equivalent but overflow-prone form; `eye(n) - L./M` as sparse ops instead
-of a dense `eye(10800)`, ~933 MB). Compare per quantity, not per test:
+stability or performance (the neighbour sigmoid and its derivative evaluated through
+`exp(-|z|)`, which cannot overflow, instead of the source's `(1+exp(z))^-1` and
+`FT^2*rouf*exp(z)`, which reach `0*inf = NaN` for `rouf*dt > ~709`; `eye(n) - L./M` as
+sparse ops instead of a dense `eye(10800)`, ~933 MB). Compare per quantity, not per test:
 
 - **Tight** (`rtol=1e-10`): purely algebraic quantities with no linear solve or
   iteration involved — filter matrices (`H`, `Hs`, `L`), neighbor weights (`N_el`,
