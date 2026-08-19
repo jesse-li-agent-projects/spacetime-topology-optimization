@@ -29,7 +29,7 @@ def plane_stress_KE(nu: float) -> Float[np.ndarray, "8 8"]:
     return (A + nu * B) / (1 - nu**2) / 24
 
 
-def element_dof_map(nelx: int, nely: int) -> Int[np.ndarray, "nelx*nely 8"]:
+def element_dof_map(nelx: int, nely: int) -> Int[np.ndarray, "n 8"]:
     """Per-element global dof indices (0-indexed), in element order matching `xPhys.flatten('F')`.
 
     Each row lists the 8 dofs (x, y for each of the 4 corner nodes) of one element.
