@@ -1,3 +1,11 @@
 resources
 
 .claude
+
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Throwaway scripts (see CLAUDE.local.md's *.tmp.py convention) -- never committed.
+*.tmp.py
