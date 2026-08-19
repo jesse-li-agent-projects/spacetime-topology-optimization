@@ -112,6 +112,25 @@ def test_heaviside_projection_derivative_near_domain_edges():
         np.testing.assert_allclose(analytic, fd, rtol=1e-5, atol=1e-6)
 
 
+@pytest.mark.parametrize(
+    "x,beta,eta,expected",
+    [
+        (0.5, 2.0, 0.5, 0.5),
+        (0.6, 4.0, 0.3, 0.9129507086430348),
+        (0.15, 0.5, 0.7, 0.14034596134119473),
+        (0.9, 6.0, 0.4, 0.9982578858793695),
+    ],
+)
+def test_heaviside_projection_interior_values(x, beta, eta, expected):
+    # Golden values from an independent exp-ratio tanh identity (not np.tanh), pinning
+    # the projection's own output at interior points -- the FD tests above only check
+    # consistency between the projection and its derivative, so a bug shared by both
+    # (e.g. a sign error) wouldn't be caught there.
+    assert heaviside_projection(np.array(x), beta, eta) == pytest.approx(
+        expected, rel=1e-12
+    )
+
+
 def test_heaviside_projection_endpoints():
     # f(0) = 0, f(1) = 1 by construction, regardless of beta/eta.
     for beta, eta in [(1.0, 0.5), (5.0, 0.2), (0.3, 0.8)]:
