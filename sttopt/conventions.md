@@ -47,6 +47,18 @@ sparse ops instead of a dense `eye(10800)`, ~933 MB). Compare per quantity, not 
   exact agreement after hundreds of iterations. `tests/conftest.py`'s `assert_close`
   takes an iteration count and scales tolerance accordingly.
 
+## Mesh assumptions
+
+Every element is a unit cell on a regular `(nely, nelx)` grid — no per-element volume
+`v_e`. This isn't an oversight: Wang et al. (2019) Eq. (3)'s density-filter weighting
+includes a `v_e` term, but states element volume is constant (`v_e = v0`) for their
+uniform mesh, at which point `v_e` cancels out of the (normalized) filter ratio —
+that's why `filters.density_filter`'s `H`/`Hs` carry no such term. A non-uniform mesh
+would need `v_e` reintroduced there (and anywhere else area/volume-weighted quantities
+assume uniformity, e.g. volume-fraction constraints) — a larger change than adding a
+guard, so no code currently asserts uniformity; this note is the single place that
+assumption is recorded.
+
 ## Known deviations (not bugs)
 
 See the plan (`plans/conductivity_estimation_2d_python_port.md`, "Known traps") for the
