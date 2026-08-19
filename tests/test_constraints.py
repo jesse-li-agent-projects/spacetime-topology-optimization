@@ -48,9 +48,8 @@ def test_constraints_match_fixture():
     nStage, volfrac, tfield = int(fx["nStage"]), float(fx["volfrac"]), int(fx["tfield"])
     nloop = e2e["xPhys_traj"].shape[2] - 1
     nel = nelx * nely
-    assert (
-        tfield == 3
-    )  # Nei = 1:nely (0-indexed: 0..nely-1), not the tfield==1 singleton
+    # Nei = 1:nely (0-indexed: 0..nely-1), not the tfield==1 singleton
+    assert tfield == 3
 
     H, Hs = filters.density_filter(nelx, nely, RMIN)
     L = filters.continuity_filter(nelx, nely, LRMIN)

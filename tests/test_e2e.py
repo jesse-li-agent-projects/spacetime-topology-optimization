@@ -162,9 +162,8 @@ def test_hotspot_factor_refresh_at_loop_25():
 
     # Independent recomputation (conductivity.hotspot_constraint's own docstring recipe),
     # using the pre-update xPhys/tPhys/dx the refresh actually saw.
-    dx = np.ones_like(
-        state.xTilde
-    )  # unused by K_est; only scales density sensitivities
+    # unused by K_est; only scales density sensitivities
+    dx = np.ones_like(state.xTilde)
     fv_old, _, _ = conductivity.hotspot_constraint(
         state.xPhys,
         state.tPhys,
