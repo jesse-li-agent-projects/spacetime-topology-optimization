@@ -290,20 +290,29 @@ phases are committed in whatever order they finish, not strictly 1→9.
 - `0ba3cf5` — Phase 2, `sttopt/filters.py` (density/continuity filters, Heaviside projection) — also fixed a latent jaxtyping bug in `fem.py`'s `element_dof_map`, folded into this commit since it was found during this phase's review
 - `bc1b102` — Phase 3, `sttopt/timefield.py` + `sttopt/gravity.py` (3 tfield variants, gravity load matrix)
 - `ea85b7d` — Phase 4, `sttopt/compliance.py` (SIMP compliance + sensitivities under fixed load and self-weight gravity)
+- `5905d15` — Phase 5, `sttopt/constraints.py` (global/continuity/start-point/per-stage constraints)
+- `6f342fb` — unrelated fixup: `*.tmp.py` was missing from `.gitignore`, untracked `check_fixtures.tmp.py`
 
-**In progress:** Phase 5 (`sttopt/constraints.py`) — executor subagent launched, not yet
-reviewed/committed as of this writing. If you're resuming this session cold, check
-`git status`/`git diff` first: uncommitted `sttopt/constraints.py` +
-`tests/test_constraints.py` in the worktree means the executor finished but review/fixup
-didn't happen yet; nothing there means it's still running or was lost (re-launch it —
-see the Phase 5 executor prompt used, in this session's transcript, or reconstruct from
-the "Known traps"/module-decomposition sections below — the constraint math is quoted in
-full from `generate_fixtures.m`'s main-loop, which is unchanged and still the ground truth).
+**In progress:** Phase 6 (`sttopt/conductivity.py`) — executor subagent launched, not yet
+reviewed/committed as of this writing. This is the hardest phase (hotspot p-norm
+constraint sensitivity, where each element's gradient depends on its neighbors' own
+neighbor-lists pointing back — non-trivial to vectorize correctly). If you're resuming
+this session cold: check `git status`/`git diff` first — uncommitted
+`sttopt/conductivity.py` + `tests/test_conductivity.py` means the executor finished but
+review/fixup didn't happen yet; nothing there means it's still running or was lost. If
+you need to re-launch it, the full MATLAB ground truth (neighbor-list construction, K_est,
+hotspot constraint value + df1/dt1 sensitivities) plus a hand-derived, COO-pair-vectorized
+version of the sensitivity math (self-term vs. cross-term formulas, row-aggregation
+pattern) is in this session's transcript as the Phase 6 executor prompt — reconstructing
+that derivation from scratch is real work, worth searching the transcript for first.
+Known traps specific to this phase (see "Known traps" section below for full text):
+`factor` is stateful (Trap 2, must be an explicit function input, `factor=1` for all 3
+fixture iterations), `WE == w_el` should be tested explicitly before relying on it (Trap
+3), and `DFT(o)=0` at exact ties is a real, documented deviation an FD check will hit at
+every element's self-neighbor term (Trap 1) — expected, not a bug.
 
-**Not started:** Phase 6 (`sttopt/conductivity.py` — hardest phase, do it with full
-attention rather than parallel to other work), Phase 8 (`sttopt/optimize.py` + E2E test
-— depends on all of 1-7), Phase 9 (`sttopt/viz.py` + `sttopt/cli.py` — depends on
-everything, lowest risk, do last).
+**Not started:** Phase 8 (`sttopt/optimize.py` + E2E test — depends on all of 1-7),
+Phase 9 (`sttopt/viz.py` + `sttopt/cli.py` — depends on everything, lowest risk, do last).
 
 **Cross-phase findings worth knowing before starting a new phase:**
 - **jaxtyping symbolic-dim bug pattern**, found 3x independently (fem.py, filters.py,
