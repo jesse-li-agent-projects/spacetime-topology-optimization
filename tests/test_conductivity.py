@@ -105,8 +105,13 @@ def test_hotspot_constraint_matches_fixture():
 
     # The fixture's tPhys (seeded from tfield3, a corner-distance field, then MMA-perturbed)
     # never happens to put two DISTINCT elements at an exact tie -- confirmed here so the
-    # report doesn't overclaim fixture coverage of the `DFT(o)==0`-on-tie branch (that
-    # branch is exercised only by the synthetic `_tie_discrepancy` test below).
+    # report doesn't overclaim fixture coverage of the distinct-element-tie branch (that
+    # branch is exercised only by the synthetic `_at_ties` test below). Corner-distance
+    # fields (tfield 1/3) are tie-free by construction (irrational-ish Euclidean distances
+    # rarely coincide), but tfield 2 (`timefield_edge`, a linear ramp constant down each
+    # column) is NOT: at a realistic 180x60 mesh it produces structural off-diagonal ties
+    # on ~5% of neighbor pairs, surviving density filtering -- so the distinct-element-tie
+    # branch is far from a synthetic-only corner case for that timefield choice.
     for k in range(nloop):
         tflat = e2e["tPhys_traj"][:, :, k].flatten(order="F")
         off_diag = e1 != e2
@@ -305,7 +310,15 @@ def test_hotspot_constraint_fd_time_at_ties():
 
     Note: the MATLAB fixture's own `tPhys` trajectory never hits a distinct-element tie
     (checked in `test_hotspot_constraint_matches_fixture`), so this branch is validated
-    only by this synthetic test, not cross-checked against MATLAB output.
+    only by this synthetic test, not cross-checked against MATLAB output. That's a
+    property of the fixture's corner-distance timefield, though, not of ties being rare
+    in general: `timefield_edge` (a linear ramp, constant down each column) produces
+    ~5% of neighbor pairs as structural exact ties at a realistic 180x60 mesh, surviving
+    density filtering -- so this isn't a hypothetical edge case for that timefield choice.
+    Before the fix, the bug wasn't just "wrong at a measure-zero set": DFT was ~rouf/4 for
+    near-ties and exactly 0 at exact ties, so dt1 was discontinuous in t -- a hole in the
+    gradient field that an optimizer driving a symmetric design toward equal print times
+    would walk straight into.
     """
     nelx, nely = 6, 4
     nel = nelx * nely

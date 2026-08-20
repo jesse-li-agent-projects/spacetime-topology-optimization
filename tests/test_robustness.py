@@ -319,9 +319,13 @@ def test_dft_zero_only_at_self_pairs():
     n = 50
     t = rng.uniform(0.0, 1.0, n)
 
-    # Self-pairs: a == b for every index, t[a] == t[b] trivially.
+    # Self-pairs: a == b for every index, t[a] == t[b] trivially. FT == 0.5 is the
+    # actual reason DFT == 0 is correct here (FT(t_a, t_a) is that constant regardless
+    # of t_a, so its true derivative is 0) -- pinned alongside DFT so the self-pair
+    # branch is self-justifying, not just asserted.
     idx = np.arange(n)
-    _, DFT_self = conductivity._pairwise_sigmoid_terms(t, idx, idx, rouf)
+    FT_self, DFT_self = conductivity._pairwise_sigmoid_terms(t, idx, idx, rouf)
+    assert np.all(FT_self == 0.5)
     assert np.all(DFT_self == 0.0)
 
     # Distinct-element ties: two disjoint index ranges sharing the same t values, so

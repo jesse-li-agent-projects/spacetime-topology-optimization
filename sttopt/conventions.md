@@ -74,3 +74,11 @@ original MATLAB, not a deliberate design choice, so this port fixed it
 (`_pairwise_sigmoid_terms` in `conductivity.py` now checks `a == b` by index rather
 than `t[a] == t[b]` by value) rather than reproducing it — correctness of the port
 takes priority over bug-for-bug fidelity to the source.
+
+Not a measure-zero edge case, either: `timefield_edge` (linear ramp, constant down
+each column) produces structural off-diagonal ties on ~5% of neighbor pairs at a
+realistic 180x60 mesh, surviving density filtering — so with that timefield choice
+this branch is live from iteration 0, not a rare coincidence. The old bug was also
+worse than "wrong on a small set": `DFT` was ~`rouf/4` approaching a tie and exactly
+`0` at one, so `dt1` was discontinuous in `t` — a hole in the gradient field that an
+optimizer driving a symmetric design toward equal print times would walk straight into.
