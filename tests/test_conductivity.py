@@ -315,9 +315,8 @@ def test_hotspot_constraint_fd_time_tie_discrepancy():
     """
     nelx, nely = 6, 4
     nel = nelx * nely
-    H, Hs = sp.eye(nel, format="csr"), np.ones(
-        nel
-    )  # identity filter: tPhys IS the raw variable
+    # identity filter: tPhys IS the raw variable
+    H, Hs = sp.eye(nel, format="csr"), np.ones(nel)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
     factor, Tcr = 1.0, 0.8
 
