@@ -21,7 +21,9 @@ from jaxtyping import Float, Int
 
 def neighbor_weights(
     nelx: int, nely: int, rmin_cond: float
-) -> tuple[Int[np.ndarray, " npairs"], Int[np.ndarray, " npairs"], Float[np.ndarray, " npairs"]]:
+) -> tuple[
+    Int[np.ndarray, " npairs"], Int[np.ndarray, " npairs"], Float[np.ndarray, " npairs"]
+]:
     """Symmetric distance-weighted neighbor structure for the hotspot constraint, as COO
     triplets `(e1, e2, w)` (0-indexed element numbers; `e1 == e2` self-pairs included).
 
@@ -53,9 +55,11 @@ def _pairwise_sigmoid_terms(
     rouf: float,
 ) -> tuple[Float[np.ndarray, " npairs"], Float[np.ndarray, " npairs"]]:
     """`FT_el{a}[b]`/`DFT_el{a}[b]` (a neighbor-sigmoid weight and its t-derivative) for a
-    COO pair array. `DFT` is exactly 0 at `t[a] == t[b]` ties (including every `a == b`
-    self-pair) -- a real property of the source, not a porting artifact; see
-    `conventions.md`'s "Known deviations".
+    COO pair array. `DFT` is exactly 0 only at `a == b` self-pairs, where `FT(t[a], t[a])`
+    is constant in `t[a]` so the true derivative really is 0; a genuine tie between two
+    *distinct* elements (`a != b`, `t[a] == t[b]`) gets the ordinary `rouf/4` like any
+    other point, since `FT` is smooth in `t[a]` there -- the source instead zeroed `DFT`
+    on any value-tie regardless of `a == b`, a bug (not a deviation); see `conventions.md`.
 
     Both are evaluated through `exp(-|z|)`, which lies in `(0, 1]` for every `z` and so
     cannot overflow. The source's literal forms do: `(1+exp(z))^-1` saturates to 0 and
@@ -68,7 +72,7 @@ def _pairwise_sigmoid_terms(
     ez = np.exp(-np.abs(z))
     FT = np.where(z >= 0, ez / (1.0 + ez), 1.0 / (1.0 + ez))
     # d/d(t[a]) of FT, which is even in z: exp(z)/(1+exp(z))^2 == exp(-|z|)/(1+exp(-|z|))^2.
-    DFT = np.where(ta == tb, 0.0, rouf * ez / (1.0 + ez) ** 2)
+    DFT = np.where(a == b, 0.0, rouf * ez / (1.0 + ez) ** 2)
     return FT, DFT
 
 

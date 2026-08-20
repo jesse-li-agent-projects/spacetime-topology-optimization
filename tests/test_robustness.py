@@ -283,15 +283,13 @@ def test_stable_sigmoid_matches_the_matlab_expression():
         FT_matlab = 1.0 / (1.0 + np.exp(z))
         DFT_matlab = FT_matlab**2 * rouf * np.exp(z)
 
-    # `z == 0` is an exact print-time tie, where the source (and so this port) forces
-    # DFT to 0 rather than the true rouf/4 -- a documented deviation, not something the
-    # overflow fix introduced, so it is pinned separately from the comparison.
-    ties = z == 0.0
-    assert np.all(DFT[ties] == 0.0)
-
+    # `a`/`b` are always distinct here, so `z == 0` is a genuine tie between distinct
+    # elements: DFT should be the ordinary rouf/4, matching DFT_matlab, not 0 (the
+    # source's `if TPhys(N_ele(o))==ti` zeroed it there too, but that was a bug --
+    # correct only for a == b self-pairs, not distinct-element ties; see
+    # conventions.md). So no special-casing needed: compare everywhere in `safe`.
     np.testing.assert_allclose(FT[safe], FT_matlab[safe], rtol=1e-14, atol=0)
-    compare = safe & ~ties
-    np.testing.assert_allclose(DFT[compare], DFT_matlab[compare], rtol=1e-14, atol=0)
+    np.testing.assert_allclose(DFT[safe], DFT_matlab[safe], rtol=1e-14, atol=0)
 
     # Extreme tail: finite everywhere, and still non-zero wherever the true value is
     # representable -- past |z| ~ 745 it genuinely underflows, so 0 is the correct
@@ -304,3 +302,36 @@ def test_stable_sigmoid_matches_the_matlab_expression():
     assert degraded[
         representable
     ].any(), "sanity: the extreme samples should break the source form"
+
+
+def test_dft_zero_only_at_self_pairs():
+    """Direct unit-level pin of the `a == b` branch in `_pairwise_sigmoid_terms`,
+    separate from the aggregate FD checks in test_conductivity.py: `DFT` must be
+    exactly 0 at every self-pair (`a == b`, where `FT(t_a, t_a)` is the constant 0.5
+    regardless of `t_a`, so its true derivative really is 0) and must be the ordinary
+    nonzero `rouf/4` at a genuine tie between two *distinct* elements (`a != b`,
+    `t[a] == t[b]`) -- the fix this module's other sigmoid test exercises only
+    indirectly (via distinct, never-equal index pairs) and test_conductivity.py's FD
+    checks exercise only in aggregate through the full `hotspot_constraint` pipeline.
+    """
+    rng = np.random.default_rng(3)
+    rouf = 17.0
+    n = 50
+    t = rng.uniform(0.0, 1.0, n)
+
+    # Self-pairs: a == b for every index, t[a] == t[b] trivially. FT == 0.5 is the
+    # actual reason DFT == 0 is correct here (FT(t_a, t_a) is that constant regardless
+    # of t_a, so its true derivative is 0) -- pinned alongside DFT so the self-pair
+    # branch is self-justifying, not just asserted.
+    idx = np.arange(n)
+    FT_self, DFT_self = conductivity._pairwise_sigmoid_terms(t, idx, idx, rouf)
+    assert np.all(FT_self == 0.5)
+    assert np.all(DFT_self == 0.0)
+
+    # Distinct-element ties: two disjoint index ranges sharing the same t values, so
+    # t[a[i]] == t[b[i]] for every i while a[i] != b[i] (b[i] = a[i] + n).
+    t_dup = np.concatenate([t, t])
+    a = np.arange(n)
+    b = a + n
+    _, DFT_tied = conductivity._pairwise_sigmoid_terms(t_dup, a, b, rouf)
+    np.testing.assert_allclose(DFT_tied, rouf / 4.0, rtol=1e-14, atol=0)
