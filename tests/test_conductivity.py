@@ -11,7 +11,7 @@ import scipy.sparse as sp
 
 import sttopt.conductivity as conductivity
 import sttopt.filters as filters
-from conftest import assert_close, load_fixture
+from conftest import assert_close, load_fixture, load_fixture_npz
 
 NELX, NELY = 7, 5
 RMIN_COND = 3
@@ -99,7 +99,9 @@ def test_hotspot_constraint_matches_fixture():
     H, Hs = filters.density_filter(nelx, nely, RMIN)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
 
-    xTilde_traj = _reconstruct_xTilde_traj(mma["xmma_all"], H, Hs, nelx, nely, volfrac, nloop)
+    xTilde_traj = _reconstruct_xTilde_traj(
+        mma["xmma_all"], H, Hs, nelx, nely, volfrac, nloop
+    )
 
     # The fixture's tPhys (seeded from tfield3, a corner-distance field, then MMA-perturbed)
     # never happens to put two DISTINCT elements at an exact tie -- confirmed here so the
@@ -131,6 +133,29 @@ def test_hotspot_constraint_matches_fixture():
         assert_close(tru_max, fx["tru_max_all"][k], tier="algebraic")
         assert_close(df1, fx["df1_all"][:, k], tier="algebraic")
         assert_close(dt1, fx["dt1_all"][:, k], tier="algebraic")
+
+
+def test_K_est_matches_golden_scenes():
+    """Regression fixture, not a MATLAB cross-check: 4 synthetic overhang scenes (bottom_up,
+    left_right, sharp_sigmoid, soft_sigmoid -- different build directions / sigmoid
+    sharpness) at a 168x120 grid, visually validated via conductivity_viz.tmp.py before
+    their K_est output was frozen as golden values here.
+
+    Only xPhys/tPhys/rouf/K_est are stored in the fixture -- e1/e2/w are recomputed from
+    (nelx, nely, rmin_cond) rather than persisted, since at this resolution the COO arrays
+    are ~744 MB (pair count scales ~rmin_cond**2 * nelx*nely) versus ~224 KB for the rest.
+    """
+    fx = load_fixture_npz("conductivity_golden_scenes")
+    nelx, nely, rmin_cond = int(fx["nelx"]), int(fx["nely"]), float(fx["rmin_cond"])
+    q = int(fx["q"])
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
+
+    for name in ["bottom_up", "left_right", "sharp_sigmoid", "soft_sigmoid"]:
+        xPhys = fx[f"{name}_xPhys"]
+        tPhys = fx[f"{name}_tPhys"]
+        rouf = float(fx[f"{name}_rouf"])
+        K_est = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, rouf)
+        assert_close(K_est, fx[f"{name}_K_est"], tier="algebraic")
 
 
 # --- Finite-difference internal-consistency checks (pure Python, no MATLAB fixture) ---
@@ -191,8 +216,10 @@ def test_hotspot_constraint_fd_density(factor):
             xm[j, i] -= h
             fd_x[e] = (fval_of(xp, t_raw) - fval_of(xm, t_raw)) / (2 * h)
 
-        print(f"factor={factor} seed={seed} max|df1|={np.abs(df1).max():.3e} "
-              f"max|df1-fd|={np.abs(df1 - fd_x).max():.3e}")
+        print(
+            f"factor={factor} seed={seed} max|df1|={np.abs(df1).max():.3e} "
+            f"max|df1-fd|={np.abs(df1 - fd_x).max():.3e}"
+        )
         np.testing.assert_allclose(df1, fd_x, rtol=1e-3, atol=1e-6)
 
 
@@ -256,8 +283,10 @@ def test_hotspot_constraint_fd_time_generic(factor):
     # Tight everywhere: max observed |dt1 - fd| ~1e-9 at factor=1 (pure FD truncation
     # noise, scales with factor), no bounded tie-point residual -- confirms the
     # self-term handling is correct, not merely "close enough on average".
-    print(f"factor={factor} max|dt1|={np.abs(dt1).max():.3e} "
-          f"max|dt1-fd|={np.abs(dt1 - fd_t).max():.3e}")
+    print(
+        f"factor={factor} max|dt1|={np.abs(dt1).max():.3e} "
+        f"max|dt1-fd|={np.abs(dt1 - fd_t).max():.3e}"
+    )
     np.testing.assert_allclose(dt1, fd_t, rtol=1e-4, atol=1e-7 * factor)
 
 
@@ -286,7 +315,9 @@ def test_hotspot_constraint_fd_time_tie_discrepancy():
     """
     nelx, nely = 6, 4
     nel = nelx * nely
-    H, Hs = sp.eye(nel, format="csr"), np.ones(nel)  # identity filter: tPhys IS the raw variable
+    H, Hs = sp.eye(nel, format="csr"), np.ones(
+        nel
+    )  # identity filter: tPhys IS the raw variable
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
     factor, Tcr = 1.0, 0.8
 
@@ -321,7 +352,9 @@ def test_hotspot_constraint_fd_time_tie_discrepancy():
             tm[j, i] -= h
             fd_t[e] = (fval_of(tp) - fval_of(tm)) / (2 * h)
         max_diffs[h] = np.abs(dt1 - fd_t).max()
-        print(f"h={h:.0e} max|dt1-fd|={max_diffs[h]:.3e} max|dt1|={np.abs(dt1).max():.3e}")
+        print(
+            f"h={h:.0e} max|dt1-fd|={max_diffs[h]:.3e} max|dt1|={np.abs(dt1).max():.3e}"
+        )
 
     # A real (nonvanishing) discrepancy is present...
     assert max_diffs[1e-6] > 1e-3

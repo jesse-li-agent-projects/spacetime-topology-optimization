@@ -25,6 +25,16 @@ def load_fixture(name: str) -> dict:
     )
 
 
+def load_fixture_npz(name: str) -> dict:
+    """Load a Python-generated (non-MATLAB) fixture by base filename (no `.npz` suffix).
+
+    For regression fixtures with no MATLAB counterpart -- e.g. golden values frozen from
+    a Python scene the source MATLAB code never modeled -- 0-indexed throughout.
+    """
+    with np.load(FIXTURES_DIR / f"{name}.npz") as data:
+        return dict(data)
+
+
 def e2e_rtol(
     iteration: int, *, base_rtol: float = 1e-9, max_rtol: float = 1e-2
 ) -> float:
