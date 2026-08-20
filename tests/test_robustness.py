@@ -283,15 +283,13 @@ def test_stable_sigmoid_matches_the_matlab_expression():
         FT_matlab = 1.0 / (1.0 + np.exp(z))
         DFT_matlab = FT_matlab**2 * rouf * np.exp(z)
 
-    # `z == 0` is an exact print-time tie, where the source (and so this port) forces
-    # DFT to 0 rather than the true rouf/4 -- a documented deviation, not something the
-    # overflow fix introduced, so it is pinned separately from the comparison.
-    ties = z == 0.0
-    assert np.all(DFT[ties] == 0.0)
-
+    # `a`/`b` are always distinct here, so `z == 0` is a genuine tie between distinct
+    # elements: DFT should be the ordinary rouf/4, matching DFT_matlab, not 0 (the
+    # source's `if TPhys(N_ele(o))==ti` zeroed it there too, but that was a bug --
+    # correct only for a == b self-pairs, not distinct-element ties; see
+    # conventions.md). So no special-casing needed: compare everywhere in `safe`.
     np.testing.assert_allclose(FT[safe], FT_matlab[safe], rtol=1e-14, atol=0)
-    compare = safe & ~ties
-    np.testing.assert_allclose(DFT[compare], DFT_matlab[compare], rtol=1e-14, atol=0)
+    np.testing.assert_allclose(DFT[safe], DFT_matlab[safe], rtol=1e-14, atol=0)
 
     # Extreme tail: finite everywhere, and still non-zero wherever the true value is
     # representable -- past |z| ~ 745 it genuinely underflows, so 0 is the correct

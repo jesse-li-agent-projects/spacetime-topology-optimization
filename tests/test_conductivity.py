@@ -226,19 +226,16 @@ def test_hotspot_constraint_fd_density(factor):
 @pytest.mark.parametrize("factor", [1.0, 1.7])
 def test_hotspot_constraint_fd_time_generic(factor):
     """dt1 (time sensitivity) vs. central-difference on a generic random field, where
-    (verified empirically -- see below and the sibling `_tie_discrepancy` test) no two
-    distinct elements' filtered `tPhys` values coincide, so the only exact tie any pair
-    ever hits is each element's own trivial self-comparison (`tPhys[a] == tPhys[a]`).
-    That structural self-tie's true contribution to the gradient is genuinely 0 (it's
-    `sigmoid(rouf*(t_a - t_a)) = sigmoid(0)`, a constant independent of `t_a`, not a
-    numerically-coincidental near-tie that a perturbation could shift) -- so `DFT=0`
-    there isn't an approximation, and FD is expected to (and does) match analytic
-    tightly, everywhere, for a field like this. (This sharpens conventions.md's phrasing
-    that "the true derivative at Δt=0 is rouf/4" -- that's the true one-sided partial
-    derivative of the *cross*-pair sigmoid at a coincidental tie between two distinct
-    elements; the self-pair's *total* derivative along t_a==t_b is exactly 0, matching
-    `DFT_aa=0` exactly, not approximately. See `test_hotspot_constraint_fd_time_tie_discrepancy`
-    for the genuine (distinct-element) tie case, where the documented deviation applies.)
+    (verified empirically below) no two distinct elements' filtered `tPhys` values
+    coincide, so the only exact tie any pair ever hits is each element's own trivial
+    self-comparison (`tPhys[a] == tPhys[a]`). That structural self-tie's true
+    contribution to the gradient is genuinely 0 (it's `sigmoid(rouf*(t_a - t_a)) =
+    sigmoid(0)`, a constant independent of `t_a`, not a numerically-coincidental
+    near-tie that a perturbation could shift) -- so `DFT_aa=0` there isn't an
+    approximation, and FD matches analytic tightly, everywhere, for a field like this.
+    See `test_hotspot_constraint_fd_time_at_ties` for the genuine (distinct-element)
+    tie case, which -- since the `a == b` fix in `_pairwise_sigmoid_terms` -- now
+    matches FD here too, rather than exhibiting the bounded discrepancy it used to.
     """
     nelx, nely = 6, 4
     RMIN = 2
@@ -290,24 +287,21 @@ def test_hotspot_constraint_fd_time_generic(factor):
     np.testing.assert_allclose(dt1, fd_t, rtol=1e-4, atol=1e-7 * factor)
 
 
-def test_hotspot_constraint_fd_time_tie_discrepancy():
-    """Documents the real, bounded, non-shrinking-with-h FD-vs-analytic discrepancy at
-    a genuine tie between two DISTINCT elements (as opposed to the always-present,
-    always-exact self-tie handled correctly above): `DFT(o) = 0` at any exact
-    `tPhys[a] == tPhys[b]` (conventions.md's documented deviation; true one-sided
-    derivative there is `rouf/4`, not 0). Forced via a uniform `tPhys` and an identity
-    density filter (`H=I`, `Hs=1`) so `tPhys` can be perturbed directly and stays exactly
-    uniform bit-for-bit (routing a uniform raw field through the *real* density filter,
-    as in the sibling tests, does NOT reliably preserve exact equality -- H's matrix-
-    multiply accumulation order and Hs's row-sum reduction can round differently in the
-    last ULP -- so this test sidesteps the filter rather than relying on that).
+def test_hotspot_constraint_fd_time_at_ties():
+    """dt1 vs. central-difference at a genuine tie between two DISTINCT elements (as
+    opposed to the always-present, always-exact self-tie handled by the sibling
+    `_generic` test above): forced via a uniform `tPhys` and an identity density filter
+    (`H=I`, `Hs=1`) so `tPhys` can be perturbed directly and stays exactly uniform
+    bit-for-bit (routing a uniform raw field through the *real* density filter, as in
+    the sibling tests, does NOT reliably preserve exact equality -- H's matrix-multiply
+    accumulation order and Hs's row-sum reduction can round differently in the last ULP
+    -- so this test sidesteps the filter rather than relying on that).
 
-    Empirically: with every pair tied, `dt1` is exactly 0 (every `DFT` term it's built
-    from is 0 by construction) while the true derivative, seen by FD, is ~0.66 -- a
-    total, not partial, mismatch here, not a small residual. `max|dt1 - fd|` is
-    IDENTICAL to 3 significant figures across `h` from 1e-3 down to 1e-7 -- i.e. it does
-    not shrink like a truncation error, confirming it's a real, bounded artifact of the
-    FD probe crossing an exact tie, not a bug in the analytic port.
+    `_pairwise_sigmoid_terms` used to zero `DFT` on any value-tie `t[a] == t[b]`,
+    ported verbatim from a MATLAB bug (`if TPhys(N_ele(o))==ti`, conflating "value tie"
+    with "self-pair"; see conventions.md). That's now fixed to check `a == b` by index,
+    so a genuine tie between distinct elements gets the ordinary `rouf/4` derivative
+    instead of 0, and FD matches analytic tightly here too, not just in the generic case.
 
     Note: the MATLAB fixture's own `tPhys` trajectory never hits a distinct-element tie
     (checked in `test_hotspot_constraint_matches_fixture`), so this branch is validated
@@ -334,6 +328,8 @@ def test_hotspot_constraint_fd_time_tie_discrepancy():
     _, _, dt1 = conductivity.hotspot_constraint(
         xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF
     )
+    # Guard well above the atol below: with the fix, ties no longer force dt1 to 0.
+    assert np.abs(dt1).max() > 1e-3
 
     def fval_of(tPhys):
         fval, _, _ = conductivity.hotspot_constraint(
@@ -341,23 +337,16 @@ def test_hotspot_constraint_fd_time_tie_discrepancy():
         )
         return fval
 
-    max_diffs = {}
-    for h in [1e-3, 1e-4, 1e-5, 1e-6, 1e-7]:
-        fd_t = np.zeros(nely * nelx)
-        for e in range(nely * nelx):
-            j, i = e % nely, e // nely
-            tp, tm = tPhys.copy(), tPhys.copy()
-            tp[j, i] += h
-            tm[j, i] -= h
-            fd_t[e] = (fval_of(tp) - fval_of(tm)) / (2 * h)
-        max_diffs[h] = np.abs(dt1 - fd_t).max()
-        print(
-            f"h={h:.0e} max|dt1-fd|={max_diffs[h]:.3e} max|dt1|={np.abs(dt1).max():.3e}"
-        )
+    h = 1e-6
+    fd_t = np.zeros(nely * nelx)
+    for e in range(nely * nelx):
+        j, i = e % nely, e // nely
+        tp, tm = tPhys.copy(), tPhys.copy()
+        tp[j, i] += h
+        tm[j, i] -= h
+        fd_t[e] = (fval_of(tp) - fval_of(tm)) / (2 * h)
 
-    # A real (nonvanishing) discrepancy is present...
-    assert max_diffs[1e-6] > 1e-3
-    # ...and stays essentially constant across 4 decades of h (does not shrink like a
-    # truncation error would): the smallest and largest h agree to within 1%.
-    ratio = max_diffs[1e-3] / max_diffs[1e-7]
-    assert 0.99 < ratio < 1.01
+    print(
+        f"max|dt1|={np.abs(dt1).max():.3e} max|dt1-fd|={np.abs(dt1 - fd_t).max():.3e}"
+    )
+    np.testing.assert_allclose(dt1, fd_t, rtol=1e-4, atol=1e-7 * factor)

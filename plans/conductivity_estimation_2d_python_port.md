@@ -120,6 +120,13 @@ before any porting starts rather than discovered ad hoc:
   fixtures are authoritative for *port fidelity* (reproduce the original, ties included),
   FD checks are authoritative for *math correctness* elsewhere; where they disagree at
   known tie points, that's documented, not "fixed" unilaterally.
+
+  **Revisited during correctness review:** this was misdiagnosed above as an
+  intentional deviation. It's actually a bug in the original MATLAB (`if
+  TPhys(N_ele(o))==ti` checks value-equality where it should check index-equality
+  against the self-neighbor) — correct only by coincidence for the always-tied
+  self-pair, wrong for any genuine tie between distinct elements. Fixed in
+  `_pairwise_sigmoid_terms` (checks `a == b` by index now); see `conventions.md`.
 - **The hotspot constraint's `factor` is stateful** (`if rem(loop,25)==0`, carried across
   iterations) — not a pure function of `(xPhys, tPhys)`. Unit tests must inject `factor`
   explicitly rather than recomputing it; E2E comparisons must start from the same

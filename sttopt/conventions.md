@@ -62,8 +62,15 @@ assumption is recorded.
 ## Known deviations (not bugs)
 
 See the plan (`plans/conductivity_estimation_2d_python_port.md`, "Known traps") for the
-full list. The one that affects test expectations directly: `DFT(o) = 0` on exact
-ties in the hotspot constraint's finite-difference-vs-analytic comparison is a real
-property of the original code (the true derivative at `Δt=0` is `rouf/4`, not 0), not
-a porting bug — FD checks are expected to disagree with the analytic gradient exactly
-at tie points, and this is asserted explicitly rather than avoided.
+full list.
+
+One entry there no longer applies: `DFT(o) = 0` on exact `t[a] == t[b]` ties was
+originally ported verbatim from the source (`conductivity_estimation_stto_main.m`,
+`if TPhys(N_ele(o))==ti`), which zeros the sigmoid's t-derivative on *any* value-tie.
+That's only correct for `a == b` self-pairs, where `FT(t[a], t[a])` is constant in
+`t[a]` so the true derivative is 0 — a genuine tie between two *distinct* elements has
+the ordinary `rouf/4` derivative, since `FT` is smooth there. This was a bug in the
+original MATLAB, not a deliberate design choice, so this port fixed it
+(`_pairwise_sigmoid_terms` in `conductivity.py` now checks `a == b` by index rather
+than `t[a] == t[b]` by value) rather than reproducing it — correctness of the port
+takes priority over bug-for-bug fidelity to the source.
