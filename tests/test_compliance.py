@@ -5,6 +5,7 @@ See conftest.py/conventions.md for fixture format and tolerance policy.
 """
 
 import numpy as np
+import pytest
 
 import sttopt.compliance as compliance
 import sttopt.fem as fem
@@ -132,6 +133,85 @@ def test_whole_compliance_axial_bar_patch():
     L, A = nelx, nely
     c_analytic = t**2 * L * A / Emax  # = P^2 L / (E A), with resultant P = t * A
     np.testing.assert_allclose(c, c_analytic, rtol=1e-9)
+
+
+def _cantilever_beam_compliance(nely: int) -> tuple[float, float]:
+    """whole_compliance's `c` (and the Timoshenko-beam prediction) for a slender
+    cantilever, at a given through-thickness element count.
+
+    Full clamp at x=0, tip load P distributed as consistent nodal forces across the
+    x=nelx edge (a concentrated corner load would be singular under mesh refinement,
+    and off-centroid, so it isn't a fair comparison). c == F^T U == P * tip deflection,
+    predicted by bending (Euler-Bernoulli) plus shear (Timoshenko correction, negligible
+    at L/H == 20 regardless of which of the several published shear-coefficient
+    conventions is used).
+
+    L/H == 20 is held fixed as `nely` grows, so this isn't exact even in the limit:
+    the full clamp is stiffer than beam theory's idealized support, and standard
+    full-integration Q4 elements are mildly over-stiff in bending (shear locking) --
+    both push c_FEM below c_analytic by an amount that shrinks with mesh refinement
+    (see `test_whole_compliance_cantilever_beam_converges`) but never exactly vanishes.
+    """
+    nelx = 20 * nely  # L/H == 20: slender enough that shear is negligible
+    E, nu, P = 1.0, 0.3, 1.0
+    Emin, Emax, penal = 1e-9, 1.0, 3
+    ndof = 2 * (nelx + 1) * (nely + 1)
+    xPhys = np.ones((nely, nelx))
+    KE = fem.plane_stress_KE(nu)
+    edofMat = fem.element_dof_map(nelx, nely)
+
+    fixeddofs = [d for row in range(nely + 1) for d in _dofs(row, 0, nely)]
+    freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)
+
+    F = np.zeros(ndof)
+    _add_edge_traction(
+        F,
+        [_node_id(row, nelx, nely) for row in range(nely + 1)],
+        (0.0, -P / nely),
+    )
+
+    c, dcx = compliance.whole_compliance(
+        xPhys, KE, edofMat, Emin, Emax, penal, freedofs, F, ndof
+    )
+
+    L, H = nelx, nely
+    I = H**3 / 12
+    delta_bend = P * L**3 / (3 * E * I)
+    shear_ratio = (3 / 5) * (1 + nu) * (H / L) ** 2  # Timoshenko shear correction
+    c_analytic = delta_bend * (1 + shear_ratio)
+    return c, c_analytic
+
+
+# nely -> max acceptable |c_FEM - c_analytic| / c_analytic, each with headroom above the
+# measured error at that resolution (-2.03%, -0.58%, -0.21%, -0.12%) -- not guessed.
+_CANTILEVER_MAX_PCT_ERROR = {5: 0.025, 10: 0.008, 20: 0.003, 40: 0.0016}
+
+
+@pytest.mark.parametrize("nely", sorted(_CANTILEVER_MAX_PCT_ERROR))
+def test_whole_compliance_cantilever_beam(nely):
+    c, c_analytic = _cantilever_beam_compliance(nely)
+    assert (
+        c < c_analytic
+    ), "expected a stiffer-clamp/shear-locking bias below c_analytic"
+    np.testing.assert_allclose(c, c_analytic, rtol=_CANTILEVER_MAX_PCT_ERROR[nely])
+
+
+def test_whole_compliance_cantilever_beam_converges():
+    """The FEM/beam-theory gap should shrink monotonically as the mesh refines.
+
+    A stronger, less arbitrary check than any single resolution's tolerance in
+    `test_whole_compliance_cantilever_beam`: a real discretization error shrinks with
+    refinement, so a bug that merely happens to land within one level's tolerance band
+    would still fail this test.
+    """
+    errors = [
+        abs(c - c_analytic) / c_analytic
+        for c, c_analytic in (
+            _cantilever_beam_compliance(nely)
+            for nely in sorted(_CANTILEVER_MAX_PCT_ERROR)
+        )
+    ]
+    assert errors == sorted(errors, reverse=True), f"errors not decreasing: {errors}"
 
 
 # --- Finite-difference internal-consistency checks (pure Python, no MATLAB fixture) ---
