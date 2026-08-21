@@ -214,6 +214,85 @@ def test_whole_compliance_cantilever_beam_converges():
     assert errors == sorted(errors, reverse=True), f"errors not decreasing: {errors}"
 
 
+def _gravity_cantilever_compliance(
+    nelx: int,
+    nely: int,
+    Emax: float,
+    tPhys: np.ndarray | None = None,
+    ti: float = 0.5,
+    lam: float = 10.0,
+    w_scale: float = 1.0,
+) -> float:
+    """`gravity_compliance`'s `c` for a fully-clamped, self-weight-loaded cantilever.
+
+    `tPhys`/`ti`/`lam` default to a fully built structure: `tPhys` all-zero makes
+    every element exactly "active" for any `ti` > 0 (`time_mask`'s sigmoid is exactly
+    1, not just approximately -- `num` cancels to 0 in that case), so this isolates
+    the self-weight load path with no sigmoid-softening error. `w_scale` rescales
+    `gravity.gravity_load_matrix`'s load; see
+    `test_gravity_compliance_partial_build_matches_truncated_mesh` for why.
+    """
+    Emin, penal = 1e-9 * Emax, 3
+    ndof = 2 * (nelx + 1) * (nely + 1)
+    xPhys = np.ones((nely, nelx))
+    if tPhys is None:
+        tPhys = np.zeros((nely, nelx))
+    KE = fem.plane_stress_KE(nu=0.3)
+    edofMat = fem.element_dof_map(nelx, nely)
+
+    fixeddofs = [d for row in range(nely + 1) for d in _dofs(row, 0, nely)]
+    freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)
+    C = gravity.gravity_load_matrix(nelx, nely) * w_scale
+
+    c, _, _ = compliance.gravity_compliance(
+        xPhys, tPhys, KE, edofMat, Emin, Emax, penal, ti, C, lam, freedofs, ndof
+    )
+    return c
+
+
+def _self_weight_cantilever_analytic(nelx: int, nely: int, Emax: float) -> float:
+    """Euler-Bernoulli compliance of a fully built, uniformly self-loaded cantilever.
+
+    Shear is deliberately left uncorrected here, unlike `_cantilever_beam_compliance`'s
+    Timoshenko term for the tip-load case: at this test's L/H == 10 slenderness, the
+    FEM/bending-only gap plateaus at shear's fixed relative contribution instead of
+    shrinking to zero under mesh refinement (measured -1.74%, +0.59%, +1.22%, +1.38%
+    at nely = 4, 8, 16, 32) -- which is why the tolerance below is a flat bound rather
+    than a per-resolution shrinking one.
+    """
+    # Total self-weight is 1 at full density regardless of mesh size (`gravity.py`'s
+    # `fe` normalization), so the load per unit length is w = 1/nelx.
+    L, H, w = nelx, nely, 1.0 / nelx
+    I = H**3 / 12
+    return w**2 * L**5 / (20 * Emax * I)
+
+
+# headroom above the measured 1.74% (see helper docstring)
+_SELF_WEIGHT_MAX_PCT_ERROR = 0.025
+
+
+@pytest.mark.parametrize("Emax", [1.0, 2.5])
+@pytest.mark.parametrize("nely", [4, 8, 16])
+def test_gravity_compliance_self_weight_cantilever(nely, Emax):
+    # L/H == 10: reasonably slender, but (per helper docstring) not slender enough for
+    # the uncorrected shear bias to vanish -- absorbed into the flat tolerance instead.
+    nelx = 10 * nely
+    c = _gravity_cantilever_compliance(nelx, nely, Emax)
+    c_analytic = _self_weight_cantilever_analytic(nelx, nely, Emax)
+    np.testing.assert_allclose(c, c_analytic, rtol=_SELF_WEIGHT_MAX_PCT_ERROR)
+
+
+def test_gravity_compliance_scales_as_1_over_Emax():
+    """Self-weight load doesn't depend on `Emax` (only stiffness does), so `c` should
+    scale as exactly `1/Emax` -- a stronger, exact check than the beam-theory
+    tolerance above, isolating the `Emax` path from bending-theory approximation
+    error."""
+    nelx, nely = 80, 8
+    c1 = _gravity_cantilever_compliance(nelx, nely, Emax=1.0)
+    c2 = _gravity_cantilever_compliance(nelx, nely, Emax=3.7)
+    np.testing.assert_allclose(c1, c2 * 3.7, rtol=1e-8)
+
+
 # --- Finite-difference internal-consistency checks (pure Python, no MATLAB fixture) ---
 
 

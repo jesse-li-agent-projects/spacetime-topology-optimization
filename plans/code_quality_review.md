@@ -23,13 +23,11 @@ patch test, cantilever-beam vs. Timoshenko theory with a mesh-refinement converg
 check -- `tests/test_compliance.py`), independent of the MATLAB fixture. Two more would
 close the remaining first-principles gaps:
 
-- [ ] `gravity_compliance`'s self-weight path is untested against ground truth (only
-  MATLAB-fixture and FD-self-consistency, same caveat as `conventions.md`'s framing:
-  those can't catch a bug shared with the MATLAB source). A self-weight cantilever has a
-  standard closed form: tip deflection `delta = w*L^4/(8*E*I)` for a uniformly
-  distributed load `w` per unit length (here, self-weight via `gravity.gravity_load_matrix`
-  at full density). Same slenderness/convergence-sweep approach as the tip-load
-  cantilever test should carry over directly.
+- [x] `gravity_compliance`'s self-weight path is now checked against a closed-form
+  self-weight cantilever (`test_gravity_compliance_self_weight_cantilever`, plus an
+  exact `Emax`-scaling check), Euler-Bernoulli only (no Timoshenko term -- a flat
+  tolerance at L/H == 10 rather than a per-resolution shrinking one, since the
+  uncorrected shear contribution doesn't vanish under mesh refinement).
 - [ ] Nothing exercises the `tPhys`/`time_mask` path against ground truth -- existing
   coverage (fixture + FD) never independently checks *what* a given `tPhys` field should
   produce, only that the Python port's numbers move consistently with themselves/MATLAB.
