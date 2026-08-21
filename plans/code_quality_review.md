@@ -16,6 +16,35 @@ correctness-fix commit happened to be in progress when they were noticed.
 
 ## Open items
 
+### `compliance.py` -- analytic ground-truth test coverage
+
+`whole_compliance` now has closed-form checks against elasticity theory (bar-in-tension
+patch test, cantilever-beam vs. Timoshenko theory with a mesh-refinement convergence
+check -- `tests/test_compliance.py`), independent of the MATLAB fixture. Two more would
+close the remaining first-principles gaps:
+
+- [ ] `gravity_compliance`'s self-weight path is untested against ground truth (only
+  MATLAB-fixture and FD-self-consistency, same caveat as `conventions.md`'s framing:
+  those can't catch a bug shared with the MATLAB source). A self-weight cantilever has a
+  standard closed form: tip deflection `delta = w*L^4/(8*E*I)` for a uniformly
+  distributed load `w` per unit length (here, self-weight via `gravity.gravity_load_matrix`
+  at full density). Same slenderness/convergence-sweep approach as the tip-load
+  cantilever test should carry over directly.
+- [ ] Nothing exercises the `tPhys`/`time_mask` path against ground truth -- existing
+  coverage (fixture + FD) never independently checks *what* a given `tPhys` field should
+  produce, only that the Python port's numbers move consistently with themselves/MATLAB.
+  Idea: a cantilever built up over deposition time (layer-by-layer through the depth, or
+  section-by-section along the length) with a `tPhys` field encoding that build order, at
+  a stage time `ti` before the whole beam is complete. The un-built portion should
+  contribute ~nothing to stiffness (via `time_mask`'s sigmoid), so compliance at partial
+  build should match the closed-form compliance of the *shorter* (or *thinner*) beam that
+  is actually built by that stage -- e.g. a half-built cantilever (by length) should
+  compliance-match a cantilever of half the length under the same tip load, modulo the
+  sigmoid's transition sharpness (`lam`) softening the cutoff. Needs some thought on how
+  to keep the sigmoid transition zone from dominating the comparison (either a very sharp
+  `lam` at the cost of conditioning, or explicitly modeling the softened transition into
+  the closed-form comparison).
+
 ### `timefield.py`
 
 - [ ] `init_timefield`'s `variant` parameter is a bare `int` (1/2/3, `ValueError` on
