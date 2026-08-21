@@ -20,28 +20,20 @@ correctness-fix commit happened to be in progress when they were noticed.
 
 `whole_compliance` now has closed-form checks against elasticity theory (bar-in-tension
 patch test, cantilever-beam vs. Timoshenko theory with a mesh-refinement convergence
-check -- `tests/test_compliance.py`), independent of the MATLAB fixture. Two more would
-close the remaining first-principles gaps:
+check -- `tests/test_compliance.py`), independent of the MATLAB fixture. So does
+`gravity_compliance`, closing the remaining first-principles gaps:
 
 - [x] `gravity_compliance`'s self-weight path is now checked against a closed-form
   self-weight cantilever (`test_gravity_compliance_self_weight_cantilever`, plus an
   exact `Emax`-scaling check), Euler-Bernoulli only (no Timoshenko term -- a flat
   tolerance at L/H == 10 rather than a per-resolution shrinking one, since the
   uncorrected shear contribution doesn't vanish under mesh refinement).
-- [ ] Nothing exercises the `tPhys`/`time_mask` path against ground truth -- existing
-  coverage (fixture + FD) never independently checks *what* a given `tPhys` field should
-  produce, only that the Python port's numbers move consistently with themselves/MATLAB.
-  Idea: a cantilever built up over deposition time (layer-by-layer through the depth, or
-  section-by-section along the length) with a `tPhys` field encoding that build order, at
-  a stage time `ti` before the whole beam is complete. The un-built portion should
-  contribute ~nothing to stiffness (via `time_mask`'s sigmoid), so compliance at partial
-  build should match the closed-form compliance of the *shorter* (or *thinner*) beam that
-  is actually built by that stage -- e.g. a half-built cantilever (by length) should
-  compliance-match a cantilever of half the length under the same tip load, modulo the
-  sigmoid's transition sharpness (`lam`) softening the cutoff. Needs some thought on how
-  to keep the sigmoid transition zone from dominating the comparison (either a very sharp
-  `lam` at the cost of conditioning, or explicitly modeling the softened transition into
-  the closed-form comparison).
+- [x] The `tPhys`/`time_mask` path is now checked
+  (`test_gravity_compliance_partial_build_matches_truncated_mesh`): a cantilever built
+  up column-by-column along its length, stopped partway through the build, compared
+  against an actual shorter mesh built to full density -- two independent FEM solves
+  rather than a second closed form layered on top of beam theory, using a sharp `lam`
+  and rescaling the truncated mesh's load to sidestep the sigmoid-softening question.
 
 ### `timefield.py`
 

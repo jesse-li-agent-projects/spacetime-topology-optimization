@@ -293,6 +293,38 @@ def test_gravity_compliance_scales_as_1_over_Emax():
     np.testing.assert_allclose(c1, c2 * 3.7, rtol=1e-8)
 
 
+def test_gravity_compliance_partial_build_matches_truncated_mesh():
+    """`gravity_compliance`'s `tPhys`/`ti` path: a cantilever built up column-by-column
+    along its length, stopped partway through the build, should match the self-weight
+    compliance of a *shorter* cantilever built to full density over just the built
+    portion.
+
+    Compares two independent FEM solves rather than layering a second closed-form
+    approximation on top of the beam-theory one above: the full mesh's build-order
+    field (`tPhys` linear in x) with `ti` set between column `m - 1`'s and column
+    `m`'s `tPhys` -- away from either, so a sharp `lam` leaves the sigmoid's
+    transition zone with negligible weight on any column -- against an actual
+    `m`-column mesh built at full density.
+
+    The truncated mesh's own `gravity.gravity_load_matrix` normalizes weight-per-length
+    by its own (smaller) `nelx`, so its load is rescaled by `m / nelx` to match the
+    full mesh's per-length convention before comparing; skipping that rescale would
+    make the two differ by exactly `(m / nelx) ** 2`, since compliance is quadratic in
+    load -- that's a load-convention mismatch, not evidence of a bug.
+    """
+    nely, nelx, m = 8, 80, 40
+    # sharp: sigmoid transition width is far below the 1/nelx column spacing
+    lam = 1000.0
+    tPhys = np.tile(np.arange(nelx) / nelx, (nely, 1))
+    ti = (m - 0.5) / nelx
+
+    c_partial = _gravity_cantilever_compliance(
+        nelx, nely, 2.5, tPhys=tPhys, ti=ti, lam=lam
+    )
+    c_truncated = _gravity_cantilever_compliance(m, nely, 2.5, w_scale=m / nelx)
+    np.testing.assert_allclose(c_partial, c_truncated, rtol=1e-4)
+
+
 # --- Finite-difference internal-consistency checks (pure Python, no MATLAB fixture) ---
 
 
