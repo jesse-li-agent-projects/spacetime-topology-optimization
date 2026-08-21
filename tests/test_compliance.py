@@ -96,7 +96,9 @@ def _add_edge_traction(F, nodes, traction):
         F[2 * node + 1] += weight * ty
 
 
-def test_whole_compliance_axial_bar_patch():
+@pytest.mark.parametrize("Emax", [1.0, 3.7])
+@pytest.mark.parametrize("t", [1.0, 2.5])
+def test_whole_compliance_axial_bar_patch(t, Emax):
     """whole_compliance's `c` against the exact closed-form bar-in-tension compliance.
 
     Roller BCs plus a uniform edge traction reproduce a bar in uniaxial tension --
@@ -105,10 +107,12 @@ def test_whole_compliance_axial_bar_patch():
     compliance.py's own `ce`/`simp`/`sum(...)` path against elasticity theory, rather
     than only against the MATLAB fixture (matches-fixture tests above) or against itself
     (FD tests below) -- neither of which would catch a bug shared with the MATLAB source.
+
+    `t`/`Emax` are swept off 1.0 so the closed form's `t**2` and `1/Emax` are actually
+    exercised; at unit values a missing factor of either is invisible (see PR #15).
     """
     nelx, nely = 7, 5  # asymmetric, per conventions.md
-    t = 1.0  # traction magnitude
-    Emin, Emax, penal = 1e-9, 1.0, 3
+    Emin, penal = 1e-9 * Emax, 3
     ndof = 2 * (nelx + 1) * (nely + 1)
     xPhys = np.ones((nely, nelx))
     KE = fem.plane_stress_KE(nu=0.3)
@@ -135,16 +139,20 @@ def test_whole_compliance_axial_bar_patch():
     np.testing.assert_allclose(c, c_analytic, rtol=1e-9)
 
 
-def _cantilever_beam_compliance(nely: int) -> tuple[float, float]:
+def _cantilever_beam_compliance(
+    nely: int, P: float = 1.0, Emax: float = 1.0
+) -> tuple[float, float]:
     """whole_compliance's `c` (and the Timoshenko-beam prediction) for a slender
     cantilever, at a given through-thickness element count.
 
     Full clamp at x=0, tip load P distributed as consistent nodal forces across the
     x=nelx edge (a concentrated corner load would be singular under mesh refinement,
     and off-centroid, so it isn't a fair comparison). c == F^T U == P * tip deflection,
-    predicted by bending (Euler-Bernoulli) plus shear (Timoshenko correction, negligible
-    at L/H == 20 regardless of which of the several published shear-coefficient
-    conventions is used).
+    so `c_analytic` is quadratic in P -- it has units of work, not of deflection.
+
+    Bending (Euler-Bernoulli) plus the Timoshenko shear correction. That correction is
+    small at L/H == 20 but load-bearing: dropping it, or using a shear coefficient other
+    than k == 5/6, fails the tests below (see PR #15).
 
     L/H == 20 is held fixed as `nely` grows, so this isn't exact even in the limit:
     the full clamp is stiffer than beam theory's idealized support, and standard
@@ -152,9 +160,9 @@ def _cantilever_beam_compliance(nely: int) -> tuple[float, float]:
     both push c_FEM below c_analytic by an amount that shrinks with mesh refinement
     (see `test_whole_compliance_cantilever_beam_converges`) but never exactly vanishes.
     """
-    nelx = 20 * nely  # L/H == 20: slender enough that shear is negligible
-    E, nu, P = 1.0, 0.3, 1.0
-    Emin, Emax, penal = 1e-9, 1.0, 3
+    nelx = 20 * nely  # L/H == 20
+    nu = 0.3
+    Emin, penal = 1e-9 * Emax, 3
     ndof = 2 * (nelx + 1) * (nely + 1)
     xPhys = np.ones((nely, nelx))
     KE = fem.plane_stress_KE(nu)
@@ -176,9 +184,9 @@ def _cantilever_beam_compliance(nely: int) -> tuple[float, float]:
 
     L, H = nelx, nely
     I = H**3 / 12
-    delta_bend = P * L**3 / (3 * E * I)
-    shear_ratio = (3 / 5) * (1 + nu) * (H / L) ** 2  # Timoshenko shear correction
-    c_analytic = delta_bend * (1 + shear_ratio)
+    delta_bend = P * L**3 / (3 * Emax * I)
+    shear_ratio = (3 / 5) * (1 + nu) * (H / L) ** 2  # Timoshenko, rectangular k = 5/6
+    c_analytic = P * delta_bend * (1 + shear_ratio)
     return c, c_analytic
 
 
@@ -212,6 +220,50 @@ def test_whole_compliance_cantilever_beam_converges():
         )
     ]
     assert errors == sorted(errors, reverse=True), f"errors not decreasing: {errors}"
+
+
+@pytest.mark.parametrize("P, Emax", [(2.5, 1.0), (1.0, 3.7), (2.5, 3.7), (0.4, 0.25)])
+def test_whole_compliance_cantilever_beam_dimensional_consistency(P, Emax):
+    """`c_analytic` must track `c` when the load and modulus leave 1.0.
+
+    `c` is quadratic in the load and inverse in the modulus, so a closed form short a
+    factor of either still agrees at P == Emax == 1.0 -- which is exactly how a missing
+    `P` survived the tolerance and convergence tests above (PR #15). Comparing the
+    *relative* error across (P, Emax) pins the scaling without re-deriving the formula.
+    """
+    # rtol is set by sparse-solve roundoff across the differently-scaled stiffness
+    # matrices (~1e-8), not by physics: a missing P or Emax factor is an O(1) miss.
+    c0, a0 = _cantilever_beam_compliance(10)
+    c, a = _cantilever_beam_compliance(10, P=P, Emax=Emax)
+    np.testing.assert_allclose((c - a) / a, (c0 - a0) / a0, rtol=1e-6)
+    np.testing.assert_allclose(c, c0 * P**2 / Emax, rtol=1e-6)
+
+
+def test_whole_compliance_scales_as_load_squared_and_inverse_modulus():
+    """`c == F^T K^-1 F` is exactly quadratic in load and inverse in modulus.
+
+    Checked directly on `whole_compliance` at a non-uniform density, so it is
+    independent of any beam/bar closed form and of `penal` -- this is the scaling law
+    the analytic tests above lean on.
+    """
+    nelx, nely = 6, 4
+    penal = 3
+    KE = fem.plane_stress_KE(nu=0.3)
+    edofMat = fem.element_dof_map(nelx, nely)
+    F, freedofs, ndof = _build_point_load_problem(nelx, nely)
+    xPhys = _random_field(np.random.default_rng(3), nely, nelx)
+
+    def c_of(alpha, Emax):
+        c, _ = compliance.whole_compliance(
+            xPhys, KE, edofMat, 1e-9 * Emax, Emax, penal, freedofs, alpha * F, ndof
+        )
+        return c
+
+    c0 = c_of(1.0, 1.0)
+    for alpha in (2.0, 0.25, 3.7):
+        np.testing.assert_allclose(c_of(alpha, 1.0), c0 * alpha**2, rtol=1e-9)
+    for Emax in (2.0, 0.25, 3.7):
+        np.testing.assert_allclose(c_of(1.0, Emax), c0 / Emax, rtol=1e-9)
 
 
 # --- Finite-difference internal-consistency checks (pure Python, no MATLAB fixture) ---
@@ -301,10 +353,8 @@ def test_gravity_compliance_fd_dcx_and_dct():
         fd_x = np.zeros(nely * nelx)
         fd_t = np.zeros(nely * nelx)
         for e in range(nely * nelx):
-            j, i = (
-                e % nely,
-                e // nely,
-            )  # Fortran-order element -> (row, col), per conventions.md
+            # Fortran-order element -> (row, col), per conventions.md
+            j, i = e % nely, e // nely
 
             xp = xPhys.copy()
             xp[j, i] += h
