@@ -85,9 +85,8 @@ def gravity_compliance(
     Emax: float,
     penal: float,
     ti: float,
-    C: (
-        sp.spmatrix | sp.sparray
-    ),  # gravity.gravity_load_matrix's output, or a loaded fixture's
+    # gravity.gravity_load_matrix's output, or a loaded fixture's
+    C: sp.spmatrix | sp.sparray,
     lam: float,
     freedofs: Int[np.ndarray, " n_free"],
     ndof: int,
