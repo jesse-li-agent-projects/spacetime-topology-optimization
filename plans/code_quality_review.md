@@ -16,6 +16,25 @@ correctness-fix commit happened to be in progress when they were noticed.
 
 ## Open items
 
+### `compliance.py` -- analytic ground-truth test coverage
+
+`whole_compliance` now has closed-form checks against elasticity theory (bar-in-tension
+patch test, cantilever-beam vs. Timoshenko theory with a mesh-refinement convergence
+check -- `tests/test_compliance.py`), independent of the MATLAB fixture. So does
+`gravity_compliance`, closing the remaining first-principles gaps:
+
+- [x] `gravity_compliance`'s self-weight path is now checked against a closed-form
+  self-weight cantilever (`test_gravity_compliance_self_weight_cantilever`, plus an
+  exact `Emax`-scaling check), Euler-Bernoulli only (no Timoshenko term -- a flat
+  tolerance at L/H == 10 rather than a per-resolution shrinking one, since the
+  uncorrected shear contribution doesn't vanish under mesh refinement).
+- [x] The `tPhys`/`time_mask` path is now checked
+  (`test_gravity_compliance_partial_build_matches_truncated_mesh`): a cantilever built
+  up column-by-column along its length, stopped partway through the build, compared
+  against an actual shorter mesh built to full density -- two independent FEM solves
+  rather than a second closed form layered on top of beam theory, using a sharp `lam`
+  and rescaling the truncated mesh's load to sidestep the sigmoid-softening question.
+
 ### `timefield.py`
 
 - [ ] `init_timefield`'s `variant` parameter is a bare `int` (1/2/3, `ValueError` on
