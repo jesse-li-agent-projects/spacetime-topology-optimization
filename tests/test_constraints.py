@@ -147,22 +147,42 @@ def test_stage_volume_bounds_fd():
             )
             return fu
 
+        def fval_lower_of(x_raw, t_raw):
+            xPhys, _ = _xPhys_of(x_raw, H, Hs, nely, nelx, BETA, ETA)
+            tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
+            _, fl, _, _ = constraints.stage_volume_bounds(
+                xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, ROU
+            )
+            return fl
+
         fd_x = np.zeros(nely * nelx)
         fd_t = np.zeros(nely * nelx)
+        fd_x_lower = np.zeros(nely * nelx)
+        fd_t_lower = np.zeros(nely * nelx)
         for e in range(nely * nelx):
             j, i = e % nely, e // nely
             xp, xm = x_raw.copy(), x_raw.copy()
             xp[j, i] += h
             xm[j, i] -= h
             fd_x[e] = (fval_upper_of(xp, t_raw) - fval_upper_of(xm, t_raw)) / (2 * h)
+            fd_x_lower[e] = (fval_lower_of(xp, t_raw) - fval_lower_of(xm, t_raw)) / (
+                2 * h
+            )
 
             tp, tm = t_raw.copy(), t_raw.copy()
             tp[j, i] += h
             tm[j, i] -= h
             fd_t[e] = (fval_upper_of(x_raw, tp) - fval_upper_of(x_raw, tm)) / (2 * h)
+            fd_t_lower[e] = (fval_lower_of(x_raw, tp) - fval_lower_of(x_raw, tm)) / (
+                2 * h
+            )
 
         np.testing.assert_allclose(dfx, fd_x, rtol=1e-4, atol=1e-6)
         np.testing.assert_allclose(dft, fd_t, rtol=1e-4, atol=1e-6)
+        # fval_lower's sensitivity rows are documented as exactly -dfx, -dft --
+        # check that against its own independent FD pass, not just algebraically.
+        np.testing.assert_allclose(-dfx, fd_x_lower, rtol=1e-4, atol=1e-6)
+        np.testing.assert_allclose(-dft, fd_t_lower, rtol=1e-4, atol=1e-6)
 
 
 def test_global_volume_fraction_fd():
@@ -381,6 +401,12 @@ def test_stage_volume_bounds_xPhys_weighting():
         )
         return fu
 
+    def fval_lower_of(xPhys):
+        _, fl, _, _ = constraints.stage_volume_bounds(
+            xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, ROU
+        )
+        return fl
+
     xPhys_printed_heavy = np.where(tPhys < 0.5, 0.8, 0.1)
     xPhys_notyet_heavy = np.where(tPhys < 0.5, 0.1, 0.8)
     xPhys_equal = np.full((nely, nelx), volfrac)
@@ -393,6 +419,17 @@ def test_stage_volume_bounds_xPhys_weighting():
     assert fu_printed > 0.05  # over-budget: violated
     assert abs(fu_equal) < 0.05  # even split roughly meets the budget
     assert fu_notyet < -0.05  # well under budget: comfortably satisfied
+
+    # Mirror image on fval_lower: deposited *below* budget violates the lower bound,
+    # so the ordering (and which cases violate/satisfy) flips.
+    fl_printed = fval_lower_of(xPhys_printed_heavy)
+    fl_equal = fval_lower_of(xPhys_equal)
+    fl_notyet = fval_lower_of(xPhys_notyet_heavy)
+
+    assert fl_printed < fl_equal < fl_notyet
+    assert fl_notyet > 0.05  # well under budget: violates the lower bound
+    assert abs(fl_equal) < 0.05  # even split roughly meets the budget
+    assert fl_printed < -0.05  # over-budget: comfortably satisfies the lower bound
 
 
 def test_stage_volume_bounds_rou_sharpness():
@@ -416,5 +453,36 @@ def test_stage_volume_bounds_rou_sharpness():
         )
         return fu
 
+    def fval_lower_of(rou):
+        _, fl, _, _ = constraints.stage_volume_bounds(
+            xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, rou
+        )
+        return fl
+
     fus = [fval_upper_of(rou) for rou in (1, 3, 10, 30, 100)]
     assert all(a > b for a, b in zip(fus, fus[1:]))  # strictly looser as rou softens
+
+    # Mirror image: fval_lower should also strictly loosen (increase) as rou softens.
+    fls = [fval_lower_of(rou) for rou in (1, 3, 10, 30, 100)]
+    assert all(a < b for a, b in zip(fls, fls[1:]))
+
+
+def test_stage_volume_bounds_lower_has_slack_margin():
+    """fval_lower must be a genuinely tighter constraint than -fval_upper, not just its
+    negation -- MMA's one-sided inequalities need a slack margin between the two so an
+    exact-equality deposited==budget solution isn't simultaneously "just satisfying" and
+    "just violating" both bounds. Don't assume the margin's exact size (implementation
+    detail); just check it's present and strictly positive."""
+    nely, nelx = 4, 6
+    volfrac, nStage, stage = 0.4, 2, 1
+    H, Hs = filters.density_filter(nelx, nely, RMIN)
+    dx = np.ones((nely, nelx))
+
+    rng = np.random.default_rng(4)
+    xPhys = rng.uniform(0.1, 0.9, size=(nely, nelx))
+    tPhys = rng.uniform(0.05, 0.95, size=(nely, nelx))
+
+    fu, fl, _, _ = constraints.stage_volume_bounds(
+        xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, ROU
+    )
+    assert fl < -fu - 1e-8
