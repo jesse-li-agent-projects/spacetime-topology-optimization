@@ -75,7 +75,11 @@ check -- `tests/test_compliance.py`), independent of the MATLAB fixture. So does
   `xTilde`) -- but this breaks exact bit-matching against `generate_fixtures.m`'s init,
   so needs a decision on whether fixture fidelity or algorithmic correctness wins here.
   Fixing it would also remove the asymmetry that currently justifies `xTilde`/`t` being
-  threaded/commented as two different "unfiltered at init" special cases.
+  threaded/commented as two different "unfiltered at init" special cases. `xTilde`
+  should likely get the same treatment for consistency even though it's currently a
+  numeric no-op (`x` uniform at init) -- init both `x`/`t` as the raw seed and derive
+  `xTilde`/`tPhys` via `H @ (...) / Hs` uniformly, rather than special-casing which
+  fields get filtered at init and which don't.
 
 - [ ] `step` (`sttopt/optimize.py:260`) inverts `fval` to recover `numer` and calls
   `hotspot_constraint` twice on refresh iterations (`sttopt/optimize.py:346-358`) --
