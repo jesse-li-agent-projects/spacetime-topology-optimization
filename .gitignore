@@ -15,3 +15,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
+
+# Sandbox quirk
+.gitmodules
