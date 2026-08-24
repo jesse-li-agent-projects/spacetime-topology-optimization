@@ -26,3 +26,7 @@ include = ["sttopt*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = ["-m", "not slow"]
+markers = [
+    "slow: full-length optimization runs (minutes to hours). Deselected by default; run with `-m slow`.",
+]
