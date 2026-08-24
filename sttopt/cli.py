@@ -91,7 +91,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--output-dir",
         dest="output_dir",
         type=Path,
-        default=Path("."),
+        default=Path("./plot"),
         help="directory to save the final combination+boundary plot into",
     )
     return parser.parse_args(argv)

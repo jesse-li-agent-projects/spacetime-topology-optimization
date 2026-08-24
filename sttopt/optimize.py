@@ -86,9 +86,9 @@ class State:
 
     x: Float[np.ndarray, "nely nelx"]  # raw density (unfiltered MMA output)
     xTilde: Float[np.ndarray, "nely nelx"]  # density-filtered x
-    xPhys: Float[np.ndarray, "nely nelx"]  # xTilde, Heaviside-projected -- what the physics uses
+    xPhys: Float[np.ndarray, "nely nelx"]  # density for physics purposes
     t: Float[np.ndarray, "nely nelx"]  # raw time field (unfiltered MMA output)
-    tPhys: Float[np.ndarray, "nely nelx"]  # density-filtered t -- what the physics uses (no projection)
+    tPhys: Float[np.ndarray, "nely nelx"]  # time for physics purposes
     xold1: Float[np.ndarray, " n"]
     xold2: Float[np.ndarray, " n"]
     low: Float[np.ndarray, " n"]
@@ -96,17 +96,17 @@ class State:
     loop: int
     rou: float  # gravity/stage-mask sigmoid sharpness
     beta: float  # Heaviside projection sharpness
-    factor: float  # hotspot-constraint rescaling constant, refreshed every 25 iterations
+    factor: float  # hotspot-constraint rescaling constant, periodically refreshed
 
 
 @dataclass(frozen=True)
 class IterationRecord:
     """Per-iteration diagnostics and raw MMA outputs, for E2E/MMA/constraint-order tests."""
 
-    obj: float  # whole-structure compliance only (matches MATLAB's `objf`, saved before the Theta*gravity sum)
-    vol: float  # mean xPhys, at this iteration's (pre-update) density field
-    tru_max: float  # factor * numer, the hotspot constraint's estimated worst-case value
-    f0val: float  # full MMA objective (whole compliance + Theta-weighted per-stage gravity)
+    obj: float  # whole-structure compliance (doesn't include intermediate structures)
+    vol: float  # volume fraction (mean xPhys)
+    tru_max: float  # Estimated max hotspot severity (debiased from P-mean)
+    f0val: float  # objective (weighted sum of whole & per-stage compliances)
     df0dx: Float[np.ndarray, " n"]
     xmma: Float[np.ndarray, " n"]
     low: Float[np.ndarray, " n"]
@@ -119,7 +119,8 @@ class IterationRecord:
 @dataclass(frozen=True)
 class RunResult:
     state: State  # final state after nloop iterations
-    xPhys_traj: list[Float[np.ndarray, "nely nelx"]]  # length nloop+1, index 0 is the initial field
+    # length nloop+1, index 0 is initial field
+    xPhys_traj: list[Float[np.ndarray, "nely nelx"]]
     tPhys_traj: list[Float[np.ndarray, "nely nelx"]]  # length nloop+1
     records: list[IterationRecord]  # length nloop
 
@@ -230,7 +231,8 @@ def init_state(problem: Problem, beta: float) -> State:
     nel = nelx * nely
 
     x = np.full((nely, nelx), problem.volfrac)
-    xTilde = x.copy()  # unfiltered at init, unlike every later iteration's H-filtered xTilde
+    # unfiltered at init, unlike every later iteration's H-filtered xTilde
+    xTilde = x.copy()
     xPhys = filters.heaviside_projection(xTilde, beta, problem.eta)
 
     tPhys = timefield.init_timefield(nelx, nely, problem.tfield)
@@ -290,7 +292,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     c, dcx = compliance.whole_compliance(
         xPhys, p.KE, p.edofMat, p.Emin, p.Emax, p.penal, p.freedofs, p.F, p.ndof
     )
-    obj_diag = c  # MATLAB's `objf(loop)`: saved here, before the Theta*gravity sum below
+    obj_final_only = c # compliance of final structure only, saved for logging
     obj = c
     dc = p.H @ (dcx.flatten(order="F") * dx.flatten(order="F") / p.Hs)
     dt = np.zeros(nel)
@@ -299,7 +301,18 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     for i in range(1, nStage + 1):
         ti = tP[i]
         cg, dcx_g, dct_g = compliance.gravity_compliance(
-            xPhys, tPhys, p.KE, p.edofMat, p.Emin, p.Emax, p.penal, ti, p.C, rou, p.freedofs, p.ndof
+            xPhys,
+            tPhys,
+            p.KE,
+            p.edofMat,
+            p.Emin,
+            p.Emax,
+            p.penal,
+            ti,
+            p.C,
+            rou,
+            p.freedofs,
+            p.ndof,
         )
         obj += p.Theta * cg
         dc = dc + p.Theta * (p.H @ (dcx_g * dx.flatten(order="F") / p.Hs))
@@ -340,23 +353,53 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             xPhys, tPhys, dx, p.H, p.Hs, stage, nStage, p.volfrac, rou
         )
         fval_parts.append(np.array([fu, fl]))
-        dfdx_parts.append(np.stack([np.concatenate([dfx, dft]), np.concatenate([-dfx, -dft])]))
+        dfdx_parts.append(
+            np.stack([np.concatenate([dfx, dft]), np.concatenate([-dfx, -dft])])
+        )
 
     # Hotspot constraint: `factor` is refreshed every 25 iterations from a *separate*
     # estimated_conductivity call (see conductivity.hotspot_constraint's docstring) --
     # numer is factor-independent, so the first call's fval recovers it; if the
     # refresh fires, factor changes and the constraint is recomputed with the new value.
     fv, df1, dt1 = conductivity.hotspot_constraint(
-        xPhys, tPhys, p.e1, p.e2, p.w, dx, p.H, p.Hs, state.factor, p.Tcr, p.p, p.q, p.r, p.rouf
+        xPhys,
+        tPhys,
+        p.e1,
+        p.e2,
+        p.w,
+        dx,
+        p.H,
+        p.Hs,
+        state.factor,
+        p.Tcr,
+        p.p,
+        p.q,
+        p.r,
+        p.rouf,
     )
     numer = (fv + 1) * p.Tcr / state.factor
     factor = state.factor
     if loop % 25 == 0:
-        K_est = conductivity.estimated_conductivity(xPhys, tPhys, p.e1, p.e2, p.w, p.q, p.rouf)
+        K_est = conductivity.estimated_conductivity(
+            xPhys, tPhys, p.e1, p.e2, p.w, p.q, p.rouf
+        )
         max_g = float(np.max((1 - K_est) * xPhys.flatten(order="F") ** p.r))
         factor = max_g / numer
         fv, df1, dt1 = conductivity.hotspot_constraint(
-            xPhys, tPhys, p.e1, p.e2, p.w, dx, p.H, p.Hs, factor, p.Tcr, p.p, p.q, p.r, p.rouf
+            xPhys,
+            tPhys,
+            p.e1,
+            p.e2,
+            p.w,
+            dx,
+            p.H,
+            p.Hs,
+            factor,
+            p.Tcr,
+            p.p,
+            p.q,
+            p.r,
+            p.rouf,
         )
     tru_max = factor * numer
     fval_parts.append(np.array([fv]))
@@ -370,8 +413,24 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     mma_c = np.full(p.m, p.mma_c)
     mma_d = np.zeros(p.m)
     xmma, ymma, zmma, lam, xsi, mma_eta, mu, zet, s, low, upp = mma.mmasub(
-        p.m, p.n, loop, xval, xmin, xmax, state.xold1, state.xold2,
-        f0val, df0dx, fval, dfdx, state.low, state.upp, p.a0, mma_a, mma_c, mma_d,
+        p.m,
+        p.n,
+        loop,
+        xval,
+        xmin,
+        xmax,
+        state.xold1,
+        state.xold2,
+        f0val,
+        df0dx,
+        fval,
+        dfdx,
+        state.low,
+        state.upp,
+        p.a0,
+        mma_a,
+        mma_c,
+        mma_d,
     )
 
     xnew = xmma.reshape(nely, -1, order="F")
@@ -398,9 +457,17 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         factor=factor,
     )
     record = IterationRecord(
-        obj=obj_diag, vol=vol_diag, tru_max=tru_max,
-        f0val=f0val, df0dx=df0dx,
-        xmma=xmma, low=low, upp=upp, lam=lam, fval=fval, dfdx=dfdx,
+        obj=obj_final_only,
+        vol=vol_diag,
+        tru_max=tru_max,
+        f0val=f0val,
+        df0dx=df0dx,
+        xmma=xmma,
+        low=low,
+        upp=upp,
+        lam=lam,
+        fval=fval,
+        dfdx=dfdx,
     )
     return new_state, record
 
@@ -427,7 +494,17 @@ def run(
     hotspot/MMA constants) for callers that need non-default values.
     """
     problem = build_problem(
-        nelx, nely, nStage, volfrac, Theta, Tcr, tfield, rmin, lrmin, rmin_cond, **problem_kwargs
+        nelx,
+        nely,
+        nStage,
+        volfrac,
+        Theta,
+        Tcr,
+        tfield,
+        rmin,
+        lrmin,
+        rmin_cond,
+        **problem_kwargs,
     )
     state = init_state(problem, beta)
 
@@ -441,4 +518,6 @@ def run(
         tPhys_traj.append(state.tPhys.copy())
         records.append(record)
 
-    return RunResult(state=state, xPhys_traj=xPhys_traj, tPhys_traj=tPhys_traj, records=records)
+    return RunResult(
+        state=state, xPhys_traj=xPhys_traj, tPhys_traj=tPhys_traj, records=records
+    )
