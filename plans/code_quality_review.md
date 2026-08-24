@@ -56,6 +56,27 @@ check -- `tests/test_compliance.py`), independent of the MATLAB fixture. So does
 
 ### `optimize.py` / `conductivity.py`
 
+- [ ] `init_state` (`sttopt/optimize.py:226`) sets `t = tPhys.copy()` (raw == physical,
+  unfiltered) instead of filtering, matching the MATLAB source's identical `t = tPhys`
+  at init (e.g. `Space_Time_TopOpt_Robot.m:178-180`). But every `step()` iteration
+  treats `tPhys` as *defined* by `tPhys = H @ t / Hs` (`sttopt/optimize.py:444`), and
+  the sensitivity chain rule `dt = ... H @ (dct_g / Hs)` (`sttopt/optimize.py:321`) is
+  only the correct gradient w.r.t. raw `t` under that definition. Since `init_timefield`
+  is generally non-uniform (nonlinear for the corner-distance variants, `tfield=1`/`3`),
+  `filter(t) != t` there, so iteration 1's `dt` doesn't reflect the actual (identity)
+  forward map used to produce `state.tPhys` at init -- forward and backward pass
+  disagree about what function was evaluated. Contrast `xTilde = x` at init
+  (`sttopt/optimize.py:235`): also unfiltered by direct assignment, but numerically
+  *equal* to `H @ x / Hs` anyway since `x` is spatially uniform (`volfrac`) and the
+  filter preserves constants exactly -- no actual inconsistency there. This looks like a
+  genuine (if minor, and iteration-1-only) bug in the reference algorithm rather than a
+  deliberate design choice. Likely fix: seed `t = init_timefield(...)` as the raw
+  variable and derive `tPhys = H @ t / Hs` at init too (mirroring `xPhys`'s treatment of
+  `xTilde`) -- but this breaks exact bit-matching against `generate_fixtures.m`'s init,
+  so needs a decision on whether fixture fidelity or algorithmic correctness wins here.
+  Fixing it would also remove the asymmetry that currently justifies `xTilde`/`t` being
+  threaded/commented as two different "unfiltered at init" special cases.
+
 - [ ] `step` (`sttopt/optimize.py:260`) inverts `fval` to recover `numer` and calls
   `hotspot_constraint` twice on refresh iterations (`sttopt/optimize.py:346-358`) --
   returning `numer`/`K_est` directly from `hotspot_constraint` would delete both the
