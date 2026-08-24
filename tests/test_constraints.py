@@ -258,3 +258,163 @@ def test_time_field_continuity_fd():
             fd_t[e] = (fval_of(tp) - fval_of(tm)) / (2 * h)
 
         np.testing.assert_allclose(dft, fd_t, rtol=1e-5, atol=1e-8)
+
+
+# --- Layout-based valid/invalid checks -----------------------------------------------
+# These test known good/bad *designs* against first-principles expectations (not the
+# exact regularization constants baked into the constraint formulas, which are
+# implementation detail and shouldn't be encoded into a well-designed test).
+
+
+def test_global_volume_fraction_uniform_layouts():
+    """Uniform xPhys at 0, 1, and volfrac itself are exact closed-form cases regardless
+    of volfrac's value."""
+    nely, nelx = 4, 6
+    dx = np.ones((nely, nelx))  # dfx isn't checked here, only fval
+    H, Hs = filters.density_filter(nelx, nely, RMIN)
+    for volfrac in (0.2, 0.35, 0.6):
+        for c, expected in (
+            (0.0, -1.0),
+            (1.0, 1.0 / volfrac - 1.0),
+            (volfrac, 0.0),
+        ):
+            xPhys = np.full((nely, nelx), c)
+            fval, _, _ = constraints.global_volume_fraction(xPhys, dx, H, Hs, volfrac)
+            np.testing.assert_allclose(fval, expected, rtol=1e-9, atol=1e-9)
+
+
+def _element_grid(nely, nelx):
+    """(row, col) grid matching the (nely, nelx) array shape, i.e. row=y, col=x."""
+    jj, ii = np.meshgrid(np.arange(nely), np.arange(nelx), indexing="ij")
+    return jj, ii
+
+
+def test_time_field_continuity_layouts():
+    """Smooth monotonic time fields should satisfy the continuity constraint far better
+    than a checkerboard -- and a checkerboard confined to a small local patch inside an
+    otherwise-smooth field should still register as clearly worse than the smooth
+    baseline, not get washed out by the surrounding smooth region."""
+    nely, nelx = 4, 6
+    H, Hs = filters.density_filter(nelx, nely, RMIN)
+    L = filters.continuity_filter(nelx, nely, LRMIN)
+    jj, ii = _element_grid(nely, nelx)
+
+    def fval_of(tPhys):
+        fval, _, _ = constraints.time_field_continuity(tPhys, L, H, Hs)
+        return fval
+
+    grad_x = ii / (nelx - 1)
+    grad_y = jj / (nely - 1)
+    grad_diag = (ii + jj) / (nelx - 1 + nely - 1)
+    checkerboard = ((ii + jj) % 2).astype(float)
+
+    fval_smooth = max(fval_of(g) for g in (grad_x, grad_y, grad_diag))
+    fval_checker = fval_of(checkerboard)
+
+    local = grad_x.copy()
+    local[1:3, 1:3] = ((ii[1:3, 1:3] + jj[1:3, 1:3]) % 2).astype(float)
+    fval_local = fval_of(local)
+
+    assert fval_smooth < fval_local < fval_checker
+
+
+def _distance_field(Nei, nely, nelx):
+    """Normalized Manhattan-distance-to-nearest-Nei-cell field, in element-index space
+    (0-indexed, Fortran/column-major numbering matching `conventions.md`)."""
+    nel = nely * nelx
+    e = np.arange(nel)
+    j_of_e, i_of_e = e % nely, e // nely
+    coords = np.stack([j_of_e, i_of_e], axis=1)
+    nei_coords = coords[Nei]
+    dists = np.min(
+        np.abs(coords[:, None, :] - nei_coords[None, :, :]).sum(axis=2), axis=1
+    )
+    maxdist = dists.max()
+    field = dists / maxdist if maxdist > 0 else dists
+    return field.reshape((nely, nelx), order="F")
+
+
+def test_start_point_layouts():
+    """Nei shapes beyond the two existing tfield conventions (single corner, whole
+    column) should work generically. A tPhys built as distance-to-nearest-Nei-cell is a
+    physically sensible print-time field that satisfies the constraint at Nei; the same
+    kind of field anchored elsewhere should violate it."""
+    nely, nelx = 4, 6
+    nel = nely * nelx
+    H, Hs = filters.density_filter(nelx, nely, RMIN)
+
+    cases = [
+        (np.array([0]), np.array([nel - 1])),  # single corner vs. opposite corner
+        (np.array([nel // 2]), np.array([0])),  # interior singleton, no tfield analog
+        (np.array([0, nel - 1]), np.array([nel // 2])),  # scattered opposite corners
+    ]
+    for Nei, wrong_anchor in cases:
+        tPhys_valid = _distance_field(Nei, nely, nelx)
+        fval, dfx, dft = constraints.start_point(tPhys_valid, Nei, H, Hs)
+        assert fval.shape == (len(Nei),)
+        assert dfx.shape == (len(Nei), nel)
+        assert dft.shape == (len(Nei), nel)
+        assert np.all(fval < 1e-6)  # satisfied: Nei cells sit at the field's minimum
+
+        tPhys_invalid = _distance_field(wrong_anchor, nely, nelx)
+        fval_wrong, _, _ = constraints.start_point(tPhys_invalid, Nei, H, Hs)
+        assert np.all(fval_wrong > 0.05)  # violated: Nei isn't where printing starts
+
+
+def test_stage_volume_bounds_xPhys_weighting():
+    """The per-stage budget must actually weight by xPhys, not just threshold tPhys:
+    concentrating density in the already-printed half vs. the not-yet-printed half
+    should give very different `deposited` amounts for the *same* time field, and an
+    even split should land close to satisfying the budget."""
+    nely, nelx = 4, 6
+    volfrac, nStage, stage = 0.4, 2, 1  # ti = 0.5, budget = 0.5
+    H, Hs = filters.density_filter(nelx, nely, RMIN)
+    dx = np.ones((nely, nelx))
+
+    tPhys = np.empty((nely, nelx))
+    tPhys[:, :3] = 0.1  # clearly printed by ti=0.5
+    tPhys[:, 3:] = 0.9  # clearly not yet printed
+
+    def fval_upper_of(xPhys):
+        fu, _, _, _ = constraints.stage_volume_bounds(
+            xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, ROU
+        )
+        return fu
+
+    xPhys_printed_heavy = np.where(tPhys < 0.5, 0.8, 0.1)
+    xPhys_notyet_heavy = np.where(tPhys < 0.5, 0.1, 0.8)
+    xPhys_equal = np.full((nely, nelx), volfrac)
+
+    fu_printed = fval_upper_of(xPhys_printed_heavy)
+    fu_equal = fval_upper_of(xPhys_equal)
+    fu_notyet = fval_upper_of(xPhys_notyet_heavy)
+
+    assert fu_printed > fu_equal > fu_notyet
+    assert fu_printed > 0.05  # over-budget: violated
+    assert abs(fu_equal) < 0.05  # even split roughly meets the budget
+    assert fu_notyet < -0.05  # well under budget: comfortably satisfied
+
+
+def test_stage_volume_bounds_rou_sharpness():
+    """Elements sitting just past the stage cutoff should count for less as `rou`
+    sharpens (a sharper mask approaches a hard 0/1 cutoff); softer `rou` gives them
+    more partial credit, making the constraint looser."""
+    nely, nelx = 4, 6
+    volfrac, nStage, stage = 0.4, 2, 1  # ti = 0.5
+    H, Hs = filters.density_filter(nelx, nely, RMIN)
+    dx = np.ones((nely, nelx))
+    xPhys = np.full((nely, nelx), volfrac)
+
+    tPhys = np.empty((nely, nelx))
+    tPhys[:, :2] = 0.1  # clearly printed
+    tPhys[:, 2:4] = 0.55  # just past the ti=0.5 cutoff -- should be excluded
+    tPhys[:, 4:] = 0.9  # clearly not yet printed
+
+    def fval_upper_of(rou):
+        fu, _, _, _ = constraints.stage_volume_bounds(
+            xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, rou
+        )
+        return fu
+
+    fus = [fval_upper_of(rou) for rou in (1, 3, 10, 30, 100)]
+    assert all(a > b for a, b in zip(fus, fus[1:]))  # strictly looser as rou softens
