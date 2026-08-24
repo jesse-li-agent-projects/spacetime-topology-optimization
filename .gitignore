@@ -1,3 +1,5 @@
+.vscode
+
 # Read-only local files
 resources
 
@@ -16,5 +18,14 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 
-# Sandbox quirk
+# Sandbox quirks
 .gitmodules
+.gitconfig
+.bashrc
+.bash_profile
+.idea
+.mcp.json
+.profile
+.ripgreprc
+.zshrc
+.zprofile
