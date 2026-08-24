@@ -120,6 +120,34 @@ check -- `tests/test_compliance.py`), independent of the MATLAB fixture. So does
   agent" as a starting point) -- listed here as a to-check, not yet confirmed to
   recur elsewhere.
 
+### Array/tensor conventions and naming
+
+- [ ] Audit for Fortran-ordered arrays (MATLAB's native layout) that got carried over
+  during the port instead of being converted to NumPy's native C order -- check
+  reshape/flatten calls and any explicit `order='F'` for whether row-major would be more
+  idiomatic (and possibly faster, since most NumPy/PyTorch ops assume C order) now that
+  there's no MATLAB fixture-bit-matching constraint forcing the layout.
+- [ ] Audit for one-letter (or otherwise cryptic) variable names inherited from the
+  MATLAB source that aren't documented or given a better name where the Python port
+  would allow it -- MATLAB math code leans on terse single-letter names matching paper
+  notation, but the Python port doesn't need to preserve that convention verbatim if a
+  more descriptive name is available without hurting readability against the paper.
+
+### Port to PyTorch / CUDA
+
+- [ ] Consider porting `sttopt/` off NumPy/SciPy and onto PyTorch, with CUDA support --
+  the FEM assembly and MMA-based optimization loop are dense linear-algebra-heavy and
+  currently CPU-only. Needs a decision on scope (whole package vs. hot loop only) and a
+  check that SciPy-only functionality in the current implementation (sparse solvers,
+  etc.) has a suitable PyTorch/CUDA equivalent before committing.
+- [ ] After a PyTorch port, evaluate replacing some of the hand-derived sensitivity
+  (`dc`/`dt`/adjoint) code with autodiff, at least for the more mundane/straightforward
+  derivative chains -- manually-written sensitivities are a common source of subtle
+  correctness bugs (mismatched chain rule terms, stale derivatives after a forward-pass
+  change) that autodiff sidesteps. Likely not a full replacement everywhere -- some
+  sensitivities may be intentionally hand-optimized or awkward to express in autodiff --
+  so this needs a per-case call, not a blanket switch.
+
 ## Open questions
 
 - Whether `Problem` decomposition is worth the churn given it's `frozen=True` and

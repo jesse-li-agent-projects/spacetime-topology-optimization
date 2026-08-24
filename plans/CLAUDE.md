@@ -6,8 +6,6 @@ This directory contains plans for agents.
       KEEP this entry even once every plan below is finished/archived and this
       list is otherwise empty -- it's the format documentation, not a stale
       leftover.
-- conductivity_estimation_2d_python_port.md
-    - Porting plan from MATLAB to Python.
 - code_quality_review.md
     - Living list of code-quality/design cleanup items (not correctness bugs) surfaced
       during manual correctness review of the ported Python code.
