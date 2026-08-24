@@ -155,8 +155,8 @@ def test_stage_volume_bounds_fd():
             )
             return fl
 
-        fd_x = np.zeros(nely * nelx)
-        fd_t = np.zeros(nely * nelx)
+        fd_x_upper = np.zeros(nely * nelx)
+        fd_t_upper = np.zeros(nely * nelx)
         fd_x_lower = np.zeros(nely * nelx)
         fd_t_lower = np.zeros(nely * nelx)
         for e in range(nely * nelx):
@@ -164,7 +164,9 @@ def test_stage_volume_bounds_fd():
             xp, xm = x_raw.copy(), x_raw.copy()
             xp[j, i] += h
             xm[j, i] -= h
-            fd_x[e] = (fval_upper_of(xp, t_raw) - fval_upper_of(xm, t_raw)) / (2 * h)
+            fd_x_upper[e] = (fval_upper_of(xp, t_raw) - fval_upper_of(xm, t_raw)) / (
+                2 * h
+            )
             fd_x_lower[e] = (fval_lower_of(xp, t_raw) - fval_lower_of(xm, t_raw)) / (
                 2 * h
             )
@@ -172,13 +174,15 @@ def test_stage_volume_bounds_fd():
             tp, tm = t_raw.copy(), t_raw.copy()
             tp[j, i] += h
             tm[j, i] -= h
-            fd_t[e] = (fval_upper_of(x_raw, tp) - fval_upper_of(x_raw, tm)) / (2 * h)
+            fd_t_upper[e] = (fval_upper_of(x_raw, tp) - fval_upper_of(x_raw, tm)) / (
+                2 * h
+            )
             fd_t_lower[e] = (fval_lower_of(x_raw, tp) - fval_lower_of(x_raw, tm)) / (
                 2 * h
             )
 
-        np.testing.assert_allclose(dfx, fd_x, rtol=1e-4, atol=1e-6)
-        np.testing.assert_allclose(dft, fd_t, rtol=1e-4, atol=1e-6)
+        np.testing.assert_allclose(dfx, fd_x_upper, rtol=1e-4, atol=1e-6)
+        np.testing.assert_allclose(dft, fd_t_upper, rtol=1e-4, atol=1e-6)
         # fval_lower's sensitivity rows are documented as exactly -dfx, -dft --
         # check that against its own independent FD pass, not just algebraically.
         np.testing.assert_allclose(-dfx, fd_x_lower, rtol=1e-4, atol=1e-6)
