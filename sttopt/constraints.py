@@ -74,12 +74,10 @@ def start_point(
     Float[np.ndarray, "k nely*nelx"],
 ]:
     """Print-start constraint(s): the deposition-origin element(s) `Nei` (0-indexed element
-    numbers, per `conventions.md`) must start printing at (approximately) t=0.
+    numbers, per `conventions.md`) must start printing at t=0 (up to machine precision).
 
-    `Nei` is `[0]` for the single-origin time field (`tfield==1`) or the whole first mesh
-    column, elements `0..nely-1` (other `tfield` variants) -- both are the elements nearest
-    the print-start origin regardless of variant. `dfx` is identically zero (no density
-    dependence).
+    Example: `Nei` is `[0]` for the single-origin time field (`tfield==1`) -- the elements nearest
+    the print-start origin. `dfx` is identically zero (no density dependence).
     """
     nely, nelx = tPhys.shape
     nel = nely * nelx
@@ -102,7 +100,9 @@ def stage_volume_bounds(
     nStage: int,
     volfrac: float,
     rou: float,
-) -> tuple[float, float, Float[np.ndarray, " nely*nelx"], Float[np.ndarray, " nely*nelx"]]:
+) -> tuple[
+    float, float, Float[np.ndarray, " nely*nelx"], Float[np.ndarray, " nely*nelx"]
+]:
     """Per-stage material deposition budget: the volume fraction deposited by the end of
     stage `stage` (1-indexed, out of `nStage`) must stay within a small slack of the even
     schedule `stage/nStage`. Returns both the upper- and lower-bound constraint (MMA
@@ -115,7 +115,8 @@ def stage_volume_bounds(
     """
     nely, nelx = xPhys.shape
     scale = nelx * nely * volfrac
-    ti = np.linspace(0, 1, nStage + 1)[stage]  # matches MATLAB's `tP(i+1)`, not just `stage/nStage`
+    # matches MATLAB's `tP(i+1)`, not just `stage/nStage`
+    ti = np.linspace(0, 1, nStage + 1)[stage]
     ft = compliance.time_mask(tPhys, ti, rou)
     dfdt = compliance.time_mask_derivative(tPhys, ti, rou)
     xtJoint = xPhys * ft
