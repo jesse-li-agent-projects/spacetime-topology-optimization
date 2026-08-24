@@ -165,6 +165,70 @@ def test_stage_volume_bounds_fd():
         np.testing.assert_allclose(dft, fd_t, rtol=1e-4, atol=1e-6)
 
 
+def test_global_volume_fraction_fd():
+    nelx, nely = 6, 4
+    volfrac = 0.4
+    h = 1e-6
+    H, Hs = filters.density_filter(nelx, nely, RMIN)
+
+    rng = np.random.default_rng(2)
+    for seed in range(5):
+        x_raw = rng.uniform(0.2, 0.8, size=(nely, nelx))
+
+        xPhys, xTilde = _xPhys_of(x_raw, H, Hs, nely, nelx, BETA, ETA)
+        dx = filters.heaviside_projection_derivative(xTilde, BETA, ETA)
+
+        _, dfx, dft = constraints.global_volume_fraction(xPhys, dx, H, Hs, volfrac)
+        np.testing.assert_allclose(dft, 0.0)
+        assert np.abs(dfx).max() > 1e-3  # guard against a vacuous atol-only pass
+
+        def fval_of(x_raw):
+            xPhys, _ = _xPhys_of(x_raw, H, Hs, nely, nelx, BETA, ETA)
+            fval, _, _ = constraints.global_volume_fraction(xPhys, dx, H, Hs, volfrac)
+            return fval
+
+        fd_x = np.zeros(nely * nelx)
+        for e in range(nely * nelx):
+            j, i = e % nely, e // nely
+            xp, xm = x_raw.copy(), x_raw.copy()
+            xp[j, i] += h
+            xm[j, i] -= h
+            fd_x[e] = (fval_of(xp) - fval_of(xm)) / (2 * h)
+
+        np.testing.assert_allclose(dfx, fd_x, rtol=1e-5, atol=1e-8)
+
+
+def test_start_point_fd():
+    nelx, nely = 6, 4
+    h = 1e-6
+    H, Hs = filters.density_filter(nelx, nely, RMIN)
+    Nei = np.arange(nely)
+
+    rng = np.random.default_rng(3)
+    for seed in range(5):
+        t_raw = rng.uniform(0.05, 0.95, size=(nely, nelx))
+        tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
+
+        fval, dfx, dft = constraints.start_point(tPhys, Nei, H, Hs)
+        np.testing.assert_allclose(dfx, 0.0)
+        assert np.abs(dft).max() > 1e-3  # guard against a vacuous atol-only pass
+
+        def fval_of(t_raw):
+            tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
+            fval, _, _ = constraints.start_point(tPhys, Nei, H, Hs)
+            return fval
+
+        fd_t = np.zeros((len(Nei), nely * nelx))
+        for e in range(nely * nelx):
+            j, i = e % nely, e // nely
+            tp, tm = t_raw.copy(), t_raw.copy()
+            tp[j, i] += h
+            tm[j, i] -= h
+            fd_t[:, e] = (fval_of(tp) - fval_of(tm)) / (2 * h)
+
+        np.testing.assert_allclose(dft, fd_t, rtol=1e-5, atol=1e-8)
+
+
 def test_time_field_continuity_fd():
     nelx, nely = 6, 4
     h = 1e-6
