@@ -46,7 +46,7 @@ class Problem:
     volfrac: float
     Theta: float
     Tcr: float
-    tfield: int
+    tfield: timefield.TimeField
 
     KE: Float[np.ndarray, "8 8"]
     edofMat: Int[np.ndarray, "nelx*nely 8"]
@@ -132,7 +132,7 @@ def build_problem(
     volfrac: float,
     Theta: float,
     Tcr: float,
-    tfield: int,
+    tfield: timefield.TimeField,
     rmin: float,
     lrmin: float,
     rmin_cond: float,
@@ -175,13 +175,13 @@ def build_problem(
     C = gravity.gravity_load_matrix(nelx, nely)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
 
-    # Print-start element(s): the whole first mesh column for tfield != 1, the single
-    # origin element for tfield == 1 (constraints.start_point's own docstring).
-    Nei = np.array([0]) if tfield == 1 else np.arange(nely)
+    # Print-start element(s): the whole first mesh column for tfield != CORNER, the
+    # single origin element for tfield == CORNER (constraints.start_point's own docstring).
+    Nei = np.array([0]) if tfield == timefield.TimeField.CORNER else np.arange(nely)
 
     n = 2 * nelx * nely
     # MATLAB hardcodes `m = 1 + 1 + nely + 2*nStage + 1` -- only self-consistent when
-    # tfield != 1 (Nei has nely rows); computing from len(Nei) generalizes correctly.
+    # tfield != CORNER (Nei has nely rows); computing from len(Nei) generalizes correctly.
     m = 1 + 1 + len(Nei) + 2 * nStage + 1
 
     return Problem(
@@ -464,7 +464,7 @@ def run(
     volfrac: float,
     Theta: float,
     Tcr: float,
-    tfield: int,
+    tfield: timefield.TimeField,
     rmin: float,
     lrmin: float,
     rmin_cond: float,

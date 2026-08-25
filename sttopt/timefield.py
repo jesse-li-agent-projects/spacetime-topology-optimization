@@ -7,8 +7,18 @@ Euclidean-distance or linear ramps over the `(nely, nelx)` element grid; see
 `conventions.md` for the grid/array-order convention they follow.
 """
 
+from enum import IntEnum
+
 import numpy as np
 from jaxtyping import Float
+
+
+class TimeField(IntEnum):
+    """Named time-field initialization variants, matching `tfield` in the MATLAB source."""
+
+    CORNER = 1  # top-left corner distance
+    EDGE = 2  # left-edge ramp
+    OPPOSITE_CORNER = 3  # bottom-left corner distance
 
 
 def _corner_distance_grid(
@@ -46,18 +56,14 @@ def timefield_opposite_corner(nelx: int, nely: int) -> Float[np.ndarray, "nely n
 
 
 def init_timefield(
-    nelx: int, nely: int, variant: int
+    nelx: int, nely: int, variant: TimeField
 ) -> Float[np.ndarray, "nely nelx"]:
-    """Dispatch to one of the three named time-field initializations.
-
-    `variant`: 1 (top-left corner), 2 (left edge ramp), 3 (bottom-left corner) --
-    matches `tfield` in the MATLAB source.
-    """
-    if variant == 1:
+    """Dispatch to one of the three named time-field initializations."""
+    if variant == TimeField.CORNER:
         return timefield_corner(nelx, nely)
-    elif variant == 2:
+    elif variant == TimeField.EDGE:
         return timefield_edge(nelx, nely)
-    elif variant == 3:
+    elif variant == TimeField.OPPOSITE_CORNER:
         return timefield_opposite_corner(nelx, nely)
     else:
-        raise ValueError(f"variant must be 1, 2, or 3, got {variant!r}")
+        raise ValueError(f"variant must be a TimeField member, got {variant!r}")

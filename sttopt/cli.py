@@ -39,6 +39,8 @@ computed earlier in the same iteration).
 import argparse
 from pathlib import Path
 
+from sttopt.timefield import TimeField
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -62,9 +64,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--tfield",
-        type=int,
-        default=3,
-        choices=(1, 2, 3),
+        type=lambda s: TimeField(int(s)),
+        default=TimeField.OPPOSITE_CORNER,
+        choices=list(TimeField),
         help="initial time-field variant: 1=top-left corner, 2=left edge, 3=bottom-left corner",
     )
     parser.add_argument("--rmin", type=float, default=4.0, help="density filter radius")
