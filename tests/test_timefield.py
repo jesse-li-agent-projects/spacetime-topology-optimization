@@ -64,3 +64,18 @@ def test_timefield_variants_span_0_to_1(nelx, nely):
         0,
     )
     assert np.array_equal(tfield_edge[0], np.linspace(0, 1, nelx))
+
+
+@pytest.mark.parametrize("nelx,nely", [(1, 5), (5, 1), (1, 1)])
+def test_degenerate_mesh_rejected(nelx, nely):
+    """`nelx < 2` or `nely < 2` degenerates the corner variants to a divide-by-zero and
+    the edge variant to a constant field instead of spanning [0, 1] -- rejected outright
+    rather than silently producing nan/a wrong-shaped field."""
+    with pytest.raises(ValueError):
+        timefield.timefield_corner(nelx, nely)
+    with pytest.raises(ValueError):
+        timefield.timefield_edge(nelx, nely)
+    with pytest.raises(ValueError):
+        timefield.timefield_opposite_corner(nelx, nely)
+    with pytest.raises(ValueError):
+        timefield.init_timefield(nelx, nely, timefield.TimeField.CORNER)

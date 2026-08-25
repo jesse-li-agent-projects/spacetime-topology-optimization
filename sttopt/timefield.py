@@ -21,6 +21,15 @@ class TimeField(IntEnum):
     OPPOSITE_CORNER = 3  # bottom-left corner distance
 
 
+def _check_grid_size(nelx: int, nely: int) -> None:
+    """Reject `nelx < 2` or `nely < 2`: `linspace(0, nel, nel)` degenerates at a single
+    sample -- `nel == 1` divides by a zero max distance (corner variants) or fails to
+    span `[0, 1]` (edge variant) -- so a one-element-wide/tall mesh is unsupported here.
+    """
+    if nelx < 2 or nely < 2:
+        raise ValueError(f"nelx and nely must be >= 2, got nelx={nelx}, nely={nely}")
+
+
 def _corner_distance_grid(
     nelx: int, nely: int, corner: tuple[float, float]
 ) -> Float[np.ndarray, "nely nelx"]:
@@ -31,6 +40,7 @@ def _corner_distance_grid(
     the MATLAB source, not an off-by-one to "fix": since the x- and y-axis spacings
     differ whenever `nelx != nely`, changing this shifts the field's shape (not just an
     overall scale), so it must stay exactly as the source has it to match the fixture.
+    Requires `nelx, nely >= 2` (see `_check_grid_size`); undefined at `nel == 1`.
     """
     xpos = np.linspace(0, nelx, nelx)
     ypos = np.linspace(0, nely, nely)
@@ -42,16 +52,19 @@ def _corner_distance_grid(
 
 def timefield_corner(nelx: int, nely: int) -> Float[np.ndarray, "nely nelx"]:
     """Normalized distance from the top-left grid corner (x=0, y=0)."""
+    _check_grid_size(nelx, nely)
     return _corner_distance_grid(nelx, nely, (0, 0))
 
 
 def timefield_edge(nelx: int, nely: int) -> Float[np.ndarray, "nely nelx"]:
     """Left-to-right linear ramp in x, constant down each column."""
+    _check_grid_size(nelx, nely)
     return np.tile(np.linspace(0, 1, nelx), (nely, 1))
 
 
 def timefield_opposite_corner(nelx: int, nely: int) -> Float[np.ndarray, "nely nelx"]:
     """Normalized distance from the bottom-left grid corner (x=0, y=nely)."""
+    _check_grid_size(nelx, nely)
     return _corner_distance_grid(nelx, nely, (0, nely))
 
 
