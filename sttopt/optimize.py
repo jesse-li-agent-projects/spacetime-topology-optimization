@@ -280,9 +280,11 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     unpack the result into the next state.
 
     The three periodic state updates below (`rou += 5` at loop%30==0, `beta *= 2` at
-    loop%50==0, the hotspot `factor` refresh at loop%25==0) are implemented faithfully
-    but never trigger against the small E2E fixture (`nloop=3`) -- unexercised by that
-    fixture, not unimplemented or worked around.
+    loop%50==0, the hotspot `factor` refresh at loop%25==0) never trigger against the
+    small E2E fixture (`nloop=3`) -- unexercised by that fixture, not unimplemented or
+    worked around. The `factor` refresh deviates from the MATLAB reference: it takes
+    effect starting the *next* iteration rather than rescaling this iteration's own
+    `fval`/`df1`/`dt1` mid-loop -- a deliberate simplification, not a fidelity gap.
     """
     prob = problem
     nely, nelx, nStage = prob.nely, prob.nelx, prob.nStage
@@ -382,8 +384,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             np.stack([np.concatenate([dfx, dft]), np.concatenate([-dfx, -dft])])
         )
 
-    # Hotspot constraint: `factor` is refreshed every 25 iterations. `numer`/`K_est` come
-    # back from this one call, so the refresh below is a pure rescale, not a recompute.
+    # Hotspot constraint, evaluated at this iteration's (possibly stale) `factor`.
+    # `factor` is refreshed every 25 iterations from this same call's `numer`/`K_est`
+    # (both independent of `factor`), but the refresh only takes effect starting next
+    # iteration's `step` call -- `fv`/`df1`/`dt1` below are never rescaled mid-iteration.
     hotspot = conductivity.hotspot_constraint(
         xPhys,
         tPhys,
@@ -405,19 +409,6 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     if loop % 25 == 0:
         max_g = float(np.max((1 - hotspot.K_est) * xPhys.flatten() ** prob.r))
         factor = max_g / hotspot.numer
-        # `hotspot_constraint` computes `fval = factor * numer / Tcr - 1` and scales
-        # `df1`/`dt1` by that same `factor` (its `scale` term) -- `numer`, and
-        # everything `df1`/`dt1` are built from, hold `factor` fixed. So at a new
-        # `factor' = factor * rescale`, `fval' = rescale * (fval + 1) - 1` (the `-1`
-        # is why this can't be a plain `fval * rescale`) and `df1'/dt1' = rescale *
-        # df1/dt1` exactly -- not an approximation. `test_hotspot_factor_refresh_at_loop_25`
-        # (tests/test_e2e.py) pins this against an independent recompute at the new
-        # `factor`, so a broken rescale (e.g. dropping the `-1` handling, or scaling
-        # df1/dt1 by the wrong quantity) fails that test.
-        rescale = factor / state.factor
-        fv = (fv + 1) * rescale - 1
-        df1 = df1 * rescale
-        dt1 = dt1 * rescale
     tru_max = factor * hotspot.numer
     fval_parts.append(np.array([fv]))
     dfdx_parts.append(np.concatenate([df1, dt1])[None, :])

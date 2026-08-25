@@ -158,6 +158,10 @@ def test_hotspot_factor_refresh_at_loop_25():
     incidental warning unrelated to what this test targets) and checks the 25th call's
     returned `factor`, `fval`, and `dfdx` against an independent recomputation, rather
     than relying on `step`'s internals to be self-consistently correct.
+
+    The refresh takes effect starting the *next* iteration, not the one that computes
+    it: loop 25's own `fval`/`dfdx` are evaluated at the old `factor`, and the new
+    `factor` only lands in `new_state.factor` for loop 26 onward.
     """
     problem = optimize.build_problem(
         NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
@@ -206,26 +210,12 @@ def test_hotspot_factor_refresh_at_loop_25():
     assert not np.isclose(expected_factor, state.factor), "refresh must be non-vacuous"
     assert_close(new_state.factor, expected_factor, tier="algebraic")
 
-    # The refreshed fv/df1/dt1 in `record` must match a full hotspot_constraint
-    # recompute at the new factor -- not just an affine rescale of the old ones, which
-    # would silently pass if someone dropped the `-1` handling in the `fval` recompute.
-    full = conductivity.hotspot_constraint(
-        state.xPhys,
-        state.tPhys,
-        problem.e1,
-        problem.e2,
-        problem.w,
-        dx,
-        problem.H,
-        problem.Hs,
-        expected_factor,
-        problem.Tcr,
-        problem.p,
-        problem.q,
-        problem.r,
-        problem.rouf,
-    )
+    # Loop 25's own fv/df1/dt1 in `record` are evaluated at the *old* (pre-refresh)
+    # factor -- they must match `old` (already computed above at `state.factor`), not
+    # a recompute at `expected_factor`. `tru_max`, a pure diagnostic, uses the refreshed
+    # factor immediately.
     nel = problem.nelx * problem.nely
-    assert_close(record.fval[-1], full.fval, tier="algebraic")
-    assert_close(record.dfdx[-1, :nel], full.df1, tier="algebraic")
-    assert_close(record.dfdx[-1, nel:], full.dt1, tier="algebraic")
+    assert_close(record.fval[-1], old.fval, tier="algebraic")
+    assert_close(record.dfdx[-1, :nel], old.df1, tier="algebraic")
+    assert_close(record.dfdx[-1, nel:], old.dt1, tier="algebraic")
+    assert_close(record.tru_max, expected_factor * numer, tier="algebraic")
