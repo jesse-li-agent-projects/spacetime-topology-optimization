@@ -159,6 +159,7 @@ def build_problem(
     (e.g. the E2E test) can match whatever grid they're running on, since the fixture's
     radii differ from the original full-scale script's.
     """
+    tfield = timefield.TimeField(tfield)
     KE = fem.plane_stress_KE(nu)
     edofMat = fem.element_dof_map(nelx, nely)
     ndof = 2 * (nelx + 1) * (nely + 1)

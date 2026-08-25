@@ -170,10 +170,10 @@ class HotspotConstraintResult(NamedTuple):
     fval: float
     df1: Float[np.ndarray, " nely*nelx"]
     dt1: Float[np.ndarray, " nely*nelx"]
-    numer: float  # factor-independent; caller's refresh rescales fval/df1/dt1 from this
-    K_est: Float[
-        np.ndarray, " nely*nelx"
-    ]  # caller's refresh recomputes max_g from this
+    # factor-independent
+    numer: float
+    # factor-independent
+    K_est: Float[np.ndarray, " nely*nelx"]
 
 
 def hotspot_constraint(
@@ -242,4 +242,4 @@ def hotspot_constraint(
     scale = factor * (sum_cond / nel) ** (1 / p - 1) / (nel * Tcr)
     df1 = H @ ((scale * cond_arr2) * dx.flatten(order="F") / Hs)
     dt1 = H @ ((scale * cond_arr1) / Hs)
-    return HotspotConstraintResult(fval, df1, dt1, numer, K_est)
+    return HotspotConstraintResult(fval, df1, dt1, float(numer), K_est)
