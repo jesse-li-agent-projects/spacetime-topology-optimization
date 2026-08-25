@@ -9,10 +9,10 @@ the raw-vs-filtered x/t fields) from one call to the next. See `conventions.md` 
 array-order conventions and `tests/fixtures/generate_fixtures.m` (the literal MATLAB
 reference this ports) for the authoritative iteration order.
 
-Two field pairs are threaded per design variable, and must not be conflated (see the
-Phase 8 handoff notes): `x`/`t` are each iteration's *raw* MMA output (unfiltered,
-unprojected -- what next iteration's move-limit bounds read); `xTilde`/`xPhys`/`tPhys`
-are the *filtered* (and, for density, Heaviside-projected) fields the physics uses.
+Two field pairs are threaded per design variable, and must not be conflated: `x`/`t`
+are each iteration's *raw* MMA output (unfiltered, unprojected -- what next
+iteration's move-limit bounds read); `xTilde`/`xPhys`/`tPhys` are the *filtered* (and,
+for density, Heaviside-projected) fields the physics uses.
 `xTilde` alone is carried an extra step (needed for the Heaviside-derivative chain rule
 at the *start* of the next iteration, before that iteration's own update).
 """
@@ -156,8 +156,8 @@ def build_problem(
 
     `rmin`/`lrmin`/`rmin_cond` are filter radii (density filter, continuity filter,
     conductivity neighborhood) -- passed explicitly rather than hardcoded so callers
-    (e.g. the E2E test) can match whatever grid they're running on; see the Phase 8
-    handoff notes on why the fixture's radii differ from the original full-scale script.
+    (e.g. the E2E test) can match whatever grid they're running on, since the fixture's
+    radii differ from the original full-scale script's.
     """
     KE = fem.plane_stress_KE(nu)
     edofMat = fem.element_dof_map(nelx, nely)
@@ -292,7 +292,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     c, dcx = compliance.whole_compliance(
         xPhys, p.KE, p.edofMat, p.Emin, p.Emax, p.penal, p.freedofs, p.F, p.ndof
     )
-    obj_final_only = c # compliance of final structure only, saved for logging
+    obj_final_only = c  # compliance of final structure only, saved for logging
     obj = c
     dc = p.H @ (dcx.flatten(order="F") * dx.flatten(order="F") / p.Hs)
     dt = np.zeros(nel)
