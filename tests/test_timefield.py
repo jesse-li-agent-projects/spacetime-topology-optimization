@@ -64,3 +64,26 @@ def test_timefield_variants_span_0_to_1(nelx, nely):
         0,
     )
     assert np.array_equal(tfield_edge[0], np.linspace(0, 1, nelx))
+
+
+@pytest.mark.parametrize("nelx,nely", [(1, 5), (5, 1)])
+def test_lone_one_mesh_allowed(nelx, nely):
+    """A lone-1 mesh is well-defined (not necessarily spanning [0, 1] -- see the module
+    docstring) and must not raise."""
+    timefield.timefield_corner(nelx, nely)
+    timefield.timefield_edge(nelx, nely)
+    timefield.timefield_opposite_corner(nelx, nely)
+
+
+def test_degenerate_mesh_rejected():
+    """Only `nelx == nely == 1` is rejected: CORNER's distance normalization divides by
+    a zero max distance there."""
+    nelx, nely = 1, 1
+    with pytest.raises(ValueError):
+        timefield.timefield_corner(nelx, nely)
+    with pytest.raises(ValueError):
+        timefield.timefield_edge(nelx, nely)
+    with pytest.raises(ValueError):
+        timefield.timefield_opposite_corner(nelx, nely)
+    with pytest.raises(ValueError):
+        timefield.init_timefield(nelx, nely, timefield.TimeField.CORNER)

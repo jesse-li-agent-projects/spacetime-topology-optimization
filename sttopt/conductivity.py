@@ -14,6 +14,8 @@ MATLAB function), so `hotspot_constraint` bakes the density-filter chain rule
 the (nontrivial, hand-derived) sensitivity algebra.
 """
 
+from typing import NamedTuple
+
 import numpy as np
 import scipy.sparse as sp
 from jaxtyping import Float, Int
@@ -76,6 +78,47 @@ def _pairwise_sigmoid_terms(
     return FT, DFT
 
 
+class _ConductivityCore(NamedTuple):
+    K_est: Float[np.ndarray, " nel"]
+    Nsum3: Float[np.ndarray, " nel"]
+    FT_ab: Float[np.ndarray, " npairs"]
+    DFT_ab: Float[np.ndarray, " npairs"]
+    xb_q: Float[np.ndarray, " npairs"]
+
+
+class _ConductivityTerms(NamedTuple):
+    K_est: Float[np.ndarray, " nel"]
+    Nsum3: Float[np.ndarray, " nel"]
+    FT_ba: Float[np.ndarray, " npairs"]
+    DFT_ba: Float[np.ndarray, " npairs"]
+    S1: Float[np.ndarray, " nel"]
+    S2: Float[np.ndarray, " nel"]
+
+
+def _conductivity_core(
+    x: Float[np.ndarray, " nel"],
+    t: Float[np.ndarray, " nel"],
+    e1: Int[np.ndarray, " npairs"],
+    e2: Int[np.ndarray, " npairs"],
+    w: Float[np.ndarray, " npairs"],
+    q: float,
+    rouf: float,
+) -> _ConductivityCore:
+    """`K_est`/`Nsum3` (its row-sum denominator), plus the `a->b` pair terms
+    (`FT_ab`/`DFT_ab`/`xb_q`) shared by both `estimated_conductivity` and
+    `_conductivity_terms` -- computed once here rather than redone by each.
+    """
+    nel = x.shape[0]
+    FT_ab, DFT_ab = _pairwise_sigmoid_terms(t, e1, e2, rouf)
+    xb_q = x[e2] ** q
+    Nsum3 = np.zeros(nel)
+    np.add.at(Nsum3, e1, w * FT_ab)
+    num = np.zeros(nel)
+    np.add.at(num, e1, xb_q * w * FT_ab)
+    K_est = num / Nsum3
+    return _ConductivityCore(K_est, Nsum3, FT_ab, DFT_ab, xb_q)
+
+
 def _conductivity_terms(
     x: Float[np.ndarray, " nel"],
     t: Float[np.ndarray, " nel"],
@@ -84,40 +127,25 @@ def _conductivity_terms(
     w: Float[np.ndarray, " npairs"],
     q: float,
     rouf: float,
-) -> tuple[
-    Float[np.ndarray, " nel"],
-    Float[np.ndarray, " nel"],
-    Float[np.ndarray, " npairs"],
-    Float[np.ndarray, " npairs"],
-    Float[np.ndarray, " nel"],
-    Float[np.ndarray, " nel"],
-]:
-    """Shared per-element/per-pair terms for `estimated_conductivity` and
-    `hotspot_constraint`: `K_est`, `Nsum3` (its row-sum denominator), the
-    neighbor-role-swapped sigmoid pair terms `FT_ba`/`DFT_ba` (needed by the
-    sensitivity's cross term), and `S1`/`S2` (needed by its self/diagonal term).
+) -> _ConductivityTerms:
+    """`_conductivity_core`'s `K_est`/`Nsum3`, plus the sensitivity-only terms
+    `hotspot_constraint` needs: the neighbor-role-swapped sigmoid pair terms
+    `FT_ba`/`DFT_ba` (its cross term) and `S1`/`S2` (its self/diagonal term).
 
     Reuses `e1`'s weight for both pair directions (`w[e1,e2] == w[e2,e1]` by
     construction of `neighbor_weights` -- confirmed against the MATLAB `WE` fixture in
     this module's tests) rather than a second lookup.
     """
     nel = x.shape[0]
-    FT_ab, DFT_ab = _pairwise_sigmoid_terms(t, e1, e2, rouf)
+    core = _conductivity_core(x, t, e1, e2, w, q, rouf)
     FT_ba, DFT_ba = _pairwise_sigmoid_terms(t, e2, e1, rouf)
 
-    xb_q = x[e2] ** q
-    Nsum3 = np.zeros(nel)
-    np.add.at(Nsum3, e1, w * FT_ab)
-    num = np.zeros(nel)
-    np.add.at(num, e1, xb_q * w * FT_ab)
-    K_est = num / Nsum3
-
     S1 = np.zeros(nel)
-    np.add.at(S1, e1, w * DFT_ab)
+    np.add.at(S1, e1, w * core.DFT_ab)
     S2 = np.zeros(nel)
-    np.add.at(S2, e1, xb_q * w * DFT_ab)
+    np.add.at(S2, e1, core.xb_q * w * core.DFT_ab)
 
-    return K_est, Nsum3, FT_ba, DFT_ba, S1, S2
+    return _ConductivityTerms(core.K_est, core.Nsum3, FT_ba, DFT_ba, S1, S2)
 
 
 def estimated_conductivity(
@@ -135,8 +163,17 @@ def estimated_conductivity(
     """
     x = xPhys.flatten(order="F")
     t = tPhys.flatten(order="F")
-    K_est, *_ = _conductivity_terms(x, t, e1, e2, w, q, rouf)
-    return K_est
+    return _conductivity_core(x, t, e1, e2, w, q, rouf).K_est
+
+
+class HotspotConstraintResult(NamedTuple):
+    fval: float
+    df1: Float[np.ndarray, " nely*nelx"]
+    dt1: Float[np.ndarray, " nely*nelx"]
+    # factor-independent
+    numer: float
+    # factor-independent
+    K_est: Float[np.ndarray, " nely*nelx"]
 
 
 def hotspot_constraint(
@@ -154,27 +191,24 @@ def hotspot_constraint(
     q: float,
     r: float,
     rouf: float,
-) -> tuple[float, Float[np.ndarray, " nely*nelx"], Float[np.ndarray, " nely*nelx"]]:
+) -> HotspotConstraintResult:
     """Hotspot constraint: a p-norm of `1 - K_est` (weighted toward hot, dense regions)
     stays below `Tcr`, smoothly bounding the worst-case local overheating risk.
 
     `factor` is a periodically-refreshed rescaling constant the main optimization loop
-    owns as persistent state (see `conventions.md`'s "Known traps") -- pass it through,
-    never recompute it here. To refresh it (MATLAB's `rem(loop,25)==0` guard): this
-    call's own `numer = (fval + 1) * Tcr / factor` is recoverable from `fval` alone
-    (no extra return value needed, since `fval` is an affine function of `numer`); the
-    other ingredient, `max((1 - K_est) * xPhys.flatten('F')**r)`, needs a separate
-    `estimated_conductivity(...)` call (same `e1`/`e2`/`w`/`q`/`rouf`) to get `K_est` --
-    cheap to duplicate since it only runs once per 25 iterations. Sensitivity algebra
-    is hand-derived from the MATLAB source's per-element neighbor loop; see this
-    module's tests for the derivation.
+    owns as persistent state (`optimize.State.factor`) -- pass it through, never
+    recompute it here. `numer`/`K_est` are returned for the caller's periodic
+    refresh (MATLAB's `rem(loop,25)==0` guard), which needs both but must not perturb
+    this call's own `factor`-scaled result. Sensitivity algebra is hand-derived from the
+    MATLAB source's per-element neighbor loop; see this module's tests for the derivation.
     """
     nely, nelx = xPhys.shape
     nel = nely * nelx
     x = xPhys.flatten(order="F")
     t = tPhys.flatten(order="F")
 
-    K_est, Nsum3, FT_ba, DFT_ba, S1, S2 = _conductivity_terms(x, t, e1, e2, w, q, rouf)
+    terms = _conductivity_terms(x, t, e1, e2, w, q, rouf)
+    K_est = terms.K_est
     T_val = 1 - K_est
 
     cond_p = (T_val * x**r) ** p
@@ -184,19 +218,19 @@ def hotspot_constraint(
 
     xa, xb = x[e1], x[e2]
     Ka, Kb = K_est[e1], K_est[e2]
-    Na, Nb = Nsum3[e1], Nsum3[e2]
-    S1a, S2a = S1[e1], S2[e1]
+    Na, Nb = terms.Nsum3[e1], terms.Nsum3[e2]
+    S1a, S2a = terms.S1[e1], terms.S2[e1]
     diag = e1 == e2
 
     # N_sub2's cross term is shared by both branches (at a == b, xb/Nb reduce to
     # xa/Na, and FT_ba/w reduce to their diagonal identities 0.5/1 -- no separate
     # diagonal constant needed); only the self-heating correction is diagonal-only.
-    N_sub2 = -(xb**r) * q * xa ** (q - 1) * FT_ba * w / Nb
+    N_sub2 = -(xb**r) * q * xa ** (q - 1) * terms.FT_ba * w / Nb
     N_sub2 = N_sub2 + np.where(diag, (1 - Ka) * r * xa ** (r - 1), 0.0)
     N_sub1 = np.where(
         diag,
         -(xa**r) * (S2a / Na - Ka * S1a / Na),
-        -(w / Nb) * (Kb - xa**q) * xb**r * DFT_ba,
+        -(w / Nb) * (Kb - xa**q) * xb**r * terms.DFT_ba,
     )
 
     Tsub_pow = (T_val[e2] * xb**r) ** (p - 1)
@@ -208,4 +242,4 @@ def hotspot_constraint(
     scale = factor * (sum_cond / nel) ** (1 / p - 1) / (nel * Tcr)
     df1 = H @ ((scale * cond_arr2) * dx.flatten(order="F") / Hs)
     dt1 = H @ ((scale * cond_arr1) / Hs)
-    return fval, df1, dt1
+    return HotspotConstraintResult(fval, df1, dt1, float(numer), K_est)

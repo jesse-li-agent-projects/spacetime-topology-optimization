@@ -103,6 +103,9 @@ def test_WE_equals_w_el_generally(nelx, nely, rmin_cond):
 def test_timefield_matches_reference(nelx, nely, variant):
     """`timefield.mat` covers all three variants but only one grid; the `linspace(0, n, n)`
     spacing means variants 1 and 3 change shape (not just scale) with the aspect ratio.
+
+    `(4, 1)`/`(1, 4)` are lone-1 meshes: well-defined and finite for every variant here
+    (only `nelx == nely == 1` raises, and only for CORNER -- see `timefield.py`).
     """
     got = timefield.init_timefield(nelx, nely, variant)
     assert rel(got, ref.ref_timefield(nelx, nely, variant)) < TIGHT
@@ -227,15 +230,15 @@ def test_hotspot_matches_reference(nelx, nely, rmin_cond, factor):
 
     H, Hs = filters.density_filter(nelx, nely, 2.0)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
-    fv, df1, dt1 = conductivity.hotspot_constraint(
+    result = conductivity.hotspot_constraint(
         xP, tP, e1, e2, w, dx, H, Hs, factor, 0.8, 25.0, 3.0, 0.05, 100.0
     )
     K = conductivity.estimated_conductivity(xP, tP, e1, e2, w, 3.0, 100.0)
 
     assert rel(K, K_ref) < TIGHT
-    assert abs(fv - fv_ref) / abs(fv_ref) < TIGHT
-    assert rel(df1, df_ref) < 1e-10
-    assert rel(dt1, dt_ref) < 1e-10
+    assert abs(result.fval - fv_ref) / abs(fv_ref) < TIGHT
+    assert rel(result.df1, df_ref) < 1e-10
+    assert rel(result.dt1, dt_ref) < 1e-10
 
 
 @pytest.mark.parametrize(
@@ -274,12 +277,12 @@ def test_hotspot_non_default_constants(p, q, r, rouf):
     )
     H, Hs = filters.density_filter(nelx, nely, 2.0)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, 3.0)
-    fv, df1, dt1 = conductivity.hotspot_constraint(
+    result = conductivity.hotspot_constraint(
         xP, tP, e1, e2, w, dx, H, Hs, 1.0, 0.8, float(p), float(q), r, rouf
     )
-    assert abs(fv - fv_ref) / abs(fv_ref) < TIGHT
-    assert rel(df1, df_ref) < TIGHT
-    assert rel(dt1, dt_ref) < TIGHT
+    assert abs(result.fval - fv_ref) / abs(fv_ref) < TIGHT
+    assert rel(result.df1, df_ref) < TIGHT
+    assert rel(result.dt1, dt_ref) < TIGHT
 
 
 # ----------------------------------------------------------------- full loop

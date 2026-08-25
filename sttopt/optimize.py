@@ -9,10 +9,10 @@ the raw-vs-filtered x/t fields) from one call to the next. See `conventions.md` 
 array-order conventions and `tests/fixtures/generate_fixtures.m` (the literal MATLAB
 reference this ports) for the authoritative iteration order.
 
-Two field pairs are threaded per design variable, and must not be conflated (see the
-Phase 8 handoff notes): `x`/`t` are each iteration's *raw* MMA output (unfiltered,
-unprojected -- what next iteration's move-limit bounds read); `xTilde`/`xPhys`/`tPhys`
-are the *filtered* (and, for density, Heaviside-projected) fields the physics uses.
+Two field pairs are threaded per design variable, and must not be conflated: `x`/`t`
+are each iteration's *raw* MMA output (unfiltered, unprojected -- what next
+iteration's move-limit bounds read); `xTilde`/`xPhys`/`tPhys` are the *filtered* (and,
+for density, Heaviside-projected) fields the physics uses.
 `xTilde` alone is carried an extra step (needed for the Heaviside-derivative chain rule
 at the *start* of the next iteration, before that iteration's own update).
 """
@@ -46,7 +46,7 @@ class Problem:
     volfrac: float
     Theta: float
     Tcr: float
-    tfield: int
+    tfield: timefield.TimeField
 
     KE: Float[np.ndarray, "8 8"]
     edofMat: Int[np.ndarray, "nelx*nely 8"]
@@ -132,7 +132,7 @@ def build_problem(
     volfrac: float,
     Theta: float,
     Tcr: float,
-    tfield: int,
+    tfield: timefield.TimeField,
     rmin: float,
     lrmin: float,
     rmin_cond: float,
@@ -156,9 +156,10 @@ def build_problem(
 
     `rmin`/`lrmin`/`rmin_cond` are filter radii (density filter, continuity filter,
     conductivity neighborhood) -- passed explicitly rather than hardcoded so callers
-    (e.g. the E2E test) can match whatever grid they're running on; see the Phase 8
-    handoff notes on why the fixture's radii differ from the original full-scale script.
+    (e.g. the E2E test) can match whatever grid they're running on, since the fixture's
+    radii differ from the original full-scale script's.
     """
+    tfield = timefield.TimeField(tfield)
     KE = fem.plane_stress_KE(nu)
     edofMat = fem.element_dof_map(nelx, nely)
     ndof = 2 * (nelx + 1) * (nely + 1)
@@ -175,13 +176,13 @@ def build_problem(
     C = gravity.gravity_load_matrix(nelx, nely)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
 
-    # Print-start element(s): the whole first mesh column for tfield != 1, the single
-    # origin element for tfield == 1 (constraints.start_point's own docstring).
-    Nei = np.array([0]) if tfield == 1 else np.arange(nely)
+    # Print-start element(s): the whole first mesh column for tfield != CORNER, the
+    # single origin element for tfield == CORNER (constraints.start_point's own docstring).
+    Nei = np.array([0]) if tfield == timefield.TimeField.CORNER else np.arange(nely)
 
     n = 2 * nelx * nely
     # MATLAB hardcodes `m = 1 + 1 + nely + 2*nStage + 1` -- only self-consistent when
-    # tfield != 1 (Nei has nely rows); computing from len(Nei) generalizes correctly.
+    # tfield != CORNER (Nei has nely rows); computing from len(Nei) generalizes correctly.
     m = 1 + 1 + len(Nei) + 2 * nStage + 1
 
     return Problem(
@@ -292,7 +293,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     c, dcx = compliance.whole_compliance(
         xPhys, p.KE, p.edofMat, p.Emin, p.Emax, p.penal, p.freedofs, p.F, p.ndof
     )
-    obj_final_only = c # compliance of final structure only, saved for logging
+    obj_final_only = c  # compliance of final structure only, saved for logging
     obj = c
     dc = p.H @ (dcx.flatten(order="F") * dx.flatten(order="F") / p.Hs)
     dt = np.zeros(nel)
@@ -357,11 +358,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             np.stack([np.concatenate([dfx, dft]), np.concatenate([-dfx, -dft])])
         )
 
-    # Hotspot constraint: `factor` is refreshed every 25 iterations from a *separate*
-    # estimated_conductivity call (see conductivity.hotspot_constraint's docstring) --
-    # numer is factor-independent, so the first call's fval recovers it; if the
-    # refresh fires, factor changes and the constraint is recomputed with the new value.
-    fv, df1, dt1 = conductivity.hotspot_constraint(
+    # Hotspot constraint: `factor` is refreshed every 25 iterations. `numer`/`K_est` come
+    # back from this one call, so the refresh below is a pure rescale, not a recompute.
+    hotspot = conductivity.hotspot_constraint(
         xPhys,
         tPhys,
         p.e1,
@@ -377,31 +376,25 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         p.r,
         p.rouf,
     )
-    numer = (fv + 1) * p.Tcr / state.factor
+    fv, df1, dt1 = hotspot.fval, hotspot.df1, hotspot.dt1
     factor = state.factor
     if loop % 25 == 0:
-        K_est = conductivity.estimated_conductivity(
-            xPhys, tPhys, p.e1, p.e2, p.w, p.q, p.rouf
-        )
-        max_g = float(np.max((1 - K_est) * xPhys.flatten(order="F") ** p.r))
-        factor = max_g / numer
-        fv, df1, dt1 = conductivity.hotspot_constraint(
-            xPhys,
-            tPhys,
-            p.e1,
-            p.e2,
-            p.w,
-            dx,
-            p.H,
-            p.Hs,
-            factor,
-            p.Tcr,
-            p.p,
-            p.q,
-            p.r,
-            p.rouf,
-        )
-    tru_max = factor * numer
+        max_g = float(np.max((1 - hotspot.K_est) * xPhys.flatten(order="F") ** p.r))
+        factor = max_g / hotspot.numer
+        # `hotspot_constraint` computes `fval = factor * numer / Tcr - 1` and scales
+        # `df1`/`dt1` by that same `factor` (its `scale` term) -- `numer`, and
+        # everything `df1`/`dt1` are built from, hold `factor` fixed. So at a new
+        # `factor' = factor * rescale`, `fval' = rescale * (fval + 1) - 1` (the `-1`
+        # is why this can't be a plain `fval * rescale`) and `df1'/dt1' = rescale *
+        # df1/dt1` exactly -- not an approximation. `test_hotspot_factor_refresh_at_loop_25`
+        # (tests/test_e2e.py) pins this against an independent recompute at the new
+        # `factor`, so a broken rescale (e.g. dropping the `-1` handling, or scaling
+        # df1/dt1 by the wrong quantity) fails that test.
+        rescale = factor / state.factor
+        fv = (fv + 1) * rescale - 1
+        df1 = df1 * rescale
+        dt1 = dt1 * rescale
+    tru_max = factor * hotspot.numer
     fval_parts.append(np.array([fv]))
     dfdx_parts.append(np.concatenate([df1, dt1])[None, :])
 
@@ -480,7 +473,7 @@ def run(
     volfrac: float,
     Theta: float,
     Tcr: float,
-    tfield: int,
+    tfield: timefield.TimeField,
     rmin: float,
     lrmin: float,
     rmin_cond: float,

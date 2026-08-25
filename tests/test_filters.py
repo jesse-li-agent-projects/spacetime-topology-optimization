@@ -39,6 +39,99 @@ def test_continuity_filter_returns_sparse():
     assert sp.issparse(L)
 
 
+# --- continuity_filter properties (first-principles, no MATLAB fixture) ---------------
+# `L @ t` is defined to be each element's own value minus the unweighted mean of its
+# `lrmin`-neighbours (self excluded). Everything below follows from that definition
+# alone, so these pin the operator's *meaning* rather than its fixture values -- the
+# fixture test above only covers nelx=7, nely=5, lrmin=2.
+#
+# All the closed forms use lrmin=2, i.e. the 3x3 window minus self, which is the radius
+# the reference loop and every fixture use. Neighbour counts: 8 in the interior, 5 along
+# an edge, 3 at a corner.
+
+
+def _column_index_field(nelx: int, nely: int) -> np.ndarray:
+    """t[j, i] = i -- a field increasing by exactly 1 per column, constant down a column."""
+    return np.broadcast_to(np.arange(nelx, dtype=float), (nely, nelx)).copy()
+
+
+def _apply(L, field, nelx, nely):
+    return (L @ field.flatten(order="F")).reshape((nely, nelx), order="F")
+
+
+@pytest.mark.parametrize("c", [0.0, 1.0, -3.25, 0.4])
+def test_continuity_filter_annihilates_constant_fields(c):
+    """A uniform field disagrees with its neighbourhood nowhere, so `L @ t` must be
+    exactly zero at *every* element -- including boundary ones, whose windows are
+    truncated and whose row normalizer therefore differs. This is the penalty's floor:
+    a single-shot print (all elements deposited at the same instant) is the smoothest
+    time field there is, and must score zero, not merely "something small"."""
+    nelx, nely = 6, 4
+    L = continuity_filter(nelx, nely, LRMIN)
+    out = _apply(L, np.full((nely, nelx), c), nelx, nely)
+    np.testing.assert_allclose(out, 0.0, atol=1e-14)
+
+
+def test_continuity_filter_on_linear_ramp_closed_form():
+    """A ramp increasing by 1 per column is the canonical "perfectly continuous" build
+    order (`timefield_edge`'s shape). Its 3x3 neighbourhood is symmetric about the centre
+    everywhere except the first and last columns, so `L @ t` must vanish identically off
+    those two columns, whatever the mesh size -- an operator that leaked a nonzero
+    residual into the interior would penalize the very build order it exists to reward.
+
+    On the two end columns the neighbourhood is one-sided and the residual is a fixed
+    closed form: an edge element has 5 neighbours (2 in its own column, 3 in the adjacent
+    one) so the mean sits 3/5 of a column away; a corner element has 3 neighbours (1 in
+    its own column, 2 in the adjacent one) so the mean sits 2/3 of a column away. The
+    sign is negative on the low-index end (the element is earlier than its neighbourhood)
+    and mirrored on the high-index end.
+    """
+    for nelx, nely in [(6, 4), (5, 5), (7, 3)]:
+        L = continuity_filter(nelx, nely, LRMIN)
+        out = _apply(L, _column_index_field(nelx, nely), nelx, nely)
+
+        np.testing.assert_allclose(out[:, 1:-1], 0.0, atol=1e-14)
+
+        expected_first = np.full(nely, -3 / 5)
+        expected_first[0] = expected_first[-1] = -2 / 3
+        np.testing.assert_allclose(out[:, 0], expected_first, atol=1e-14)
+        np.testing.assert_allclose(out[:, -1], -expected_first, atol=1e-14)
+
+
+def test_continuity_filter_row_and_diagonal_ramps():
+    """The same closed form must hold for a ramp down the rows (the operator has no
+    preferred axis), and a diagonal ramp -- the sum of the two -- must vanish wherever
+    both index directions are interior."""
+    nelx, nely = 6, 5
+    L = continuity_filter(nelx, nely, LRMIN)
+
+    jj, ii = np.meshgrid(np.arange(nely), np.arange(nelx), indexing="ij")
+    row_ramp = jj.astype(float)
+    out_rows = _apply(L, row_ramp, nelx, nely)
+    np.testing.assert_allclose(out_rows[1:-1, :], 0.0, atol=1e-14)
+    expected_first = np.full(nelx, -3 / 5)
+    expected_first[0] = expected_first[-1] = -2 / 3
+    np.testing.assert_allclose(out_rows[0, :], expected_first, atol=1e-14)
+    np.testing.assert_allclose(out_rows[-1, :], -expected_first, atol=1e-14)
+
+    out_diag = _apply(L, (ii + jj).astype(float), nelx, nely)
+    np.testing.assert_allclose(out_diag[1:-1, 1:-1], 0.0, atol=1e-14)
+
+
+def test_continuity_filter_on_checkerboard_closed_form():
+    """The worst case the penalty exists to reject. An interior element's 8 neighbours
+    split 4/4 between the two checkerboard phases, so the neighbourhood mean is exactly
+    1/2 and the residual is +-1/2 -- the largest magnitude any 0/1 field can produce, and
+    an order of magnitude above the ramp's interior residual of 0."""
+    nelx, nely = 6, 5
+    L = continuity_filter(nelx, nely, LRMIN)
+    jj, ii = np.meshgrid(np.arange(nely), np.arange(nelx), indexing="ij")
+    phase = ((ii + jj) % 2).astype(float)
+
+    out = _apply(L, phase, nelx, nely)
+    np.testing.assert_allclose(out[1:-1, 1:-1], phase[1:-1, 1:-1] - 0.5, atol=1e-14)
+
+
 def _reference_density_filter(nelx: int, nely: int, rmin: float) -> np.ndarray:
     """Independent transliteration of generate_fixtures.m's density-filter loop (0-indexed).
 

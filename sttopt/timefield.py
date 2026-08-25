@@ -5,10 +5,35 @@ encoding a spatial ordering of when each element is expected to be "active" (e.g
 solidification or deposition front sweeping the domain). All three are normalized
 Euclidean-distance or linear ramps over the `(nely, nelx)` element grid; see
 `conventions.md` for the grid/array-order convention they follow.
+
+A lone-1 mesh (`nelx == 1` xor `nely == 1`) is well-defined but doesn't necessarily
+span `[0, 1]`: EDGE is constant at 0 when `nelx == 1`, and OPPOSITE_CORNER never
+reaches 0 when `nely == 1`. Only `nelx == nely == 1` is rejected, since CORNER's
+distance normalization divides by a zero max distance there.
 """
+
+from enum import IntEnum
 
 import numpy as np
 from jaxtyping import Float
+
+
+class TimeField(IntEnum):
+    """Named time-field initialization variants, matching `tfield` in the MATLAB source."""
+
+    CORNER = 1  # top-left corner distance
+    EDGE = 2  # left-edge ramp
+    OPPOSITE_CORNER = 3  # bottom-left corner distance
+
+
+def _check_grid_size(nelx: int, nely: int) -> None:
+    """Reject only `nelx == nely == 1`, where CORNER's distance normalization divides
+    by a zero max distance -- see the module docstring for the (allowed) lone-1 cases.
+    """
+    if nelx == 1 and nely == 1:
+        raise ValueError(
+            f"nelx and nely cannot both be 1, got nelx={nelx}, nely={nely}"
+        )
 
 
 def _corner_distance_grid(
@@ -21,6 +46,7 @@ def _corner_distance_grid(
     the MATLAB source, not an off-by-one to "fix": since the x- and y-axis spacings
     differ whenever `nelx != nely`, changing this shifts the field's shape (not just an
     overall scale), so it must stay exactly as the source has it to match the fixture.
+    Undefined only at `nelx == nely == 1` (see `_check_grid_size`).
     """
     xpos = np.linspace(0, nelx, nelx)
     ypos = np.linspace(0, nely, nely)
@@ -32,32 +58,31 @@ def _corner_distance_grid(
 
 def timefield_corner(nelx: int, nely: int) -> Float[np.ndarray, "nely nelx"]:
     """Normalized distance from the top-left grid corner (x=0, y=0)."""
+    _check_grid_size(nelx, nely)
     return _corner_distance_grid(nelx, nely, (0, 0))
 
 
 def timefield_edge(nelx: int, nely: int) -> Float[np.ndarray, "nely nelx"]:
     """Left-to-right linear ramp in x, constant down each column."""
+    _check_grid_size(nelx, nely)
     return np.tile(np.linspace(0, 1, nelx), (nely, 1))
 
 
 def timefield_opposite_corner(nelx: int, nely: int) -> Float[np.ndarray, "nely nelx"]:
     """Normalized distance from the bottom-left grid corner (x=0, y=nely)."""
+    _check_grid_size(nelx, nely)
     return _corner_distance_grid(nelx, nely, (0, nely))
 
 
 def init_timefield(
-    nelx: int, nely: int, variant: int
+    nelx: int, nely: int, variant: TimeField
 ) -> Float[np.ndarray, "nely nelx"]:
-    """Dispatch to one of the three named time-field initializations.
-
-    `variant`: 1 (top-left corner), 2 (left edge ramp), 3 (bottom-left corner) --
-    matches `tfield` in the MATLAB source.
-    """
-    if variant == 1:
+    """Dispatch to one of the three named time-field initializations."""
+    if variant == TimeField.CORNER:
         return timefield_corner(nelx, nely)
-    elif variant == 2:
+    elif variant == TimeField.EDGE:
         return timefield_edge(nelx, nely)
-    elif variant == 3:
+    elif variant == TimeField.OPPOSITE_CORNER:
         return timefield_opposite_corner(nelx, nely)
     else:
-        raise ValueError(f"variant must be 1, 2, or 3, got {variant!r}")
+        raise ValueError(f"variant must be a TimeField member, got {variant!r}")

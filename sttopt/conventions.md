@@ -59,10 +59,14 @@ assume uniformity, e.g. volume-fraction constraints) — a larger change than ad
 guard, so no code currently asserts uniformity; this note is the single place that
 assumption is recorded.
 
+`timefield.py`'s three variants require `nelx`/`nely` not both 1 (`nelx == nely == 1`
+divides by a zero max distance in the CORNER variant); a lone-1 mesh is otherwise
+well-defined but doesn't necessarily span `[0, 1]` (see that module's docstring).
+
 ## Known deviations (not bugs)
 
-See the plan (`plans/conductivity_estimation_2d_python_port.md`, "Known traps") for the
-full list.
+See the plan (`plans/archive/conductivity_estimation_2d_python_port.md`, "Known traps")
+for the full list.
 
 One entry there no longer applies: `DFT(o) = 0` on exact `t[a] == t[b]` ties was
 originally ported verbatim from the source (`conductivity_estimation_stto_main.m`,

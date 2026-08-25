@@ -33,8 +33,7 @@ never reassigned between `f0val = obj` and the `disp` call) -- NOT `IterationRec
 this iteration's *post-update* `xPhys` (MATLAB's `disp` runs after the MMA step
 reassigns `xPhys`, so it measures the density feeding the *next* iteration) -- NOT
 `IterationRecord.vol` (the pre-update value MATLAB's own `vol(loop)` array stores,
-computed earlier in the same iteration). Both mismatches were caught by an independent
-reviewer pass, not by any test -- `tests/test_cli.py` only checks that the PNG exists.
+computed earlier in the same iteration).
 """
 
 import argparse
@@ -66,7 +65,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=3,
         choices=(1, 2, 3),
-        help="initial time-field variant: 1=top-left corner, 2=left edge, 3=bottom-left corner",
+        help="initial time-field variant: 1=top-left corner, 2=left edge, 3=bottom-left corner "
+        "(coerced to a TimeField by build_problem)",
     )
     parser.add_argument("--rmin", type=float, default=4.0, help="density filter radius")
     parser.add_argument(
