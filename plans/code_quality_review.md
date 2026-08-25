@@ -35,25 +35,6 @@ check -- `tests/test_compliance.py`), independent of the MATLAB fixture. So does
   rather than a second closed form layered on top of beam theory, using a sharp `lam`
   and rescaling the truncated mesh's load to sidestep the sigmoid-softening question.
 
-### `timefield.py`
-
-- [ ] `init_timefield`'s `variant` parameter is a bare `int` (1/2/3, `ValueError` on
-  anything else) instead of an enum. Magic ints duplicated between the docstring and the
-  `if/elif` dispatch (`sttopt/timefield.py:49-64`); an `IntEnum` (or plain `Enum`) would
-  make call sites self-documenting and give a real type to check instead of prose.
-- [ ] `_corner_distance_grid`/`timefield_edge` degenerate when `nelx==1` or `nely==1`
-  (found while adding `test_timefield_variants_span_0_to_1`, `tests/test_timefield.py`):
-  `nelx=nely=1` divides by `dist.max()==0`, producing `nan`/`nan` with a genuine
-  `RuntimeWarning: invalid value encountered in divide`; a lone `nely=1` (or `nelx=1`)
-  makes `timefield_opposite_corner` (or `timefield_edge`) never reach the corner/edge it
-  normalizes against, so the field is constant `1` (or `0`) instead of spanning `[0, 1]`
-  -- a consequence of the same `linspace(0, nel, nel)` endpoint-vs-single-sample behavior
-  the module docstring already flags as intentional for `nel>1`. `nelx`/`nely` are always
-  well above 1 in every real usage seen so far, so this is likely latent rather than
-  live, but it's undocumented and unguarded. Worth a decision: reject `nelx<2`/`nely<2`
-  explicitly (`ValueError`), or just document it as an assumption alongside the existing
-  `_corner_distance_grid` docstring note.
-
 ### `optimize.py` / `conductivity.py`
 
 - [ ] `init_state` (`sttopt/optimize.py:226`) sets `t = tPhys.copy()` (raw == physical,
@@ -81,44 +62,11 @@ check -- `tests/test_compliance.py`), independent of the MATLAB fixture. So does
   `xTilde`/`tPhys` via `H @ (...) / Hs` uniformly, rather than special-casing which
   fields get filtered at init and which don't.
 
-- [ ] `step` (`sttopt/optimize.py:260`) inverts `fval` to recover `numer` and calls
-  `hotspot_constraint` twice on refresh iterations (`sttopt/optimize.py:346-358`) --
-  returning `numer`/`K_est` directly from `hotspot_constraint` would delete both the
-  inversion and the second call, plus the paragraph of docstring explaining the
-  workaround. A docstring paragraph justifying an awkward call pattern is itself a signal
-  the interface is the wrong shape.
-- [ ] `estimated_conductivity` (`sttopt/conductivity.py:119`) computes `FT_ba`/`DFT_ba`/
-  `S1`/`S2` and throws them away -- only `K_est` survives. Either the computation should
-  stop building values nothing uses, or (if `hotspot_constraint` genuinely needs to
-  redo this work with the extra terms) the two functions should share it instead of
-  `estimated_conductivity` duplicating a subset of `_conductivity_terms`'s work for
-  nothing.
-- [ ] `_conductivity_terms` (`sttopt/conductivity.py:75`) returns a positional 6-tuple.
-  Call sites (`estimated_conductivity`, `hotspot_constraint`) have to unpack it
-  positionally and remember what each slot means; a small `@dataclass` (or named tuple)
-  would make call sites self-documenting and catch transposed-field bugs at write time
-  instead of relying on correct unpack order.
 - [ ] `Problem` (`sttopt/optimize.py:37`) has 30 fields, and `step`
   (`sttopt/optimize.py:260`) unpacks ~20 of them. Worth revisiting whether `Problem`
   should be decomposed into sub-groups (e.g. FEM assembly constants, filter/neighbor
   structures, MMA hyperparameters) that `step` can pass through instead of unpacking
   individually -- but see "Open questions" below before committing to a specific split.
-
-### `cli.py`
-
-- [ ] The module docstring (`sttopt/cli.py:1-36`) narrates review history in its last
-  paragraph: `"Both mismatches were caught by an independent reviewer pass, not by any
-  test -- tests/test_cli.py only checks that the PNG exists."` `CLAUDE.local.md`'s style
-  section explicitly asks to avoid this kind of unimportant history in docs (contrast:
-  history that explains a past *pitfall* to avoid repeating, which is fine to keep, and
-  is arguably what the rest of this paragraph already does by explaining *why* `Obj.`/
-  `Vol.` read from `prev_state` instead of `IterationRecord`). Trim to keep the
-  why-it's-`prev_state`-not-`IterationRecord` reasoning and drop the meta-commentary
-  about who caught it and how.
-- [ ] Audit other module docstrings for the same pattern (this one was flagged by a
-  previous review pass; grep for phrasing like "caught by", "reviewer", "previous
-  agent" as a starting point) -- listed here as a to-check, not yet confirmed to
-  recur elsewhere.
 
 ### Array/tensor conventions and naming
 
@@ -153,11 +101,35 @@ check -- `tests/test_compliance.py`), independent of the MATLAB fixture. So does
 - Whether `Problem` decomposition is worth the churn given it's `frozen=True` and
   threaded through `build_problem`/`init_state`/`step`/tests -- needs a concrete
   sub-grouping proposal before starting, not just "it's big."
-- Whether an `Enum` for `timefield` variant should also replace `Problem.tfield: int`
-  (`sttopt/optimize.py:48`), or stay local to `init_timefield`'s parameter -- `tfield` is
-  stored on `Problem` and round-trips through the CLI as a plain int argument, so making
-  it an enum end-to-end touches more surface than just `timefield.py`.
 
 ## Done
 
-(none yet)
+- [x] `timefield.py`: `init_timefield`'s `variant` parameter is now `TimeField`, an
+  `IntEnum` (`CORNER`/`EDGE`/`OPPOSITE_CORNER`), taken end-to-end through
+  `Problem.tfield`/`build_problem`/`run` and the CLI's `--tfield` argument (parses into
+  `TimeField` via `type=`/`choices=`) -- resolves the enum item and the open question
+  about how far to take it. Existing plain-int call sites keep working since `IntEnum`
+  compares equal to `int`.
+- [x] `timefield.py`: `nelx < 2` or `nely < 2` (previously `nan` from the corner variants
+  or a non-spanning constant field from the edge variant) is now rejected with
+  `ValueError` via a shared `_check_grid_size` guard, covering all three variants and
+  `init_timefield`.
+- [x] `optimize.py`/`conductivity.py`: `hotspot_constraint` now returns `numer`/`K_est`
+  directly (as a `HotspotConstraintResult` NamedTuple), so `step`'s `loop % 25 == 0`
+  refresh no longer inverts `fval` to recover `numer`, calls `estimated_conductivity`
+  separately for `K_est`, or calls `hotspot_constraint` a second time -- it rescales
+  `fval`/`df1`/`dt1` exactly instead, since both are linear in `factor`. Verified the
+  exact-rescale claim numerically (two `factor` values, random inputs): `fval` matched
+  to 0, `df1`/`dt1` to ~1e-16/4e-17 relative.
+- [x] `conductivity.py`: `_conductivity_terms` split into a cheap `_conductivity_core`
+  (`K_est`/`Nsum3`) and the sensitivity-only extras, so `estimated_conductivity` no
+  longer computes `FT_ba`/`DFT_ba`/`S1`/`S2` for nothing.
+- [x] `conductivity.py`: `_conductivity_terms` returns a `NamedTuple`
+  (`_ConductivityTerms`/`_ConductivityCore`) instead of a positional tuple; call sites
+  use attribute access.
+- [x] `cli.py`: trimmed the review-history sentence from the module docstring's last
+  paragraph, keeping the why-it's-`prev_state`-not-`IterationRecord` reasoning. Audited
+  the rest of `sttopt/` for the same pattern (`grep -rniE "caught by|reviewer|previous
+  agent|review pass|phase [0-9]"`) and fixed the two dangling "Phase 8 handoff notes"
+  references in `optimize.py` (rewritten to state their substance directly, since that
+  document doesn't exist in the repo).
