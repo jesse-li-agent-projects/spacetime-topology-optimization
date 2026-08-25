@@ -81,6 +81,9 @@ def _pairwise_sigmoid_terms(
 class _ConductivityCore(NamedTuple):
     K_est: Float[np.ndarray, " nel"]
     Nsum3: Float[np.ndarray, " nel"]
+    FT_ab: Float[np.ndarray, " npairs"]
+    DFT_ab: Float[np.ndarray, " npairs"]
+    xb_q: Float[np.ndarray, " npairs"]
 
 
 class _ConductivityTerms(NamedTuple):
@@ -101,19 +104,19 @@ def _conductivity_core(
     q: float,
     rouf: float,
 ) -> _ConductivityCore:
-    """`K_est`/`Nsum3` (its row-sum denominator) only -- the cheap subset of
-    `_conductivity_terms` that `estimated_conductivity` needs, skipping the
-    sensitivity-only pair/self terms `hotspot_constraint` additionally requires.
+    """`K_est`/`Nsum3` (its row-sum denominator), plus the `a->b` pair terms
+    (`FT_ab`/`DFT_ab`/`xb_q`) shared by both `estimated_conductivity` and
+    `_conductivity_terms` -- computed once here rather than redone by each.
     """
     nel = x.shape[0]
-    FT_ab, _ = _pairwise_sigmoid_terms(t, e1, e2, rouf)
+    FT_ab, DFT_ab = _pairwise_sigmoid_terms(t, e1, e2, rouf)
     xb_q = x[e2] ** q
     Nsum3 = np.zeros(nel)
     np.add.at(Nsum3, e1, w * FT_ab)
     num = np.zeros(nel)
     np.add.at(num, e1, xb_q * w * FT_ab)
     K_est = num / Nsum3
-    return _ConductivityCore(K_est, Nsum3)
+    return _ConductivityCore(K_est, Nsum3, FT_ab, DFT_ab, xb_q)
 
 
 def _conductivity_terms(
@@ -134,17 +137,15 @@ def _conductivity_terms(
     this module's tests) rather than a second lookup.
     """
     nel = x.shape[0]
-    K_est, Nsum3 = _conductivity_core(x, t, e1, e2, w, q, rouf)
-    FT_ab, DFT_ab = _pairwise_sigmoid_terms(t, e1, e2, rouf)
+    core = _conductivity_core(x, t, e1, e2, w, q, rouf)
     FT_ba, DFT_ba = _pairwise_sigmoid_terms(t, e2, e1, rouf)
 
-    xb_q = x[e2] ** q
     S1 = np.zeros(nel)
-    np.add.at(S1, e1, w * DFT_ab)
+    np.add.at(S1, e1, w * core.DFT_ab)
     S2 = np.zeros(nel)
-    np.add.at(S2, e1, xb_q * w * DFT_ab)
+    np.add.at(S2, e1, core.xb_q * w * core.DFT_ab)
 
-    return _ConductivityTerms(K_est, Nsum3, FT_ba, DFT_ba, S1, S2)
+    return _ConductivityTerms(core.K_est, core.Nsum3, FT_ba, DFT_ba, S1, S2)
 
 
 def estimated_conductivity(
