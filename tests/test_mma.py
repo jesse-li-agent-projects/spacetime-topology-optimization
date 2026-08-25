@@ -110,6 +110,115 @@ def test_mmasub_asymptote_update_branch():
     assert_close(upp_out, expected_upp, tier="algebraic")
 
 
+def _assert_subsolv_kkt(
+    solution, *, low, upp, alfa, beta, p0, q0, P, Q, a0, a, b, c, d, epsimin
+):
+    """Assert a `subsolv` return satisfies the relaxed KKT system it solves.
+
+    `subsolv` returns the solution of the *log-barrier subproblem* at the last barrier
+    parameter it ran, not of the unrelaxed problem: its outer loop stops once
+    `epsi <= epsimin`, so the final pass ran at `epsi = 10*epsimin`. Residuals are
+    therefore bounded by that value and complementarity products equal it rather than
+    zero -- exactly the conditions `subsolv`'s own inner convergence test uses. This
+    checks the returned point against those conditions from the MMA subproblem's own
+    definition (Svanberg's dual/primal-dual formulation), independent of any fixture.
+    """
+    xmma, ymma, zmma, lamma, xsimma, etamma, mumma, zetmma, smma = solution
+
+    for arr in (xmma, ymma, zmma, lamma, xsimma, etamma, mumma, zetmma, smma):
+        assert np.all(np.isfinite(arr))
+    assert np.all(xmma > alfa) and np.all(xmma < beta)
+    assert np.all(ymma >= 0)
+    assert zmma >= 0
+    assert np.all(lamma >= 0)
+    assert (
+        np.all(xsimma >= 0)
+        and np.all(etamma >= 0)
+        and np.all(mumma >= 0)
+        and zetmma >= 0
+    )
+
+    epsi_final = 10 * epsimin
+    ux1, xl1 = upp - xmma, xmma - low
+    plam, qlam = p0 + P.T @ lamma, q0 + Q.T @ lamma
+    rex = plam / ux1**2 - qlam / xl1**2 - xsimma + etamma
+    rey = c + d * ymma - mumma - lamma
+    rez = a0 - zetmma - a @ lamma
+    relam = P @ (1 / ux1) + Q @ (1 / xl1) - a * zmma - ymma + smma - b
+    tol = 10 * epsi_final
+    for r in (rex, rey, np.array([rez]), relam):
+        assert np.max(np.abs(r)) < tol
+    complementarity = (
+        xsimma * (xmma - alfa),
+        etamma * (beta - xmma),
+        mumma * ymma,
+        lamma * smma,
+        np.array([zetmma * zmma]),
+    )
+    for prod in complementarity:
+        assert np.all(np.abs(prod - epsi_final) < tol)
+
+
+def test_subsolv_m_lt_n_kkt():
+    """KKT check for subsolv's `m < n` branch (primal-space elimination) -- the branch
+    the real space-time problem always takes (m ~ 17 vs. n = 2*nelx*nely), and the one
+    every fixture drives, but only ever *through* a MATLAB trajectory comparison. Nothing
+    outside those fixtures says the point it returns actually solves the subproblem.
+
+    The two branches share the outer Newton loop but assemble and factor entirely
+    different systems, so passing on `m >= n` says nothing here. Nonzero `a`/`d` keep the
+    z- and y-coupled terms live: the production loop passes `a = d = 0`, which zeroes
+    them and would hide a sign or coefficient error in any of them.
+    """
+    n, m = 8, 3
+    rng = np.random.default_rng(7)
+    low = np.full(n, -1.0)
+    upp = np.full(n, 1.0)
+    alfa = np.full(n, -0.9)
+    beta = np.full(n, 0.9)
+    p0 = rng.uniform(0.5, 2.0, n)
+    q0 = rng.uniform(0.5, 2.0, n)
+    P = rng.uniform(0.1, 1.0, (m, n))
+    Q = rng.uniform(0.1, 1.0, (m, n))
+    a0 = 1.0
+    a = np.array([0.3, 0.1, 0.2])
+    # Below each row's value at x = 0 (9.66, 7.97, 8.16), so all three constraints
+    # actually bind -- with slack bounds every lam collapses to ~0 and the residual
+    # checks below pass without the dual terms ever being exercised.
+    b = np.array([8.0, 7.0, 7.0])
+    c = np.full(m, 10.0)
+    d = np.array([0.5, 1.0, 0.25])
+    epsimin = 1e-7
+
+    solution = mma.subsolv(
+        m, n, epsimin, low, upp, alfa, beta, p0, q0, P, Q, a0, a, b, c, d
+    )
+    _assert_subsolv_kkt(
+        solution,
+        low=low,
+        upp=upp,
+        alfa=alfa,
+        beta=beta,
+        p0=p0,
+        q0=q0,
+        P=P,
+        Q=Q,
+        a0=a0,
+        a=a,
+        b=b,
+        c=c,
+        d=d,
+        epsimin=epsimin,
+    )
+    # Non-vacuity: a solve that parked every dual at zero, or left every primal at the
+    # midpoint, would satisfy the residuals above without exercising the branch.
+    xmma, ymma = solution[0], solution[1]
+    lamma = solution[3]
+    assert np.max(lamma) > 1e-3
+    assert np.max(np.abs(xmma - 0.5 * (alfa + beta))) > 1e-3
+    assert np.all(np.isfinite(ymma))
+
+
 def test_subsolv_m_gt_n_smoke():
     """Smoke test for subsolv's `m >= n` branch (dual elimination), which no fixture
     exercises -- the real problem always has m << n (see mma.py's comment on this
@@ -137,43 +246,23 @@ def test_subsolv_m_gt_n_smoke():
     d = np.zeros(m)
     epsimin = 1e-7
 
-    xmma, ymma, zmma, lamma, xsimma, etamma, mumma, zetmma, smma = mma.subsolv(
+    solution = mma.subsolv(
         m, n, epsimin, low, upp, alfa, beta, p0, q0, P, Q, a0, a, b, c, d
     )
-
-    for arr in (xmma, ymma, zmma, lamma, xsimma, etamma, mumma, zetmma, smma):
-        assert np.all(np.isfinite(arr))
-    assert np.all(xmma > alfa) and np.all(xmma < beta)
-    assert np.all(ymma >= 0)
-    assert zmma >= 0
-    assert np.all(lamma >= 0)
-    assert (
-        np.all(xsimma >= 0)
-        and np.all(etamma >= 0)
-        and np.all(mumma >= 0)
-        and zetmma >= 0
+    _assert_subsolv_kkt(
+        solution,
+        low=low,
+        upp=upp,
+        alfa=alfa,
+        beta=beta,
+        p0=p0,
+        q0=q0,
+        P=P,
+        Q=Q,
+        a0=a0,
+        a=a,
+        b=b,
+        c=c,
+        d=d,
+        epsimin=epsimin,
     )
-
-    # KKT residuals, evaluated the same way subsolv's own convergence check does. The
-    # outer loop's last pass runs at epsi = 10*epsimin (the barrier value from just
-    # before the epsi > epsimin test failed), so residuals/complementarity products
-    # are bounded by that, not by zero.
-    epsi_final = 10 * epsimin
-    ux1, xl1 = upp - xmma, xmma - low
-    plam, qlam = p0 + P.T @ lamma, q0 + Q.T @ lamma
-    rex = plam / ux1**2 - qlam / xl1**2 - xsimma + etamma
-    rey = c + d * ymma - mumma - lamma
-    rez = a0 - zetmma - a @ lamma
-    relam = P @ (1 / ux1) + Q @ (1 / xl1) - a * zmma - ymma + smma - b
-    tol = 10 * epsi_final
-    for r in (rex, rey, np.array([rez]), relam):
-        assert np.max(np.abs(r)) < tol
-    complementarity = (
-        xsimma * (xmma - alfa),
-        etamma * (beta - xmma),
-        mumma * ymma,
-        lamma * smma,
-        np.array([zetmma * zmma]),
-    )
-    for prod in complementarity:
-        assert np.all(np.abs(prod - epsi_final) < tol)
