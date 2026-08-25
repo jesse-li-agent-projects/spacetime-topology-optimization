@@ -63,14 +63,17 @@ def _new_axes() -> Axes:
 
 def combination_plot(
     xPhys: Float[np.ndarray, "nely nelx"],
-    tPhys: Float[np.ndarray, "nely nelx"],
+    values: Float[np.ndarray, "nely nelx"],
     eps: float,
     *,
     ax: Axes | None = None,
 ) -> Axes:
     """Ports `draw_combination1`: draws only the elements with density `>= eps`, each
-    colored by its own `tPhys` value (jet colormap, per-face flat color -- not
-    interpolated from vertices, matching the MATLAB source's `FaceColor='flat'`).
+    colored by `values` (jet colormap, per-face flat color -- not interpolated from
+    vertices, matching the MATLAB source's `FaceColor='flat'`). Typically `tPhys`, but
+    the MATLAB source also reuses this same call with a per-element hotspot-severity
+    score in place of print time (see `cli.py`) -- `values` is any per-element scalar,
+    not necessarily a time field.
     """
     if ax is None:
         ax = _new_axes()
@@ -86,7 +89,7 @@ def combination_plot(
         ],
         axis=1,
     ).astype(float)
-    values = tPhys[rows, cols]
+    values = values[rows, cols]
 
     coll = PolyCollection(verts, array=values, cmap="jet", edgecolors="none")
     ax.add_collection(coll)

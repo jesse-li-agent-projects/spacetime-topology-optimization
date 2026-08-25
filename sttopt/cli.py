@@ -17,7 +17,8 @@ one `Axes` (via `stage_boundary_plot`'s `combination_coords=True`, needed becaus
 functions' native coordinate frames don't coincide -- see `viz.py`'s docstring) -- more
 useful as a saved artifact than MATLAB's separate two-figure/two-window layout. Reproduces
 the main script's specific *final* plot recipe (lines ~581-594): `XPhys` binarized
-(`>0.5 -> 1, else 0`), colored by `T1 = (1-K_est)*XPhys`, with stage-boundary lines
+(`>0.5 -> 1, else 0`), colored by `hotspot_severity = (1-K_est)*XPhys` -- not a print
+time, despite feeding `combination_plot`'s color-by slot -- with stage-boundary lines
 overlaid. MATLAB captures `XPhys`/computes `K_est` from the *last iteration's pre-update*
 density/time fields (`XPhys=xPhys(:)` at the top of that iteration's hotspot block, before
 that same iteration's own MMA step) -- so this uses `prev_state` (the state entering the
@@ -139,9 +140,11 @@ def main(args: argparse.Namespace) -> None:
         problem.rouf,
     ).reshape(problem.nely, problem.nelx)
     XPhys = (prev_state.xPhys > 0.5).astype(float)
-    T1 = (1 - K_est) * XPhys
+    # Same quantity as hotspot_constraint's internal T_val (conductivity.py), density-masked
+    # for display -- not a print time, despite feeding combination_plot's "timing" slot.
+    hotspot_severity = (1 - K_est) * XPhys
 
-    ax = viz.combination_plot(XPhys, T1, eps=1.0e-1)
+    ax = viz.combination_plot(XPhys, hotspot_severity, eps=1.0e-1)
     viz.stage_boundary_plot(
         prev_state.tPhys, args.nStage, ax=ax, combination_coords=True
     )
