@@ -129,10 +129,18 @@ correctness-fix commit happened to be in progress when they were noticed.
   `_pairwise_sigmoid_terms(a, b, ...)` vs. call sites' `e1`/`e2` (minor def/call-site
   naming mismatch, not worth churn); `gravity.py`'s return value documented as `C` in its
   own docstring but never named that internally (doc/code mismatch, not a bug).
-  **Deferred, not yet resolved:** the same sigmoid-sharpness parameter feeding
-  `state.rou` is called `lam` in `compliance.py` (`gravity_compliance`) but `rou` in
-  `constraints.py` (`stage_volume_bounds`) -- needs a look at whether MATLAB
-  intentionally uses `lamda` vs `rou` for different call sites before unifying the name.
+  **Resolved (2026-08-25):** confirmed against Wang et al. 2019 (the actual STTO source
+  paper, `resources/Wang2019_Space-Time-TO-Additive-Manufacturing.pdf`) that this
+  sigmoid-sharpness parameter is their `beta_t` -- `rou`/`lamda` in the MATLAB source is
+  just a caller/callee copy-paste split, not two different quantities (and unrelated to
+  `rho`, which that paper reserves for the density field). Renamed throughout: generic
+  sigmoid functions (`compliance.time_mask`/`time_mask_derivative`) take `beta`; the
+  field-specific callers/state (`gravity_compliance`, `stage_volume_bounds`,
+  `OptimizerState`) use `beta_t`, matching the existing `beta_d` (formerly `beta`) for the
+  density-projection sharpness that was already living alongside it in `OptimizerState`/
+  `Problem`. `Problem.rouf` (the unrelated hotspot/conductivity-selection sharpness, Das
+  2023's zeta) was deliberately left alone -- different symbol, different meaning, despite
+  the similar name.
 
 ### Test coverage before fixture-breaking changes
 

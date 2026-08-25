@@ -448,9 +448,9 @@ def test_stage_volume_bounds_xPhys_weighting():
     assert fl_printed < -0.05  # over-budget: comfortably satisfies the lower bound
 
 
-def test_stage_volume_bounds_rou_sharpness():
-    """Elements sitting just past the stage cutoff should count for less as `rou`
-    sharpens (a sharper mask approaches a hard 0/1 cutoff); softer `rou` gives them
+def test_stage_volume_bounds_beta_t_sharpness():
+    """Elements sitting just past the stage cutoff should count for less as `beta_t`
+    sharpens (a sharper mask approaches a hard 0/1 cutoff); softer `beta_t` gives them
     more partial credit, making the constraint looser."""
     nely, nelx = 4, 6
     volfrac, nStage, stage = 0.4, 2, 1  # ti = 0.5
@@ -463,23 +463,23 @@ def test_stage_volume_bounds_rou_sharpness():
     tPhys[:, 2:4] = 0.55  # just past the ti=0.5 cutoff -- should be excluded
     tPhys[:, 4:] = 0.9  # clearly not yet printed
 
-    def fval_upper_of(rou):
+    def fval_upper_of(beta_t):
         fu, _, _, _ = constraints.stage_volume_bounds(
-            xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, rou
+            xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, beta_t
         )
         return fu
 
-    def fval_lower_of(rou):
+    def fval_lower_of(beta_t):
         _, fl, _, _ = constraints.stage_volume_bounds(
-            xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, rou
+            xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, beta_t
         )
         return fl
 
-    fus = [fval_upper_of(rou) for rou in (1, 3, 10, 30, 100)]
-    assert all(a > b for a, b in zip(fus, fus[1:]))  # strictly looser as rou softens
+    fus = [fval_upper_of(beta_t) for beta_t in (1, 3, 10, 30, 100)]
+    assert all(a > b for a, b in zip(fus, fus[1:]))  # strictly looser as beta_t softens
 
-    # Mirror image: fval_lower should also strictly loosen (increase) as rou softens.
-    fls = [fval_lower_of(rou) for rou in (1, 3, 10, 30, 100)]
+    # Mirror image: fval_lower should also strictly loosen (increase) as beta_t softens.
+    fls = [fval_lower_of(beta_t) for beta_t in (1, 3, 10, 30, 100)]
     assert all(a < b for a, b in zip(fls, fls[1:]))
 
 

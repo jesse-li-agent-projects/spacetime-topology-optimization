@@ -30,7 +30,7 @@ VOLFRAC = 0.4
 TCR = 0.8
 RMIN = LRMIN = 2
 RMIN_COND = 3
-BETA = 1.0
+BETA_D = 1.0
 
 
 def _filter_field(problem, raw):
@@ -56,14 +56,14 @@ def _filter_field(problem, raw):
 # filter did.
 
 
-def _assert_state_fields_are_consistent(problem, state, beta):
+def _assert_state_fields_are_consistent(problem, state, beta_d):
     """The invariant above, asserted on a `State` from any source."""
     np.testing.assert_allclose(
         state.xTilde, _filter_field(problem, state.x), rtol=1e-12, atol=1e-14
     )
     np.testing.assert_allclose(
         state.xPhys,
-        filters.heaviside_projection(state.xTilde, beta, problem.eta),
+        filters.heaviside_projection(state.xTilde, beta_d, problem.eta),
         rtol=1e-12,
         atol=1e-14,
     )
@@ -96,7 +96,7 @@ def test_init_state_seeds_the_raw_fields(tfield):
     print time. These are the variables MMA's move limits are measured against, so they
     are what "initial design" means."""
     problem = _problem(tfield=tfield)
-    state = optimize.init_state(problem, BETA)
+    state = optimize.init_state(problem, BETA_D)
 
     np.testing.assert_allclose(state.x, VOLFRAC, rtol=1e-14)
     np.testing.assert_allclose(
@@ -114,7 +114,7 @@ def test_init_state_density_half_is_derived_from_its_seed(tfield):
     it pins the intended relationship rather than tolerating it: `xTilde` must equal the
     filtered raw field, and `xPhys` the projection of that."""
     problem = _problem(tfield=tfield)
-    state = optimize.init_state(problem, BETA)
+    state = optimize.init_state(problem, BETA_D)
 
     np.testing.assert_allclose(
         state.xTilde, _filter_field(problem, state.x), rtol=1e-12, atol=1e-14
@@ -122,7 +122,7 @@ def test_init_state_density_half_is_derived_from_its_seed(tfield):
     np.testing.assert_allclose(state.xTilde, VOLFRAC, rtol=1e-14)
     np.testing.assert_allclose(
         state.xPhys,
-        filters.heaviside_projection(state.xTilde, BETA, problem.eta),
+        filters.heaviside_projection(state.xTilde, BETA_D, problem.eta),
         rtol=1e-12,
         atol=1e-14,
     )
@@ -141,7 +141,7 @@ def test_init_state_time_half_is_derived_from_its_seed(tfield):
     The premise assertion below pins exactly that, so the test cannot pass vacuously.
     """
     problem = _problem(tfield=tfield)
-    state = optimize.init_state(problem, BETA)
+    state = optimize.init_state(problem, BETA_D)
 
     seed = timefield.init_timefield(problem.nelx, problem.nely, tfield)
     assert not np.allclose(_filter_field(problem, seed), seed), (
@@ -159,21 +159,21 @@ def test_step_output_state_is_self_consistent(tfield):
     iteration. This is the behaviour `init_state` is being specified against above, so
     pinning it here keeps the target from drifting."""
     problem = _problem(tfield=tfield)
-    state = optimize.init_state(problem, BETA)
+    state = optimize.init_state(problem, BETA_D)
     for _ in range(3):
         state, _ = optimize.step(problem, state)
-        _assert_state_fields_are_consistent(problem, state, state.beta)
+        _assert_state_fields_are_consistent(problem, state, state.beta_d)
 
 
 # --- step: finite-difference check of the assembled sensitivities ---------------------
 
 
-def _state_from_raw(problem, x_raw, t_raw, *, beta=BETA, factor=1.0, rou=10.0):
+def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, factor=1.0, beta_t=10.0):
     """A `State` at raw design point `[x_raw; t_raw]`, with the physics fields derived
     per the invariant above -- i.e. the state `step` itself would have produced.
 
     `loop` is left at 0 so the ensuing `step` runs as iteration 1, which is none of
-    30/50/25: `rou`, `beta` and `factor` all stay fixed across the call, so `f0val`/`fval`
+    30/50/25: `beta_t`, `beta_d` and `factor` all stay fixed across the call, so `f0val`/`fval`
     are smooth functions of the raw variables alone. (At a refresh iteration `factor`
     jumps as a function of the design, and the reported gradient deliberately does not
     account for that -- a different question from the one this test asks.)
@@ -183,7 +183,7 @@ def _state_from_raw(problem, x_raw, t_raw, *, beta=BETA, factor=1.0, rou=10.0):
     return optimize.State(
         x=x_raw,
         xTilde=xTilde,
-        xPhys=filters.heaviside_projection(xTilde, beta, problem.eta),
+        xPhys=filters.heaviside_projection(xTilde, beta_d, problem.eta),
         t=t_raw,
         tPhys=_filter_field(problem, t_raw),
         xold1=np.zeros(problem.n),
@@ -191,8 +191,8 @@ def _state_from_raw(problem, x_raw, t_raw, *, beta=BETA, factor=1.0, rou=10.0):
         low=np.zeros(problem.n),
         upp=np.zeros(problem.n),
         loop=0,
-        rou=rou,
-        beta=beta,
+        beta_t=beta_t,
+        beta_d=beta_d,
         factor=factor,
     )
 
@@ -214,12 +214,12 @@ def _state_from_raw(problem, x_raw, t_raw, *, beta=BETA, factor=1.0, rou=10.0):
 MAX_COND = 1e10
 
 
-def _well_conditioned(problem, state, rou):
+def _well_conditioned(problem, state, beta_t):
     p = problem
     fields = [state.xPhys]
     tP = np.linspace(0, 1, p.nStage + 1)
     for i in range(1, p.nStage + 1):
-        fields.append(state.xPhys * compliance.time_mask(state.tPhys, tP[i], rou))
+        fields.append(state.xPhys * compliance.time_mask(state.tPhys, tP[i], beta_t))
     for field in fields:
         K = fem.assemble_stiffness(
             p.KE, field, p.Emin, p.Emax, p.penal, p.edofMat, p.ndof
@@ -230,12 +230,12 @@ def _well_conditioned(problem, state, rou):
     return True
 
 
-def _draw_well_conditioned_state(problem, rng, *, rou=10.0, max_tries=50):
+def _draw_well_conditioned_state(problem, rng, *, beta_t=10.0, max_tries=50):
     for _ in range(max_tries):
         x_raw = rng.uniform(0.3, 0.7, size=(problem.nely, problem.nelx))
         t_raw = rng.uniform(0.1, 0.9, size=(problem.nely, problem.nelx))
-        state = _state_from_raw(problem, x_raw, t_raw, rou=rou)
-        if _well_conditioned(problem, state, rou):
+        state = _state_from_raw(problem, x_raw, t_raw, beta_t=beta_t)
+        if _well_conditioned(problem, state, beta_t):
             return x_raw, t_raw, state
     raise AssertionError(f"no well-conditioned draw in {max_tries} tries")
 

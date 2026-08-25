@@ -4,7 +4,7 @@ conductivity/mma together into the actual space-time topology optimization itera
 Every module this file calls already owns its own math and its own fixture/FD tests;
 this file's only job is *wiring* -- building the stacked objective/constraint arrays
 MMA expects, in the exact row order the MATLAB main loop uses, and threading the
-iteration-dependent state (`beta`, `rou`, `factor`, `xold1`/`xold2`, `low`/`upp`, and
+iteration-dependent state (`beta_d`, `beta_t`, `factor`, `xold1`/`xold2`, `low`/`upp`, and
 the raw-vs-filtered x/t fields) from one call to the next. See `conventions.md` for
 array-order conventions and `tests/fixtures/generate_fixtures.m` (the literal MATLAB
 reference this ports) for the authoritative iteration order.
@@ -66,11 +66,11 @@ class Problem:
     Emax: float
     penal: float
     eta: float
-    beta_max: float
+    beta_d_max: float
     p: float
     q: float
     r: float
-    rouf: float
+    rouf: float  # hotspot/conductivity-selection sigmoid sharpness (Das 2023 zeta) -- unrelated to beta_t/beta_d
     a0: float
     mma_c: float
     move: float
@@ -94,8 +94,8 @@ class State:
     low: Float[np.ndarray, " n"]
     upp: Float[np.ndarray, " n"]
     loop: int
-    rou: float  # gravity/stage-mask sigmoid sharpness
-    beta: float  # Heaviside projection sharpness
+    beta_t: float  # gravity/stage-mask sigmoid sharpness
+    beta_d: float  # Heaviside projection sharpness
     factor: float  # hotspot-constraint rescaling constant, periodically refreshed
 
 
@@ -142,7 +142,7 @@ def build_problem(
     nu: float = 0.3,
     penal: float = 3.0,
     eta: float = 0.5,
-    beta_max: float = 128.0,
+    beta_d_max: float = 128.0,
     p: float = 25.0,
     q: float = 3.0,
     r: float = 0.05,
@@ -216,7 +216,7 @@ def build_problem(
         Emax=Emax,
         penal=penal,
         eta=eta,
-        beta_max=beta_max,
+        beta_d_max=beta_d_max,
         p=p,
         q=q,
         r=r,
@@ -230,7 +230,7 @@ def build_problem(
     )
 
 
-def init_state(problem: Problem, beta: float) -> State:
+def init_state(problem: Problem, beta_d: float) -> State:
     """Initial state: `x`/`t` are the raw seed (uniform `problem.volfrac`, time field per
     `problem.tfield`); the physics fields are derived from them exactly as in `step`.
 
@@ -248,7 +248,7 @@ def init_state(problem: Problem, beta: float) -> State:
 
     x = np.full((nely, nelx), problem.volfrac)
     xTilde = filtered(x)
-    xPhys = filters.heaviside_projection(xTilde, beta, problem.eta)
+    xPhys = filters.heaviside_projection(xTilde, beta_d, problem.eta)
 
     t = timefield.init_timefield(nelx, nely, problem.tfield)
     tPhys = filtered(t)
@@ -268,8 +268,8 @@ def init_state(problem: Problem, beta: float) -> State:
         low=np.zeros(problem.n),
         upp=np.zeros(problem.n),
         loop=0,
-        rou=10.0,
-        beta=beta,
+        beta_t=10.0,
+        beta_d=beta_d,
         factor=1.0,
     )
 
@@ -279,7 +279,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     value/sensitivity in the reference's exact row order, call `mma.mmasub`, and
     unpack the result into the next state.
 
-    The three periodic state updates below (`rou += 5` at loop%30==0, `beta *= 2` at
+    The three periodic state updates below (`beta_t += 5` at loop%30==0, `beta_d *= 2` at
     loop%50==0, the hotspot `factor` refresh at loop%25==0) are implemented faithfully
     but never trigger against the small E2E fixture (`nloop=3`) -- unexercised by that
     fixture, not unimplemented or worked around.
@@ -289,19 +289,19 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     nel = nelx * nely
 
     loop = state.loop + 1
-    rou = state.rou
-    if loop % 30 == 0 and rou < 50:
-        rou += 5
-    beta = state.beta
-    if loop % 50 == 0 and beta <= prob.beta_max:
-        beta *= 2
-    if beta > prob.beta_max:
-        beta = prob.beta_max
+    beta_t = state.beta_t
+    if loop % 30 == 0 and beta_t < 50:
+        beta_t += 5
+    beta_d = state.beta_d
+    if loop % 50 == 0 and beta_d <= prob.beta_d_max:
+        beta_d *= 2
+    if beta_d > prob.beta_d_max:
+        beta_d = prob.beta_d_max
 
     xPhys, tPhys = state.xPhys, state.tPhys
     # Heaviside-derivative chain rule for this iteration's density sensitivities, from
     # the xTilde carried over from the *previous* iteration's update (or init).
-    dx = filters.heaviside_projection_derivative(state.xTilde, beta, prob.eta)
+    dx = filters.heaviside_projection_derivative(state.xTilde, beta_d, prob.eta)
 
     # -- Objective: whole-structure compliance + Theta-weighted per-stage gravity compliance --
     c, dcx = compliance.whole_compliance(
@@ -333,7 +333,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             prob.penal,
             ti,
             prob.C,
-            rou,
+            beta_t,
             prob.freedofs,
             prob.ndof,
         )
@@ -375,7 +375,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     for stage in range(1, nStage + 1):
         fu, fl, dfx, dft = constraints.stage_volume_bounds(
-            xPhys, tPhys, dx, prob.H, prob.Hs, stage, nStage, prob.volfrac, rou
+            xPhys, tPhys, dx, prob.H, prob.Hs, stage, nStage, prob.volfrac, beta_t
         )
         fval_parts.append(np.array([fu, fl]))
         dfdx_parts.append(
@@ -454,7 +454,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     t_new = xmma[nel:].reshape(nely, nelx)
 
     xTilde_new = (prob.H @ x_new.flatten() / prob.Hs).reshape(nely, nelx)
-    xPhys_new = filters.heaviside_projection(xTilde_new, beta, prob.eta)
+    xPhys_new = filters.heaviside_projection(xTilde_new, beta_d, prob.eta)
     tPhys_new = (prob.H @ t_new.flatten() / prob.Hs).reshape(nely, nelx)
 
     new_state = State(
@@ -468,8 +468,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         low=low,
         upp=upp,
         loop=loop,
-        rou=rou,
-        beta=beta,
+        beta_t=beta_t,
+        beta_d=beta_d,
         factor=factor,
     )
     record = IterationRecord(
@@ -501,7 +501,7 @@ def run(
     lrmin: float,
     rmin_cond: float,
     *,
-    beta: float = 1.0,
+    beta_d: float = 1.0,
     **problem_kwargs,
 ) -> RunResult:
     """Build the fixed setup and run `nloop` optimization iterations from the standard
@@ -522,7 +522,7 @@ def run(
         rmin_cond,
         **problem_kwargs,
     )
-    return run_from_state(problem, init_state(problem, beta), nloop)
+    return run_from_state(problem, init_state(problem, beta_d), nloop)
 
 
 def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:

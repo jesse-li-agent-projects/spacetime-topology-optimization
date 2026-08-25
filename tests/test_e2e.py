@@ -173,7 +173,9 @@ def test_hotspot_factor_refresh_at_loop_25():
 
     # Independent recomputation of the refresh formula (factor = max_g / numer), using
     # the pre-update xPhys/tPhys/dx the refresh actually saw.
-    dx = filters.heaviside_projection_derivative(state.xTilde, state.beta, problem.eta)
+    dx = filters.heaviside_projection_derivative(
+        state.xTilde, state.beta_d, problem.eta
+    )
     old = conductivity.hotspot_constraint(
         state.xPhys,
         state.tPhys,

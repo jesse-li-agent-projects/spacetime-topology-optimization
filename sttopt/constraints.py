@@ -104,7 +104,7 @@ def stage_volume_bounds(
     stage: int,
     nStage: int,
     volfrac: float,
-    rou: float,
+    beta_t: float,
 ) -> tuple[
     float, float, Float[np.ndarray, " nely*nelx"], Float[np.ndarray, " nely*nelx"]
 ]:
@@ -112,7 +112,7 @@ def stage_volume_bounds(
     stage `stage` (1-indexed, out of `nStage`) must stay within a small slack of the even
     schedule `stage/nStage`. Returns both the upper- and lower-bound constraint (MMA
     constraints are one-sided, so an equality-like budget needs both), via a smooth
-    stage-membership mask (`compliance.time_mask`, sharpness `rou`) rather than a hard
+    stage-membership mask (`compliance.time_mask`, sharpness `beta_t`) rather than a hard
     time cutoff.
 
     Returns `(fval_upper, fval_lower, dfx, dft)`: the lower bound's sensitivity rows are
@@ -122,8 +122,8 @@ def stage_volume_bounds(
     scale = nelx * nely * volfrac
     # matches MATLAB's `tP(i+1)`, not just `stage/nStage`
     ti = np.linspace(0, 1, nStage + 1)[stage]
-    t_mask = compliance.time_mask(tPhys, ti, rou)
-    dfdt = compliance.time_mask_derivative(tPhys, ti, rou)
+    t_mask = compliance.time_mask(tPhys, ti, beta_t)
+    dfdt = compliance.time_mask_derivative(tPhys, ti, beta_t)
     xtJoint = xPhys * t_mask
 
     budget = stage / nStage
