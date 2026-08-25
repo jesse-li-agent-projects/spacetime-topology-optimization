@@ -137,7 +137,7 @@ def main(args: argparse.Namespace) -> None:
         problem.w,
         problem.q,
         problem.rouf,
-    ).reshape(problem.nely, problem.nelx, order="F")
+    ).reshape(problem.nely, problem.nelx)
     XPhys = (prev_state.xPhys > 0.5).astype(float)
     T1 = (1 - K_est) * XPhys
 

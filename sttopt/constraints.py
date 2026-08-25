@@ -36,7 +36,7 @@ def global_volume_fraction(
     scale = nelx * nely * volfrac
     fval = float(np.sum(xPhys) / scale - 1)
     dv = np.ones((nely, nelx))
-    dfx = H @ (dv.flatten(order="F") * dx.flatten(order="F") / Hs) / scale
+    dfx = H @ (dv.flatten() * dx.flatten() / Hs) / scale
     dft = np.zeros(nelx * nely)
     return fval, dfx, dft
 
@@ -56,7 +56,7 @@ def time_field_continuity(
     nely, nelx = tPhys.shape
     nel = nely * nelx
     kk = 2 * nel
-    A = L @ tPhys.flatten(order="F")
+    A = L @ tPhys.flatten()
     fval = float(kk * (np.sum(A**2 / nel) - 1.0e-6))
     dft = H @ ((kk * 2 * (L.T @ A)) / Hs) / nel
     dfx = np.zeros(nel)
@@ -82,7 +82,7 @@ def start_point(
     nely, nelx = tPhys.shape
     nel = nely * nelx
     k = len(Nei)
-    fval = tPhys.flatten(order="F")[Nei] - 1.0e-9
+    fval = tPhys.flatten()[Nei] - 1.0e-9
     ss = np.zeros((nel, k))
     ss[Nei, np.arange(k)] = 1.0
     dft = (H @ (ss / Hs[:, None])).T
@@ -126,6 +126,6 @@ def stage_volume_bounds(
     fval_upper = float(deposited - budget)
     fval_lower = float(-deposited + budget - 1.0e-5)
 
-    dfx = H @ ((ft / scale).flatten(order="F") * dx.flatten(order="F") / Hs)
-    dft = H @ ((xPhys * dfdt / scale).flatten(order="F") / Hs)
+    dfx = H @ ((ft / scale).flatten() * dx.flatten() / Hs)
+    dft = H @ ((xPhys * dfdt / scale).flatten() / Hs)
     return fval_upper, fval_lower, dfx, dft

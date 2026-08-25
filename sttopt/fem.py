@@ -30,11 +30,14 @@ def plane_stress_KE(nu: float) -> Float[np.ndarray, "8 8"]:
 
 
 def element_dof_map(nelx: int, nely: int) -> Int[np.ndarray, "n 8"]:
-    """Per-element global dof indices (0-indexed), in element order matching `xPhys.flatten('F')`.
+    """Per-element global dof indices (0-indexed), in element order matching `xPhys.flatten()`.
 
     Each row lists the 8 dofs (x, y for each of the 4 corner nodes) of one element.
-    Node numbering follows the mesh's column-major node grid, so element `e` (0-indexed,
-    Fortran order) corresponds to grid position `(e % nely, e // nely)` per conventions.md.
+    Element `e` (0-indexed, C order per conventions.md) corresponds to grid position
+    `(e // nelx, e % nelx)`. Node numbering itself (`nodenrs` below) is an unrelated
+    internal dof-labeling choice, not tied to that element-order convention -- it stays
+    column-major regardless, since nothing outside this module and `gravity.py` (which
+    mirrors it) observes node numbers directly.
     """
     # Mirrors the MATLAB source's 1-indexed dof numbering exactly (nodenrs 1..N, dof
     # 2*node+1), then shifts to 0-indexed at the end -- doing the arithmetic directly
@@ -42,7 +45,7 @@ def element_dof_map(nelx: int, nely: int) -> Int[np.ndarray, "n 8"]:
     nodenrs = np.arange(1, (1 + nelx) * (1 + nely) + 1).reshape(
         1 + nely, 1 + nelx, order="F"
     )
-    edof_vec = 2 * nodenrs[:-1, :-1].flatten(order="F") + 1
+    edof_vec = 2 * nodenrs[:-1, :-1].flatten() + 1
     offsets = np.array(
         [0, 1, 2 * nely + 2, 2 * nely + 3, 2 * nely, 2 * nely + 1, -2, -1]
     )
@@ -60,7 +63,7 @@ def assemble_stiffness(
 ) -> sp.csr_matrix:
     """Assemble the global SIMP-penalized stiffness matrix from per-element densities.
 
-    Element density `xPhys.flatten('F')[e]` scales `KE` via the SIMP interpolation
+    Element density `xPhys.flatten()[e]` scales `KE` via the SIMP interpolation
     `Emin + xPhys**penal * (Emax - Emin)`; overlapping dof contributions from adjacent
     elements are summed (COO duplicate-index accumulation), then the result is
     symmetrized to cancel floating-point asymmetry from the summation order.
@@ -70,12 +73,13 @@ def assemble_stiffness(
     # pairing exactly (iK[k] = row[k%8], jK[k] = row[k//8]) -- inert here since KE is
     # symmetric and the result is symmetrized below, but kept literal to the source.
     # NB: these three flattens are row-major ('C', NumPy's default) over the per-element
-    # (nel, 64) block layout built by tile/repeat -- that's correct here and not a
-    # violation of conventions.md's order='F' rule, which is about mirroring a MATLAB
-    # (:) or reshape over the (nely, nelx) grid; this isn't that.
+    # (nel, 64) block layout built by tile/repeat, and KE.flatten(order='F') pairs with
+    # them to match local dof indices (row=k%8, col=k//8) -- an internal-consistency
+    # choice for KE's own 8x8 layout, unrelated to conventions.md's grid-element-order
+    # convention (which governs `xPhys.flatten()` below, not KE's).
     iK = np.tile(edofMat, (1, 8)).flatten()
     jK = np.repeat(edofMat, 8, axis=1).flatten()
-    density = Emin + xPhys.flatten(order="F") ** penal * (Emax - Emin)
+    density = Emin + xPhys.flatten() ** penal * (Emax - Emin)
     sK = (KE.flatten(order="F")[None, :] * density[:, None]).flatten()
     assert iK.shape == jK.shape == sK.shape == (64 * nel,)
     K = sp.coo_matrix((sK, (iK, jK)), shape=(ndof, ndof)).tocsr()

@@ -177,8 +177,14 @@ def build_problem(
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
 
     # Print-start element(s): the whole first mesh column for tfield != CORNER, the
-    # single origin element for tfield == CORNER (constraints.start_point's own docstring).
-    Nei = np.array([0]) if tfield == timefield.TimeField.CORNER else np.arange(nely)
+    # single origin element for tfield == CORNER (constraints.start_point's own
+    # docstring). Element `row*nelx` is grid position `(row, 0)` per conventions.md's
+    # C-order element enumeration -- i.e. column 0, every row.
+    Nei = (
+        np.array([0])
+        if tfield == timefield.TimeField.CORNER
+        else np.arange(nely) * nelx
+    )
 
     n = 2 * nelx * nely
     # MATLAB hardcodes `m = 1 + 1 + nely + 2*nStage + 1` -- only self-consistent when
@@ -238,9 +244,7 @@ def init_state(problem: Problem, beta: float) -> State:
     nel = nelx * nely
 
     def filtered(field):
-        return (problem.H @ field.flatten(order="F") / problem.Hs).reshape(
-            nely, nelx, order="F"
-        )
+        return (problem.H @ field.flatten() / problem.Hs).reshape(nely, nelx)
 
     x = np.full((nely, nelx), problem.volfrac)
     xTilde = filtered(x)
@@ -251,7 +255,7 @@ def init_state(problem: Problem, beta: float) -> State:
 
     # MATLAB's xold1=xold2=[x(:); zeros(nel,1)] -- provably unread (iterations 1 and 2
     # both take mmasub's `iteration < 2.5` reinit branch), reproduced anyway for fidelity.
-    xold = np.concatenate([x.flatten(order="F"), np.zeros(nel)])
+    xold = np.concatenate([x.flatten(), np.zeros(nel)])
 
     return State(
         x=x,
@@ -305,7 +309,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     )
     obj_final_only = c  # compliance of final structure only, saved for logging
     obj = c
-    dc = p.H @ (dcx.flatten(order="F") * dx.flatten(order="F") / p.Hs)
+    dc = p.H @ (dcx.flatten() * dx.flatten() / p.Hs)
     dt = np.zeros(nel)
 
     tP = np.linspace(0, 1, nStage + 1)
@@ -326,14 +330,14 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             p.ndof,
         )
         obj += p.Theta * cg
-        dc = dc + p.Theta * (p.H @ (dcx_g * dx.flatten(order="F") / p.Hs))
+        dc = dc + p.Theta * (p.H @ (dcx_g * dx.flatten() / p.Hs))
         dt = dt + p.Theta * (p.H @ (dct_g / p.Hs))
 
     df0dx = np.concatenate([dc, dt])
     f0val = obj
 
     # -- Move-limit bounds on this iteration's raw MMA variables --
-    xflat, tflat = state.x.flatten(order="F"), state.t.flatten(order="F")
+    xflat, tflat = state.x.flatten(), state.t.flatten()
     xminx = np.maximum(0.0, xflat - p.move)
     xmaxx = np.minimum(1.0, xflat + p.move)
     xmint = np.maximum(0.0, tflat - p.tmove)
@@ -389,7 +393,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     fv, df1, dt1 = hotspot.fval, hotspot.df1, hotspot.dt1
     factor = state.factor
     if loop % 25 == 0:
-        max_g = float(np.max((1 - hotspot.K_est) * xPhys.flatten(order="F") ** p.r))
+        max_g = float(np.max((1 - hotspot.K_est) * xPhys.flatten() ** p.r))
         factor = max_g / hotspot.numer
         # `hotspot_constraint` computes `fval = factor * numer / Tcr - 1` and scales
         # `df1`/`dt1` by that same `factor` (its `scale` term) -- `numer`, and
@@ -436,13 +440,12 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         mma_d,
     )
 
-    xnew = xmma.reshape(nely, -1, order="F")
-    s_new = xnew[:, :nelx]
-    t_new = xnew[:, nelx:]
+    s_new = xmma[:nel].reshape(nely, nelx)
+    t_new = xmma[nel:].reshape(nely, nelx)
 
-    xTilde_new = (p.H @ s_new.flatten(order="F") / p.Hs).reshape(nely, nelx, order="F")
+    xTilde_new = (p.H @ s_new.flatten() / p.Hs).reshape(nely, nelx)
     xPhys_new = filters.heaviside_projection(xTilde_new, beta, p.eta)
-    tPhys_new = (p.H @ t_new.flatten(order="F") / p.Hs).reshape(nely, nelx, order="F")
+    tPhys_new = (p.H @ t_new.flatten() / p.Hs).reshape(nely, nelx)
 
     new_state = State(
         x=s_new,

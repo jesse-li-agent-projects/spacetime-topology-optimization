@@ -194,7 +194,7 @@ def test_gravity_compliance_matches_reference(nelx, nely, ti):
         ndof,
     )
     ft = compliance.time_mask(tP, ti, 10.0)
-    dens = 1e-9 + (xP * ft).flatten(order="F") ** 3 * (1.0 - 1e-9)
+    dens = 1e-9 + (xP * ft).flatten() ** 3 * (1.0 - 1e-9)
     K_free = ref._assemble(KE, dens, ref.ref_edofMat(nelx, nely), ndof)[
         np.ix_(freedofs1 - 1, freedofs1 - 1)
     ]

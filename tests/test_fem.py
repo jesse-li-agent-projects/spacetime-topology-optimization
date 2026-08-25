@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 import sttopt.fem as fem
-from conftest import assert_close, load_fixture
+from conftest import assert_close, load_fixture, reindex_fixture
 
 # SIMP constants for the patch tests below; matches test_assemble_and_solve's convention.
 EMIN, EMAX, PENAL = 1e-9, 1.0, 3
@@ -25,6 +25,7 @@ def test_element_dof_map():
     nelx, nely = int(fx["nelx"]), int(fx["nely"])
     edofMat = fem.element_dof_map(nelx, nely)
     expected = fx["edofMat"].astype(np.int64) - 1  # MATLAB 1-indexed -> 0-indexed
+    expected = reindex_fixture(expected, nelx, nely, axis=0)
     assert edofMat.shape == expected.shape
     assert_close(edofMat, expected, tier="algebraic")
 
@@ -58,7 +59,7 @@ def test_assemble_and_solve():
     assert_close(U, U0, tier="solved")
 
 
-def test_assemble_respects_column_major_element_order():
+def test_assemble_respects_row_major_element_order():
     # fem_solve.mat's xPhys0 is uniform (repmat with tanh(0)=0 offset cancels), so the
     # U comparison above can't distinguish order='F' from order='C' -- conventions.md
     # calls this out explicitly. Pin a single asymmetric density element instead.
@@ -71,8 +72,8 @@ def test_assemble_respects_column_major_element_order():
     K = fem.assemble_stiffness(
         fem.plane_stress_KE(0.3), xPhys, 0.0, 1.0, 3, edofMat, ndof
     )
-    # Fortran-order (column-major) element index per conventions.md
-    element = i * nely + j
+    # C-order (row-major) element index per conventions.md
+    element = j * nelx + i
     touched_dofs = np.unique(K.nonzero()[0])
     assert np.array_equal(touched_dofs, np.sort(edofMat[element]))
 

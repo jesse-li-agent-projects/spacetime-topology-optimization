@@ -4,7 +4,7 @@ import numpy as np
 
 import sttopt.fem as fem
 import sttopt.gravity as gravity
-from conftest import assert_close, load_fixture
+from conftest import assert_close, load_fixture, reindex_fixture
 
 
 def test_gravity_load_matrix():
@@ -13,7 +13,7 @@ def test_gravity_load_matrix():
 
     C = gravity.gravity_load_matrix(nelx, nely)
     # sparse fixture, small problem size -- densify for comparison only
-    expected = fx["C"].toarray()
+    expected = reindex_fixture(fx["C"].toarray(), nelx, nely, axis=1)
 
     assert C.shape == expected.shape == ((nelx + 1) * (nely + 1), nelx * nely)
     assert_close(C.toarray(), expected, tier="algebraic")
@@ -49,7 +49,7 @@ def test_gravity_self_weight_column_patch():
     C = gravity.gravity_load_matrix(nelx, nely)
     F = np.zeros(ndof)
     # sign/scatter convention matches compliance.gravity_compliance: gravity acts in -y
-    F[1::2] = -C @ xPhys.flatten(order="F")
+    F[1::2] = -C @ xPhys.flatten()
 
     num_nodes = (nelx + 1) * (nely + 1)
     node_row = np.arange(num_nodes) % (nely + 1)

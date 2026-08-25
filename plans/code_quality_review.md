@@ -78,11 +78,35 @@ correctness-fix commit happened to be in progress when they were noticed.
 
 ### Array/tensor conventions and naming
 
-- [ ] Audit for Fortran-ordered arrays (MATLAB's native layout) that got carried over
-  during the port instead of being converted to NumPy's native C order -- check
-  reshape/flatten calls and any explicit `order='F'` for whether row-major would be more
-  idiomatic (and possibly faster, since most NumPy/PyTorch ops assume C order) now that
-  there's no MATLAB fixture-bit-matching constraint forcing the layout.
+- [x] **Done.** Switched the element-enumeration convention from Fortran order
+  (column-major, matching the MATLAB source) to NumPy's native C order (row-major):
+  every `.flatten()`/`.reshape()` mirroring a grid-shaped `(nely, nelx)` field across
+  `fem.py`, `filters.py`, `gravity.py`, `compliance.py`, `constraints.py`,
+  `conductivity.py`, `optimize.py`, `cli.py` now uses the default order, and
+  `conventions.md`'s "Array order" section documents the new `e // nelx, e % nelx`
+  mapping. Node/dof numbering (`fem.element_dof_map`'s and `gravity.py`'s `nodenrs`)
+  is a separate, deliberately-unchanged internal labeling scheme -- only *element*
+  enumeration flipped, so `fixeddofs`/load-vector indices in `optimize.py` needed no
+  change (confirmed by `test_assemble_and_solve` and the full FEM patch-test suite).
+  One real bug the audit caught along the way: `optimize.build_problem`'s `Nei`
+  (`start_point`'s print-origin elements) hardcoded the old column-major "first
+  column" formula (`np.arange(nely)`) directly, not via a flatten/reshape call, and
+  needed `np.arange(nely) * nelx` under the new convention.
+
+  The live MATLAB-transliteration oracle (`tests/matlab_reference*.py`) and every
+  from-scratch "independent reference" helper inside the test suite got the same
+  flip, since they're code under our control, not frozen artifacts (same precedent as
+  the `init_state` fix above). Only genuinely frozen `.mat`/`.npz` fixture data needed
+  a real adapter: `tests/conftest.py` gained `fixture_element_perm`/
+  `reindex_fixture`/`reindex_fixture_values`/`reindex_fixture_halves`, mapping a
+  fixture's F-order element indices to the new C-order ones, used at every fixture
+  comparison that's element-indexed (`edofMat` rows, `H`/`L`'s two element axes,
+  `gravity_load_matrix`'s element columns, neighbor-pair COO indices, and the raw
+  `[x; t]` MMA-variable halves of `df0dx`/`dfdx`/`xmma`/`low`/`upp`). Fixture-derived
+  *grid*-shaped `(nely, nelx)` arrays (`xPhys_traj`, `tPhys_traj`, etc.) needed no
+  reindexing -- a grid's physical layout doesn't depend on the flatten convention.
+  All 327 non-slow tests pass; `test_e2e_slow.py` was audited for the same patterns
+  and found clean (no `order='F'`, no hardcoded element-index formulas).
 - [ ] Audit for one-letter (or otherwise cryptic) variable names inherited from the
   MATLAB source that aren't documented or given a better name where the Python port
   would allow it -- MATLAB math code leans on terse single-letter names matching paper

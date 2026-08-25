@@ -25,7 +25,12 @@ import numpy as np
 import sttopt.conductivity as conductivity
 import sttopt.filters as filters
 import sttopt.optimize as optimize
-from conftest import assert_close, load_fixture, matlab_init_state
+from conftest import (
+    assert_close,
+    load_fixture,
+    matlab_init_state,
+    reindex_fixture_halves,
+)
 
 NELX, NELY = 7, 5
 NSTAGE = 3
@@ -65,10 +70,14 @@ def test_iteration1_assembly_matches_fixture():
     _, record = optimize.step(problem, state)
 
     # f0val/df0dx are downstream of a sparse linear solve (compliance), so "solved" tier.
+    # df0dx/dfdx are element-indexed (raw [x; t] variable order); reindex the fixture's
+    # F-order halves to sttopt's C-order before comparing (see conventions.md).
     assert_close(record.f0val, fx["f0val_1"], tier="solved")
-    assert_close(record.df0dx, fx["df0dx_1"], tier="solved")
+    expected_df0dx = reindex_fixture_halves(fx["df0dx_1"], NELX, NELY, axis=0)
+    assert_close(record.df0dx, expected_df0dx, tier="solved")
     assert_close(record.fval, fx["fval_1"], tier="algebraic")
-    assert_close(record.dfdx, fx["dfdx_1"], tier="algebraic")
+    expected_dfdx = reindex_fixture_halves(fx["dfdx_1"], NELX, NELY, axis=1)
+    assert_close(record.dfdx, expected_dfdx, tier="algebraic")
 
 
 def test_mma_state_threading_matches_fixture():
@@ -78,11 +87,17 @@ def test_mma_state_threading_matches_fixture():
     )
     state = matlab_init_state(problem, BETA_INIT)
 
+    # xmma/low/upp are element-indexed (raw [x; t] variable order); reindex the
+    # fixture's F-order halves to sttopt's C-order. lam is constraint-indexed, not
+    # element-indexed, so it needs no reindex.
     for k in range(NLOOP):
         state, record = optimize.step(problem, state)
-        assert_close(record.xmma, fx["xmma_all"][:, k], tier="e2e", iteration=k + 1)
-        assert_close(record.low, fx["low_all"][:, k], tier="e2e", iteration=k + 1)
-        assert_close(record.upp, fx["upp_all"][:, k], tier="e2e", iteration=k + 1)
+        expected_xmma = reindex_fixture_halves(fx["xmma_all"][:, k], NELX, NELY)
+        expected_low = reindex_fixture_halves(fx["low_all"][:, k], NELX, NELY)
+        expected_upp = reindex_fixture_halves(fx["upp_all"][:, k], NELX, NELY)
+        assert_close(record.xmma, expected_xmma, tier="e2e", iteration=k + 1)
+        assert_close(record.low, expected_low, tier="e2e", iteration=k + 1)
+        assert_close(record.upp, expected_upp, tier="e2e", iteration=k + 1)
         assert_close(record.lam, fx["lam_all"][:, k], tier="e2e", iteration=k + 1)
 
 
@@ -101,7 +116,10 @@ def test_constraints_stacking_matches_fixture():
     for k in range(NLOOP):
         state, record = optimize.step(problem, state)
         assert_close(record.fval, fx["fval_all"][:, k], tier="e2e", iteration=k + 1)
-        assert_close(record.dfdx, fx["dfdx_all"][:, :, k], tier="e2e", iteration=k + 1)
+        expected_dfdx = reindex_fixture_halves(
+            fx["dfdx_all"][:, :, k], NELX, NELY, axis=1
+        )
+        assert_close(record.dfdx, expected_dfdx, tier="e2e", iteration=k + 1)
 
 
 def test_e2e_trajectory_matches_fixture():
@@ -182,7 +200,7 @@ def test_hotspot_factor_refresh_at_loop_25():
         problem.q,
         problem.rouf,
     )
-    max_g = np.max((1 - K_est) * state.xPhys.flatten(order="F") ** problem.r)
+    max_g = np.max((1 - K_est) * state.xPhys.flatten() ** problem.r)
     expected_factor = max_g / numer
 
     assert not np.isclose(expected_factor, state.factor), "refresh must be non-vacuous"

@@ -22,11 +22,11 @@ def _neighbor_offsets(radius: float) -> list[tuple[int, int]]:
 def _element_grid(nelx: int, nely: int) -> tuple[np.ndarray, np.ndarray]:
     """0-indexed (i, j) grid coordinates of every element, in linear-index order.
 
-    `e = i*nely + j` is exactly the column-major element index from `conventions.md`
+    `e = j*nelx + i` is exactly the row-major element index from `conventions.md`
     (0-indexed), so `np.arange(nelx*nely)` already lists elements in that order.
     """
     e = np.arange(nelx * nely)
-    return e // nely, e % nely
+    return e % nelx, e // nelx
 
 
 def density_filter(
@@ -36,7 +36,7 @@ def density_filter(
 
     `H[e1, e2] = max(0, rmin - dist(e1, e2))` for elements within `rmin` of each other
     (including `e1 == e2`); `Hs` normalizes a filtered field back to the original
-    density's scale (`xTilde = H @ x.flatten('F') / Hs`).
+    density's scale (`xTilde = H @ x.flatten() / Hs`).
     """
     i1, j1 = _element_grid(nelx, nely)
     e1_all = np.arange(nelx * nely)
@@ -48,7 +48,7 @@ def density_filter(
         if weight == 0.0:
             continue
         rows.append(e1_all[valid])
-        cols.append((i2 * nely + j2)[valid])
+        cols.append((j2 * nelx + i2)[valid])
         vals.append(np.full(valid.sum(), weight))
     H = sp.coo_matrix(
         (np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
@@ -75,7 +75,7 @@ def continuity_filter(nelx: int, nely: int, lrmin: float) -> sp.csr_matrix:
         i2, j2 = i1 + di, j1 + dj
         valid = (i2 >= 0) & (i2 < nelx) & (j2 >= 0) & (j2 < nely)
         rows.append(e1_all[valid])
-        cols.append((i2 * nely + j2)[valid])
+        cols.append((j2 * nelx + i2)[valid])
     n = nelx * nely
     rows, cols = np.concatenate(rows), np.concatenate(cols)
     adjacency = sp.coo_matrix((np.ones(rows.shape), (rows, cols)), shape=(n, n)).tocsr()
