@@ -227,7 +227,7 @@ def test_hotspot_matches_reference(nelx, nely, rmin_cond, factor):
 
     H, Hs = filters.density_filter(nelx, nely, 2.0)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
-    fv, df1, dt1 = conductivity.hotspot_constraint(
+    fv, df1, dt1, _, _ = conductivity.hotspot_constraint(
         xP, tP, e1, e2, w, dx, H, Hs, factor, 0.8, 25.0, 3.0, 0.05, 100.0
     )
     K = conductivity.estimated_conductivity(xP, tP, e1, e2, w, 3.0, 100.0)
@@ -274,7 +274,7 @@ def test_hotspot_non_default_constants(p, q, r, rouf):
     )
     H, Hs = filters.density_filter(nelx, nely, 2.0)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, 3.0)
-    fv, df1, dt1 = conductivity.hotspot_constraint(
+    fv, df1, dt1, _, _ = conductivity.hotspot_constraint(
         xP, tP, e1, e2, w, dx, H, Hs, 1.0, 0.8, float(p), float(q), r, rouf
     )
     assert abs(fv - fv_ref) / abs(fv_ref) < TIGHT

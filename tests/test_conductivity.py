@@ -124,7 +124,7 @@ def test_hotspot_constraint_matches_fixture():
         dx = filters.heaviside_projection_derivative(xTilde, BETA, ETA)
         factor = float(factor_all[k])
 
-        fval, df1, dt1 = conductivity.hotspot_constraint(
+        fval, df1, dt1, _, _ = conductivity.hotspot_constraint(
             xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, TCR, P, Q, R, ROUF
         )
 
@@ -198,7 +198,7 @@ def test_hotspot_constraint_fd_density(factor):
         tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
         dx = filters.heaviside_projection_derivative(xTilde, BETA, ETA)
 
-        _, df1, _ = conductivity.hotspot_constraint(
+        _, df1, _, _, _ = conductivity.hotspot_constraint(
             xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF
         )
         # Guard well above the assert_allclose atol below, so this can't pass vacuously.
@@ -208,7 +208,7 @@ def test_hotspot_constraint_fd_density(factor):
             xPhys, xTilde = _xPhys_of(x_raw, H, Hs, nely, nelx, BETA, ETA)
             tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
             dx = filters.heaviside_projection_derivative(xTilde, BETA, ETA)
-            fval, _, _ = conductivity.hotspot_constraint(
+            fval, _, _, _, _ = conductivity.hotspot_constraint(
                 xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF
             )
             return fval
@@ -262,14 +262,14 @@ def test_hotspot_constraint_fd_time_generic(factor):
     off_diag = e1 != e2
     assert np.sum(tflat[e1[off_diag]] == tflat[e2[off_diag]]) == 0
 
-    _, _, dt1 = conductivity.hotspot_constraint(
+    _, _, dt1, _, _ = conductivity.hotspot_constraint(
         xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF
     )
     assert np.abs(dt1).max() > 1e-3  # guard well above the atol below
 
     def fval_of(t_raw):
         tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
-        fval, _, _ = conductivity.hotspot_constraint(
+        fval, _, _, _, _ = conductivity.hotspot_constraint(
             xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF
         )
         return fval
@@ -338,14 +338,14 @@ def test_hotspot_constraint_fd_time_at_ties():
     off_diag = e1 != e2
     assert np.sum(tflat[e1[off_diag]] == tflat[e2[off_diag]]) == off_diag.sum()
 
-    _, _, dt1 = conductivity.hotspot_constraint(
+    _, _, dt1, _, _ = conductivity.hotspot_constraint(
         xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF
     )
     # Guard well above the atol below: with the fix, ties no longer force dt1 to 0.
     assert np.abs(dt1).max() > 1e-3
 
     def fval_of(tPhys):
-        fval, _, _ = conductivity.hotspot_constraint(
+        fval, _, _, _, _ = conductivity.hotspot_constraint(
             xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF
         )
         return fval

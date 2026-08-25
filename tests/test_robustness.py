@@ -233,7 +233,7 @@ def test_hotspot_gradients_finite_for_large_rouf():
     dx = np.ones((nely, nelx))
 
     for rouf in [100.0, 800.0, 2000.0, 1e6]:
-        fval, df1, dt1 = conductivity.hotspot_constraint(
+        fval, df1, dt1, _, _ = conductivity.hotspot_constraint(
             xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, 0.8, 25.0, 3.0, 0.05, rouf
         )
         assert np.isfinite(fval)
