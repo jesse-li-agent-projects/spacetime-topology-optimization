@@ -23,6 +23,7 @@ entries at iteration 3 exceed tolerance.
 import numpy as np
 
 import sttopt.conductivity as conductivity
+import sttopt.filters as filters
 import sttopt.optimize as optimize
 from conftest import assert_close, load_fixture
 
@@ -144,9 +145,8 @@ def test_hotspot_factor_refresh_at_loop_25():
     than fabricating a `loop=24` state directly -- stale `low`/`upp`/`xold1`/`xold2` at an
     unrealistic loop count makes `mmasub`'s inner Newton loop fail to converge, an
     incidental warning unrelated to what this test targets) and checks the 25th call's
-    returned `factor` against an independent recomputation of `hotspot_constraint`'s own
-    documented refresh recipe, rather than relying on `step`'s internals to be
-    self-consistently correct.
+    returned `factor`, `fval`, and `dfdx` against an independent recomputation, rather
+    than relying on `step`'s internals to be self-consistently correct.
     """
     problem = optimize.build_problem(
         NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
@@ -157,14 +157,13 @@ def test_hotspot_factor_refresh_at_loop_25():
     assert state.loop == 24
     assert state.factor == 1.0  # never refreshed before loop 25
 
-    new_state, _ = optimize.step(problem, state)
+    new_state, record = optimize.step(problem, state)
     assert new_state.loop == 25
 
     # Independent recomputation of the refresh formula (factor = max_g / numer), using
     # the pre-update xPhys/tPhys/dx the refresh actually saw.
-    # unused by K_est; only scales density sensitivities
-    dx = np.ones_like(state.xTilde)
-    fv_old, _, _, _, _ = conductivity.hotspot_constraint(
+    dx = filters.heaviside_projection_derivative(state.xTilde, state.beta, problem.eta)
+    old = conductivity.hotspot_constraint(
         state.xPhys,
         state.tPhys,
         problem.e1,
@@ -180,7 +179,7 @@ def test_hotspot_factor_refresh_at_loop_25():
         problem.r,
         problem.rouf,
     )
-    numer = (fv_old + 1) * problem.Tcr / state.factor
+    numer = (old.fval + 1) * problem.Tcr / state.factor
     K_est = conductivity.estimated_conductivity(
         state.xPhys,
         state.tPhys,
@@ -195,3 +194,27 @@ def test_hotspot_factor_refresh_at_loop_25():
 
     assert not np.isclose(expected_factor, state.factor), "refresh must be non-vacuous"
     assert_close(new_state.factor, expected_factor, tier="algebraic")
+
+    # The refreshed fv/df1/dt1 in `record` must match a full hotspot_constraint
+    # recompute at the new factor -- not just an affine rescale of the old ones, which
+    # would silently pass if someone dropped the `-1` handling in the `fval` recompute.
+    full = conductivity.hotspot_constraint(
+        state.xPhys,
+        state.tPhys,
+        problem.e1,
+        problem.e2,
+        problem.w,
+        dx,
+        problem.H,
+        problem.Hs,
+        expected_factor,
+        problem.Tcr,
+        problem.p,
+        problem.q,
+        problem.r,
+        problem.rouf,
+    )
+    nel = problem.nelx * problem.nely
+    assert_close(record.fval[-1], full.fval, tier="algebraic")
+    assert_close(record.dfdx[-1, :nel], full.df1, tier="algebraic")
+    assert_close(record.dfdx[-1, nel:], full.dt1, tier="algebraic")
