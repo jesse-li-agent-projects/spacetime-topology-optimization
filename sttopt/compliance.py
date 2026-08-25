@@ -96,16 +96,16 @@ def gravity_compliance(
     Only elements active by stage time `ti` (per `time_mask`, sharpness `lam` --
     MATLAB source's `lamda`/`rou`) carry density-weighted self-weight load, built via
     `gravity.gravity_load_matrix`'s `C`. Because the load itself depends on `xPhys`
-    (through the joint density-time field `xtJoint = xPhys * ft`), the sensitivities
+    (through the joint density-time field `xtJoint = xPhys * t_mask`), the sensitivities
     pick up an extra adjoint term (`dcx2`/`dct2` below, from differentiating the load
     through the displacement it produces) beyond the direct SIMP-stiffness term
     (`dcx1`/`dct1`); the factor of 2 combining them is the standard self-adjoint
     compliance-sensitivity result for a density-dependent load, not a simplification.
     """
     nely, nelx = xPhys.shape
-    ft = time_mask(tPhys, ti, lam)
+    t_mask = time_mask(tPhys, ti, lam)
     dfdt = time_mask_derivative(tPhys, ti, lam)
-    xtJoint = xPhys * ft
+    xtJoint = xPhys * t_mask
 
     K = fem.assemble_stiffness(KE, xtJoint, Emin, Emax, penal, edofMat, ndof)
 
@@ -119,13 +119,13 @@ def gravity_compliance(
     simp = Emin + xtJoint**penal * (Emax - Emin)
     c = float(np.sum(simp * ce))
 
-    dcx1 = -penal * (Emax - Emin) * xtJoint ** (penal - 1) * ce * ft
+    dcx1 = -penal * (Emax - Emin) * xtJoint ** (penal - 1) * ce * t_mask
     dct1 = -penal * (Emax - Emin) * xtJoint ** (penal - 1) * ce * xPhys * dfdt
 
     Uy = U[1::2]  # y-displacement dof of every node, in the node order C's rows use
     adjoint = -(C.T @ Uy)  # (nel,): d(load)/d(density) term, adjoint-contracted with U
 
-    dcx2 = adjoint * ft.flatten()
+    dcx2 = adjoint * t_mask.flatten()
     dct2 = adjoint * xPhys.flatten() * dfdt.flatten()
 
     dcx = 2 * dcx2 + dcx1.flatten()
