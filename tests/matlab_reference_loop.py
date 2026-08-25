@@ -43,19 +43,22 @@ def run_reference_loop(
     C = ref.ref_gravity_C(nelx, nely)
     beta, eta = beta0, 0.5
 
+    # Deliberate divergence from the MATLAB source, which assigns `xTilde = x` and
+    # `t = tPhys` unfiltered here: this oracle follows `init_state`'s corrected
+    # initialization rather than transliterating the bug it fixes. See PR #26.
     x = np.full((nely, nelx), volfrac)
-    xTilde = x.copy()
+    xTilde = (H @ x.flatten(order="F") / Hs).reshape(nely, nelx, order="F")
     xPhys = (np.tanh(beta * eta) + np.tanh(beta * (xTilde - eta))) / (
         np.tanh(beta * eta) + np.tanh(beta * (1 - eta))
     )
-    tPhys = ref.ref_timefield(nelx, nely, tfield)
+    t = ref.ref_timefield(nelx, nely, tfield)
+    tPhys = (H @ t.flatten(order="F") / Hs).reshape(nely, nelx, order="F")
 
     ndof = 2 * (nelx + 1) * (nely + 1)
     F = np.zeros(ndof)
     F[2 * (nelx + 1) * (nely + 1) - 1] = -1.0
     freedofs1 = np.setdiff1d(np.arange(1, ndof + 1), np.arange(1, 2 * (nely + 1) + 1))
 
-    t = tPhys.copy()
     xold1 = np.concatenate([x.flatten(order="F"), np.zeros(nel)])
     xold2 = xold1.copy()
     low = np.zeros(2 * nel)

@@ -79,10 +79,11 @@ def _problem(nelx=7, nely=5, nStage=3, tfield=3, Theta=1.0):
 
 
 def test_density_filter_fixes_constant_fields():
-    """`H @ 1 / Hs == 1` exactly, because `Hs` is by construction `H`'s row sum. This is
-    what lets the density half of the initialization invariant be checked *exactly*
-    rather than approximately: a uniform seed survives the filter unchanged, so
-    `xTilde == x == volfrac` holds bit-for-bit whether or not the seed was filtered."""
+    """`H @ 1 / Hs == 1` up to rounding, because `Hs` is by construction `H`'s row sum.
+    This is what makes filtering the uniform density seed a no-op in practice, so that
+    the correction to `init_state` (PR #26) changed only the time half: measured, the
+    filtered seed differs from `volfrac` by ~1.7e-16, one ulp, not bit-for-bit -- the
+    row-sum division is exact in exact arithmetic, not in floating point."""
     for nelx, nely in [(7, 5), (10, 8), (4, 4)]:
         H, Hs = filters.density_filter(nelx, nely, RMIN)
         ones = np.ones(nelx * nely)
@@ -128,32 +129,16 @@ def test_init_state_density_half_is_derived_from_its_seed(tfield):
 
 
 @pytest.mark.parametrize("tfield", [1, 2, 3])
-@pytest.mark.xfail(
-    strict=True,
-    reason="init_state sets t = tPhys.copy(), leaving tPhys unfiltered at iteration 1; "
-    "remove this marker once tPhys is derived from the raw seed",
-)
 def test_init_state_time_half_is_derived_from_its_seed(tfield):
-    """The time half of the same invariant -- and the half that does not hold.
+    """The time half of the same invariant -- the half the MATLAB source got wrong.
 
-    `init_state` seeds `tPhys` from `init_timefield` and then sets `t = tPhys.copy()`,
-    so at iteration 1 the physics field is the *unfiltered* seed while `step` goes on to
-    differentiate it as though `tPhys = H @ t / Hs`. Every subsequent iteration derives
-    `tPhys` through the filter, so iteration 1 is the only one where the forward map and
-    the backward map disagree.
+    It assigns `t = tPhys` unfiltered, so at iteration 1 the physics field was the raw
+    seed while `step` went on to differentiate it as though `tPhys = H @ t / Hs`.
 
     Unlike the density half, this cannot be waved away by the filter's constant-field
     fixed point: no `init_timefield` variant is constant (a constant print-time field
     would mean the whole part is deposited at once), so `H @ t / Hs != t` here for real.
-
-    This test is the specification the fix should satisfy. It is written against the
-    intended behaviour, not the current behaviour, precisely because the fix will
-    invalidate the fixtures that currently pin this code -- `test_e2e.py` (all four),
-    `test_robustness.py::test_e2e_agreement_is_at_machine_precision`, and both
-    `test_reference_sweep.py` loop tests, since `matlab_reference_loop.py` hardcodes the
-    same `t = tPhys.copy()`. Those all encode "matches MATLAB", and MATLAB has the bug;
-    without this test the fix would have no statement of intent to be checked against at
-    all, only fixtures to be regenerated.
+    The premise assertion below pins exactly that, so the test cannot pass vacuously.
     """
     problem = _problem(tfield=tfield)
     state = optimize.init_state(problem, BETA)
