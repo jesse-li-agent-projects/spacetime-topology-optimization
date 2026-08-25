@@ -55,7 +55,7 @@ def test_thesis_4_4_reproduction():
         RMIN,
         LRMIN,
         RMIN_COND,
-        beta=BETA_INIT,
+        beta_d=BETA_INIT,
     )
     record = result.records[-1]
 

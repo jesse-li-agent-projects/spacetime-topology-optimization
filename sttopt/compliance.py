@@ -18,25 +18,25 @@ import sttopt.fem as fem
 
 
 def time_mask(
-    tPhys: Float[np.ndarray, "nely nelx"], ti: float, lam: float
+    tPhys: Float[np.ndarray, "nely nelx"], ti: float, beta: float
 ) -> Float[np.ndarray, "nely nelx"]:
     """Smooth indicator of whether each element is "active" by stage time `ti`.
 
     Sigmoid transition (MATLAB source's `ft`, called with `lamda`/`rou` depending on
-    caller) from ~1 (element active, `tPhys < ti`) to ~0 (not yet active), with
-    sharpness `lam`.
+    caller; Wang et al. 2019's beta_t) from ~1 (element active, `tPhys < ti`) to ~0
+    (not yet active), with sharpness `beta`.
     """
-    num = np.tanh(lam * ti) + np.tanh(lam * (tPhys - ti))
-    den = np.tanh(lam * ti) + np.tanh(lam * (1 - ti))
+    num = np.tanh(beta * ti) + np.tanh(beta * (tPhys - ti))
+    den = np.tanh(beta * ti) + np.tanh(beta * (1 - ti))
     return 1 - num / den
 
 
 def time_mask_derivative(
-    tPhys: Float[np.ndarray, "nely nelx"], ti: float, lam: float
+    tPhys: Float[np.ndarray, "nely nelx"], ti: float, beta: float
 ) -> Float[np.ndarray, "nely nelx"]:
     """d(`time_mask`)/d(tPhys), element-wise."""
-    num = lam * (np.tanh(lam * (tPhys - ti)) ** 2 - 1)
-    den = np.tanh(lam * (ti - 1)) - np.tanh(lam * ti)
+    num = beta * (np.tanh(beta * (tPhys - ti)) ** 2 - 1)
+    den = np.tanh(beta * (ti - 1)) - np.tanh(beta * ti)
     return -num / den
 
 
@@ -87,13 +87,13 @@ def gravity_compliance(
     ti: float,
     # gravity.gravity_load_matrix's output, or a loaded fixture's
     C: sp.spmatrix | sp.sparray,
-    lam: float,
+    beta_t: float,
     freedofs: Int[np.ndarray, " n_free"],
     ndof: int,
 ) -> tuple[float, Float[np.ndarray, " nely*nelx"], Float[np.ndarray, " nely*nelx"]]:
     """SIMP compliance and its density/time sensitivities under self-weight gravity.
 
-    Only elements active by stage time `ti` (per `time_mask`, sharpness `lam` --
+    Only elements active by stage time `ti` (per `time_mask`, sharpness `beta_t` --
     MATLAB source's `lamda`/`rou`) carry density-weighted self-weight load, built via
     `gravity.gravity_load_matrix`'s `C`. Because the load itself depends on `xPhys`
     (through the joint density-time field `xtJoint = xPhys * t_mask`), the sensitivities
@@ -103,8 +103,8 @@ def gravity_compliance(
     compliance-sensitivity result for a density-dependent load, not a simplification.
     """
     nely, nelx = xPhys.shape
-    t_mask = time_mask(tPhys, ti, lam)
-    dfdt = time_mask_derivative(tPhys, ti, lam)
+    t_mask = time_mask(tPhys, ti, beta_t)
+    dfdt = time_mask_derivative(tPhys, ti, beta_t)
     xtJoint = xPhys * t_mask
 
     K = fem.assemble_stiffness(KE, xtJoint, Emin, Emax, penal, edofMat, ndof)

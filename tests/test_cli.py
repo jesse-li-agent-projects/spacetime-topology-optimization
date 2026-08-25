@@ -56,9 +56,9 @@ def _reference_run(args):
         args.rmin,
         args.lrmin,
         args.rmin_cond,
-        beta_max=args.beta_max,
+        beta_d_max=args.beta_d_max,
     )
-    state = optimize.init_state(problem, beta=1.0)
+    state = optimize.init_state(problem, beta_d=1.0)
     prev_state, records, states = state, [], []
     for _ in range(args.nloop):
         prev_state = state

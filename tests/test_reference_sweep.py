@@ -352,8 +352,8 @@ def test_periodic_schedules_match_reference():
     assert trace[29]["rou"] == 15.0, "reference rou bump at loop 30 did not fire"
     assert trace[49]["beta"] == 2.0, "reference beta doubling at loop 50 did not fire"
     assert result.state.factor != 1.0, "port factor refresh at loop 25 did not fire"
-    assert result.state.rou == 15.0, "port rou bump at loop 30 did not fire"
-    assert result.state.beta == 2.0, "port beta doubling at loop 50 did not fire"
+    assert result.state.beta_t == 15.0, "port rou bump at loop 30 did not fire"
+    assert result.state.beta_d == 2.0, "port beta doubling at loop 50 did not fire"
 
     for k, (rec, want) in enumerate(zip(result.records, trace), start=1):
         if k >= 25:

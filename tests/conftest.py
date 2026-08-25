@@ -69,7 +69,7 @@ def load_fixture(name: str) -> dict:
     )
 
 
-def matlab_init_state(problem, beta: float):
+def matlab_init_state(problem, beta_d: float):
     """The initial state the `.mat` fixtures were generated from: the reference's
     initialization, which leaves `xTilde` and `tPhys` unfiltered
     (`generate_fixtures.m:200-203`).
@@ -96,7 +96,7 @@ def matlab_init_state(problem, beta: float):
     return optimize.State(
         x=x,
         xTilde=x.copy(),
-        xPhys=filters.heaviside_projection(x.copy(), beta, problem.eta),
+        xPhys=filters.heaviside_projection(x.copy(), beta_d, problem.eta),
         t=tPhys.copy(),
         tPhys=tPhys,
         xold1=np.concatenate([x.flatten(), np.zeros(nel)]),
@@ -104,8 +104,8 @@ def matlab_init_state(problem, beta: float):
         low=np.zeros(problem.n),
         upp=np.zeros(problem.n),
         loop=0,
-        rou=10.0,
-        beta=beta,
+        beta_t=10.0,
+        beta_d=beta_d,
         factor=1.0,
     )
 
