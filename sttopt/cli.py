@@ -1,6 +1,6 @@
 """Command-line entry point for the space-time topology optimization loop -- the
 argparse equivalent of `conductivity_estimation_stto_main.m`'s hardcoded constants at
-the top of that script (`nelx`, `nely`, `nloop`, ... through `beta_max`), with the same
+the top of that script (`nelx`, `nely`, `nloop`, ... through `beta_d_max`), with the same
 default values (the original *full-scale* script's constants, not the smaller ones the
 fixture harness/tests use for speed).
 
@@ -71,8 +71,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "source reusing the name `rmin` for both -- see the port plan)",
     )
     parser.add_argument(
-        "--beta-max",
-        dest="beta_max",
+        "--beta-d-max",
+        dest="beta_d_max",
         type=float,
         default=128.0,
         help="Heaviside projection sharpness cap",
@@ -106,9 +106,9 @@ def main(args: argparse.Namespace) -> None:
         args.rmin,
         args.lrmin,
         args.rmin_cond,
-        beta_max=args.beta_max,
+        beta_d_max=args.beta_d_max,
     )
-    state = optimize.init_state(problem, beta=1.0)
+    state = optimize.init_state(problem, beta_d=1.0)
 
     prev_state = state  # state entering the final `step` call -- see module docstring
     for _ in range(args.nloop):

@@ -50,7 +50,7 @@ def test_gravity_compliance_matches_fixture():
     nelx, nely, nStage = int(fx["nelx"]), int(fx["nely"]), int(fx["nStage"])
     nloop = e2e["xPhys_traj"].shape[2] - 1
     Emin, Emax, penal = 1e-9, 1.0, 3
-    lam = 10.0  # rou=10 fixed for loop=1..3: mod(loop,30)==0 never triggers (see generate_fixtures.m)
+    beta_t = 10.0  # beta_t=10 fixed for loop=1..3: mod(loop,30)==0 never triggers (see generate_fixtures.m)
 
     KE = fem.plane_stress_KE(nu=0.3)
     edofMat = fem.element_dof_map(nelx, nely)
@@ -67,7 +67,18 @@ def test_gravity_compliance_matches_fixture():
         for i in range(nStage):
             ti = tP[i + 1]
             c, dcx, dct = compliance.gravity_compliance(
-                xPhys, tPhys, KE, edofMat, Emin, Emax, penal, ti, C, lam, freedofs, ndof
+                xPhys,
+                tPhys,
+                KE,
+                edofMat,
+                Emin,
+                Emax,
+                penal,
+                ti,
+                C,
+                beta_t,
+                freedofs,
+                ndof,
             )
             assert_close(c, fx["c_grav_all"][k, i], tier="solved")
             expected_dcx = reindex_fixture(
@@ -281,12 +292,12 @@ def _gravity_cantilever_compliance(
     Emax: float,
     tPhys: np.ndarray | None = None,
     ti: float = 0.5,
-    lam: float = 10.0,
+    beta_t: float = 10.0,
     w_scale: float = 1.0,
 ) -> float:
     """`gravity_compliance`'s `c` for a fully-clamped, self-weight-loaded cantilever.
 
-    `tPhys`/`ti`/`lam` default to a fully built structure: `tPhys` all-zero makes
+    `tPhys`/`ti`/`beta_t` default to a fully built structure: `tPhys` all-zero makes
     every element exactly "active" for any `ti` > 0 (`time_mask`'s sigmoid is exactly
     1, not just approximately -- `num` cancels to 0 in that case), so this isolates
     the self-weight load path with no sigmoid-softening error. `w_scale` rescales
@@ -306,7 +317,7 @@ def _gravity_cantilever_compliance(
     C = gravity.gravity_load_matrix(nelx, nely) * w_scale
 
     c, _, _ = compliance.gravity_compliance(
-        xPhys, tPhys, KE, edofMat, Emin, Emax, penal, ti, C, lam, freedofs, ndof
+        xPhys, tPhys, KE, edofMat, Emin, Emax, penal, ti, C, beta_t, freedofs, ndof
     )
     return c
 
@@ -365,7 +376,7 @@ def test_gravity_compliance_partial_build_matches_truncated_mesh():
     Compares two independent FEM solves rather than layering a second closed-form
     approximation on top of the beam-theory one above: the full mesh's build-order
     field (`tPhys` linear in x) with `ti` set between column `m - 1`'s and column
-    `m`'s `tPhys` -- away from either, so a sharp `lam` leaves the sigmoid's
+    `m`'s `tPhys` -- away from either, so a sharp `beta_t` leaves the sigmoid's
     transition zone with negligible weight on any column -- against an actual
     `m`-column mesh built at full density.
 
@@ -378,12 +389,12 @@ def test_gravity_compliance_partial_build_matches_truncated_mesh():
     """
     nely, nelx, m = 8, 80, 40
     # sharp: sigmoid transition width is far below the 1/nelx column spacing
-    lam = 1000.0
+    beta_t = 1000.0
     tPhys = np.tile(np.arange(nelx) / nelx, (nely, 1))
     ti = (m - 0.5) / nelx
 
     c_partial = _gravity_cantilever_compliance(
-        nelx, nely, 2.5, tPhys=tPhys, ti=ti, lam=lam
+        nelx, nely, 2.5, tPhys=tPhys, ti=ti, beta_t=beta_t
     )
     c_truncated = _gravity_cantilever_compliance(m, nely, 2.5, w_scale=m / nelx)
     np.testing.assert_allclose(c_partial, c_truncated, rtol=1e-4)
@@ -433,7 +444,7 @@ def test_whole_compliance_fd_dcx():
 def test_gravity_compliance_fd_dcx_and_dct():
     nelx, nely = 6, 4
     Emin, Emax, penal = 1e-9, 1.0, 3
-    lam = 10.0
+    beta_t = 10.0
     ti = 0.5
     KE = fem.plane_stress_KE(nu=0.3)
     edofMat = fem.element_dof_map(nelx, nely)
@@ -449,7 +460,7 @@ def test_gravity_compliance_fd_dcx_and_dct():
     # loosen tolerances to paper over them: this is a numerical-conditioning artifact
     # of the FD probe, not evidence about the analytic formula.
     def well_conditioned(xPhys, tPhys):
-        ft = compliance.time_mask(tPhys, ti, lam)
+        ft = compliance.time_mask(tPhys, ti, beta_t)
         K = fem.assemble_stiffness(KE, xPhys * ft, Emin, Emax, penal, edofMat, ndof)
         Kfree = K[np.ix_(freedofs, freedofs)].toarray()
         return np.linalg.cond(Kfree) < 1e5
@@ -470,7 +481,7 @@ def test_gravity_compliance_fd_dcx_and_dct():
         accepted += 1
 
         _, dcx, dct = compliance.gravity_compliance(
-            xPhys, tPhys, KE, edofMat, Emin, Emax, penal, ti, C, lam, freedofs, ndof
+            xPhys, tPhys, KE, edofMat, Emin, Emax, penal, ti, C, beta_t, freedofs, ndof
         )
 
         fd_x = np.zeros(nely * nelx)
@@ -484,10 +495,10 @@ def test_gravity_compliance_fd_dcx_and_dct():
             xm = xPhys.copy()
             xm[j, i] -= h
             cp, _, _ = compliance.gravity_compliance(
-                xp, tPhys, KE, edofMat, Emin, Emax, penal, ti, C, lam, freedofs, ndof
+                xp, tPhys, KE, edofMat, Emin, Emax, penal, ti, C, beta_t, freedofs, ndof
             )
             cm, _, _ = compliance.gravity_compliance(
-                xm, tPhys, KE, edofMat, Emin, Emax, penal, ti, C, lam, freedofs, ndof
+                xm, tPhys, KE, edofMat, Emin, Emax, penal, ti, C, beta_t, freedofs, ndof
             )
             fd_x[e] = (cp - cm) / (2 * h)
 
@@ -496,10 +507,10 @@ def test_gravity_compliance_fd_dcx_and_dct():
             tm = tPhys.copy()
             tm[j, i] -= h
             cp, _, _ = compliance.gravity_compliance(
-                xPhys, tp, KE, edofMat, Emin, Emax, penal, ti, C, lam, freedofs, ndof
+                xPhys, tp, KE, edofMat, Emin, Emax, penal, ti, C, beta_t, freedofs, ndof
             )
             cm, _, _ = compliance.gravity_compliance(
-                xPhys, tm, KE, edofMat, Emin, Emax, penal, ti, C, lam, freedofs, ndof
+                xPhys, tm, KE, edofMat, Emin, Emax, penal, ti, C, beta_t, freedofs, ndof
             )
             fd_t[e] = (cp - cm) / (2 * h)
 
@@ -510,11 +521,11 @@ def test_gravity_compliance_fd_dcx_and_dct():
 def test_time_mask_derivative_matches_fd():
     rng = np.random.default_rng(2)
     tPhys = rng.uniform(0.05, 0.95, size=(4, 6))
-    ti, lam = 0.4, 10.0
+    ti, beta_t = 0.4, 10.0
     h = 1e-6
-    analytic = compliance.time_mask_derivative(tPhys, ti, lam)
+    analytic = compliance.time_mask_derivative(tPhys, ti, beta_t)
     fd = (
-        compliance.time_mask(tPhys + h, ti, lam)
-        - compliance.time_mask(tPhys - h, ti, lam)
+        compliance.time_mask(tPhys + h, ti, beta_t)
+        - compliance.time_mask(tPhys - h, ti, beta_t)
     ) / (2 * h)
     np.testing.assert_allclose(analytic, fd, rtol=1e-6, atol=1e-8)
