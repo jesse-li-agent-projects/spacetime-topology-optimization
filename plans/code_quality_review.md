@@ -62,6 +62,14 @@ check -- `tests/test_compliance.py`), independent of the MATLAB fixture. So does
   `xTilde`/`tPhys` via `H @ (...) / Hs` uniformly, rather than special-casing which
   fields get filtered at init and which don't.
 
+  **Decision: algorithmic correctness wins.** **Blocked on test coverage**, though:
+  `tests/matlab_reference_loop.py` hardcodes the same `t = tPhys.copy()`, so this
+  breaks the MATLAB-transliteration oracle *and* the `.mat` fixtures at once
+  (`test_e2e.py`, `test_robustness.py`'s 1e-12 agreement check, both
+  `test_reference_sweep.py` loop tests), leaving `optimize.py` with no correctness
+  evidence at all -- see "Test coverage before fixture-breaking changes" below. Write
+  items 1 and 2 of that section first.
+
 - [ ] `Problem` (`sttopt/optimize.py:37`) has 30 fields, and `step`
   (`sttopt/optimize.py:260`) unpacks ~20 of them. Worth revisiting whether `Problem`
   should be decomposed into sub-groups (e.g. FEM assembly constants, filter/neighbor
@@ -81,6 +89,43 @@ check -- `tests/test_compliance.py`), independent of the MATLAB fixture. So does
   notation, but the Python port doesn't need to preserve that convention verbatim if a
   more descriptive name is available without hurting readability against the paper.
 
+### Test coverage before fixture-breaking changes
+
+Both the `init_state` fix above and the PyTorch port below invalidate MATLAB
+comparisons, so the suite's non-MATLAB evidence is what has to carry them. An audit
+found three evidence tiers: the `.mat` fixtures; the MATLAB-transliteration oracle
+(`tests/matlab_reference*.py`, swept by `test_reference_sweep.py`), which is
+independent of the `.mat` files but still "matches MATLAB"; and first-principles tests
+(closed forms, patch tests, FD gradient checks, convergence under refinement).
+
+The first-principles tier is strong where it exists: `fem.py`, `gravity.py`,
+`compliance.py`, `constraints.py` and `filters.density_filter` all survive fixture
+removal, and every sensitivity derived *inside* a module is FD-checked independently of
+MATLAB (`gravity_compliance`'s `dcx_g`/`dct_g`, `hotspot_constraint`'s `df1`/`dt1`
+including the exact-tie case, all four of `constraints.py`'s). Those FD tests are also
+the natural acceptance criteria for an autodiff swap. The gaps:
+
+- [ ] FD-check `step`'s *assembled* `df0dx`/`dfdx` w.r.t. the raw `[x; t]` vector, on a
+  small grid at a couple of `Theta`/`nStage`/`tfield` points. `optimize.py`'s assembly
+  -- `Theta` weighting, the `H @ (dct_g / Hs)` chain rule, constraint row stacking, the
+  `m` count -- has no FD check anywhere and is fixture/oracle-only. Highest-value test
+  in the repo: it gates the `init_state` fix and is the acceptance test for autodiff.
+- [ ] Property test for `init_state` stating the *intended* invariant (raw seed ->
+  `tPhys = H @ t / Hs`, leaning on the filter's constant-field fixed point
+  `H @ 1 / Hs == 1`). Without it the `init_state` fix has no specification, only
+  fixtures it will break.
+- [ ] First-principles checks on `estimated_conductivity`/`hotspot_constraint`'s
+  *values* (a hand-computable 2-3 element case, the `rouf -> inf` step-function limit,
+  monotonicity in build order). The gradients are FD-checked against the code's own
+  `fval`, and the only non-fixture golden is an `.npz` frozen from this same Python, so
+  a smooth-but-wrong `K_est` currently passes everything.
+- [ ] Property test for `filters.continuity_filter` (annihilates constant fields, row
+  structure, symmetry) -- outside the fixtures it has only an `issparse()` type check.
+- [ ] Fast non-`@slow` end-to-end check on `optimize.run` at small `nelx`/`nely`:
+  objective descent, constraints satisfied at termination, mirror-symmetry invariance.
+  `run()`'s only physics evidence today is the 180x60x800 `test_e2e_slow.py`
+  reproduction, whose `f0val < 195` ceiling is hand-tuned rather than derived.
+
 ### Port to PyTorch / CUDA
 
 - [ ] Consider porting `sttopt/` off NumPy/SciPy and onto PyTorch, with CUDA support --
@@ -88,6 +133,10 @@ check -- `tests/test_compliance.py`), independent of the MATLAB fixture. So does
   currently CPU-only. Needs a decision on scope (whole package vs. hot loop only) and a
   check that SciPy-only functionality in the current implementation (sparse solvers,
   etc.) has a suitable PyTorch/CUDA equivalent before committing.
+  **Decision: start on float64** as torch's default dtype, so the suite's existing
+  float64-calibrated tolerances (`conftest.assert_close`, `test_reference_sweep`'s
+  `TIGHT`/`SOLVED`) carry over unchanged and the port is judged on correctness alone.
+  Revisit only if float32/GPU throughput turns out to be the reason for porting.
 - [ ] After a PyTorch port, evaluate replacing some of the hand-derived sensitivity
   (`dc`/`dt`/adjoint) code with autodiff, at least for the more mundane/straightforward
   derivative chains -- manually-written sensitivities are a common source of subtle
