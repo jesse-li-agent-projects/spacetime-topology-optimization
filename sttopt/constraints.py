@@ -55,10 +55,15 @@ def time_field_continuity(
     """
     nely, nelx = tPhys.shape
     nel = nely * nelx
-    kk = 2 * nel
-    A = L @ tPhys.flatten()
-    fval = float(kk * (np.sum(A**2 / nel) - 1.0e-6))
-    dft = H @ ((kk * 2 * (L.T @ A)) / Hs) / nel
+    # smoothness_weight = 2*nel is an overall tuning multiplier on the whole constraint
+    # (MATLAB source's `kk`, commented "controlling the smoothness of the time field" --
+    # not a paper symbol); it shows up in fval itself, so it isn't a derivative artifact.
+    # The separate explicit `* 2` in dft below IS a derivative factor, from
+    # d(deviation**2)/dt = 2*deviation * d(deviation)/dt.
+    smoothness_weight = 2 * nel
+    deviation = L @ tPhys.flatten()
+    fval = float(smoothness_weight * (np.sum(deviation**2 / nel) - 1.0e-6))
+    dft = H @ ((smoothness_weight * 2 * (L.T @ deviation)) / Hs) / nel
     dfx = np.zeros(nel)
     return fval, dfx, dft
 
@@ -83,7 +88,7 @@ def start_point(
     nel = nely * nelx
     k = len(Nei)
     fval = tPhys.flatten()[Nei] - 1.0e-9
-    ss = np.zeros((nel, k))
+    ss = np.zeros((nel, k))  # ss: one-hot selector, column j picks out element Nei[j]
     ss[Nei, np.arange(k)] = 1.0
     dft = (H @ (ss / Hs[:, None])).T
     dfx = np.zeros((k, nel))
@@ -117,15 +122,15 @@ def stage_volume_bounds(
     scale = nelx * nely * volfrac
     # matches MATLAB's `tP(i+1)`, not just `stage/nStage`
     ti = np.linspace(0, 1, nStage + 1)[stage]
-    ft = compliance.time_mask(tPhys, ti, rou)
+    t_mask = compliance.time_mask(tPhys, ti, rou)
     dfdt = compliance.time_mask_derivative(tPhys, ti, rou)
-    xtJoint = xPhys * ft
+    xtJoint = xPhys * t_mask
 
     budget = stage / nStage
     deposited = np.sum(xtJoint) / scale
     fval_upper = float(deposited - budget)
     fval_lower = float(-deposited + budget - 1.0e-5)
 
-    dfx = H @ ((ft / scale).flatten() * dx.flatten() / Hs)
+    dfx = H @ ((t_mask / scale).flatten() * dx.flatten() / Hs)
     dft = H @ ((xPhys * dfdt / scale).flatten() / Hs)
     return fval_upper, fval_lower, dfx, dft
