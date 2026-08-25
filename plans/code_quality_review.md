@@ -107,11 +107,32 @@ correctness-fix commit happened to be in progress when they were noticed.
   reindexing -- a grid's physical layout doesn't depend on the flatten convention.
   All 327 non-slow tests pass; `test_e2e_slow.py` was audited for the same patterns
   and found clean (no `order='F'`, no hardcoded element-index formulas).
-- [ ] Audit for one-letter (or otherwise cryptic) variable names inherited from the
-  MATLAB source that aren't documented or given a better name where the Python port
-  would allow it -- MATLAB math code leans on terse single-letter names matching paper
-  notation, but the Python port doesn't need to preserve that convention verbatim if a
-  more descriptive name is available without hurting readability against the paper.
+- [x] **Mostly done.** Audited `sttopt/` for one-letter/cryptic variable names inherited
+  from the MATLAB source. Fixed: `optimize.py`'s `p = problem` local alias (collided with
+  `Problem.p`, the hotspot p-norm exponent) -> `prob`; `xnew`/`s_new` -> `xt_new`/`x_new`
+  to match the module's own `x`/`t` convention (`xt_new` folded away entirely by the
+  later C-order rewrite of the split, which slices `xmma` directly). `cli.py`'s `T1` ->
+  `hotspot_severity`, traced to MATLAB's `T1=(1-B).*XPhys` -- confirmed *not* a print
+  time despite feeding `draw_combination1`'s `timing` parameter, but the same quantity as
+  `hotspot_constraint`'s internal `T_val = 1 - K_est`, reused there only to piggyback on
+  the generic per-element coloring plot; `viz.combination_plot`'s `tPhys` parameter
+  renamed to `values` accordingly. `constraints.py`: `kk`/`A` in `time_field_continuity`
+  -> `smoothness_weight`/`deviation` (the MATLAB source already comments `kk` as
+  "controlling the smoothness of the time field" -- a tuning weight, not a paper symbol);
+  `ss` in `start_point` kept (terse selector-matrix name reads fine against the math) but
+  given an inline comment. `ft` (MATLAB's function name reused as a variable) ->
+  `t_mask` in both `compliance.py`/`gravity_compliance` and
+  `constraints.py`/`stage_volume_bounds`. Left alone on review: `fem.py`'s
+  `A11/A12/B11/B12`/`iK/jK/sK` and `gravity.py`'s `I/J/S` (standard FEM/COO-triplet
+  conventions, already commented); all of `mma.py` (deliberate verbatim port of
+  Svanberg's reference code, per its own module docstring); `conductivity.py`'s
+  `_pairwise_sigmoid_terms(a, b, ...)` vs. call sites' `e1`/`e2` (minor def/call-site
+  naming mismatch, not worth churn); `gravity.py`'s return value documented as `C` in its
+  own docstring but never named that internally (doc/code mismatch, not a bug).
+  **Deferred, not yet resolved:** the same sigmoid-sharpness parameter feeding
+  `state.rou` is called `lam` in `compliance.py` (`gravity_compliance`) but `rou` in
+  `constraints.py` (`stage_volume_bounds`) -- needs a look at whether MATLAB
+  intentionally uses `lamda` vs `rou` for different call sites before unifying the name.
 
 ### Test coverage before fixture-breaking changes
 

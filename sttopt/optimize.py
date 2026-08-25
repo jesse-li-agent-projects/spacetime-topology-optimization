@@ -284,8 +284,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     but never trigger against the small E2E fixture (`nloop=3`) -- unexercised by that
     fixture, not unimplemented or worked around.
     """
-    p = problem
-    nely, nelx, nStage = p.nely, p.nelx, p.nStage
+    prob = problem
+    nely, nelx, nStage = prob.nely, prob.nelx, prob.nStage
     nel = nelx * nely
 
     loop = state.loop + 1
@@ -293,23 +293,31 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     if loop % 30 == 0 and rou < 50:
         rou += 5
     beta = state.beta
-    if loop % 50 == 0 and beta <= p.beta_max:
+    if loop % 50 == 0 and beta <= prob.beta_max:
         beta *= 2
-    if beta > p.beta_max:
-        beta = p.beta_max
+    if beta > prob.beta_max:
+        beta = prob.beta_max
 
     xPhys, tPhys = state.xPhys, state.tPhys
     # Heaviside-derivative chain rule for this iteration's density sensitivities, from
     # the xTilde carried over from the *previous* iteration's update (or init).
-    dx = filters.heaviside_projection_derivative(state.xTilde, beta, p.eta)
+    dx = filters.heaviside_projection_derivative(state.xTilde, beta, prob.eta)
 
     # -- Objective: whole-structure compliance + Theta-weighted per-stage gravity compliance --
     c, dcx = compliance.whole_compliance(
-        xPhys, p.KE, p.edofMat, p.Emin, p.Emax, p.penal, p.freedofs, p.F, p.ndof
+        xPhys,
+        prob.KE,
+        prob.edofMat,
+        prob.Emin,
+        prob.Emax,
+        prob.penal,
+        prob.freedofs,
+        prob.F,
+        prob.ndof,
     )
     obj_final_only = c  # compliance of final structure only, saved for logging
     obj = c
-    dc = p.H @ (dcx.flatten() * dx.flatten() / p.Hs)
+    dc = prob.H @ (dcx.flatten() * dx.flatten() / prob.Hs)
     dt = np.zeros(nel)
 
     tP = np.linspace(0, 1, nStage + 1)
@@ -318,30 +326,30 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         cg, dcx_g, dct_g = compliance.gravity_compliance(
             xPhys,
             tPhys,
-            p.KE,
-            p.edofMat,
-            p.Emin,
-            p.Emax,
-            p.penal,
+            prob.KE,
+            prob.edofMat,
+            prob.Emin,
+            prob.Emax,
+            prob.penal,
             ti,
-            p.C,
+            prob.C,
             rou,
-            p.freedofs,
-            p.ndof,
+            prob.freedofs,
+            prob.ndof,
         )
-        obj += p.Theta * cg
-        dc = dc + p.Theta * (p.H @ (dcx_g * dx.flatten() / p.Hs))
-        dt = dt + p.Theta * (p.H @ (dct_g / p.Hs))
+        obj += prob.Theta * cg
+        dc = dc + prob.Theta * (prob.H @ (dcx_g * dx.flatten() / prob.Hs))
+        dt = dt + prob.Theta * (prob.H @ (dct_g / prob.Hs))
 
     df0dx = np.concatenate([dc, dt])
     f0val = obj
 
     # -- Move-limit bounds on this iteration's raw MMA variables --
     xflat, tflat = state.x.flatten(), state.t.flatten()
-    xminx = np.maximum(0.0, xflat - p.move)
-    xmaxx = np.minimum(1.0, xflat + p.move)
-    xmint = np.maximum(0.0, tflat - p.tmove)
-    xmaxt = np.minimum(1.0, tflat + p.tmove)
+    xminx = np.maximum(0.0, xflat - prob.move)
+    xmaxx = np.minimum(1.0, xflat + prob.move)
+    xmint = np.maximum(0.0, tflat - prob.tmove)
+    xmaxt = np.minimum(1.0, tflat + prob.tmove)
     xmin = np.concatenate([xminx, xmint])
     xmax = np.concatenate([xmaxx, xmaxt])
     xval = np.concatenate([xflat, tflat])
@@ -350,22 +358,24 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     fval_parts: list[np.ndarray] = []
     dfdx_parts: list[np.ndarray] = []
 
-    fv, dfx, dft = constraints.global_volume_fraction(xPhys, dx, p.H, p.Hs, p.volfrac)
+    fv, dfx, dft = constraints.global_volume_fraction(
+        xPhys, dx, prob.H, prob.Hs, prob.volfrac
+    )
     vol_diag = float(np.sum(xPhys) / (nelx * nely))
     fval_parts.append(np.array([fv]))
     dfdx_parts.append(np.concatenate([dfx, dft])[None, :])
 
-    fv, dfx, dft = constraints.time_field_continuity(tPhys, p.L, p.H, p.Hs)
+    fv, dfx, dft = constraints.time_field_continuity(tPhys, prob.L, prob.H, prob.Hs)
     fval_parts.append(np.array([fv]))
     dfdx_parts.append(np.concatenate([dfx, dft])[None, :])
 
-    fv, dfx, dft = constraints.start_point(tPhys, p.Nei, p.H, p.Hs)
+    fv, dfx, dft = constraints.start_point(tPhys, prob.Nei, prob.H, prob.Hs)
     fval_parts.append(fv)
     dfdx_parts.append(np.concatenate([dfx, dft], axis=1))
 
     for stage in range(1, nStage + 1):
         fu, fl, dfx, dft = constraints.stage_volume_bounds(
-            xPhys, tPhys, dx, p.H, p.Hs, stage, nStage, p.volfrac, rou
+            xPhys, tPhys, dx, prob.H, prob.Hs, stage, nStage, prob.volfrac, rou
         )
         fval_parts.append(np.array([fu, fl]))
         dfdx_parts.append(
@@ -377,23 +387,23 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     hotspot = conductivity.hotspot_constraint(
         xPhys,
         tPhys,
-        p.e1,
-        p.e2,
-        p.w,
+        prob.e1,
+        prob.e2,
+        prob.w,
         dx,
-        p.H,
-        p.Hs,
+        prob.H,
+        prob.Hs,
         state.factor,
-        p.Tcr,
-        p.p,
-        p.q,
-        p.r,
-        p.rouf,
+        prob.Tcr,
+        prob.p,
+        prob.q,
+        prob.r,
+        prob.rouf,
     )
     fv, df1, dt1 = hotspot.fval, hotspot.df1, hotspot.dt1
     factor = state.factor
     if loop % 25 == 0:
-        max_g = float(np.max((1 - hotspot.K_est) * xPhys.flatten() ** p.r))
+        max_g = float(np.max((1 - hotspot.K_est) * xPhys.flatten() ** prob.r))
         factor = max_g / hotspot.numer
         # `hotspot_constraint` computes `fval = factor * numer / Tcr - 1` and scales
         # `df1`/`dt1` by that same `factor` (its `scale` term) -- `numer`, and
@@ -416,12 +426,12 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     dfdx = np.concatenate(dfdx_parts, axis=0)
 
     # -- MMA subproblem solve and update --
-    mma_a = np.zeros(p.m)
-    mma_c = np.full(p.m, p.mma_c)
-    mma_d = np.zeros(p.m)
+    mma_a = np.zeros(prob.m)
+    mma_c = np.full(prob.m, prob.mma_c)
+    mma_d = np.zeros(prob.m)
     xmma, ymma, zmma, lam, xsi, mma_eta, mu, zet, s, low, upp = mma.mmasub(
-        p.m,
-        p.n,
+        prob.m,
+        prob.n,
         loop,
         xval,
         xmin,
@@ -434,21 +444,21 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         dfdx,
         state.low,
         state.upp,
-        p.a0,
+        prob.a0,
         mma_a,
         mma_c,
         mma_d,
     )
 
-    s_new = xmma[:nel].reshape(nely, nelx)
+    x_new = xmma[:nel].reshape(nely, nelx)
     t_new = xmma[nel:].reshape(nely, nelx)
 
-    xTilde_new = (p.H @ s_new.flatten() / p.Hs).reshape(nely, nelx)
-    xPhys_new = filters.heaviside_projection(xTilde_new, beta, p.eta)
-    tPhys_new = (p.H @ t_new.flatten() / p.Hs).reshape(nely, nelx)
+    xTilde_new = (prob.H @ x_new.flatten() / prob.Hs).reshape(nely, nelx)
+    xPhys_new = filters.heaviside_projection(xTilde_new, beta, prob.eta)
+    tPhys_new = (prob.H @ t_new.flatten() / prob.Hs).reshape(nely, nelx)
 
     new_state = State(
-        x=s_new,
+        x=x_new,
         xTilde=xTilde_new,
         xPhys=xPhys_new,
         t=t_new,
