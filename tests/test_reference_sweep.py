@@ -98,15 +98,14 @@ def test_WE_equals_w_el_generally(nelx, nely, rmin_cond):
         assert np.array_equal(WE[i], w_el[i]), f"WE != w_el at element {i}"
 
 
-@pytest.mark.parametrize("nelx,nely", [(7, 5), (5, 7), (9, 3), (2, 2)])
+@pytest.mark.parametrize("nelx,nely", [(7, 5), (5, 7), (9, 3), (2, 2), (4, 1), (1, 4)])
 @pytest.mark.parametrize("variant", [1, 2, 3])
 def test_timefield_matches_reference(nelx, nely, variant):
     """`timefield.mat` covers all three variants but only one grid; the `linspace(0, n, n)`
     spacing means variants 1 and 3 change shape (not just scale) with the aspect ratio.
 
-    `nelx==1`/`nely==1` are excluded here: `init_timefield` now rejects them outright
-    (`test_timefield.py::test_degenerate_mesh_rejected`) rather than matching whatever
-    the MATLAB reference happens to produce (`nan`, in the corner variants' case).
+    `(4, 1)`/`(1, 4)` are lone-1 meshes: well-defined and finite for every variant here
+    (only `nelx == nely == 1` raises, and only for CORNER -- see `timefield.py`).
     """
     got = timefield.init_timefield(nelx, nely, variant)
     assert rel(got, ref.ref_timefield(nelx, nely, variant)) < TIGHT

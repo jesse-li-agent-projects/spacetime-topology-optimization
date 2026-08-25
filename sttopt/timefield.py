@@ -5,6 +5,11 @@ encoding a spatial ordering of when each element is expected to be "active" (e.g
 solidification or deposition front sweeping the domain). All three are normalized
 Euclidean-distance or linear ramps over the `(nely, nelx)` element grid; see
 `conventions.md` for the grid/array-order convention they follow.
+
+A lone-1 mesh (`nelx == 1` xor `nely == 1`) is well-defined but doesn't necessarily
+span `[0, 1]`: EDGE is constant at 0 when `nelx == 1`, and OPPOSITE_CORNER never
+reaches 0 when `nely == 1`. Only `nelx == nely == 1` is rejected, since CORNER's
+distance normalization divides by a zero max distance there.
 """
 
 from enum import IntEnum
@@ -22,12 +27,13 @@ class TimeField(IntEnum):
 
 
 def _check_grid_size(nelx: int, nely: int) -> None:
-    """Reject `nelx < 2` or `nely < 2`: `linspace(0, nel, nel)` degenerates at a single
-    sample -- `nel == 1` divides by a zero max distance (corner variants) or fails to
-    span `[0, 1]` (edge variant) -- so a one-element-wide/tall mesh is unsupported here.
+    """Reject only `nelx == nely == 1`, where CORNER's distance normalization divides
+    by a zero max distance -- see the module docstring for the (allowed) lone-1 cases.
     """
-    if nelx < 2 or nely < 2:
-        raise ValueError(f"nelx and nely must be >= 2, got nelx={nelx}, nely={nely}")
+    if nelx == 1 and nely == 1:
+        raise ValueError(
+            f"nelx and nely cannot both be 1, got nelx={nelx}, nely={nely}"
+        )
 
 
 def _corner_distance_grid(
@@ -40,7 +46,7 @@ def _corner_distance_grid(
     the MATLAB source, not an off-by-one to "fix": since the x- and y-axis spacings
     differ whenever `nelx != nely`, changing this shifts the field's shape (not just an
     overall scale), so it must stay exactly as the source has it to match the fixture.
-    Requires `nelx, nely >= 2` (see `_check_grid_size`); undefined at `nel == 1`.
+    Undefined only at `nelx == nely == 1` (see `_check_grid_size`).
     """
     xpos = np.linspace(0, nelx, nelx)
     ypos = np.linspace(0, nely, nely)
