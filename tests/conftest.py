@@ -25,6 +25,47 @@ def load_fixture(name: str) -> dict:
     )
 
 
+def matlab_init_state(problem, beta: float):
+    """The initial state the `.mat` fixtures were generated from: the reference's
+    initialization, which leaves `xTilde` and `tPhys` unfiltered
+    (`generate_fixtures.m:200-203`).
+
+    `optimize.init_state` deliberately no longer reproduces this -- it derives both
+    physics fields through the filter, since `step` differentiates `tPhys` as though
+    `tPhys = H @ t / Hs` (PR #26). The committed `.mat` files are frozen artifacts of
+    the old code and cannot be regenerated to match, so tests that compare against them
+    enter the trajectory here instead, and keep checking what they were written to check
+    -- the per-iteration agreement of `step`, not the seeding. `init_state`'s own
+    behaviour is specified by `test_optimize.py`'s three init invariant tests.
+
+    Unlike this helper, the live transliteration oracle (`matlab_reference_loop.py`)
+    *does* follow the fix: it is code under our control, not a frozen artifact.
+    """
+    import sttopt.filters as filters
+    import sttopt.optimize as optimize
+    import sttopt.timefield as timefield
+
+    x = np.full((problem.nely, problem.nelx), problem.volfrac)
+    tPhys = timefield.init_timefield(problem.nelx, problem.nely, problem.tfield)
+    nel = problem.nelx * problem.nely
+
+    return optimize.State(
+        x=x,
+        xTilde=x.copy(),
+        xPhys=filters.heaviside_projection(x.copy(), beta, problem.eta),
+        t=tPhys.copy(),
+        tPhys=tPhys,
+        xold1=np.concatenate([x.flatten(order="F"), np.zeros(nel)]),
+        xold2=np.concatenate([x.flatten(order="F"), np.zeros(nel)]),
+        low=np.zeros(problem.n),
+        upp=np.zeros(problem.n),
+        loop=0,
+        rou=10.0,
+        beta=beta,
+        factor=1.0,
+    )
+
+
 def load_fixture_npz(name: str) -> dict:
     """Load a Python-generated (non-MATLAB) fixture by base filename (no `.npz` suffix).
 

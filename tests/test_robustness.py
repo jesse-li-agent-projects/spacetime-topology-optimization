@@ -17,7 +17,7 @@ import io
 
 import numpy as np
 import scipy.sparse as sp
-from conftest import e2e_rtol, load_fixture
+from conftest import e2e_rtol, load_fixture, matlab_init_state
 
 import sttopt.conductivity as conductivity
 import sttopt.mma as mma
@@ -46,7 +46,10 @@ def test_e2e_agreement_is_at_machine_precision():
     """
     e2e = load_fixture("e2e")
     cons = load_fixture("constraints")
-    result = optimize.run(NELX, NELY, NLOOP, NSTAGE, 0.5, 0.1, 0.8, 3, 2.0, 2.0, 3.0)
+    problem = optimize.build_problem(
+        NELX, NELY, NSTAGE, 0.5, 0.1, 0.8, 3, 2.0, 2.0, 3.0
+    )
+    result = optimize.run_from_state(problem, matlab_init_state(problem, 1.0), NLOOP)
 
     strict = 1e-12
     for k in range(1, NLOOP + 1):

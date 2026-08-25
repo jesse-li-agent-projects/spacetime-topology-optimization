@@ -499,8 +499,15 @@ def run(
         rmin_cond,
         **problem_kwargs,
     )
-    state = init_state(problem, beta)
+    return run_from_state(problem, init_state(problem, beta), nloop)
 
+
+def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
+    """Run `nloop` iterations from an arbitrary starting state, collecting the
+    trajectory. Split out of `run` so that where the iteration starts is a caller's
+    choice -- warm-starting from a previous run's final state, or entering at a
+    trajectory recorded elsewhere.
+    """
     xPhys_traj = [state.xPhys.copy()]
     tPhys_traj = [state.tPhys.copy()]
     records: list[IterationRecord] = []
