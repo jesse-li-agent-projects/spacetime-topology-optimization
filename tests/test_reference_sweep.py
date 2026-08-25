@@ -230,15 +230,15 @@ def test_hotspot_matches_reference(nelx, nely, rmin_cond, factor):
 
     H, Hs = filters.density_filter(nelx, nely, 2.0)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
-    fv, df1, dt1, _, _ = conductivity.hotspot_constraint(
+    result = conductivity.hotspot_constraint(
         xP, tP, e1, e2, w, dx, H, Hs, factor, 0.8, 25.0, 3.0, 0.05, 100.0
     )
     K = conductivity.estimated_conductivity(xP, tP, e1, e2, w, 3.0, 100.0)
 
     assert rel(K, K_ref) < TIGHT
-    assert abs(fv - fv_ref) / abs(fv_ref) < TIGHT
-    assert rel(df1, df_ref) < 1e-10
-    assert rel(dt1, dt_ref) < 1e-10
+    assert abs(result.fval - fv_ref) / abs(fv_ref) < TIGHT
+    assert rel(result.df1, df_ref) < 1e-10
+    assert rel(result.dt1, dt_ref) < 1e-10
 
 
 @pytest.mark.parametrize(
@@ -277,12 +277,12 @@ def test_hotspot_non_default_constants(p, q, r, rouf):
     )
     H, Hs = filters.density_filter(nelx, nely, 2.0)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, 3.0)
-    fv, df1, dt1, _, _ = conductivity.hotspot_constraint(
+    result = conductivity.hotspot_constraint(
         xP, tP, e1, e2, w, dx, H, Hs, 1.0, 0.8, float(p), float(q), r, rouf
     )
-    assert abs(fv - fv_ref) / abs(fv_ref) < TIGHT
-    assert rel(df1, df_ref) < TIGHT
-    assert rel(dt1, dt_ref) < TIGHT
+    assert abs(result.fval - fv_ref) / abs(fv_ref) < TIGHT
+    assert rel(result.df1, df_ref) < TIGHT
+    assert rel(result.dt1, dt_ref) < TIGHT
 
 
 # ----------------------------------------------------------------- full loop

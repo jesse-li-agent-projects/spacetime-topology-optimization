@@ -233,16 +233,16 @@ def test_hotspot_gradients_finite_for_large_rouf():
     dx = np.ones((nely, nelx))
 
     for rouf in [100.0, 800.0, 2000.0, 1e6]:
-        fval, df1, dt1, _, _ = conductivity.hotspot_constraint(
+        result = conductivity.hotspot_constraint(
             xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, 0.8, 25.0, 3.0, 0.05, rouf
         )
-        assert np.isfinite(fval)
+        assert np.isfinite(result.fval)
         assert np.all(
-            np.isfinite(df1)
-        ), f"rouf={rouf}: {np.isnan(df1).sum()} NaNs in df1"
+            np.isfinite(result.df1)
+        ), f"rouf={rouf}: {np.isnan(result.df1).sum()} NaNs in df1"
         assert np.all(
-            np.isfinite(dt1)
-        ), f"rouf={rouf}: {np.isnan(dt1).sum()} NaNs in dt1"
+            np.isfinite(result.dt1)
+        ), f"rouf={rouf}: {np.isnan(result.dt1).sum()} NaNs in dt1"
 
 
 def test_stable_sigmoid_matches_the_matlab_expression():
