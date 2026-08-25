@@ -91,40 +91,43 @@ correctness-fix commit happened to be in progress when they were noticed.
 
 ### Test coverage before fixture-breaking changes
 
-Both the `init_state` fix above and the PyTorch port below invalidate MATLAB
-comparisons, so the suite's non-MATLAB evidence is what has to carry them. An audit
-found three evidence tiers: the `.mat` fixtures; the MATLAB-transliteration oracle
-(`tests/matlab_reference*.py`, swept by `test_reference_sweep.py`), which is
-independent of the `.mat` files but still "matches MATLAB"; and first-principles tests
-(closed forms, patch tests, FD gradient checks, convergence under refinement).
+> **Status (2026-08-25): mostly done.** Both the `init_state` fix above and the PyTorch
+> port below invalidate MATLAB comparisons, so the suite's non-MATLAB evidence is what
+> has to carry them. An audit found three evidence tiers: the `.mat` fixtures; the
+> MATLAB-transliteration oracle (`tests/matlab_reference*.py`, swept by
+> `test_reference_sweep.py`), which is independent of the `.mat` files but still
+> "matches MATLAB"; and first-principles tests (closed forms, patch tests, FD gradient
+> checks, convergence under refinement).
 
 The first-principles tier is strong where it exists: `fem.py`, `gravity.py`,
 `compliance.py`, `constraints.py` and `filters.density_filter` all survive fixture
 removal, and every sensitivity derived *inside* a module is FD-checked independently of
 MATLAB (`gravity_compliance`'s `dcx_g`/`dct_g`, `hotspot_constraint`'s `df1`/`dt1`
 including the exact-tie case, all four of `constraints.py`'s). Those FD tests are also
-the natural acceptance criteria for an autodiff swap. The gaps:
+the natural acceptance criteria for an autodiff swap.
 
-- [ ] FD-check `step`'s *assembled* `df0dx`/`dfdx` w.r.t. the raw `[x; t]` vector, on a
-  small grid at a couple of `Theta`/`nStage`/`tfield` points. `optimize.py`'s assembly
-  -- `Theta` weighting, the `H @ (dct_g / Hs)` chain rule, constraint row stacking, the
-  `m` count -- has no FD check anywhere and is fixture/oracle-only. Highest-value test
-  in the repo: it gates the `init_state` fix and is the acceptance test for autodiff.
-- [ ] Property test for `init_state` stating the *intended* invariant (raw seed ->
+- [x] FD-check `step`'s *assembled* `df0dx`/`dfdx` w.r.t. the raw `[x; t]` vector --
+  `test_optimize.py`'s `test_step_...` FD test (around line 252) checks the stacked
+  `df0dx`/`dfdx` against central differences of `step`'s own `f0val`/`fval` across
+  `Theta`/`nStage`/`tfield` points.
+- [x] Property test for `init_state` stating the *intended* invariant (raw seed ->
   `tPhys = H @ t / Hs`, leaning on the filter's constant-field fixed point
-  `H @ 1 / Hs == 1`). Without it the `init_state` fix has no specification, only
-  fixtures it will break.
-- [ ] First-principles checks on `estimated_conductivity`/`hotspot_constraint`'s
-  *values* (a hand-computable 2-3 element case, the `rouf -> inf` step-function limit,
-  monotonicity in build order). The gradients are FD-checked against the code's own
-  `fval`, and the only non-fixture golden is an `.npz` frozen from this same Python, so
-  a smooth-but-wrong `K_est` currently passes everything.
-- [ ] Property test for `filters.continuity_filter` (annihilates constant fields, row
-  structure, symmetry) -- outside the fixtures it has only an `issparse()` type check.
+  `H @ 1 / Hs == 1`) -- `test_init_state_seeds_the_raw_fields`,
+  `test_init_state_density_half_is_derived_from_its_seed`, and
+  `test_init_state_time_half_is_derived_from_its_seed` in `test_optimize.py`.
+- [x] First-principles checks on `estimated_conductivity`/`hotspot_constraint`'s
+  *values* -- `test_conductivity.py` now has closed-form hard/soft-gated 3-element
+  cases, the `rouf -> 0`/`rouf -> inf` limits, monotonicity in build order/global time
+  shift, and uniform-density closed forms, well beyond the gradient-only FD checks.
+- [x] Property test for `filters.continuity_filter` (annihilates constant fields, row
+  structure, closed forms on ramps/checkerboards) -- `test_filters.py`.
 - [ ] Fast non-`@slow` end-to-end check on `optimize.run` at small `nelx`/`nely`:
   objective descent, constraints satisfied at termination, mirror-symmetry invariance.
-  `run()`'s only physics evidence today is the 180x60x800 `test_e2e_slow.py`
-  reproduction, whose `f0val < 195` ceiling is hand-tuned rather than derived.
+  Still missing: `test_e2e.py`'s tests are all `.mat`-fixture comparisons (iteration-1
+  assembly, MMA state threading, constraint stacking, a tiny fixture trajectory, the
+  loop-25 hotspot refresh), and `run()`'s only fixture-free physics evidence remains the
+  180x60x800 `test_e2e_slow.py` reproduction, whose `f0val < 195` ceiling is hand-tuned
+  rather than derived.
 
 ### Port to PyTorch / CUDA
 
