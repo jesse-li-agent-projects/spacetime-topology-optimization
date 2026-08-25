@@ -360,7 +360,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     # Hotspot constraint: `factor` is refreshed every 25 iterations. `numer`/`K_est` come
     # back from this one call, so the refresh below is a pure rescale, not a recompute.
-    fv, df1, dt1, numer, K_est = conductivity.hotspot_constraint(
+    hotspot = conductivity.hotspot_constraint(
         xPhys,
         tPhys,
         p.e1,
@@ -376,17 +376,25 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         p.r,
         p.rouf,
     )
+    fv, df1, dt1 = hotspot.fval, hotspot.df1, hotspot.dt1
     factor = state.factor
     if loop % 25 == 0:
-        max_g = float(np.max((1 - K_est) * xPhys.flatten(order="F") ** p.r))
-        factor = max_g / numer
-        # Exact rescale: fval and its sensitivities are both linear in `factor`
-        # (conductivity.hotspot_constraint's `fval`/`scale`), so no need to recompute.
+        max_g = float(np.max((1 - hotspot.K_est) * xPhys.flatten(order="F") ** p.r))
+        factor = max_g / hotspot.numer
+        # `hotspot_constraint` computes `fval = factor * numer / Tcr - 1` and scales
+        # `df1`/`dt1` by that same `factor` (its `scale` term) -- `numer`, and
+        # everything `df1`/`dt1` are built from, hold `factor` fixed. So at a new
+        # `factor' = factor * rescale`, `fval' = rescale * (fval + 1) - 1` (the `-1`
+        # is why this can't be a plain `fval * rescale`) and `df1'/dt1' = rescale *
+        # df1/dt1` exactly -- not an approximation. `test_hotspot_factor_refresh_at_loop_25`
+        # (tests/test_e2e.py) pins this against an independent recompute at the new
+        # `factor`, so a broken rescale (e.g. dropping the `-1` handling, or scaling
+        # df1/dt1 by the wrong quantity) fails that test.
         rescale = factor / state.factor
         fv = (fv + 1) * rescale - 1
         df1 = df1 * rescale
         dt1 = dt1 * rescale
-    tru_max = factor * numer
+    tru_max = factor * hotspot.numer
     fval_parts.append(np.array([fv]))
     dfdx_parts.append(np.concatenate([df1, dt1])[None, :])
 
