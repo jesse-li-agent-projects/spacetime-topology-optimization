@@ -196,8 +196,8 @@ def hotspot_constraint(
     stays below `Tcr`, smoothly bounding the worst-case local overheating risk.
 
     `factor` is a periodically-refreshed rescaling constant the main optimization loop
-    owns as persistent state (see `conventions.md`'s "Known traps") -- pass it through,
-    never recompute it here. `numer`/`K_est` are returned for the caller's periodic
+    owns as persistent state (`optimize.State.factor`) -- pass it through, never
+    recompute it here. `numer`/`K_est` are returned for the caller's periodic
     refresh (MATLAB's `rem(loop,25)==0` guard), which needs both but must not perturb
     this call's own `factor`-scaled result. Sensitivity algebra is hand-derived from the
     MATLAB source's per-element neighbor loop; see this module's tests for the derivation.
