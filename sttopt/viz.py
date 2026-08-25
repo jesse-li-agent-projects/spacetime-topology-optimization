@@ -1,8 +1,10 @@
 """Plots for the printed structure: elements colored by print time, and the boundaries
 between print stages -- ports `draw_combination1.m`/`draw_boundary.m` (the only two
-plotting calls the main script actually exercises; see the plan's Scope section and
-Finding 2 for why `draw_combination2`/`3` and the broken `draw_combination` call at the
-old line 577 are out of scope / resolved to `draw_combination1`).
+plotting calls the main script actually exercises; see
+`plans/archive/conductivity_estimation_2d_python_port.md`'s Scope section for why
+`draw_combination2`/`3` and the main script's call to the undefined `draw_combination`
+(line 577; no such file exists, only `draw_combination1`/`2`/`3`) are out of scope /
+resolved to `draw_combination1`).
 
 When no `ax` is passed, both functions build their own `Figure` directly rather than
 going through `pyplot`, so importing or calling this module registers nothing in a

@@ -5,36 +5,25 @@ default values (the original *full-scale* script's constants, not the smaller on
 fixture harness/tests use for speed).
 
 Drives `optimize.build_problem`/`init_state`/`step` directly (not `optimize.run`) so it
-can print per-iteration progress, matching the MATLAB source's `disp` line
-(`conductivity_estimation_stto_main.m`, ~line 537): `It.: {loop:4d} Obj.: {obj:10.4f}
-Vol.: {vol:6.3f} Tm.: {tru_max:7.3f}`. This is a long-running production script (800
-iterations at 180x60 is not something to run in this sandbox -- see the repo's sandbox
-rules) so console progress is the useful signal here, not MATLAB's periodic live-figure
-updates (`mod(loop,10)==0`), which this port doesn't replicate.
+can print per-iteration progress, matching the MATLAB source's `disp` line. This is a
+long-running production script (800 iterations at 180x60 is not something to run in
+this sandbox -- see the repo's sandbox rules), so console progress is the useful signal
+here, not MATLAB's periodic live-figure updates, which this port doesn't replicate. The
+printed "Obj."/"Vol." read the current iteration's full MMA objective and post-update
+density -- not `IterationRecord.obj`/`.vol` (see that class's field comments), which are
+different, pre-update quantities MATLAB's own `disp` line doesn't read either.
 
 At the end, saves one PNG combining `viz.combination_plot`/`viz.stage_boundary_plot` on
 one `Axes` (via `stage_boundary_plot`'s `combination_coords=True`, needed because the two
 functions' native coordinate frames don't coincide -- see `viz.py`'s docstring) -- more
 useful as a saved artifact than MATLAB's separate two-figure/two-window layout. Reproduces
-the main script's specific *final* plot recipe (lines ~581-594): `XPhys` binarized
-(`>0.5 -> 1, else 0`), colored by `hotspot_severity = (1-K_est)*XPhys` -- not a print
-time, despite feeding `combination_plot`'s color-by slot -- with stage-boundary lines
-overlaid. MATLAB captures `XPhys`/computes `K_est` from the *last iteration's pre-update*
-density/time fields (`XPhys=xPhys(:)` at the top of that iteration's hotspot block, before
-that same iteration's own MMA step) -- so this uses `prev_state` (the state entering the
-final `step` call), not the post-loop `state` (which is one MMA update ahead of what MATLAB
-plots). `IterationRecord` doesn't carry `K_est`, so it's recomputed here via
-`conductivity.estimated_conductivity` on `prev_state`.
-
-The per-iteration console line mirrors MATLAB's `disp` (~line 537) exactly, including
-which quantities it reads: "Obj." is the *full* MMA objective (`f0val` = whole-structure
-compliance + Theta-weighted per-stage gravity, matching MATLAB's `obj` variable, which is
-never reassigned between `f0val = obj` and the `disp` call) -- NOT `IterationRecord.obj`
-(whole-structure compliance alone, MATLAB's `objf(loop)`, a different variable). "Vol." is
-this iteration's *post-update* `xPhys` (MATLAB's `disp` runs after the MMA step
-reassigns `xPhys`, so it measures the density feeding the *next* iteration) -- NOT
-`IterationRecord.vol` (the pre-update value MATLAB's own `vol(loop)` array stores,
-computed earlier in the same iteration).
+the main script's final plot recipe: `XPhys` binarized (`>0.5 -> 1, else 0`), colored by
+`hotspot_severity = (1-K_est)*XPhys` -- not a print time, despite feeding
+`combination_plot`'s color-by slot -- with stage-boundary lines overlaid. MATLAB computes
+this from the *pre-update* density/time fields entering the last iteration, not the
+post-loop state (one MMA update further along) -- so this uses `prev_state` (the state
+entering the final `step` call), recomputing `K_est` via
+`conductivity.estimated_conductivity` since `IterationRecord` doesn't carry it.
 """
 
 import argparse
