@@ -225,19 +225,29 @@ def build_problem(
 
 
 def init_state(problem: Problem, beta: float) -> State:
-    """Initial state: uniform density at `problem.volfrac`, time field per `problem.tfield`,
-    matching `generate_fixtures.m`'s pre-loop setup (lines ~199-208).
+    """Initial state: `x`/`t` are the raw seed (uniform `problem.volfrac`, time field per
+    `problem.tfield`); the physics fields are derived from them exactly as in `step`.
+
+    The MATLAB source instead assigns `xTilde = x` and `t = tPhys` unfiltered here. For
+    the density half that is a numeric no-op -- `x` is uniform and the filter fixes
+    constants -- but no `init_timefield` variant is constant, so leaving `tPhys`
+    unfiltered made iteration 1 the one iteration whose forward map disagreed with the
+    `tPhys = H @ t / Hs` that `step`'s chain rule differentiates. See PR #26.
     """
     nely, nelx = problem.nely, problem.nelx
     nel = nelx * nely
 
+    def filtered(field):
+        return (problem.H @ field.flatten(order="F") / problem.Hs).reshape(
+            nely, nelx, order="F"
+        )
+
     x = np.full((nely, nelx), problem.volfrac)
-    # unfiltered at init, unlike every later iteration's H-filtered xTilde
-    xTilde = x.copy()
+    xTilde = filtered(x)
     xPhys = filters.heaviside_projection(xTilde, beta, problem.eta)
 
-    tPhys = timefield.init_timefield(nelx, nely, problem.tfield)
-    t = tPhys.copy()  # also unfiltered at init, unlike every later iteration's tPhys
+    t = timefield.init_timefield(nelx, nely, problem.tfield)
+    tPhys = filtered(t)
 
     # MATLAB's xold1=xold2=[x(:); zeros(nel,1)] -- provably unread (iterations 1 and 2
     # both take mmasub's `iteration < 2.5` reinit branch), reproduced anyway for fidelity.
@@ -499,8 +509,15 @@ def run(
         rmin_cond,
         **problem_kwargs,
     )
-    state = init_state(problem, beta)
+    return run_from_state(problem, init_state(problem, beta), nloop)
 
+
+def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
+    """Run `nloop` iterations from an arbitrary starting state, collecting the
+    trajectory. Split out of `run` so that where the iteration starts is a caller's
+    choice -- warm-starting from a previous run's final state, or entering at a
+    trajectory recorded elsewhere.
+    """
     xPhys_traj = [state.xPhys.copy()]
     tPhys_traj = [state.tPhys.copy()]
     records: list[IterationRecord] = []

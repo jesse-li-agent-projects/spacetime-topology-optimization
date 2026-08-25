@@ -18,7 +18,7 @@ correctness-fix commit happened to be in progress when they were noticed.
 
 ### `optimize.py` / `conductivity.py`
 
-- [ ] `init_state` (`sttopt/optimize.py:226`) sets `t = tPhys.copy()` (raw == physical,
+- [x] **Done (PR #26).** `init_state` (`sttopt/optimize.py:226`) sets `t = tPhys.copy()` (raw == physical,
   unfiltered) instead of filtering, matching the MATLAB source's identical `t = tPhys`
   at init (e.g. `Space_Time_TopOpt_Robot.m:178-180`). But every `step()` iteration
   treats `tPhys` as *defined* by `tPhys = H @ t / Hs` (`sttopt/optimize.py:444`), and
@@ -43,13 +43,31 @@ correctness-fix commit happened to be in progress when they were noticed.
   `xTilde`/`tPhys` via `H @ (...) / Hs` uniformly, rather than special-casing which
   fields get filtered at init and which don't.
 
-  **Decision: algorithmic correctness wins.** **Blocked on test coverage**, though:
-  `tests/matlab_reference_loop.py` hardcodes the same `t = tPhys.copy()`, so this
-  breaks the MATLAB-transliteration oracle *and* the `.mat` fixtures at once
-  (`test_e2e.py`, `test_robustness.py`'s 1e-12 agreement check, both
-  `test_reference_sweep.py` loop tests), leaving `optimize.py` with no correctness
-  evidence at all -- see "Test coverage before fixture-breaking changes" below. Write
-  items 1 and 2 of that section first.
+  **Decision: algorithmic correctness won.** Both blocking test-coverage items landed
+  first (commit `e330344`), then the fix itself in PR #26: `init_state` now seeds `x`/`t`
+  as the raw fields and derives `xTilde`/`tPhys` through the filter uniformly, exactly as
+  `step` does. Resolution of the two fallout questions:
+
+  * The **transliteration oracle follows the fix** (`tests/matlab_reference_loop.py`) --
+    it is live code under our control, and an oracle that reproduces a known bug is not
+    an oracle. Both `test_reference_sweep.py` loop tests still pass at the tight
+    tolerance, so the fixed `optimize.py` and the separately-edited oracle agree.
+  * The **`.mat` fixtures could not follow it**: they are frozen artifacts, and
+    regenerating them needs MATLAB, which is currently broken in this environment
+    (R2026a exits 1 with no output on `disp('hello')`). Rather than weaken or delete
+    them, the tests that compare against them now *enter the trajectory at the
+    fixtures' own starting state* via `conftest.matlab_init_state`, using the new
+    `optimize.run_from_state`. They therefore keep checking exactly what they were
+    written to check -- `step`'s per-iteration agreement with MATLAB -- while
+    `init_state`'s own behaviour is specified by `test_optimize.py`'s three init
+    invariant tests. `generate_fixtures.m:200-203` still contains the reference's
+    unfiltered init and was deliberately left alone; regenerating it is optional
+    follow-up, not a prerequisite.
+
+  Note one small correction to the analysis above: the density half is *not* bit-for-bit
+  unchanged by filtering at init, as originally claimed -- `H @ x / Hs` differs from
+  uniform `x` by ~1.7e-16 (one ulp). Far inside every tolerance in the suite, but the
+  claim is "equal to rounding", not "identical".
 
 - [ ] **Deferred indefinitely, not being tackled soon.** `Problem`
   (`sttopt/optimize.py:37`) has 30 fields, and `step` (`sttopt/optimize.py:260`) unpacks

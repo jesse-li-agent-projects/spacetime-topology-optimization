@@ -25,7 +25,7 @@ import numpy as np
 import sttopt.conductivity as conductivity
 import sttopt.filters as filters
 import sttopt.optimize as optimize
-from conftest import assert_close, load_fixture
+from conftest import assert_close, load_fixture, matlab_init_state
 
 NELX, NELY = 7, 5
 NSTAGE = 3
@@ -39,19 +39,14 @@ BETA_INIT = 1.0
 
 
 def _run():
-    return optimize.run(
-        NELX,
-        NELY,
-        NLOOP,
-        NSTAGE,
-        VOLFRAC,
-        THETA,
-        TCR,
-        TFIELD,
-        RMIN,
-        LRMIN,
-        RMIN_COND,
-        beta=BETA_INIT,
+    """`optimize.run`'s loop entered at the fixtures' own starting state -- see
+    `conftest.matlab_init_state` for why these tests do not start from `init_state`.
+    """
+    problem = optimize.build_problem(
+        NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
+    )
+    return optimize.run_from_state(
+        problem, matlab_init_state(problem, BETA_INIT), NLOOP
     )
 
 
@@ -65,7 +60,7 @@ def test_iteration1_assembly_matches_fixture():
     problem = optimize.build_problem(
         NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
     )
-    state = optimize.init_state(problem, BETA_INIT)
+    state = matlab_init_state(problem, BETA_INIT)
 
     _, record = optimize.step(problem, state)
 
@@ -81,7 +76,7 @@ def test_mma_state_threading_matches_fixture():
     problem = optimize.build_problem(
         NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
     )
-    state = optimize.init_state(problem, BETA_INIT)
+    state = matlab_init_state(problem, BETA_INIT)
 
     for k in range(NLOOP):
         state, record = optimize.step(problem, state)
@@ -101,7 +96,7 @@ def test_constraints_stacking_matches_fixture():
     problem = optimize.build_problem(
         NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
     )
-    state = optimize.init_state(problem, BETA_INIT)
+    state = matlab_init_state(problem, BETA_INIT)
 
     for k in range(NLOOP):
         state, record = optimize.step(problem, state)
@@ -113,11 +108,9 @@ def test_e2e_trajectory_matches_fixture():
     fx = load_fixture("e2e")
     result = _run()
 
-    # Slice 0: the initial field, before any iteration runs -- pins init_state's
-    # unfiltered-at-init xTilde/tPhys directly, rather than only via iteration 1.
-    assert_close(result.xPhys_traj[0], fx["xPhys_traj"][:, :, 0], tier="algebraic")
-    assert_close(result.tPhys_traj[0], fx["tPhys_traj"][:, :, 0], tier="algebraic")
-
+    # Slice 0 is this test's own entry state, so comparing it against the fixture would
+    # only restate `matlab_init_state`. What `init_state` actually produces is pinned by
+    # test_optimize.py's three init invariant tests instead.
     for k in range(1, NLOOP + 1):
         assert_close(
             result.xPhys_traj[k], fx["xPhys_traj"][:, :, k], tier="e2e", iteration=k
@@ -151,7 +144,7 @@ def test_hotspot_factor_refresh_at_loop_25():
     problem = optimize.build_problem(
         NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
     )
-    state = optimize.init_state(problem, BETA_INIT)
+    state = matlab_init_state(problem, BETA_INIT)
     for _ in range(24):
         state, _ = optimize.step(problem, state)
     assert state.loop == 24
