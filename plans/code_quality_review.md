@@ -51,11 +51,12 @@ correctness-fix commit happened to be in progress when they were noticed.
   evidence at all -- see "Test coverage before fixture-breaking changes" below. Write
   items 1 and 2 of that section first.
 
-- [ ] `Problem` (`sttopt/optimize.py:37`) has 30 fields, and `step`
-  (`sttopt/optimize.py:260`) unpacks ~20 of them. Worth revisiting whether `Problem`
-  should be decomposed into sub-groups (e.g. FEM assembly constants, filter/neighbor
-  structures, MMA hyperparameters) that `step` can pass through instead of unpacking
-  individually -- but see "Open questions" below before committing to a specific split.
+- [ ] **Deferred indefinitely, not being tackled soon.** `Problem`
+  (`sttopt/optimize.py:37`) has 30 fields, and `step` (`sttopt/optimize.py:260`) unpacks
+  ~20 of them. Worth revisiting whether `Problem` should be decomposed into sub-groups
+  (e.g. FEM assembly constants, filter/neighbor structures, MMA hyperparameters) that
+  `step` can pass through instead of unpacking individually -- but see "Open questions"
+  below before committing to a specific split.
 
 ### Array/tensor conventions and naming
 
