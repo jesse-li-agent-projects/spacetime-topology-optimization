@@ -382,7 +382,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         # Exact rescale: fval and its sensitivities are both linear in `factor`
         # (conductivity.hotspot_constraint's `fval`/`scale`), so no need to recompute.
         rescale = factor / state.factor
-        fv = factor * numer / p.Tcr - 1
+        fv = (fv + 1) * rescale - 1
         df1 = df1 * rescale
         dt1 = dt1 * rescale
     tru_max = factor * numer
