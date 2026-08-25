@@ -47,19 +47,19 @@ def run_reference_loop(
     # `t = tPhys` unfiltered here: this oracle follows `init_state`'s corrected
     # initialization rather than transliterating the bug it fixes. See PR #26.
     x = np.full((nely, nelx), volfrac)
-    xTilde = (H @ x.flatten(order="F") / Hs).reshape(nely, nelx, order="F")
+    xTilde = (H @ x.flatten() / Hs).reshape(nely, nelx)
     xPhys = (np.tanh(beta * eta) + np.tanh(beta * (xTilde - eta))) / (
         np.tanh(beta * eta) + np.tanh(beta * (1 - eta))
     )
     t = ref.ref_timefield(nelx, nely, tfield)
-    tPhys = (H @ t.flatten(order="F") / Hs).reshape(nely, nelx, order="F")
+    tPhys = (H @ t.flatten() / Hs).reshape(nely, nelx)
 
     ndof = 2 * (nelx + 1) * (nely + 1)
     F = np.zeros(ndof)
     F[2 * (nelx + 1) * (nely + 1) - 1] = -1.0
     freedofs1 = np.setdiff1d(np.arange(1, ndof + 1), np.arange(1, 2 * (nely + 1) + 1))
 
-    xold1 = np.concatenate([x.flatten(order="F"), np.zeros(nel)])
+    xold1 = np.concatenate([x.flatten(), np.zeros(nel)])
     xold2 = xold1.copy()
     low = np.zeros(2 * nel)
     upp = np.zeros(2 * nel)
@@ -93,7 +93,7 @@ def run_reference_loop(
             * (1 - np.tanh(beta * (xTilde - eta)) ** 2)
             / (np.tanh(beta * eta) + np.tanh(beta * (1 - eta)))
         )
-        dc = dc + H @ (dcx.flatten(order="F") * dx.flatten(order="F") / Hs)
+        dc = dc + H @ (dcx.flatten() * dx.flatten() / Hs)
 
         tP = np.linspace(0, 1, nStage + 1)
         for i in range(1, nStage + 1):
@@ -102,7 +102,7 @@ def run_reference_loop(
                 nelx, nely, KE, xPhys, tPhys, Emin, Emax, penal, ti, C, rou, freedofs1
             )
             obj = obj + Theta * cg
-            dc = dc + Theta * (H @ (dcxg * dx.flatten(order="F") / Hs))
+            dc = dc + Theta * (H @ (dcxg * dx.flatten() / Hs))
             dt = dt + Theta * (H @ (dctg / Hs))
 
         df0dx = np.concatenate([dc, dt])
@@ -111,23 +111,24 @@ def run_reference_loop(
 
         move = 0.01
         tmove = 0.01
-        xminx = np.maximum(0.0, x.flatten(order="F") - move)
-        xmaxx = np.minimum(1.0, x.flatten(order="F") + move)
-        xmint = np.maximum(0.0, t.flatten(order="F") - tmove)
-        xmaxt = np.minimum(1.0, t.flatten(order="F") + tmove)
+        xminx = np.maximum(0.0, x.flatten() - move)
+        xmaxx = np.minimum(1.0, x.flatten() + move)
+        xmint = np.maximum(0.0, t.flatten() - tmove)
+        xmaxt = np.minimum(1.0, t.flatten() + tmove)
         xmin = np.concatenate([xminx, xmint])
         xmax = np.concatenate([xmaxx, xmaxt])
-        xval = np.concatenate([x.flatten(order="F"), t.flatten(order="F")])
+        xval = np.concatenate([x.flatten(), t.flatten()])
 
         fval = [xPhys.sum() / (nelx * nely * volfrac) - 1]
         dv = np.ones(nel)
-        dv = H @ (dv * dx.flatten(order="F") / Hs)
+        dv = H @ (dv * dx.flatten() / Hs)
         dfdx = [np.concatenate([dv / (nelx * nely * volfrac), np.zeros(nel)])]
         vol = xPhys.sum() / (nelx * nely)
 
-        Nei = np.array([1]) if tfield == 1 else np.arange(1, nely + 1)  # 1-indexed
+        # 1-indexed; column 0 (all rows) under the new C-order element enumeration.
+        Nei = np.array([1]) if tfield == 1 else np.arange(0, nely) * nelx + 1
         kk = 2 * nel
-        A = L @ tPhys.flatten(order="F")
+        A = L @ tPhys.flatten()
         B = A**2 / nel
         fval.append(kk * (B.sum() - 1.0e-6))
         dft = kk * 2 * (L.T @ A)
@@ -135,7 +136,7 @@ def run_reference_loop(
         dfdx.append(np.concatenate([np.zeros(nel), dft]))
 
         for ii in range(len(Nei)):
-            fval.append(tPhys.flatten(order="F")[Nei[ii] - 1] - 1.0e-9)
+            fval.append(tPhys.flatten()[Nei[ii] - 1] - 1.0e-9)
         ss = np.zeros((len(Nei), nel))
         for ii in range(len(Nei)):
             ss[ii, Nei[ii] - 1] = 1.0
@@ -155,15 +156,15 @@ def run_reference_loop(
             xtJoint = xPhys * ft
             fval.append(xtJoint.sum() / (nelx * nely * volfrac) - i * percent)
             dfx = ft / (nelx * nely * volfrac)
-            dfx = H @ (dfx.flatten(order="F") * dx.flatten(order="F") / Hs)
+            dfx = H @ (dfx.flatten() * dx.flatten() / Hs)
             dft2 = xPhys * dfdt / (nelx * nely * volfrac)
-            dft2 = H @ (dft2.flatten(order="F") / Hs)
+            dft2 = H @ (dft2.flatten() / Hs)
             dfdx.append(np.concatenate([dfx, dft2]))
             fval.append(-xtJoint.sum() / (nelx * nely * volfrac) + i * percent - 1.0e-5)
             dfdx.append(np.concatenate([-dfx, -dft2]))
 
         # hotspot: needs the factor-refresh recipe, which reads numer *before* refresh
-        XPhys = xPhys.flatten(order="F")
+        XPhys = xPhys.flatten()
         fv_pre, _, _, K_est, numer = ref.ref_hotspot(
             nelx, nely, xPhys, tPhys, N_el, w_el, WE, H, Hs, dx, factor, Tcr
         )
@@ -206,19 +207,18 @@ def run_reference_loop(
             d,
         )
 
-        xnew = xmma.reshape(nely, -1, order="F")
         xold2 = xold1
         xold1 = xval
-        s = xnew[:, :nelx]
+        s = xmma[:nel].reshape(nely, nelx)
 
-        xTilde = (H @ s.flatten(order="F") / Hs).reshape(nely, nelx, order="F")
+        xTilde = (H @ s.flatten() / Hs).reshape(nely, nelx)
         xPhys = (np.tanh(beta * eta) + np.tanh(beta * (xTilde - eta))) / (
             np.tanh(beta * eta) + np.tanh(beta * (1 - eta))
         )
         x = s
 
-        t = xnew[:, nelx:]
-        tPhys = (H @ t.flatten(order="F") / Hs).reshape(nely, nelx, order="F")
+        t = xmma[nel:].reshape(nely, nelx)
+        tPhys = (H @ t.flatten() / Hs).reshape(nely, nelx)
 
         trace.append(
             dict(

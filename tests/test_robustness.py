@@ -17,7 +17,7 @@ import io
 
 import numpy as np
 import scipy.sparse as sp
-from conftest import e2e_rtol, load_fixture, matlab_init_state
+from conftest import e2e_rtol, load_fixture, matlab_init_state, reindex_fixture_halves
 
 import sttopt.conductivity as conductivity
 import sttopt.mma as mma
@@ -54,6 +54,11 @@ def test_e2e_agreement_is_at_machine_precision():
     strict = 1e-12
     for k in range(1, NLOOP + 1):
         rec = result.records[k - 1]
+        # dfdx's columns are element-indexed (raw [x; t] variable order); reindex the
+        # fixture's F-order halves to sttopt's C-order before comparing.
+        expected_dfdx = reindex_fixture_halves(
+            cons["dfdx_all"][:, :, k - 1], NELX, NELY, axis=1
+        )
         for name, got, want in [
             ("xPhys", result.xPhys_traj[k], e2e["xPhys_traj"][:, :, k]),
             ("tPhys", result.tPhys_traj[k], e2e["tPhys_traj"][:, :, k]),
@@ -61,7 +66,7 @@ def test_e2e_agreement_is_at_machine_precision():
             ("vol", np.array([rec.vol]), np.array([e2e["vol"][k - 1]])),
             ("tru_max", np.array([rec.tru_max]), np.array([e2e["tru_max_all"][k - 1]])),
             ("fval", rec.fval, cons["fval_all"][:, k - 1]),
-            ("dfdx", rec.dfdx, cons["dfdx_all"][:, :, k - 1]),
+            ("dfdx", rec.dfdx, expected_dfdx),
         ]:
             got, want = np.asarray(got, float), np.asarray(want, float)
             err = np.abs(got - want).max() / max(np.abs(want).max(), 1e-30)

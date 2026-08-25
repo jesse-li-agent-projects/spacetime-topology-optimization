@@ -22,7 +22,7 @@ import numpy as np
 import sttopt.compliance as compliance
 import sttopt.constraints as constraints
 import sttopt.filters as filters
-from conftest import assert_close, load_fixture
+from conftest import assert_close, load_fixture, reindex_fixture
 
 NELX, NELY = 7, 5
 RMIN = LRMIN = 2
@@ -31,12 +31,18 @@ ROU = 10.0
 
 
 def _reconstruct_xTilde_traj(xmma_all, H, Hs, nelx, nely, volfrac, nloop):
-    """xTilde at the start of each iteration k=0..nloop-1; see module docstring."""
+    """xTilde at the start of each iteration k=0..nloop-1; see module docstring.
+
+    `xmma_all` is raw `.mat`-fixture data (F-order element numbering); `H`/`Hs` are
+    `sttopt`'s own (C-order) filter, so the density slice must be reindexed before the
+    filter is applied.
+    """
     nel = nelx * nely
     traj = [np.full((nely, nelx), volfrac)]
     for k in range(nloop - 1):
-        xTilde = (H @ xmma_all[:nel, k]) / Hs
-        traj.append(xTilde.reshape((nely, nelx), order="F"))
+        s = reindex_fixture(xmma_all[:nel, k], nelx, nely, axis=0)
+        xTilde = (H @ s) / Hs
+        traj.append(xTilde.reshape((nely, nelx)))
     return traj
 
 
@@ -53,7 +59,9 @@ def test_constraints_match_fixture():
 
     H, Hs = filters.density_filter(nelx, nely, RMIN)
     L = filters.continuity_filter(nelx, nely, LRMIN)
-    Nei = np.arange(nely)
+    # column 0 (all rows), physical top-to-bottom order -- matches the fixture's own
+    # Nei row order under the old convention (see conventions.md's element ordering)
+    Nei = np.arange(nely) * nelx
 
     xTilde_traj = _reconstruct_xTilde_traj(
         mma["xmma_all"], H, Hs, nelx, nely, volfrac, nloop
@@ -67,24 +75,28 @@ def test_constraints_match_fixture():
 
         fval_all = fx["fval_all"][:, k]
         dfdx_all = fx["dfdx_all"][:, :, k]
+        # dfdx_all's two nel-wide column blocks are each element-indexed (fixture
+        # F-order); reindex both to sttopt's C-order before comparing.
+        dfdx_x = reindex_fixture(dfdx_all[:, :nel], nelx, nely, axis=1)
+        dfdx_t = reindex_fixture(dfdx_all[:, nel:], nelx, nely, axis=1)
 
         # (1) global volume
         fval, dfx, dft = constraints.global_volume_fraction(xPhys, dx, H, Hs, volfrac)
         assert_close(fval, fval_all[0], tier="algebraic")
-        assert_close(dfx, dfdx_all[0, :nel], tier="algebraic")
-        assert_close(dft, dfdx_all[0, nel:], tier="algebraic")
+        assert_close(dfx, dfdx_x[0], tier="algebraic")
+        assert_close(dft, dfdx_t[0], tier="algebraic")
 
         # (2) time-field continuity
         fval, dfx, dft = constraints.time_field_continuity(tPhys, L, H, Hs)
         assert_close(fval, fval_all[1], tier="algebraic")
-        assert_close(dfx, dfdx_all[1, :nel], tier="algebraic")
-        assert_close(dft, dfdx_all[1, nel:], tier="algebraic")
+        assert_close(dfx, dfdx_x[1], tier="algebraic")
+        assert_close(dft, dfdx_t[1], tier="algebraic")
 
         # (3) start-point
         fval, dfx, dft = constraints.start_point(tPhys, Nei, H, Hs)
         assert_close(fval, fval_all[2 : 2 + nely], tier="algebraic")
-        assert_close(dfx, dfdx_all[2 : 2 + nely, :nel], tier="algebraic")
-        assert_close(dft, dfdx_all[2 : 2 + nely, nel:], tier="algebraic")
+        assert_close(dfx, dfdx_x[2 : 2 + nely], tier="algebraic")
+        assert_close(dft, dfdx_t[2 : 2 + nely], tier="algebraic")
 
         # (4) per-stage volume, upper/lower interleaved starting at row 2+nely
         base = 2 + nely
@@ -95,10 +107,10 @@ def test_constraints_match_fixture():
             row_u, row_l = base + 2 * (i - 1), base + 2 * (i - 1) + 1
             assert_close(fu, fval_all[row_u], tier="algebraic")
             assert_close(fl, fval_all[row_l], tier="algebraic")
-            assert_close(dfx, dfdx_all[row_u, :nel], tier="algebraic")
-            assert_close(dft, dfdx_all[row_u, nel:], tier="algebraic")
-            assert_close(-dfx, dfdx_all[row_l, :nel], tier="algebraic")
-            assert_close(-dft, dfdx_all[row_l, nel:], tier="algebraic")
+            assert_close(dfx, dfdx_x[row_u], tier="algebraic")
+            assert_close(dft, dfdx_t[row_u], tier="algebraic")
+            assert_close(-dfx, dfdx_x[row_l], tier="algebraic")
+            assert_close(-dft, dfdx_t[row_l], tier="algebraic")
 
 
 # --- Finite-difference internal-consistency checks (pure Python, no MATLAB fixture) ---
@@ -107,12 +119,12 @@ def test_constraints_match_fixture():
 
 
 def _xPhys_of(x_raw, H, Hs, nely, nelx, beta, eta):
-    xTilde = (H @ x_raw.flatten(order="F") / Hs).reshape((nely, nelx), order="F")
+    xTilde = (H @ x_raw.flatten() / Hs).reshape((nely, nelx))
     return filters.heaviside_projection(xTilde, beta, eta), xTilde
 
 
 def _tPhys_of(t_raw, H, Hs, nely, nelx):
-    return (H @ t_raw.flatten(order="F") / Hs).reshape((nely, nelx), order="F")
+    return (H @ t_raw.flatten() / Hs).reshape((nely, nelx))
 
 
 def test_stage_volume_bounds_fd():
@@ -160,7 +172,7 @@ def test_stage_volume_bounds_fd():
         fd_x_lower = np.zeros(nely * nelx)
         fd_t_lower = np.zeros(nely * nelx)
         for e in range(nely * nelx):
-            j, i = e % nely, e // nely
+            j, i = e // nelx, e % nelx
             xp, xm = x_raw.copy(), x_raw.copy()
             xp[j, i] += h
             xm[j, i] -= h
@@ -213,7 +225,7 @@ def test_global_volume_fraction_fd():
 
         fd_x = np.zeros(nely * nelx)
         for e in range(nely * nelx):
-            j, i = e % nely, e // nely
+            j, i = e // nelx, e % nelx
             xp, xm = x_raw.copy(), x_raw.copy()
             xp[j, i] += h
             xm[j, i] -= h
@@ -226,7 +238,7 @@ def test_start_point_fd():
     nelx, nely = 6, 4
     h = 1e-6
     H, Hs = filters.density_filter(nelx, nely, RMIN)
-    Nei = np.arange(nely)
+    Nei = np.arange(nely) * nelx
 
     rng = np.random.default_rng(3)
     for seed in range(5):
@@ -244,7 +256,7 @@ def test_start_point_fd():
 
         fd_t = np.zeros((len(Nei), nely * nelx))
         for e in range(nely * nelx):
-            j, i = e % nely, e // nely
+            j, i = e // nelx, e % nelx
             tp, tm = t_raw.copy(), t_raw.copy()
             tp[j, i] += h
             tm[j, i] -= h
@@ -275,7 +287,7 @@ def test_time_field_continuity_fd():
 
         fd_t = np.zeros(nely * nelx)
         for e in range(nely * nelx):
-            j, i = e % nely, e // nely
+            j, i = e // nelx, e % nelx
             tp, tm = t_raw.copy(), t_raw.copy()
             tp[j, i] += h
             tm[j, i] -= h
@@ -344,10 +356,10 @@ def test_time_field_continuity_layouts():
 
 def _distance_field(Nei, nely, nelx):
     """Normalized Manhattan-distance-to-nearest-Nei-cell field, in element-index space
-    (0-indexed, Fortran/column-major numbering matching `conventions.md`)."""
+    (0-indexed, C/row-major numbering matching `conventions.md`)."""
     nel = nely * nelx
     e = np.arange(nel)
-    j_of_e, i_of_e = e % nely, e // nely
+    j_of_e, i_of_e = e // nelx, e % nelx
     coords = np.stack([j_of_e, i_of_e], axis=1)
     nei_coords = coords[Nei]
     dists = np.min(
@@ -355,7 +367,7 @@ def _distance_field(Nei, nely, nelx):
     )
     maxdist = dists.max()
     field = dists / maxdist if maxdist > 0 else dists
-    return field.reshape((nely, nelx), order="F")
+    return field.reshape((nely, nelx))
 
 
 def test_start_point_layouts():

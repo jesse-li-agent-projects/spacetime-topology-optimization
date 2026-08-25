@@ -35,8 +35,8 @@ BETA = 1.0
 
 def _filter_field(problem, raw):
     """`H @ raw / Hs`, on the (nely, nelx) grid -- the density filter's action."""
-    flat = problem.H @ raw.flatten(order="F") / problem.Hs
-    return flat.reshape((problem.nely, problem.nelx), order="F")
+    flat = problem.H @ raw.flatten() / problem.Hs
+    return flat.reshape((problem.nely, problem.nelx))
 
 
 # --- init_state: the initialization invariant ----------------------------------------
@@ -301,7 +301,7 @@ def test_step_assembled_sensitivities_match_finite_differences(nStage, tfield, T
     fd_f0 = np.zeros(problem.n)
     fd_f = np.zeros((problem.m, problem.n))
     for e in range(nel):
-        j, i = e % nely, e // nely
+        j, i = e // nelx, e % nelx
 
         xp, xm = x_raw.copy(), x_raw.copy()
         xp[j, i] += h

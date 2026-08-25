@@ -6,11 +6,12 @@ See conftest.py/conventions.md for fixture format and tolerance policy.
 
 import numpy as np
 import pytest
+import scipy.sparse as sp
 
 import sttopt.compliance as compliance
 import sttopt.fem as fem
 import sttopt.gravity as gravity
-from conftest import assert_close, load_fixture
+from conftest import assert_close, load_fixture, reindex_fixture
 
 
 def _build_point_load_problem(nelx, nely):
@@ -54,7 +55,9 @@ def test_gravity_compliance_matches_fixture():
     KE = fem.plane_stress_KE(nu=0.3)
     edofMat = fem.element_dof_map(nelx, nely)
     _, freedofs, ndof = _build_point_load_problem(nelx, nely)
-    C = grav["C"]
+    # grav["C"]'s columns are element-indexed (fixture F-order); reindex to sttopt's
+    # C-order before it's used as gravity_compliance's own gravity-load matrix.
+    C = sp.csr_matrix(reindex_fixture(grav["C"].toarray(), nelx, nely, axis=1))
 
     tP = np.linspace(0, 1, nStage + 1)
 
@@ -67,8 +70,14 @@ def test_gravity_compliance_matches_fixture():
                 xPhys, tPhys, KE, edofMat, Emin, Emax, penal, ti, C, lam, freedofs, ndof
             )
             assert_close(c, fx["c_grav_all"][k, i], tier="solved")
-            assert_close(dcx, fx["dcx_grav_all"][:, i, k], tier="solved")
-            assert_close(dct, fx["dct_grav_all"][:, i, k], tier="solved")
+            expected_dcx = reindex_fixture(
+                fx["dcx_grav_all"][:, i, k], nelx, nely, axis=0
+            )
+            expected_dct = reindex_fixture(
+                fx["dct_grav_all"][:, i, k], nelx, nely, axis=0
+            )
+            assert_close(dcx, expected_dcx, tier="solved")
+            assert_close(dct, expected_dct, tier="solved")
 
 
 # --- Closed-form elasticity checks (pure Python, no MATLAB fixture) ---
@@ -467,8 +476,8 @@ def test_gravity_compliance_fd_dcx_and_dct():
         fd_x = np.zeros(nely * nelx)
         fd_t = np.zeros(nely * nelx)
         for e in range(nely * nelx):
-            # Fortran-order element -> (row, col), per conventions.md
-            j, i = e % nely, e // nely
+            # C-order element -> (row, col), per conventions.md
+            j, i = e // nelx, e % nelx
 
             xp = xPhys.copy()
             xp[j, i] += h

@@ -118,7 +118,7 @@ def test_cli_closing_plot_uses_pre_final_update_state(tmp_path, monkeypatch):
             problem.w,
             problem.q,
             problem.rouf,
-        ).reshape(problem.nely, problem.nelx, order="F")
+        ).reshape(problem.nely, problem.nelx)
         XPhys = (state.xPhys > 0.5).astype(float)
         return (1 - K_est) * XPhys
 

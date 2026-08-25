@@ -50,7 +50,7 @@ def _element_strain_energy(
     """Per-element strain energy `U_e^T KE U_e`, reshaped to the `(nely, nelx)` grid."""
     Ue = U[edofMat]  # (nel, 8) -- per-element nodal displacements
     ce = np.sum((Ue @ KE) * Ue, axis=1)
-    return ce.reshape(nely, nelx, order="F")
+    return ce.reshape(nely, nelx)
 
 
 def whole_compliance(
@@ -109,7 +109,7 @@ def gravity_compliance(
 
     K = fem.assemble_stiffness(KE, xtJoint, Emin, Emax, penal, edofMat, ndof)
 
-    f = -C @ xtJoint.flatten(order="F")
+    f = -C @ xtJoint.flatten()
     F = np.zeros(ndof)
     F[1::2] = f  # y-dof of each node; x-dof stays 0 (gravity acts in -y)
 
@@ -125,9 +125,9 @@ def gravity_compliance(
     Uy = U[1::2]  # y-displacement dof of every node, in the node order C's rows use
     adjoint = -(C.T @ Uy)  # (nel,): d(load)/d(density) term, adjoint-contracted with U
 
-    dcx2 = adjoint * ft.flatten(order="F")
-    dct2 = adjoint * xPhys.flatten(order="F") * dfdt.flatten(order="F")
+    dcx2 = adjoint * ft.flatten()
+    dct2 = adjoint * xPhys.flatten() * dfdt.flatten()
 
-    dcx = 2 * dcx2 + dcx1.flatten(order="F")
-    dct = 2 * dct2 + dct1.flatten(order="F")
+    dcx = 2 * dcx2 + dcx1.flatten()
+    dct = 2 * dct2 + dct1.flatten()
     return c, dcx, dct

@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from conftest import assert_close, load_fixture
+from conftest import assert_close, load_fixture, reindex_fixture
 
 from sttopt.filters import (
     continuity_filter,
@@ -18,14 +18,19 @@ RMIN = LRMIN = 2
 def test_density_filter_against_fixture():
     fx = load_fixture("filters")
     H, Hs = density_filter(NELX, NELY, RMIN)
-    assert_close(H.toarray(), fx["H"].toarray(), tier="algebraic")
-    assert_close(Hs, np.asarray(fx["Hs"].toarray()).flatten(), tier="algebraic")
+    expected_H = reindex_fixture(fx["H"].toarray(), NELX, NELY, axis=0)
+    expected_H = reindex_fixture(expected_H, NELX, NELY, axis=1)
+    assert_close(H.toarray(), expected_H, tier="algebraic")
+    expected_Hs = reindex_fixture(np.asarray(fx["Hs"].toarray()).flatten(), NELX, NELY)
+    assert_close(Hs, expected_Hs, tier="algebraic")
 
 
 def test_continuity_filter_against_fixture():
     fx = load_fixture("filters")
     L = continuity_filter(NELX, NELY, LRMIN)
-    assert_close(L.toarray(), fx["L"].toarray(), tier="algebraic")
+    expected_L = reindex_fixture(fx["L"].toarray(), NELX, NELY, axis=0)
+    expected_L = reindex_fixture(expected_L, NELX, NELY, axis=1)
+    assert_close(L.toarray(), expected_L, tier="algebraic")
 
 
 def test_continuity_filter_returns_sparse():
@@ -56,7 +61,7 @@ def _column_index_field(nelx: int, nely: int) -> np.ndarray:
 
 
 def _apply(L, field, nelx, nely):
-    return (L @ field.flatten(order="F")).reshape((nely, nelx), order="F")
+    return (L @ field.flatten()).reshape((nely, nelx))
 
 
 @pytest.mark.parametrize("c", [0.0, 1.0, -3.25, 0.4])
@@ -148,10 +153,10 @@ def _reference_density_filter(nelx: int, nely: int, rmin: float) -> np.ndarray:
     r = int(np.ceil(rmin)) - 1
     for i1 in range(nelx):
         for j1 in range(nely):
-            e1 = i1 * nely + j1
+            e1 = j1 * nelx + i1
             for i2 in range(max(i1 - r, 0), min(i1 + r, nelx - 1) + 1):
                 for j2 in range(max(j1 - r, 0), min(j1 + r, nely - 1) + 1):
-                    e2 = i2 * nely + j2
+                    e2 = j2 * nelx + i2
                     H[e1, e2] += max(0.0, rmin - np.hypot(i1 - i2, j1 - j2))
     return H
 

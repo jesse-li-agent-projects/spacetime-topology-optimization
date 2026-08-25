@@ -25,7 +25,7 @@ def ref_continuity_filter(nelx, nely, lrmin=2):
     L = np.zeros((n, n))
     for i1 in range(1, nelx + 1):
         for j1 in range(1, nely + 1):
-            e1 = (i1 - 1) * nely + j1
+            e1 = (j1 - 1) * nelx + i1
             for i2 in range(
                 max(i1 - (int(np.ceil(lrmin)) - 1), 1),
                 min(i1 + (int(np.ceil(lrmin)) - 1), nelx) + 1,
@@ -34,7 +34,7 @@ def ref_continuity_filter(nelx, nely, lrmin=2):
                     max(j1 - (int(np.ceil(lrmin)) - 1), 1),
                     min(j1 + (int(np.ceil(lrmin)) - 1), nely) + 1,
                 ):
-                    e2 = (i2 - 1) * nely + j2
+                    e2 = (j2 - 1) * nelx + i2
                     if e1 == e2:
                         continue
                     L[e1 - 1, e2 - 1] += 1
@@ -47,7 +47,7 @@ def ref_density_filter(nelx, nely, rmin):
     H = np.zeros((n, n))
     for i1 in range(1, nelx + 1):
         for j1 in range(1, nely + 1):
-            e1 = (i1 - 1) * nely + j1
+            e1 = (j1 - 1) * nelx + i1
             for i2 in range(
                 max(i1 - (int(np.ceil(rmin)) - 1), 1),
                 min(i1 + (int(np.ceil(rmin)) - 1), nelx) + 1,
@@ -56,7 +56,7 @@ def ref_density_filter(nelx, nely, rmin):
                     max(j1 - (int(np.ceil(rmin)) - 1), 1),
                     min(j1 + (int(np.ceil(rmin)) - 1), nely) + 1,
                 ):
-                    e2 = (i2 - 1) * nely + j2
+                    e2 = (j2 - 1) * nelx + i2
                     H[e1 - 1, e2 - 1] += max(
                         0.0, rmin - np.sqrt((i1 - i2) ** 2 + (j1 - j2) ** 2)
                     )
@@ -73,7 +73,7 @@ def ref_neighbors(nelx, nely, rmin):
     w_el = [None] * (nelx * nely)
     for i1 in range(1, nelx + 1):
         for j1 in range(1, nely + 1):
-            e1 = (i1 - 1) * nely + j1
+            e1 = (j1 - 1) * nelx + i1
             Nel = []
             w = []
             for i2 in range(
@@ -85,7 +85,7 @@ def ref_neighbors(nelx, nely, rmin):
                     min(j1 + (int(np.ceil(rmin)) - 1), nely) + 1,
                 ):
                     if rmin - np.sqrt((i1 - i2) ** 2 + (j1 - j2) ** 2) >= 0:
-                        e2 = (i2 - 1) * nely + j2
+                        e2 = (j2 - 1) * nelx + i2
                         if e2 == e1:
                             sH1 = rmin
                             wk = sH1 / rmin
@@ -121,14 +121,14 @@ def ref_timefield(nelx, nely, tfield):
         ypos = np.linspace(0, nely, nely)
         xpos = np.linspace(0, nelx, nelx)
         xmesh, ymesh = np.meshgrid(xpos, ypos)
-        pos = np.stack([xmesh.flatten(order="F"), ymesh.flatten(order="F")], axis=1)
+        pos = np.stack([xmesh.flatten(), ymesh.flatten()], axis=1)
         start_pos = (
             np.array([0.0, 0.0]) if tfield == 1 else np.array([0.0, float(nely)])
         )
         vec = pos - start_pos
         dis2 = (vec * vec).sum(axis=1)
         t = np.sqrt(dis2) / np.sqrt(dis2).max()
-        return t.reshape(nely, nelx, order="F")
+        return t.reshape(nely, nelx)
     else:
         tP = np.zeros((nely, nelx))
         t = np.linspace(0, 1, nelx)
@@ -162,7 +162,7 @@ def ref_edofMat(nelx, nely):
     nodenrs = np.arange(1, (1 + nelx) * (1 + nely) + 1).reshape(
         1 + nely, 1 + nelx, order="F"
     )
-    edofVec = (2 * nodenrs[:-1, :-1] + 1).flatten(order="F")
+    edofVec = (2 * nodenrs[:-1, :-1] + 1).flatten()
     off = np.array(
         [0, 1, 2 * nely + 2, 2 * nely + 3, 2 * nely + 0, 2 * nely + 1, -2, -1]
     )
@@ -174,7 +174,7 @@ def ref_gravity_C(nelx, nely):
     fe = 1 / (nely * nelx)
     for x in range(1, nely + 1):
         for y in range(1, nelx + 1):
-            col = (y - 1) * nely + x
+            col = (x - 1) * nelx + y
             for row in [
                 (y - 1) * (nely + 1) + x,
                 (y - 1) * (nely + 1) + x + 1,
@@ -196,13 +196,13 @@ def _assemble(KE, dens, edofMat, ndof):
 def ref_whole_compliance(nelx, nely, KE, xPhys, Emin, Emax, penal, freedofs, F):
     edofMat = ref_edofMat(nelx, nely)
     ndof = 2 * (nely + 1) * (nelx + 1)
-    dens = Emin + xPhys.flatten(order="F") ** penal * (Emax - Emin)
+    dens = Emin + xPhys.flatten() ** penal * (Emax - Emin)
     K = _assemble(KE, dens, edofMat, ndof)
     U = np.zeros(ndof)
     fd = freedofs - 1
     U[fd] = np.linalg.solve(K[np.ix_(fd, fd)], F[fd])
     Ue = U[edofMat - 1]
-    ce = ((Ue @ KE) * Ue).sum(axis=1).reshape(nely, nelx, order="F")
+    ce = ((Ue @ KE) * Ue).sum(axis=1).reshape(nely, nelx)
     c = float(((Emin + xPhys**penal * (Emax - Emin)) * ce).sum())
     dcx = -penal * (Emax - Emin) * xPhys ** (penal - 1) * ce
     return c, dcx
@@ -220,24 +220,25 @@ def ref_gravity_compliance(
     xtJoint = xPhys * ft
     edofMat = ref_edofMat(nelx, nely)
     ndof = 2 * (nely + 1) * (nelx + 1)
-    dens = Emin + xtJoint.flatten(order="F") ** penal * (Emax - Emin)
+    dens = Emin + xtJoint.flatten() ** penal * (Emax - Emin)
     K = _assemble(KE, dens, edofMat, ndof)
-    f = -C @ xtJoint.flatten(order="F")
+    f = -C @ xtJoint.flatten()
     Fm = np.zeros(((nely + 1) * (nelx + 1), 2))
     Fm[:, 1] = f
+    # dof interleave (x,y per node), unrelated to element order
     F = Fm.T.flatten(order="F")
     U = np.zeros(ndof)
     fd = freedofs - 1
     U[fd] = np.linalg.solve(K[np.ix_(fd, fd)], F[fd])
     Ue = U[edofMat - 1]
-    ce = ((Ue @ KE) * Ue).sum(axis=1).reshape(nely, nelx, order="F")
+    ce = ((Ue @ KE) * Ue).sum(axis=1).reshape(nely, nelx)
     c = float(((Emin + xtJoint**penal * (Emax - Emin)) * ce).sum())
     dcx1 = -penal * (Emax - Emin) * xtJoint ** (penal - 1) * ce * ft
     dct1 = -penal * (Emax - Emin) * xtJoint ** (penal - 1) * ce * xPhys * dfdt
-    dcx2 = -(U[1::2] @ C) * ft.flatten(order="F")
-    dct2 = -(U[1::2] @ C) * xPhys.flatten(order="F") * dfdt.flatten(order="F")
-    dcx = 2 * dcx2 + dcx1.flatten(order="F")
-    dct = 2 * dct2 + dct1.flatten(order="F")
+    dcx2 = -(U[1::2] @ C) * ft.flatten()
+    dct2 = -(U[1::2] @ C) * xPhys.flatten() * dfdt.flatten()
+    dcx = 2 * dcx2 + dcx1.flatten()
+    dct = 2 * dct2 + dct1.flatten()
     return c, dcx, dct
 
 
@@ -263,8 +264,8 @@ def ref_hotspot(
     rouf=100,
 ):
     nel = nely * nelx
-    XPhys = xPhys.flatten(order="F")
-    TPhys = tPhys.flatten(order="F")
+    XPhys = xPhys.flatten()
+    TPhys = tPhys.flatten()
     K_est = np.zeros(nel)
     FT_el = [None] * nel
     DFT_el = [None] * nel
@@ -354,6 +355,6 @@ def ref_hotspot(
         _, ns2 = N_sub22[i]
         df1[i] = (factor * numer1 / denom1) * float((Tsub ** (p - 1) * ns2).sum())
         dt1[i] = (factor * numer1 / denom1) * float((Tsub ** (p - 1) * ns1).sum())
-    df1 = H @ (df1 * dx.flatten(order="F") / Hs)
+    df1 = H @ (df1 * dx.flatten() / Hs)
     dt1 = H @ (dt1 / Hs)
     return fval, df1, dt1, K_est, numer

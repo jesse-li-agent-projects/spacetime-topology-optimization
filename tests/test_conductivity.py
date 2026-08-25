@@ -11,7 +11,13 @@ import scipy.sparse as sp
 
 import sttopt.conductivity as conductivity
 import sttopt.filters as filters
-from conftest import assert_close, load_fixture, load_fixture_npz
+from conftest import (
+    assert_close,
+    fixture_element_perm,
+    load_fixture,
+    load_fixture_npz,
+    reindex_fixture,
+)
 
 NELX, NELY = 7, 5
 RMIN_COND = 3
@@ -21,12 +27,18 @@ TCR = 0.8
 
 
 def _reconstruct_xTilde_traj(xmma_all, H, Hs, nelx, nely, volfrac, nloop):
-    """xTilde at the start of each iteration k=0..nloop-1 (see test_constraints.py)."""
+    """xTilde at the start of each iteration k=0..nloop-1 (see test_constraints.py).
+
+    `xmma_all` is raw `.mat`-fixture data (F-order element numbering); `H`/`Hs` are
+    `sttopt`'s own (C-order) filter, so the density slice must be reindexed before the
+    filter is applied.
+    """
     nel = nelx * nely
     traj = [np.full((nely, nelx), volfrac)]
     for k in range(nloop - 1):
-        xTilde = (H @ xmma_all[:nel, k]) / Hs
-        traj.append(xTilde.reshape((nely, nelx), order="F"))
+        s = reindex_fixture(xmma_all[:nel, k], nelx, nely, axis=0)
+        xTilde = (H @ s) / Hs
+        traj.append(xTilde.reshape((nely, nelx)))
     return traj
 
 
@@ -56,8 +68,9 @@ def test_neighbor_weights_match_fixture():
 
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
     got = {(int(a), int(b)): float(v) for a, b, v in zip(e1, e2, w)}
+    perm = fixture_element_perm(nelx, nely)
     expected = {
-        (int(a) - 1, int(b) - 1): float(v)
+        (int(perm[int(a) - 1]), int(perm[int(b) - 1])): float(v)
         for a, b, v in zip(fx["coo_e1"], fx["coo_e2"], fx["coo_w"])
     }
     assert set(got) == set(expected)
@@ -79,7 +92,8 @@ def test_K_est_matches_fixture():
         xPhys = e2e["xPhys_traj"][:, :, k]
         tPhys = e2e["tPhys_traj"][:, :, k]
         K_est = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, Q, ROUF)
-        assert_close(K_est, fx["K_est_all"][:, k], tier="algebraic")
+        expected = reindex_fixture(fx["K_est_all"][:, k], NELX, NELY, axis=0)
+        assert_close(K_est, expected, tier="algebraic")
 
 
 def test_hotspot_constraint_matches_fixture():
@@ -113,7 +127,7 @@ def test_hotspot_constraint_matches_fixture():
     # on ~5% of neighbor pairs, surviving density filtering -- so the distinct-element-tie
     # branch is far from a synthetic-only corner case for that timefield choice.
     for k in range(nloop):
-        tflat = e2e["tPhys_traj"][:, :, k].flatten(order="F")
+        tflat = e2e["tPhys_traj"][:, :, k].flatten()
         off_diag = e1 != e2
         assert np.sum(tflat[e1[off_diag]] == tflat[e2[off_diag]]) == 0
 
@@ -136,8 +150,10 @@ def test_hotspot_constraint_matches_fixture():
 
         assert_close(numer, fx["numer_all"][k], tier="algebraic")
         assert_close(tru_max, fx["tru_max_all"][k], tier="algebraic")
-        assert_close(result.df1, fx["df1_all"][:, k], tier="algebraic")
-        assert_close(result.dt1, fx["dt1_all"][:, k], tier="algebraic")
+        expected_df1 = reindex_fixture(fx["df1_all"][:, k], nelx, nely, axis=0)
+        expected_dt1 = reindex_fixture(fx["dt1_all"][:, k], nelx, nely, axis=0)
+        assert_close(result.df1, expected_df1, tier="algebraic")
+        assert_close(result.dt1, expected_dt1, tier="algebraic")
 
 
 def test_K_est_matches_golden_scenes():
@@ -160,7 +176,8 @@ def test_K_est_matches_golden_scenes():
         tPhys = fx[f"{name}_tPhys"]
         rouf = float(fx[f"{name}_rouf"])
         K_est = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, rouf)
-        assert_close(K_est, fx[f"{name}_K_est"], tier="algebraic")
+        expected = reindex_fixture(fx[f"{name}_K_est"], nelx, nely, axis=0)
+        assert_close(K_est, expected, tier="algebraic")
 
 
 # --- First-principles value checks (no MATLAB fixture, no self-regression) -----------
@@ -204,9 +221,9 @@ def _dense_neighbor_weights(nelx, nely, rmin_cond):
     nel = nelx * nely
     W = np.zeros((nel, nel))
     for a in range(nel):
-        ia, ja = a // nely, a % nely
+        ia, ja = a % nelx, a // nelx
         for b in range(nel):
-            ib, jb = b // nely, b % nely
+            ib, jb = b % nelx, b // nelx
             dist = np.hypot(ia - ib, ja - jb)
             if dist <= rmin_cond:
                 W[a, b] = (rmin_cond - dist) / rmin_cond
@@ -215,8 +232,8 @@ def _dense_neighbor_weights(nelx, nely, rmin_cond):
 
 def _reference_K_est(xPhys, tPhys, W, q, rouf):
     """Dense restatement of the formula in this section's header comment."""
-    x = xPhys.flatten(order="F")
-    t = tPhys.flatten(order="F")
+    x = xPhys.flatten()
+    t = tPhys.flatten()
     gate = W * _logistic(rouf * (t[:, None] - t[None, :]))
     return (gate @ x**q) / gate.sum(axis=1)
 
@@ -334,7 +351,7 @@ def test_K_est_is_a_convex_combination_of_neighbour_densities():
         xPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
         tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
         K_est = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, rouf)
-        xq = xPhys.flatten(order="F") ** q
+        xq = xPhys.flatten() ** q
         for a in range(nelx * nely):
             neigh = xq[in_range[a]]
             assert neigh.min() - 1e-12 <= K_est[a] <= neigh.max() + 1e-12
@@ -372,7 +389,7 @@ def test_K_est_rouf_zero_limit_ignores_build_order():
     rng = np.random.default_rng(15)
     xPhys = rng.uniform(0.1, 1.0, size=(nely, nelx))
     tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
-    order_free = (W @ xPhys.flatten(order="F") ** q) / W.sum(axis=1)
+    order_free = (W @ xPhys.flatten() ** q) / W.sum(axis=1)
 
     np.testing.assert_allclose(
         conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, 0.0),
@@ -403,12 +420,12 @@ def test_K_est_rouf_infinite_limit_is_the_hard_build_order():
     rng = np.random.default_rng(16)
     xPhys = rng.uniform(0.1, 1.0, size=(nely, nelx))
     tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
-    t = tPhys.flatten(order="F")
+    t = tPhys.flatten()
     assert len(np.unique(t)) == t.size  # tie-free schedule: only self-pairs tie
 
     hard_gate = np.where(t[:, None] > t[None, :], 1.0, 0.0) + 0.5 * np.eye(t.size)
     gated = W * hard_gate
-    limit = (gated @ xPhys.flatten(order="F") ** q) / gated.sum(axis=1)
+    limit = (gated @ xPhys.flatten() ** q) / gated.sum(axis=1)
 
     errs = [
         np.abs(
@@ -437,7 +454,7 @@ def test_K_est_increases_when_an_element_is_printed_later():
 
     xPhys = np.ones((nely, nelx))
     xPhys[2, 2] = 0.05  # a void element in the middle of solid material
-    centre = 2 * nely + 2  # column-major index of (row 2, col 2)
+    centre = 2 * nelx + 2  # row-major index of (row 2, col 2)
 
     tPhys = np.full((nely, nelx), 0.5)
     tPhys += np.linspace(0, 0.01, tPhys.size).reshape(tPhys.shape)  # break exact ties
@@ -477,7 +494,7 @@ def test_K_est_ranks_an_overhang_below_a_supported_element():
 
     K_solid = conductivity.estimated_conductivity(solid, tPhys, e1, e2, w, q, rouf)
     K_over = conductivity.estimated_conductivity(overhang, tPhys, e1, e2, w, q, rouf)
-    probe = 6 * nely + 3  # (row 3, col 6): supported in `solid`, overhanging otherwise
+    probe = 3 * nelx + 6  # (row 3, col 6): supported in `solid`, overhanging otherwise
 
     assert K_over[probe] < K_solid[probe] - 0.1
     assert K_solid[probe] > 0.9  # fully supported element: near-perfect conductivity
@@ -601,7 +618,7 @@ def test_hotspot_constraint_gradient_is_finite_for_a_solid_part():
 def _severity(xPhys, tPhys, e1, e2, w, q, r, rouf):
     """Per-element severity g[e] = (1 - K_est[e]) * x[e]**r, from the definition."""
     K = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, rouf)
-    return (1 - K) * xPhys.flatten(order="F") ** r
+    return (1 - K) * xPhys.flatten() ** r
 
 
 def test_hotspot_constraint_numer_is_a_power_mean_bracketed_by_the_true_max():
@@ -692,7 +709,7 @@ def test_hotspot_constraint_factor_refresh_recovers_the_true_max():
         conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, Q, ROUF),
         rtol=1e-13,
     )
-    max_g = float(np.max((1 - first.K_est) * xPhys.flatten(order="F") ** R))
+    max_g = float(np.max((1 - first.K_est) * xPhys.flatten() ** R))
     assert max_g > first.numer  # the p-mean really is an under-report
 
     factor = max_g / first.numer
@@ -781,12 +798,12 @@ def test_hotspot_constraint_orders_build_directions_on_a_non_uniform_design():
 
 
 def _xPhys_of(x_raw, H, Hs, nely, nelx, beta, eta):
-    xTilde = (H @ x_raw.flatten(order="F") / Hs).reshape((nely, nelx), order="F")
+    xTilde = (H @ x_raw.flatten() / Hs).reshape((nely, nelx))
     return filters.heaviside_projection(xTilde, beta, eta), xTilde
 
 
 def _tPhys_of(t_raw, H, Hs, nely, nelx):
-    return (H @ t_raw.flatten(order="F") / Hs).reshape((nely, nelx), order="F")
+    return (H @ t_raw.flatten() / Hs).reshape((nely, nelx))
 
 
 @pytest.mark.parametrize("factor", [1.0, 1.7])
@@ -828,7 +845,7 @@ def test_hotspot_constraint_fd_density(factor):
 
         fd_x = np.zeros(nely * nelx)
         for e in range(nely * nelx):
-            j, i = e % nely, e // nely
+            j, i = e // nelx, e % nelx
             xp, xm = x_raw.copy(), x_raw.copy()
             xp[j, i] += h
             xm[j, i] -= h
@@ -871,7 +888,7 @@ def test_hotspot_constraint_fd_time_generic(factor):
     dx = filters.heaviside_projection_derivative(xTilde, BETA, ETA)
 
     # Confirm the premise: no off-diagonal (distinct-element) exact ties in this field.
-    tflat = tPhys.flatten(order="F")
+    tflat = tPhys.flatten()
     off_diag = e1 != e2
     assert np.sum(tflat[e1[off_diag]] == tflat[e2[off_diag]]) == 0
 
@@ -888,7 +905,7 @@ def test_hotspot_constraint_fd_time_generic(factor):
 
     fd_t = np.zeros(nely * nelx)
     for e in range(nely * nelx):
-        j, i = e % nely, e // nely
+        j, i = e // nelx, e % nelx
         tp, tm = t_raw.copy(), t_raw.copy()
         tp[j, i] += h
         tm[j, i] -= h
@@ -946,7 +963,7 @@ def test_hotspot_constraint_fd_time_at_ties():
 
     # Confirm the premise: literally every neighbor pair (including all off-diagonal
     # ones) is an exact tie under a uniform field.
-    tflat = tPhys.flatten(order="F")
+    tflat = tPhys.flatten()
     off_diag = e1 != e2
     assert np.sum(tflat[e1[off_diag]] == tflat[e2[off_diag]]) == off_diag.sum()
 
@@ -964,7 +981,7 @@ def test_hotspot_constraint_fd_time_at_ties():
     h = 1e-6
     fd_t = np.zeros(nely * nelx)
     for e in range(nely * nelx):
-        j, i = e % nely, e // nely
+        j, i = e // nelx, e % nelx
         tp, tm = tPhys.copy(), tPhys.copy()
         tp[j, i] += h
         tm[j, i] -= h

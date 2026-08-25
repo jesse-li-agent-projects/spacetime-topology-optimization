@@ -13,6 +13,50 @@ import scipy.io
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
+def fixture_element_perm(nelx: int, nely: int) -> np.ndarray:
+    """Maps a `.mat` fixture's 0-indexed element numbering (F-order/column-major, the
+    frozen MATLAB convention) to `sttopt`'s 0-indexed element numbering (C-order/
+    row-major -- see `sttopt/conventions.md`). `perm[e_fixture] == e_sttopt`.
+    """
+    e = np.arange(nelx * nely)
+    i, j = e // nely, e % nely  # F-order decode: i = x-index, j = y-index
+    return j * nelx + i  # C-order encode
+
+
+def reindex_fixture(arr: np.ndarray, nelx: int, nely: int, axis: int = 0) -> np.ndarray:
+    """Reindexes a fixture-derived array's element axis (length `nelx*nely`) from the
+    fixture's F-order to `sttopt`'s C-order (`fixture_element_perm`), leaving any other
+    axes untouched. For a matrix indexed by element on *both* axes (e.g. a filter
+    matrix), call this once per axis.
+    """
+    perm = fixture_element_perm(nelx, nely)
+    out = np.empty_like(arr)
+    out.swapaxes(0, axis)[perm] = arr.swapaxes(0, axis)
+    return out
+
+
+def reindex_fixture_values(idx: np.ndarray, nelx: int, nely: int) -> np.ndarray:
+    """Relabels a fixture-derived array of element *index values* (e.g. neighbor-pair
+    `e1`/`e2` columns) from F-order to C-order -- as opposed to `reindex_fixture`,
+    which reorders an array's element *axis* but leaves stored values unchanged.
+    """
+    return fixture_element_perm(nelx, nely)[idx]
+
+
+def reindex_fixture_halves(
+    arr: np.ndarray, nelx: int, nely: int, axis: int = 0
+) -> np.ndarray:
+    """`reindex_fixture`, for a raw-MMA-variable-shaped axis: `[x_half; t_half]`
+    stacked along `axis`, each half element-indexed (length `nelx*nely`) and reindexed
+    independently.
+    """
+    nel = nelx * nely
+    swapped = arr.swapaxes(0, axis)
+    x_half = reindex_fixture(swapped[:nel], nelx, nely, axis=0)
+    t_half = reindex_fixture(swapped[nel:], nelx, nely, axis=0)
+    return np.concatenate([x_half, t_half], axis=0).swapaxes(0, axis)
+
+
 def load_fixture(name: str) -> dict:
     """Load a MATLAB-generated fixture by base filename (no `.mat` suffix).
 
@@ -55,8 +99,8 @@ def matlab_init_state(problem, beta: float):
         xPhys=filters.heaviside_projection(x.copy(), beta, problem.eta),
         t=tPhys.copy(),
         tPhys=tPhys,
-        xold1=np.concatenate([x.flatten(order="F"), np.zeros(nel)]),
-        xold2=np.concatenate([x.flatten(order="F"), np.zeros(nel)]),
+        xold1=np.concatenate([x.flatten(), np.zeros(nel)]),
+        xold2=np.concatenate([x.flatten(), np.zeros(nel)]),
         low=np.zeros(problem.n),
         upp=np.zeros(problem.n),
         loop=0,

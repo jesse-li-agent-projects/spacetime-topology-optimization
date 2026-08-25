@@ -35,7 +35,7 @@ def neighbor_weights(
     """
     r = int(np.ceil(rmin_cond)) - 1
     e = np.arange(nelx * nely)
-    i1, j1 = e // nely, e % nely
+    i1, j1 = e % nelx, e // nelx
     e1s, e2s, ws = [], [], []
     for di in range(-r, r + 1):
         for dj in range(-r, r + 1):
@@ -45,7 +45,7 @@ def neighbor_weights(
             i2, j2 = i1 + di, j1 + dj
             valid = (i2 >= 0) & (i2 < nelx) & (j2 >= 0) & (j2 < nely)
             e1s.append(e[valid])
-            e2s.append((i2 * nely + j2)[valid])
+            e2s.append((j2 * nelx + i2)[valid])
             ws.append(np.full(valid.sum(), (rmin_cond - dist) / rmin_cond))
     return np.concatenate(e1s), np.concatenate(e2s), np.concatenate(ws)
 
@@ -161,8 +161,8 @@ def estimated_conductivity(
     strongly each element's neighborhood has already solidified (cooler, earlier
     `tPhys`) around it, used as an overheating proxy by `hotspot_constraint`.
     """
-    x = xPhys.flatten(order="F")
-    t = tPhys.flatten(order="F")
+    x = xPhys.flatten()
+    t = tPhys.flatten()
     return _conductivity_core(x, t, e1, e2, w, q, rouf).K_est
 
 
@@ -204,8 +204,8 @@ def hotspot_constraint(
     """
     nely, nelx = xPhys.shape
     nel = nely * nelx
-    x = xPhys.flatten(order="F")
-    t = tPhys.flatten(order="F")
+    x = xPhys.flatten()
+    t = tPhys.flatten()
 
     terms = _conductivity_terms(x, t, e1, e2, w, q, rouf)
     K_est = terms.K_est
@@ -240,6 +240,6 @@ def hotspot_constraint(
     np.add.at(cond_arr2, e1, Tsub_pow * N_sub2)
 
     scale = factor * (sum_cond / nel) ** (1 / p - 1) / (nel * Tcr)
-    df1 = H @ ((scale * cond_arr2) * dx.flatten(order="F") / Hs)
+    df1 = H @ ((scale * cond_arr2) * dx.flatten() / Hs)
     dt1 = H @ ((scale * cond_arr1) / Hs)
     return HotspotConstraintResult(fval, df1, dt1, float(numer), K_est)
