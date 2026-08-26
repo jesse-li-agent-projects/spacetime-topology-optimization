@@ -6,39 +6,31 @@ import pytest
 import sttopt.timefield as timefield
 from conftest import assert_close, load_fixture
 
+_VARIANTS = [
+    (timefield.TimeField.CORNER, "tfield1"),
+    (timefield.TimeField.EDGE, "tfield2"),
+    (timefield.TimeField.OPPOSITE_CORNER, "tfield3"),
+]
 
-def test_timefield_variants():
+
+@pytest.mark.parametrize("variant,key", _VARIANTS)
+def test_timefield_variant_matches_fixture(variant, key):
+    """`init_timefield` is the only entry point, so this covers both the field itself and
+    the dispatch mapping each `TimeField` to the right one."""
     fx = load_fixture("timefield")
     nelx, nely = int(fx["nelx"]), int(fx["nely"])
 
-    tfield1 = timefield.timefield_corner(nelx, nely)
-    tfield2 = timefield.timefield_edge(nelx, nely)
-    tfield3 = timefield.timefield_opposite_corner(nelx, nely)
+    got = timefield.init_timefield(nelx, nely, variant)
+    assert got.shape == fx[key].shape == (nely, nelx)
+    assert_close(got, fx[key], tier="algebraic")
 
-    assert tfield1.shape == fx["tfield1"].shape == (nely, nelx)
-    assert tfield2.shape == fx["tfield2"].shape == (nely, nelx)
-    assert tfield3.shape == fx["tfield3"].shape == (nely, nelx)
-    assert_close(tfield1, fx["tfield1"], tier="algebraic")
-    assert_close(tfield2, fx["tfield2"], tier="algebraic")
-    assert_close(tfield3, fx["tfield3"], tier="algebraic")
+    # A bare int dispatches identically -- cli.py passes `--tfield` straight through.
+    assert np.array_equal(got, timefield.init_timefield(nelx, nely, int(variant)))
 
 
-def test_init_timefield_dispatch():
-    fx = load_fixture("timefield")
-    nelx, nely = int(fx["nelx"]), int(fx["nely"])
-
-    assert_close(
-        timefield.init_timefield(nelx, nely, 1), fx["tfield1"], tier="algebraic"
-    )
-    assert_close(
-        timefield.init_timefield(nelx, nely, 2), fx["tfield2"], tier="algebraic"
-    )
-    assert_close(
-        timefield.init_timefield(nelx, nely, 3), fx["tfield3"], tier="algebraic"
-    )
-
+def test_unknown_variant_rejected():
     with pytest.raises(ValueError):
-        timefield.init_timefield(nelx, nely, 4)
+        timefield.init_timefield(7, 5, 4)
 
 
 @pytest.mark.parametrize("nelx,nely", [(7, 5), (5, 7), (4, 4), (2, 3)])
@@ -48,9 +40,11 @@ def test_timefield_variants_span_0_to_1(nelx, nely):
     corner/edge it's defined from and 1 at the opposite extreme -- for square and
     non-square grids alike, since `_corner_distance_grid`'s docstring warns non-square
     grids change the field's shape, not just its scale."""
-    tfield_corner = timefield.timefield_corner(nelx, nely)
-    tfield_edge = timefield.timefield_edge(nelx, nely)
-    tfield_opposite = timefield.timefield_opposite_corner(nelx, nely)
+    tfield_corner = timefield.init_timefield(nelx, nely, timefield.TimeField.CORNER)
+    tfield_edge = timefield.init_timefield(nelx, nely, timefield.TimeField.EDGE)
+    tfield_opposite = timefield.init_timefield(
+        nelx, nely, timefield.TimeField.OPPOSITE_CORNER
+    )
 
     for tfield in (tfield_corner, tfield_edge, tfield_opposite):
         assert tfield.min() == 0.0
@@ -67,23 +61,9 @@ def test_timefield_variants_span_0_to_1(nelx, nely):
 
 
 @pytest.mark.parametrize("nelx,nely", [(1, 5), (5, 1)])
-def test_lone_one_mesh_allowed(nelx, nely):
-    """A lone-1 mesh is well-defined (not necessarily spanning [0, 1] -- see the module
-    docstring) and must not raise."""
-    timefield.timefield_corner(nelx, nely)
-    timefield.timefield_edge(nelx, nely)
-    timefield.timefield_opposite_corner(nelx, nely)
-
-
-def test_degenerate_mesh_rejected():
-    """Only `nelx == nely == 1` is rejected: CORNER's distance normalization divides by
-    a zero max distance there."""
-    nelx, nely = 1, 1
-    with pytest.raises(ValueError):
-        timefield.timefield_corner(nelx, nely)
-    with pytest.raises(ValueError):
-        timefield.timefield_edge(nelx, nely)
-    with pytest.raises(ValueError):
-        timefield.timefield_opposite_corner(nelx, nely)
-    with pytest.raises(ValueError):
-        timefield.init_timefield(nelx, nely, timefield.TimeField.CORNER)
+@pytest.mark.parametrize("variant", list(timefield.TimeField))
+def test_lone_one_mesh_is_finite(nelx, nely, variant):
+    """A lone-1 mesh is well-defined -- finite everywhere, though not necessarily
+    spanning [0, 1] (see the module docstring). Only `nelx == nely == 1` degenerates,
+    and rejecting that one is `optimize.build_problem`'s job, not this module's."""
+    assert np.all(np.isfinite(timefield.init_timefield(nelx, nely, variant)))

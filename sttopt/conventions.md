@@ -71,9 +71,11 @@ assume uniformity, e.g. volume-fraction constraints) — a larger change than ad
 guard, so no code currently asserts uniformity; this note is the single place that
 assumption is recorded.
 
-`timefield.py`'s three variants require `nelx`/`nely` not both 1 (`nelx == nely == 1`
-divides by a zero max distance in the CORNER variant); a lone-1 mesh is otherwise
-well-defined but doesn't necessarily span `[0, 1]` (see that module's docstring).
+`optimize.build_problem` rejects `nelx == nely == 1`, the one mesh that degenerates both
+the CORNER/OPPOSITE_CORNER time fields (a zero max distance to normalize by) and the
+continuity filter (a zero neighbour count); it guards them together because it is where
+both are first built. A lone-1 mesh (`nelx == 1` xor `nely == 1`) stays legal, but
+doesn't necessarily span `[0, 1]` (see `timefield.py`'s docstring).
 
 ## Known deviations (not bugs)
 
@@ -91,10 +93,11 @@ original MATLAB, not a deliberate design choice, so this port fixed it
 than `t[a] == t[b]` by value) rather than reproducing it — correctness of the port
 takes priority over bug-for-bug fidelity to the source.
 
-Not a measure-zero edge case, either: `timefield_edge` (linear ramp, constant down
-each column) produces structural off-diagonal ties on ~5% of neighbor pairs at a
-realistic 180x60 mesh, surviving density filtering — so with that timefield choice
-this branch is live from iteration 0, not a rare coincidence. The old bug was also
-worse than "wrong on a small set": `DFT` was ~`rouf/4` approaching a tie and exactly
-`0` at one, so `dt1` was discontinuous in `t` — a hole in the gradient field that an
-optimizer driving a symmetric design toward equal print times would walk straight into.
+Not a measure-zero edge case, either: a time field with exact repeated values along a
+grid axis (e.g. a linear ramp) produces structural off-diagonal ties on a nontrivial
+fraction of neighbor pairs, surviving density filtering — so under that kind of
+initialization this branch is live from iteration 0, not a rare coincidence. The old
+bug was also worse than "wrong on a small set": `DFT`
+was ~`rouf/4` approaching a tie and exactly `0` at one, so `dt1` was discontinuous in
+`t` — a hole in the gradient field that an optimizer driving a symmetric design toward
+equal print times would walk straight into.

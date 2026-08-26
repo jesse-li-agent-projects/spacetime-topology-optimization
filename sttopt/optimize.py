@@ -159,6 +159,15 @@ def build_problem(
     (e.g. the E2E test) can match whatever grid they're running on, since the fixture's
     radii differ from the original full-scale script's.
     """
+    # A 1x1 mesh has neither extent nor neighbours, so two of the pieces built below
+    # degenerate: the CORNER/OPPOSITE_CORNER time fields normalize by a zero max
+    # distance, and the continuity filter divides by a zero neighbour count. This is the
+    # first point where both exist, so the check belongs here rather than in either one.
+    if nelx == 1 and nely == 1:
+        raise ValueError(
+            f"nelx and nely cannot both be 1, got nelx={nelx}, nely={nely}"
+        )
+
     tfield = timefield.TimeField(tfield)
     KE = fem.plane_stress_KE(nu)
     edofMat = fem.element_dof_map(nelx, nely)
