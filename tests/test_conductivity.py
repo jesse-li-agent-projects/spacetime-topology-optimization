@@ -566,7 +566,7 @@ def test_hotspot_constraint_solid_part_is_maximally_satisfied():
     constraint has all the slack there is".
 
     Values only; the sensitivities are separately specified by
-    `test_hotspot_constraint_gradient_is_finite_for_a_solid_part`, which currently fails.
+    `test_hotspot_constraint_gradient_is_finite_for_a_solid_part`.
     """
     nelx, nely, Tcr = 5, 4, 0.8
     H, Hs, e1, e2, w = _hotspot_setup(nelx, nely)
@@ -576,30 +576,23 @@ def test_hotspot_constraint_solid_part_is_maximally_satisfied():
     dx = np.ones((nely, nelx))
     for _ in range(3):
         tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
-        with np.errstate(divide="ignore", invalid="ignore"):
-            res = conductivity.hotspot_constraint(
-                xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF
-            )
+        res = conductivity.hotspot_constraint(
+            xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF
+        )
         np.testing.assert_allclose(res.numer, 0.0, atol=1e-12)
         np.testing.assert_allclose(res.fval, -1.0, atol=1e-12)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="sum_cond == 0 makes `scale` divide by zero, so df1/dt1 come back NaN; "
-    "remove this marker once the zero-severity case is handled",
-)
 def test_hotspot_constraint_gradient_is_finite_for_a_solid_part():
     """A design with zero overheating severity everywhere is a perfectly ordinary point
     for MMA to visit -- fval is a well-defined -1 there -- so the constraint's
     sensitivities must be finite numbers, not NaN.
 
-    They are not. `scale` contains `(sum_cond/nel)**(1/p - 1)`, and with `p > 1` the
-    exponent is negative, so a zero total severity divides by zero and poisons both
-    df1 and dt1. The limit is well-behaved: every entry of `cond_arr1`/`cond_arr2`
-    carries a factor `(T_val*x**r)**(p-1)` that vanishes faster than `scale` diverges,
-    so the true gradient is 0. Feeding NaN into the MMA row instead would corrupt the
-    whole subproblem solve, and nothing in the suite currently notices.
+    `scale` contains `(sum_cond/nel)**(1/p - 1)`, and with `p > 1` the exponent is
+    negative, so a zero total severity would divide by zero without the `sum_cond == 0`
+    guard in `hotspot_constraint`. The limit is well-behaved: every entry of
+    `cond_arr1`/`cond_arr2` carries a factor `(T_val*x**r)**(p-1)` that vanishes exactly
+    when `T_val == 0` everywhere, so the true gradient is 0.
     """
     nelx, nely, Tcr = 5, 4, 0.8
     H, Hs, e1, e2, w = _hotspot_setup(nelx, nely)
@@ -607,10 +600,9 @@ def test_hotspot_constraint_gradient_is_finite_for_a_solid_part():
     tPhys = np.random.default_rng(27).uniform(0.0, 1.0, size=(nely, nelx))
     dx = np.ones((nely, nelx))
 
-    with np.errstate(divide="ignore", invalid="ignore"):
-        res = conductivity.hotspot_constraint(
-            xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF
-        )
+    res = conductivity.hotspot_constraint(
+        xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF
+    )
     assert np.all(np.isfinite(res.df1))
     assert np.all(np.isfinite(res.dt1))
 
