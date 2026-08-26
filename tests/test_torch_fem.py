@@ -5,12 +5,16 @@ CPU and in float64 -- see plans/torch_port.md's Phase 1.
 
 import numpy as np
 import pytest
-import torch
 
 import sttopt.fem as fem
-import sttopt.torch_fem as torch_fem
-import sttopt.torch_mg as torch_mg
 from conftest import assert_close, point_load_problem
+
+# torch is an optional dependency (see pyproject.toml), so skip rather than fail
+# collection where it isn't installed.
+torch = pytest.importorskip("torch")
+
+import sttopt.torch_fem as torch_fem  # noqa: E402
+import sttopt.torch_mg as torch_mg  # noqa: E402
 
 EMIN, EMAX, PENAL = 1e-9, 1.0, 3
 NU = 0.3
