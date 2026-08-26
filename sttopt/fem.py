@@ -76,17 +76,13 @@ def assemble_stiffness(
     """
     nel = edofMat.shape[0]
     # Matches MATLAB's iK = kron(edofMat,ones(8,1))', jK = kron(edofMat,ones(1,8))'
-    # pairing exactly (iK[k] = row[k%8], jK[k] = row[k//8]) -- inert here since KE is
-    # symmetric and the result is symmetrized below, but kept literal to the source.
-    # NB: these three flattens are row-major ('C', NumPy's default) over the per-element
-    # (nel, 64) block layout built by tile/repeat, and KE.flatten(order='F') pairs with
-    # them to match local dof indices (row=k%8, col=k//8) -- an internal-consistency
-    # choice for KE's own 8x8 layout -- the last `order=` left in the package, and not a
-    # grid array, so conventions.md's C-order rule does not reach it.
+    # pairing exactly (iK[k] = row[k%8], jK[k] = row[k//8]). KE.flatten() (C order) pairs
+    # with this as KE[k//8, k%8], the transpose of what (iK[k], jK[k]) addresses -- inert
+    # since KE is symmetric, and the result is symmetrized below regardless.
     iK = np.tile(edofMat, (1, 8)).flatten()
     jK = np.repeat(edofMat, 8, axis=1).flatten()
     density = Emin + xPhys.flatten() ** penal * (Emax - Emin)
-    sK = (KE.flatten(order="F")[None, :] * density[:, None]).flatten()
+    sK = (KE.flatten()[None, :] * density[:, None]).flatten()
     assert iK.shape == jK.shape == sK.shape == (64 * nel,)
     K = sp.coo_matrix((sK, (iK, jK)), shape=(ndof, ndof)).tocsr()
     return (K + K.T) / 2
