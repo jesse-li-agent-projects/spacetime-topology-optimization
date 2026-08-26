@@ -331,9 +331,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     dc = prob.H @ (dcx.flatten() * dx.flatten() / prob.Hs)
     dt = np.zeros(nel)
 
-    tP = np.linspace(0, 1, nStage + 1)
-    for i in range(1, nStage + 1):
-        ti = tP[i]
+    for ti in np.linspace(0, 1, nStage + 1)[1:]:
         cg, dcx_g, dct_g = compliance.gravity_compliance(
             xPhys,
             tPhys,
@@ -384,9 +382,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     fval_parts.append(fv)
     dfdx_parts.append(np.concatenate([dfx, dft], axis=1))
 
-    for stage in range(1, nStage + 1):
+    for t_stage in np.linspace(0, 1, nStage + 1)[1:]:
         fu, fl, dfx, dft = constraints.stage_volume_bounds(
-            xPhys, tPhys, dx, prob.H, prob.Hs, stage, nStage, prob.volfrac, beta_t
+            xPhys, tPhys, dx, prob.H, prob.Hs, t_stage, prob.volfrac, beta_t
         )
         fval_parts.append(np.array([fu, fl]))
         dfdx_parts.append(
