@@ -92,9 +92,10 @@ def test_neighbor_weights_match_reference(nelx, nely, rmin_cond):
 @pytest.mark.parametrize("rmin_cond", [2.0, 3.0, 4.0, 12.0])
 def test_WE_equals_w_el_generally(nelx, nely, rmin_cond):
     """`conductivity.py` drops MATLAB's separate `WE` cell array and reuses the forward
-    weight for both pair directions. `test_conductivity.py` checks that against the one
-    committed fixture; this checks the underlying symmetry holds at every grid/radius,
-    including grids whose boundary truncation is asymmetric.
+    weight for both pair directions. This checks the underlying symmetry holds at every
+    grid/radius, including grids whose boundary truncation is asymmetric -- the only
+    coverage of this property now that the fixture-bound version of this check has been
+    retired as redundant (see PR #40).
     """
     nel = nelx * nely
     N_el, w_el = ref.ref_neighbors(nelx, nely, rmin_cond)
