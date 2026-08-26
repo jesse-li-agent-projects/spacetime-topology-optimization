@@ -1,6 +1,7 @@
 # Plan: PyTorch port, gated on a GPU CG solver benchmark
 
-> **Status (2026-08-26): open, not started.** Phases 0-2 are investigation and produce a
+> **Status (2026-08-26): open, not started. Do not begin any phase without the
+> repository owner's explicit go-ahead.** Phases 0a-2 are investigation and produce a
 > go/no-go decision. Phase 3 is the actual port and must not begin until Phase 2 says go.
 
 ## Goal
@@ -73,7 +74,8 @@ and CG's iteration count grows as `sqrt(cond)`. Consequences:
   grids; the mesh here is exactly the structured grid multigrid wants).
 - **Benchmarking on uniform `x = volfrac` would be dishonest.** That is the easiest
   possible conditioning and it is not what the optimizer spends its time on. Every
-  correctness and timing measurement must also be run at a realistic near-binary design.
+  correctness and timing measurement must also be run at a realistic near-binary design
+  -- which is what Phase 0a exists to produce, and why it comes first.
 
 **Problem size (high).** 22082 dofs is small for a GPU. A sparse matvec at 284k nonzeros
 is microseconds of actual work, so CG will be dominated by kernel-launch latency, not
@@ -82,25 +84,89 @@ bandwidth advantage over the CPU is maybe 3-5x, not orders of magnitude. Mitigat
 this bites: CUDA graphs to eliminate per-iteration launch overhead, kernel fusion, and
 the stage batching above.
 
-**Amdahl (high).** If the FEM solve is not most of the runtime, no solver speedup
-matters. Phase 0 exists to measure this before anything is built.
+**The FEM solve must not stay on the CPU (high).** Note that this is *not* an Amdahl
+argument, and a small FEM share of runtime is not a reason to abandon the port.
+
+Every other hot spot in the loop -- `hotspot_constraint`'s pair reductions, assembly,
+the filter matvecs, MMA's dense algebra -- is ordinary array work that ports to torch
+directly and runs on the GPU without any research. The FEM solve is the *only* piece
+with no easy GPU story, because there is no GPU sparse direct solver in torch. So if
+Phase 0 finds the solve is a small fraction of runtime, that is good news: most of the
+runtime is in the easy-to-port half, and comparatively little rides on the risky CG
+work.
+
+But the solve still has to be faster on GPU+CG than on CPU+spsolve, for a reason
+independent of its share: **a hybrid loop is actively bad.** Leaving the solve on the
+CPU while the rest runs on the GPU means 9 GPU->CPU->GPU round trips per iteration
+(7200 per production run), each a full synchronization that serializes the pipeline and
+defeats the point of having the rest on the device. There is no "keep the solve on CPU
+and accelerate everything else" configuration worth having.
+
+So the gate is a direct comparison of the solve itself, not a runtime-fraction
+threshold. Phase 0 still runs first -- it tells us where the easy wins are, and what
+`hotspot_constraint` and assembly actually cost -- but its output informs the port's
+*shape*, not its go/no-go.
 
 **Honest prior.** For 2D problems at these sizes, sparse direct factorization is strong
 -- nested dissection gives low fill-in and near-optimal work. My expectation is that GPU
 CG loses at 90x30, is close at 180x60, and may win at 360x120. The benchmark is still
 worth running, because warm-starting and stage batching are advantages the naive
-comparison omits, and because the answer decides the whole project.
+comparison omits, and because the answer decides whether the GPU motivation survives.
+
+---
+
+## Phase 0a: Generate the realistic test designs (do this first)
+
+Everything downstream -- Phase 0's profiling, Phase 1's correctness tests, Phase 2's
+benchmark -- needs realistic near-binary designs rather than uniform `x = volfrac`.
+Generating them takes a long-running job, so **start it before any implementation work**,
+so the designs are on disk by the time an agent needs them.
+
+**Method.** Run `test_e2e_slow.py`'s experiment at **half resolution (90x30)**, logging
+intermediate `xPhys`/`tPhys` snapshots along the way. Then **upscale 2x and 4x** for the
+180x60 and 360x120 cases. 90x30 has 4x fewer elements and dofs than 180x60, and a sparse
+direct solve scales superlinearly, so the run is more than 4x cheaper.
+
+Details that matter:
+
+- **Snapshot across the whole run, not just the end.** Conditioning worsens as `beta_d`
+  ramps (doubling every 50 iterations to the 128 cap) and the design binarizes. Keep
+  early, middle, and late snapshots -- the late ones are the hard cases and the ones the
+  go/no-go should turn on.
+- **Log `tPhys` too, not just `xPhys`.** `gravity_compliance` needs both, and the
+  benchmark covers the stage solves.
+- **Upscale by nearest-neighbour block repeat** (`np.kron(x, np.ones((2, 2)))`), not
+  interpolation. A near-binary design must stay near-binary; bilinear interpolation would
+  manufacture intermediate densities and quietly make the conditioning easier -- exactly
+  the property under test.
+- **Scale the run's own parameters when generating**, since `rmin`, `lrmin`, and
+  `rmin_cond` are in element units: at 90x30 they should be half the production values
+  (2.0, 1.0, 6.0) for the design to be the same physical problem.
+
+**Known limitation, accepted.** An upscaled 90x30 design has feature sizes twice as large
+in elements as a natively-converged 180x60 design would. So it is not identical to what
+the optimizer would really produce at 180x60 -- it is a coarser-featured design at fine
+resolution. It preserves the property that actually drives the conditioning risk (hard
+0/1 contrast and the void topology), at a small fraction of the cost, which is the right
+trade here. Worth a sentence in the Phase 2 write-up so the numbers are not over-read.
+
+**Deliverable:** a set of `(xPhys, tPhys)` snapshots at each of 90x30 / 180x60 / 360x120,
+stored where both the tests and the benchmark can load them, plus the script that
+regenerates them.
 
 ---
 
 ## Phase 0: Profile the current code
 
-**Question:** where does `optimize.step` actually spend its time, and what fraction is
-the FEM solve?
+**Question:** where does `optimize.step` actually spend its time?
+
+Not a go/no-go input -- see "The FEM solve must not stay on the CPU" above. This phase
+maps where the easy GPU wins are and sizes the non-FEM work, so Phase 3 can be sequenced
+sensibly and so any cheap NumPy-level wins get spotted early.
 
 Profile `optimize.step` at production settings (180x60, `nStage=8`) over enough
 iterations to be representative, with `cProfile` plus targeted wall-clock timers around
-each suspect. Run at a realistic near-binary design, not just from `init_state`.
+each suspect. Run at a Phase 0a near-binary design, not from `init_state`.
 
 Suspects, with priors:
 
@@ -119,9 +185,11 @@ Suspects, with priors:
 - `mma.mmasub` -- `n = 21600` design variables, `m = 79` constraint rows; `dfdx` is a
   dense 79x21600. Probably not dominant, but measure rather than assume.
 
-**Deliverable:** a runtime breakdown, and the fraction `f` of per-iteration time spent
-in the FEM solve. `f` sets the ceiling on the whole GPU effort (`1/(1-f)`), and becomes
-an input to the Phase 2 go/no-go threshold.
+**Deliverable:** a runtime breakdown of `optimize.step`, and -- separately from the solve
+itself -- how much of `fem.solve_fe` is the `np.ix_` reindex rather than `spsolve`. The
+second matters for Phase 2: the baseline should be timed against `spsolve`'s real cost,
+not against `spsolve` plus an artefact of how boundary conditions happen to be applied
+today.
 
 **Note:** if `np.add.at` or the `np.ix_` reindex turn out to be significant, those are
 worth fixing on their own merits, independent of this plan's outcome. Log them in
@@ -198,8 +266,8 @@ tolerance policy, and the existing fixtures are the strongest available oracle.
 2. **Diagonal vs assembled.** Matrix-free diagonal against `K.diagonal()`. `algebraic`
    tier.
 3. **Solve vs `spsolve`.** `U` from CG against `U` from `fem.solve_fe`, at four density
-   fields: uniform `volfrac`; random; **a converged near-binary design** (take an
-   `xPhys` snapshot from a real run); and a near-all-void degenerate case. `solved` tier.
+   fields: uniform `volfrac`; random; **the Phase 0a near-binary snapshots** (late ones
+   especially); and a near-all-void degenerate case. `solved` tier.
 4. **Boundary conditions.** Fixed dofs are exactly zero on output, and the solution is
    unchanged by whatever sits in the fixed rows of `F`.
 5. **Existing fixture regression.** Run `test_fem.py`, `test_compliance.py`, and the
@@ -232,22 +300,35 @@ seconds-per-solve, with a total benchmark budget of roughly 5 minutes.
 
 ### Configurations
 
-Measure a 2x2 of `{CG, direct} x {CPU, GPU}`, not just the two endpoints. Without the
-torch-CPU-CG cell you cannot tell whether a result is "CG beats direct" or "GPU beats
-CPU", and those have different implications.
+Three cells, not a 2x2 -- there is no direct-solver-on-GPU cell to fill, which is the
+whole premise of this plan. And only one CPU direct solver: `spsolve` is the baseline
+because it is what the code runs today, and it is already a well-optimized
+factorization; a second CPU direct solver would not change any decision here.
 
 | cell | what |
 |---|---|
-| `scipy.spsolve` (CPU) | the baseline, exactly as `fem.solve_fe` runs today |
-| `scipy.spsolve`, BCs pre-applied | separates solve cost from the `np.ix_` reindex |
-| torch CG (CPU) | isolates the CG-vs-direct axis from the device axis |
+| `scipy.spsolve` (CPU) | the baseline, as `fem.solve_fe` runs today (net of the `np.ix_` cost Phase 0 measured) |
 | torch CG (GPU) | the candidate |
-| CHOLMOD (CPU), *optional* | `K` is SPD; this is the fair "best CPU" number. Worth knowing if the verdict is that the CPU wins |
+| torch CG (CPU) | diagnostic control -- see below |
+
+The third cell is cheap (the same code with `.to("cpu")`) and earns its place by making
+a negative result *interpretable*. If GPU CG loses to `spsolve`, the next question is
+immediately why:
+
+- torch-CG-CPU also much slower than `spsolve` -> the problem is **algorithmic**: CG is
+  taking too many iterations. Fixable with a better preconditioner, so a no-go verdict
+  would be premature.
+- torch-CG-CPU competitive with `spsolve`, but the GPU no faster -> the problem is
+  **the device**: too small a problem, latency-bound. Fixable only with batching or CUDA
+  graphs, if at all.
+
+Without that cell a no-go tells you to stop without telling you whether stopping is
+right.
 
 Crossed with:
 
-- **Density field:** uniform `volfrac` **and** a converged near-binary design. Report
-  both separately; the near-binary number is the one that decides.
+- **Density field:** uniform `volfrac` **and** the Phase 0a near-binary snapshots. Report
+  both separately; the late near-binary number is the one that decides.
 - **Start:** cold start **and** warm start from a design perturbed by one `move = 0.01`
   step, which is the real operating condition.
 - **Batching:** sequential stage solves vs one batched `(nStage, ndof)` CG.
@@ -264,15 +345,22 @@ Crossed with:
 
 ### Go / no-go
 
-Combine with Phase 0's FEM fraction `f`. Proceed to Phase 3 only if, at 180x60 on the
-near-binary design at matched accuracy, GPU CG beats `spsolve` by a margin large enough
-that `f` makes it worth the port -- as a starting threshold, **>=2x on the solve, with
-`f` >= 0.5**, giving >=1.3x end to end. Adjust the threshold once `f` is known.
+The criterion is the solve itself, not a runtime fraction: **at 180x60, on a late
+near-binary Phase 0a design, warm-started, at matched accuracy, GPU CG must beat
+`spsolve`.** Parity is not sufficient -- the CG solver is hand-rolled code this project
+would then have to own and maintain, against a library routine that already works, so it
+has to pay for itself. As a starting threshold, **>=2x**.
 
-If the verdict is no-go: **stop and reconsider.** Record the numbers here. Note that
-Phase 0's findings and reason 1 (autodiff) may still justify a CPU-only PyTorch port, or
-a narrower NumPy-level optimization pass -- but that is a different plan, to be written
-then, not a fallback to slide into.
+If the verdict is no-go: **stop and reconsider.** Record the numbers here, and read the
+torch-CG-CPU cell first to see whether the failure is algorithmic (more preconditioner
+work might change the answer) or hardware (it will not).
+
+A no-go does not necessarily kill the port -- reason 1 (autodiff) stands on its own, and
+Phase 0 may have shown that most of the runtime is in easily-ported non-FEM work.
+But a GPU port whose FEM solve is slower than today's is not worth having (see the
+round-trip argument above), so a no-go means the *GPU* motivation is dead and what
+remains is a different, CPU-oriented plan -- to be written then, deliberately, not a
+fallback to slide into.
 
 Also worth capturing either way: the 360x120 result. If GPU CG wins only at the larger
 mesh, that is useful information about where this approach becomes viable.
