@@ -38,6 +38,12 @@ def parse_args():
     parser.add_argument(
         "--nloop", type=int, default=800, help="iterations per run (production length)"
     )
+    parser.add_argument(
+        "--mesh",
+        action="append",
+        metavar="NELXxNELY",
+        help="regenerate only this mesh, merging into an existing --out (repeatable); default is every mesh, overwriting --out",
+    )
     return parser.parse_args()
 
 
@@ -79,9 +85,20 @@ def binariness(x: np.ndarray) -> float:
     return float(np.mean((x < 0.01) | (x > 0.99)))
 
 
-def generate(nloop: int) -> dict[str, np.ndarray]:
+def generate(nloop: int, meshes: list[str] | None = None) -> dict[str, np.ndarray]:
+    """Run each mesh's optimization and collect its snapshots.
+
+    :param nloop: iterations to run per mesh.
+    :param meshes: `"NELXxNELY"` names to restrict generation to, or None for all.
+    :return: snapshot arrays keyed `"{x,t}_{nelx}x{nely}_it{loop:04d}"`.
+    """
+    selected = [m for m in MESHES if meshes is None or f"{m[0]}x{m[1]}" in meshes]
+    if meshes is not None and len(selected) != len(meshes):
+        known = ", ".join(f"{m[0]}x{m[1]}" for m in MESHES)
+        raise ValueError(f"--mesh must name one of: {known}; got {meshes}")
+
     out: dict[str, np.ndarray] = {}
-    for nelx, nely, rmin, lrmin, rmin_cond in MESHES:
+    for nelx, nely, rmin, lrmin, rmin_cond in selected:
         t0 = time.perf_counter()
         result = optimize.run(
             nelx,
@@ -117,6 +134,11 @@ def generate(nloop: int) -> dict[str, np.ndarray]:
 
 
 if __name__ == "__main__":
-    designs = generate(args.nloop)
+    designs = generate(args.nloop, args.mesh)
+    if args.mesh is not None and args.out.exists():
+        # Regenerating one mesh leaves the others in place, so a mesh whose trajectory
+        # is known-good doesn't have to be paid for again.
+        with np.load(args.out) as existing:
+            designs = {**dict(existing), **designs}
     np.savez_compressed(args.out, **designs)
     print(f"wrote {args.out} ({args.out.stat().st_size / 1e6:.1f} MB)")
