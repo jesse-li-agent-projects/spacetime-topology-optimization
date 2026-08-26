@@ -37,6 +37,7 @@ RMIN, LRMIN, RMIN_COND = 4.0, 2.0, 12.0
 BETA_INIT = 1.0
 
 F0VAL_CEILING = 195.0
+F0VAL_FLOOR = 185.0
 TRU_MAX_TARGET = 0.8
 TRU_MAX_TOL = 0.008  # 1% of TRU_MAX_TARGET
 
@@ -60,4 +61,5 @@ def test_thesis_4_4_reproduction():
     record = result.records[-1]
 
     assert record.f0val < F0VAL_CEILING
+    assert record.f0val > F0VAL_FLOOR
     assert abs(record.tru_max - TRU_MAX_TARGET) <= TRU_MAX_TOL
