@@ -241,7 +241,12 @@ def hotspot_constraint(
     np.add.at(cond_arr1, e1, Tsub_pow * N_sub1)
     np.add.at(cond_arr2, e1, Tsub_pow * N_sub2)
 
-    scale = factor * (sum_cond / nel) ** (1 / p - 1) / (nel * Tcr)
+    # sum_cond == 0 (e.g. a fully solid part, T_val == 0 everywhere) makes the exponent
+    # 1/p - 1 < 0 diverge; cond_arr1/cond_arr2 vanish exactly in that case too (every term
+    # carries the same T_val**(p-1) factor), so the true limit of scale*cond_arr is 0.
+    scale = (
+        0.0 if sum_cond == 0 else factor * (sum_cond / nel) ** (1 / p - 1) / (nel * Tcr)
+    )
     df1 = H @ ((scale * cond_arr2) * dx.flatten() / Hs)
     dt1 = H @ ((scale * cond_arr1) / Hs)
     return HotspotConstraintResult(fval, df1, dt1, float(numer), K_est)
