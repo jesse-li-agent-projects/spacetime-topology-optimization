@@ -101,16 +101,16 @@ def stage_volume_bounds(
     dx: Float[np.ndarray, "nely nelx"],
     H: sp.spmatrix | sp.sparray,
     Hs: Float[np.ndarray, " nely*nelx"],
-    stage: int,
-    nStage: int,
+    t_stage: float,
     volfrac: float,
     beta_t: float,
 ) -> tuple[
     float, float, Float[np.ndarray, " nely*nelx"], Float[np.ndarray, " nely*nelx"]
 ]:
-    """Per-stage material deposition budget: the volume fraction deposited by the end of
-    stage `stage` (1-indexed, out of `nStage`) must stay within a small slack of the even
-    schedule `stage/nStage`. Returns both the upper- and lower-bound constraint (MMA
+    """Per-stage material deposition budget: at stage boundary `t_stage` (a fraction of the
+    build, in (0, 1]), the volume fraction deposited so far must stay within a small slack
+    of `t_stage` itself -- an even deposition schedule spends the build's material at the
+    rate the build advances. Returns both the upper- and lower-bound constraint (MMA
     constraints are one-sided, so an equality-like budget needs both), via a smooth
     stage-membership mask (`compliance.time_mask`, sharpness `beta_t`) rather than a hard
     time cutoff.
@@ -120,16 +120,13 @@ def stage_volume_bounds(
     """
     nely, nelx = xPhys.shape
     scale = nelx * nely * volfrac
-    # matches MATLAB's `tP(i+1)`, not just `stage/nStage`
-    ti = np.linspace(0, 1, nStage + 1)[stage]
-    t_mask = compliance.time_mask(tPhys, ti, beta_t)
-    dfdt = compliance.time_mask_derivative(tPhys, ti, beta_t)
+    t_mask = compliance.time_mask(tPhys, t_stage, beta_t)
+    dfdt = compliance.time_mask_derivative(tPhys, t_stage, beta_t)
     xtJoint = xPhys * t_mask
 
-    budget = stage / nStage
     deposited = np.sum(xtJoint) / scale
-    fval_upper = float(deposited - budget)
-    fval_lower = float(-deposited + budget - 1.0e-5)
+    fval_upper = float(deposited - t_stage)
+    fval_lower = float(-deposited + t_stage - 1.0e-5)
 
     dfx = H @ ((t_mask / scale).flatten() * dx.flatten() / Hs)
     dft = H @ ((xPhys * dfdt / scale).flatten() / Hs)

@@ -100,11 +100,11 @@ def test_constraints_match_fixture():
 
         # (4) per-stage volume, upper/lower interleaved starting at row 2+nely
         base = 2 + nely
-        for i in range(1, nStage + 1):
+        for i, t_stage in enumerate(np.linspace(0, 1, nStage + 1)[1:]):
             fu, fl, dfx, dft = constraints.stage_volume_bounds(
-                xPhys, tPhys, dx, H, Hs, i, nStage, volfrac, ROU
+                xPhys, tPhys, dx, H, Hs, t_stage, volfrac, ROU
             )
-            row_u, row_l = base + 2 * (i - 1), base + 2 * (i - 1) + 1
+            row_u, row_l = base + 2 * i, base + 2 * i + 1
             assert_close(fu, fval_all[row_u], tier="algebraic")
             assert_close(fl, fval_all[row_l], tier="algebraic")
             assert_close(dfx, dfdx_x[row_u], tier="algebraic")
@@ -130,7 +130,7 @@ def _tPhys_of(t_raw, H, Hs, nely, nelx):
 def test_stage_volume_bounds_fd():
     nelx, nely = 6, 4
     volfrac = 0.4
-    stage, nStage = 2, 3
+    t_stage = 2 / 3  # stage 2 of 3
     h = 1e-6
     H, Hs = filters.density_filter(nelx, nely, RMIN)
 
@@ -144,7 +144,7 @@ def test_stage_volume_bounds_fd():
         dx = filters.heaviside_projection_derivative(xTilde, BETA, ETA)
 
         _, _, dfx, dft = constraints.stage_volume_bounds(
-            xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, ROU
+            xPhys, tPhys, dx, H, Hs, t_stage, volfrac, ROU
         )
         # Guard against a vacuously-passing FD check (e.g. `ft` saturated near 0/1
         # everywhere, making `dft` ~atol-sized regardless of correctness).
@@ -155,7 +155,7 @@ def test_stage_volume_bounds_fd():
             xPhys, _ = _xPhys_of(x_raw, H, Hs, nely, nelx, BETA, ETA)
             tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
             fu, _, _, _ = constraints.stage_volume_bounds(
-                xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, ROU
+                xPhys, tPhys, dx, H, Hs, t_stage, volfrac, ROU
             )
             return fu
 
@@ -163,7 +163,7 @@ def test_stage_volume_bounds_fd():
             xPhys, _ = _xPhys_of(x_raw, H, Hs, nely, nelx, BETA, ETA)
             tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
             _, fl, _, _ = constraints.stage_volume_bounds(
-                xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, ROU
+                xPhys, tPhys, dx, H, Hs, t_stage, volfrac, ROU
             )
             return fl
 
@@ -403,7 +403,7 @@ def test_stage_volume_bounds_xPhys_weighting():
     should give very different `deposited` amounts for the *same* time field, and an
     even split should land close to satisfying the budget."""
     nely, nelx = 4, 6
-    volfrac, nStage, stage = 0.4, 2, 1  # ti = 0.5, budget = 0.5
+    volfrac, t_stage = 0.4, 0.5  # halfway through the build
     H, Hs = filters.density_filter(nelx, nely, RMIN)
     dx = np.ones((nely, nelx))
 
@@ -413,13 +413,13 @@ def test_stage_volume_bounds_xPhys_weighting():
 
     def fval_upper_of(xPhys):
         fu, _, _, _ = constraints.stage_volume_bounds(
-            xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, ROU
+            xPhys, tPhys, dx, H, Hs, t_stage, volfrac, ROU
         )
         return fu
 
     def fval_lower_of(xPhys):
         _, fl, _, _ = constraints.stage_volume_bounds(
-            xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, ROU
+            xPhys, tPhys, dx, H, Hs, t_stage, volfrac, ROU
         )
         return fl
 
@@ -453,7 +453,7 @@ def test_stage_volume_bounds_beta_t_sharpness():
     sharpens (a sharper mask approaches a hard 0/1 cutoff); softer `beta_t` gives them
     more partial credit, making the constraint looser."""
     nely, nelx = 4, 6
-    volfrac, nStage, stage = 0.4, 2, 1  # ti = 0.5
+    volfrac, t_stage = 0.4, 0.5  # halfway through the build
     H, Hs = filters.density_filter(nelx, nely, RMIN)
     dx = np.ones((nely, nelx))
     xPhys = np.full((nely, nelx), volfrac)
@@ -465,13 +465,13 @@ def test_stage_volume_bounds_beta_t_sharpness():
 
     def fval_upper_of(beta_t):
         fu, _, _, _ = constraints.stage_volume_bounds(
-            xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, beta_t
+            xPhys, tPhys, dx, H, Hs, t_stage, volfrac, beta_t
         )
         return fu
 
     def fval_lower_of(beta_t):
         _, fl, _, _ = constraints.stage_volume_bounds(
-            xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, beta_t
+            xPhys, tPhys, dx, H, Hs, t_stage, volfrac, beta_t
         )
         return fl
 
@@ -490,7 +490,7 @@ def test_stage_volume_bounds_lower_has_slack_margin():
     "just violating" both bounds. Don't assume the margin's exact size (implementation
     detail); just check it's present and strictly positive."""
     nely, nelx = 4, 6
-    volfrac, nStage, stage = 0.4, 2, 1
+    volfrac, t_stage = 0.4, 0.5
     H, Hs = filters.density_filter(nelx, nely, RMIN)
     dx = np.ones((nely, nelx))
 
@@ -499,6 +499,6 @@ def test_stage_volume_bounds_lower_has_slack_margin():
     tPhys = rng.uniform(0.05, 0.95, size=(nely, nelx))
 
     fu, fl, _, _ = constraints.stage_volume_bounds(
-        xPhys, tPhys, dx, H, Hs, stage, nStage, volfrac, ROU
+        xPhys, tPhys, dx, H, Hs, t_stage, volfrac, ROU
     )
     assert fl < -fu - 1e-8
