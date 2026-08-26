@@ -30,6 +30,25 @@ def test_element_dof_map():
     assert_close(edofMat, expected, tier="algebraic")
 
 
+@pytest.mark.parametrize("nelx, nely", [(1, 1), (3, 2), (7, 5), (4, 9)])
+def test_element_dof_map_corner_geometry(nelx, nely):
+    """The fixture above pins one mesh shape only; restate the map's geometry -- each
+    element's dofs are the (x, y) pairs of its 4 corner nodes -- across several shapes.
+    """
+    edofMat = fem.element_dof_map(nelx, nely)
+    assert edofMat.shape == (nelx * nely, 8)
+    for e in range(nelx * nely):
+        row, col = e // nelx, e % nelx
+        corners = [
+            (row + 1, col),  # bottom-left, per the local node order
+            (row + 1, col + 1),
+            (row, col + 1),
+            (row, col),
+        ]
+        expected = [d for c in corners for d in _dofs(*c, nely)]
+        assert list(edofMat[e]) == expected
+
+
 def test_assemble_and_solve():
     fx = load_fixture("fem_solve")
     nelx, nely = int(fx["nelx"]), int(fx["nely"])
