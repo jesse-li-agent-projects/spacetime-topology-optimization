@@ -240,25 +240,17 @@ def hotspot_constraint(
     np.add.at(cond_arr1, e1, Tsub_pow * N_sub1)
     np.add.at(cond_arr2, e1, Tsub_pow * N_sub2)
 
-    # Diagonal self-heating correction to cond_arr2, folded in separately rather than
-    # through Tsub_pow * N_sub2 (as the cross term is above): on the diagonal
-    # xb == xa and T_val[e2] == T_val[e1], so Tsub_pow * (1-Ka)*r*xa**(r-1) is exactly
-    # r * T_val_a**p * xa**(r*p-1) -- the same value, but as one power of xa instead of
-    # two split across an (x**r)**(p-1) factor and an x**(r-1) factor. Splitting it
-    # sends the two factors to +inf and exactly 0 respectively as xa -> 0 (producing
-    # nan from their product), while the combined power is simply finite there whenever
-    # the combined exponent r*p - 1 is >= 0.
-    T_val_a = T_val[e1]
-    with np.errstate(divide="ignore", invalid="ignore"):
-        diag_self_heat = np.where(diag, r * T_val_a**p * xa ** (r * p - 1), 0.0)
-    if not np.all(np.isfinite(diag_self_heat)):
-        # A genuine singularity, not an artefact of the split above: r*p - 1 < 0 makes
-        # this term diverge as density -> 0, and an element's density did hit exactly 0.
+    # Diagonal self-heating correction to cond_arr2, kept out of the Tsub_pow * N_sub2
+    # product above: on the diagonal that product is exactly r * T_val**p * x**(r*p-1),
+    # one power of x rather than an x**(r-1) that diverges times a (x**r)**(p-1) that
+    # vanishes -- whose inf * 0 is nan at x == 0, which the Heaviside projection reaches
+    # routinely once beta_d saturates. Every element is its own neighbour exactly once,
+    # so this is a per-element term needing no pair expansion.
+    if r * p < 1 and np.any(x == 0):
         raise ValueError(
-            f"hotspot_constraint: r*p - 1 = {r * p - 1} < 0 and an element's density "
-            "is exactly 0, so cond_arr2's self-heating term diverges there."
+            f"hotspot_constraint: the self-heating term scales as x**(r*p - 1) with r*p - 1 = {r * p - 1} < 0, so it diverges at the exactly-zero element densities present here."
         )
-    np.add.at(cond_arr2, e1, diag_self_heat)
+    cond_arr2 += r * T_val**p * x ** (r * p - 1)
 
     # sum_cond == 0 (e.g. a fully solid part, T_val == 0 everywhere) makes the exponent
     # 1/p - 1 < 0 diverge; cond_arr1/cond_arr2 vanish exactly in that case too (every term
