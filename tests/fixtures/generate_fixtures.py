@@ -166,6 +166,12 @@ def main():
     low_1 = np.zeros(n)
     upp_1 = np.zeros(n)
 
+    # Overwritten on the k == 0 pass below; NLOOP > 0 guarantees that pass runs.
+    f0val_1 = 0.0
+    df0dx_1 = np.zeros(n)
+    fval_1 = np.zeros(problem.m)
+    dfdx_1 = np.zeros((problem.m, n))
+
     for k in range(NLOOP):
         dx = filters.heaviside_projection_derivative(
             state.xTilde, state.beta_d, problem.eta
