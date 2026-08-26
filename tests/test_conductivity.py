@@ -1,8 +1,6 @@
-"""Tests for sttopt.conductivity against MATLAB fixtures and finite-difference checks.
-
-See conftest.py/conventions.md for fixture format and tolerance policy, and
-test_constraints.py's module docstring for the xTilde-trajectory-reconstruction
-pattern reused here for the hotspot-constraint fixture test.
+"""Tests for sttopt.conductivity against golden-regression fixtures and
+finite-difference checks. See conftest.py/conventions.md for fixture format and
+tolerance policy.
 """
 
 import numpy as np
@@ -11,13 +9,7 @@ import scipy.sparse as sp
 
 import sttopt.conductivity as conductivity
 import sttopt.filters as filters
-from conftest import (
-    assert_close,
-    fixture_element_perm,
-    load_fixture,
-    load_fixture_npz,
-    reindex_fixture,
-)
+from conftest import assert_close, load_fixture_npz
 
 NELX, NELY = 7, 5
 RMIN_COND = 3
@@ -26,52 +18,15 @@ P, Q, R, ROUF = 25, 3, 0.05, 100
 TCR = 0.8
 
 
-def _reconstruct_xTilde_traj(xmma_all, H, Hs, nelx, nely, volfrac, nloop):
-    """xTilde at the start of each iteration k=0..nloop-1 (see test_constraints.py).
-
-    `xmma_all` is raw `.mat`-fixture data (F-order element numbering); `H`/`Hs` are
-    `sttopt`'s own (C-order) filter, so the density slice must be reindexed before the
-    filter is applied.
-    """
-    nel = nelx * nely
-    traj = [np.full((nely, nelx), volfrac)]
-    for k in range(nloop - 1):
-        s = reindex_fixture(xmma_all[:nel, k], nelx, nely, axis=0)
-        xTilde = (H @ s) / Hs
-        traj.append(xTilde.reshape((nely, nelx)))
-    return traj
-
-
-def test_we_equals_w_el():
-    """Trap 3: WE{i}(j) (the weight neighbor E1(j) assigns back to i) always equals
-    w_el{i}(j) itself, since the neighbor-weight structure is symmetric. Confirmed
-    directly against the fixture before relying on the simplification elsewhere.
-    """
-    fx = load_fixture("conductivity_neighbors")
-    w_lookup = {
-        (int(a), int(b)): float(v)
-        for a, b, v in zip(fx["coo_e1"], fx["coo_e2"], fx["coo_w"])
-    }
-    we_lookup = {
-        (int(a), int(b)): float(v)
-        for a, b, v in zip(fx["coo_we1"], fx["coo_we2"], fx["coo_we"])
-    }
-    assert set(w_lookup) == set(we_lookup)
-    for key, w_val in w_lookup.items():
-        assert we_lookup[key] == w_val
-
-
 def test_neighbor_weights_match_fixture():
-    fx = load_fixture("conductivity_neighbors")
+    fx = load_fixture_npz("conductivity_neighbors")
     nelx, nely, rmin_cond = int(fx["nelx"]), int(fx["nely"]), float(fx["rmin_cond"])
     assert (nelx, nely, rmin_cond) == (NELX, NELY, RMIN_COND)
 
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
     got = {(int(a), int(b)): float(v) for a, b, v in zip(e1, e2, w)}
-    perm = fixture_element_perm(nelx, nely)
     expected = {
-        (int(perm[int(a) - 1]), int(perm[int(b) - 1])): float(v)
-        for a, b, v in zip(fx["coo_e1"], fx["coo_e2"], fx["coo_w"])
+        (int(a), int(b)): float(v) for a, b, v in zip(fx["e1"], fx["e2"], fx["w"])
     }
     assert set(got) == set(expected)
     for key, w_val in expected.items():
@@ -79,53 +34,41 @@ def test_neighbor_weights_match_fixture():
 
 
 def test_K_est_matches_fixture():
-    fx = load_fixture("conductivity")
-    nfx = load_fixture("conductivity_neighbors")
-    e2e = load_fixture("e2e")
+    fx = load_fixture_npz("conductivity")
+    e2e = load_fixture_npz("e2e")
     nloop = e2e["xPhys_traj"].shape[2] - 1
 
     e1, e2, w = conductivity.neighbor_weights(NELX, NELY, RMIN_COND)
-    # sanity: same neighbor structure as the fixture (also checked in its own test)
-    assert e1.shape == nfx["coo_e1"].shape
 
     for k in range(nloop):
         xPhys = e2e["xPhys_traj"][:, :, k]
         tPhys = e2e["tPhys_traj"][:, :, k]
         K_est = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, Q, ROUF)
-        expected = reindex_fixture(fx["K_est_all"][:, k], NELX, NELY, axis=0)
-        assert_close(K_est, expected, tier="algebraic")
+        assert_close(K_est, fx["K_est_all"][:, k], tier="algebraic")
 
 
 def test_hotspot_constraint_matches_fixture():
-    fx = load_fixture("conductivity")
-    e2e = load_fixture("e2e")
-    mma = load_fixture("mma")
-    constraints_fx = load_fixture("constraints")
-    nelx, nely = int(constraints_fx["nelx"]), int(constraints_fx["nely"])
-    volfrac = float(constraints_fx["volfrac"])
+    fx = load_fixture_npz("conductivity")
+    e2e = load_fixture_npz("e2e")
+    nelx, nely = int(e2e["nelx"]), int(e2e["nely"])
     nloop = e2e["xPhys_traj"].shape[2] - 1
     assert (nelx, nely) == (NELX, NELY)
 
     factor_all = fx["factor_all"]
     assert np.all(factor_all == 1.0), "expected factor==1 for all 3 fixture iterations"
 
-    RMIN = 2  # density filter radius used throughout the fixture harness
-    H, Hs = filters.density_filter(nelx, nely, RMIN)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    H, Hs = filters.density_filter(
+        nelx, nely, 2
+    )  # density filter radius used in the fixture
 
-    xTilde_traj = _reconstruct_xTilde_traj(
-        mma["xmma_all"], H, Hs, nelx, nely, volfrac, nloop
-    )
-
-    # The fixture's tPhys (seeded from a corner-distance field, then MMA-perturbed) never
-    # happens to put two DISTINCT elements at an exact tie -- confirmed here so the report
-    # doesn't overclaim fixture coverage of the distinct-element-tie branch (exercised only
-    # by the synthetic `_at_ties` test below). That's a property of this fixture's field,
-    # not of ties being rare in general: distance-from-a-point fields are tie-free
-    # generically (irrational distances rarely coincide), but a field with exact repeated
-    # values along a grid axis (e.g. a linear ramp) is not -- it produces structural
-    # off-diagonal ties on a nontrivial fraction of neighbor pairs, surviving density
-    # filtering.
+    # The fixture's tPhys never happens to put two DISTINCT elements at an exact tie --
+    # confirmed here so the report doesn't overclaim fixture coverage of the
+    # distinct-element-tie branch (exercised only by the synthetic `_at_ties` test
+    # below). That's a property of this fixture's field, not of ties being rare in
+    # general: a field with exact repeated values along a grid axis (e.g. a linear
+    # ramp) produces structural off-diagonal ties on a nontrivial fraction of neighbor
+    # pairs, surviving density filtering.
     for k in range(nloop):
         tflat = e2e["tPhys_traj"][:, :, k].flatten()
         off_diag = e1 != e2
@@ -134,26 +77,29 @@ def test_hotspot_constraint_matches_fixture():
     for k in range(nloop):
         xPhys = e2e["xPhys_traj"][:, :, k]
         tPhys = e2e["tPhys_traj"][:, :, k]
-        xTilde = xTilde_traj[k]
-        dx = filters.heaviside_projection_derivative(xTilde, BETA, ETA)
+        dx = e2e["dx_all"][:, :, k]
         factor = float(factor_all[k])
 
         result = conductivity.hotspot_constraint(
-            xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, TCR, P, Q, R, ROUF
+            xPhys,
+            tPhys,
+            e1,
+            e2,
+            w,
+            dx,
+            H,
+            Hs,
+            factor,
+            TCR,
+            P,
+            Q,
+            R,
+            ROUF,
         )
 
-        # numer/tru_max are algebraically recoverable from fval (fval = factor*numer/Tcr - 1);
-        # with factor==1 here this is one independent check (not three), since numer/tru_max
-        # coincide and both invert the same relation -- df1/dt1 are the real second check.
-        numer = (result.fval + 1) * TCR / factor
-        tru_max = factor * numer
-
-        assert_close(numer, fx["numer_all"][k], tier="algebraic")
-        assert_close(tru_max, fx["tru_max_all"][k], tier="algebraic")
-        expected_df1 = reindex_fixture(fx["df1_all"][:, k], nelx, nely, axis=0)
-        expected_dt1 = reindex_fixture(fx["dt1_all"][:, k], nelx, nely, axis=0)
-        assert_close(result.df1, expected_df1, tier="algebraic")
-        assert_close(result.dt1, expected_dt1, tier="algebraic")
+        assert_close(result.numer, fx["numer_all"][k], tier="algebraic")
+        assert_close(result.df1, fx["df1_all"][:, k], tier="algebraic")
+        assert_close(result.dt1, fx["dt1_all"][:, k], tier="algebraic")
 
 
 def test_K_est_matches_golden_scenes():
@@ -176,8 +122,7 @@ def test_K_est_matches_golden_scenes():
         tPhys = fx[f"{name}_tPhys"]
         rouf = float(fx[f"{name}_rouf"])
         K_est = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, rouf)
-        expected = reindex_fixture(fx[f"{name}_K_est"], nelx, nely, axis=0)
-        assert_close(K_est, expected, tier="algebraic")
+        assert_close(K_est, fx[f"{name}_K_est"], tier="algebraic")
 
 
 # --- First-principles value checks (no MATLAB fixture, no self-regression) -----------

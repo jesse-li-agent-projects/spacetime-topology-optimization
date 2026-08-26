@@ -1,18 +1,19 @@
-"""Tests for sttopt.mma against a MATLAB fixture (see conftest.py, conventions.md)."""
+"""Tests for sttopt.mma against a golden-regression fixture (see conftest.py,
+conventions.md)."""
 
 import numpy as np
 
 import sttopt.mma as mma
-from conftest import assert_close, load_fixture
+from conftest import assert_close, load_fixture_npz
 
 # a0 = 1; a = zeros(m,1); c_ = ones(m,1)*2500; d = zeros(m,1) -- from
-# generate_fixtures.m lines ~455-457, not saved to the fixture.
+# generate_fixtures.py, not saved to the fixture.
 A0 = 1.0
 C_VAL = 2500.0
 
 
 def test_mmasub_iteration1():
-    fx = load_fixture("mma")
+    fx = load_fixture_npz("mma")
     m, n = int(fx["m"]), int(fx["n"])
     a = np.zeros(m)
     c = np.ones(m) * C_VAL
@@ -32,7 +33,7 @@ def test_mmasub_iteration1():
         fx["fval_1"],
         fx["dfdx_1"],
         # low_1/upp_1 are unused at iteration 1 (see mma.mmasub: `iteration < 2.5`
-        # recomputes them from scratch) -- the fixture stores them as scalar 0.
+        # recomputes them from scratch) -- the fixture stores them as zeros.
         np.zeros(n),
         np.zeros(n),
         A0,
@@ -42,12 +43,6 @@ def test_mmasub_iteration1():
     )
 
     assert xmma.shape == fx["xmma_all"][:, 0].shape
-    # "algebraic" tier is a deliberate carve-out from conventions.md's letter (this *is*
-    # downstream of subsolv's Newton iteration, which would nominally route it to
-    # "solved"): mmasub/subsolv are a deterministic algorithm run on identical inputs in
-    # both languages, not two different solvers of the same problem, so near-machine-
-    # precision agreement is the right expectation and what's actually observed
-    # (measured ~1e-15 for xmma/lam here, not just "passes at 1e-10").
     assert_close(xmma, fx["xmma_all"][:, 0], tier="algebraic")
     assert_close(low, fx["low_all"][:, 0], tier="algebraic")
     assert_close(upp, fx["upp_all"][:, 0], tier="algebraic")

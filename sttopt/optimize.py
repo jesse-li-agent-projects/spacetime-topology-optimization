@@ -6,8 +6,8 @@ this file's only job is *wiring* -- building the stacked objective/constraint ar
 MMA expects, in the exact row order the MATLAB main loop uses, and threading the
 iteration-dependent state (`beta_d`, `beta_t`, `factor`, `xold1`/`xold2`, `low`/`upp`, and
 the raw-vs-filtered x/t fields) from one call to the next. See `conventions.md` for
-array-order conventions and `tests/fixtures/generate_fixtures.m` (the literal MATLAB
-reference this ports) for the authoritative iteration order.
+array-order conventions and `tests/matlab_reference_loop.py` (a literal transliteration
+of the MATLAB source this ports) for the authoritative iteration order.
 
 Two field pairs are threaded per design variable, and must not be conflated: `x`/`t`
 are each iteration's *raw* MMA output (unfiltered, unprojected -- what next

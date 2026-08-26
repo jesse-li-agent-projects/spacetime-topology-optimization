@@ -1,27 +1,19 @@
-"""Tests for sttopt.gravity against MATLAB fixtures (see conftest.py, conventions.md)."""
+"""Tests for sttopt.gravity: golden-regression fixture check plus a closed-form patch
+test (see conftest.py, conventions.md)."""
 
 import numpy as np
 
 import sttopt.fem as fem
 import sttopt.gravity as gravity
-from conftest import (
-    assert_close,
-    load_fixture,
-    node_positions,
-    reindex_fixture,
-    reindex_fixture_nodes,
-)
+from conftest import assert_close, load_fixture_npz, node_positions
 
 
 def test_gravity_load_matrix():
-    fx = load_fixture("gravity")
+    fx = load_fixture_npz("gravity")
     nelx, nely = int(fx["nelx"]), int(fx["nely"])
 
     C = gravity.gravity_load_matrix(nelx, nely)
-    # sparse fixture, small problem size -- densify for comparison only. Columns are
-    # element-indexed and rows node-indexed, both F-order in the fixture.
-    expected = reindex_fixture(fx["C"].toarray(), nelx, nely, axis=1)
-    expected = reindex_fixture_nodes(expected, nelx, nely, axis=0)
+    expected = fx["C"]
 
     assert C.shape == expected.shape == ((nelx + 1) * (nely + 1), nelx * nely)
     assert_close(C.toarray(), expected, tier="algebraic")

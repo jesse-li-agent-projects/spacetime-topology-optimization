@@ -1,8 +1,9 @@
-"""Tests for `sttopt.filters`: fixture comparisons for H/Hs/L, FD checks for the Heaviside projection."""
+"""Tests for `sttopt.filters`: golden-regression fixture checks for H/Hs/L, FD checks
+for the Heaviside projection."""
 
 import numpy as np
 import pytest
-from conftest import assert_close, load_fixture, reindex_fixture
+from conftest import assert_close, load_fixture_npz
 
 from sttopt.filters import (
     continuity_filter,
@@ -16,21 +17,16 @@ RMIN = LRMIN = 2
 
 
 def test_density_filter_against_fixture():
-    fx = load_fixture("filters")
+    fx = load_fixture_npz("filters")
     H, Hs = density_filter(NELX, NELY, RMIN)
-    expected_H = reindex_fixture(fx["H"].toarray(), NELX, NELY, axis=0)
-    expected_H = reindex_fixture(expected_H, NELX, NELY, axis=1)
-    assert_close(H.toarray(), expected_H, tier="algebraic")
-    expected_Hs = reindex_fixture(np.asarray(fx["Hs"].toarray()).flatten(), NELX, NELY)
-    assert_close(Hs, expected_Hs, tier="algebraic")
+    assert_close(H.toarray(), fx["H"], tier="algebraic")
+    assert_close(Hs, fx["Hs"], tier="algebraic")
 
 
 def test_continuity_filter_against_fixture():
-    fx = load_fixture("filters")
+    fx = load_fixture_npz("filters")
     L = continuity_filter(NELX, NELY, LRMIN)
-    expected_L = reindex_fixture(fx["L"].toarray(), NELX, NELY, axis=0)
-    expected_L = reindex_fixture(expected_L, NELX, NELY, axis=1)
-    assert_close(L.toarray(), expected_L, tier="algebraic")
+    assert_close(L.toarray(), fx["L"], tier="algebraic")
 
 
 def test_continuity_filter_returns_sparse():
@@ -138,15 +134,15 @@ def test_continuity_filter_on_checkerboard_closed_form():
 
 
 def _reference_density_filter(nelx: int, nely: int, rmin: float) -> np.ndarray:
-    """Independent transliteration of generate_fixtures.m's density-filter loop (0-indexed).
+    """Independent restatement of the density-filter loop (0-indexed, C-order).
 
     Deliberately doesn't reuse `_neighbor_offsets`/any of `filters.py`'s own machinery,
-    so it can catch a window-size or cutoff bug that the MATLAB fixture comparison above
-    can't: that fixture only exercises `rmin == LRMIN == 2` (an integer), so a too-large
-    square window is invisible there (the extra offsets all carry weight 0, silently
-    dropped) -- see review discussion. `rmin=2.5` here is non-integer and gives a
-    genuinely nonzero diagonal-neighbor weight, pinning both the square window's size and
-    the circular cutoff independent of any other test's `rmin`/`lrmin` coincidence.
+    so it can catch a window-size or cutoff bug that the golden-regression fixture test
+    above can't: that fixture only exercises `rmin == LRMIN == 2` (an integer), so a
+    too-large square window is invisible there (the extra offsets all carry weight 0,
+    silently dropped) -- see review discussion. `rmin=2.5` here is non-integer and gives
+    a genuinely nonzero diagonal-neighbor weight, pinning both the square window's size
+    and the circular cutoff independent of any other test's `rmin`/`lrmin` coincidence.
     """
     n = nelx * nely
     H = np.zeros((n, n))

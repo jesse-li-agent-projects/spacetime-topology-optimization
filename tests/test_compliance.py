@@ -1,5 +1,5 @@
-"""Tests for sttopt.compliance against MATLAB fixtures, finite-difference checks, and
-closed-form elasticity solutions.
+"""Tests for sttopt.compliance against golden-regression fixtures, finite-difference
+checks, and closed-form elasticity solutions.
 
 See conftest.py/conventions.md for fixture format and tolerance policy.
 """
@@ -11,18 +11,12 @@ import scipy.sparse as sp
 import sttopt.compliance as compliance
 import sttopt.fem as fem
 import sttopt.gravity as gravity
-from conftest import (
-    assert_close,
-    load_fixture,
-    point_load_problem,
-    reindex_fixture,
-    reindex_fixture_nodes,
-)
+from conftest import assert_close, load_fixture_npz, point_load_problem
 
 
 def test_whole_compliance_matches_fixture():
-    fx = load_fixture("compliance")
-    e2e = load_fixture("e2e")
+    fx = load_fixture_npz("compliance")
+    e2e = load_fixture_npz("e2e")
     nelx, nely, nloop = int(fx["nelx"]), int(fx["nely"]), e2e["xPhys_traj"].shape[2] - 1
     Emin, Emax, penal = 1e-9, 1.0, 3
 
@@ -40,21 +34,18 @@ def test_whole_compliance_matches_fixture():
 
 
 def test_gravity_compliance_matches_fixture():
-    fx = load_fixture("compliance")
-    e2e = load_fixture("e2e")
-    grav = load_fixture("gravity")
+    fx = load_fixture_npz("compliance")
+    e2e = load_fixture_npz("e2e")
+    grav = load_fixture_npz("gravity")
     nelx, nely, nStage = int(fx["nelx"]), int(fx["nely"]), int(fx["nStage"])
     nloop = e2e["xPhys_traj"].shape[2] - 1
     Emin, Emax, penal = 1e-9, 1.0, 3
-    beta_t = 10.0  # beta_t=10 fixed for loop=1..3: mod(loop,30)==0 never triggers (see generate_fixtures.m)
+    beta_t = 10.0  # beta_t=10 fixed for loop=1..3: loop%30==0 never triggers (see generate_fixtures.py)
 
     KE = fem.plane_stress_KE(nu=0.3)
     edofMat = fem.element_dof_map(nelx, nely)
     _, freedofs, ndof = point_load_problem(nelx, nely)
-    # grav["C"] is F-order on both axes (element columns, node rows); reindex both to
-    # sttopt's C-order before it's used as gravity_compliance's own gravity-load matrix.
-    C = reindex_fixture(grav["C"].toarray(), nelx, nely, axis=1)
-    C = sp.csr_matrix(reindex_fixture_nodes(C, nelx, nely, axis=0))
+    C = sp.csr_matrix(grav["C"])
 
     tP = np.linspace(0, 1, nStage + 1)
 
@@ -78,14 +69,8 @@ def test_gravity_compliance_matches_fixture():
                 ndof,
             )
             assert_close(c, fx["c_grav_all"][k, i], tier="solved")
-            expected_dcx = reindex_fixture(
-                fx["dcx_grav_all"][:, i, k], nelx, nely, axis=0
-            )
-            expected_dct = reindex_fixture(
-                fx["dct_grav_all"][:, i, k], nelx, nely, axis=0
-            )
-            assert_close(dcx, expected_dcx, tier="solved")
-            assert_close(dct, expected_dct, tier="solved")
+            assert_close(dcx, fx["dcx_grav_all"][:, i, k], tier="solved")
+            assert_close(dct, fx["dct_grav_all"][:, i, k], tier="solved")
 
 
 # --- Closed-form elasticity checks (pure Python, no MATLAB fixture) ---
