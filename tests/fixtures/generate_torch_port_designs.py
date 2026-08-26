@@ -1,0 +1,122 @@
+"""Generate realistic near-binary `(xPhys, tPhys)` design snapshots for the PyTorch-port
+investigation (`plans/torch_port.md`, Phase 0a).
+
+Benchmarking or accuracy-testing a linear solver on the uniform `x = volfrac` field would
+be dishonest: that is the best-conditioned design the optimizer ever holds, and it holds
+it only at iteration zero. The stiffness contrast that actually stresses a CG solver comes
+from the Heaviside projection driving `xPhys` toward 0/1 as `beta_d` ramps, so the
+snapshots here span the whole run -- early, middle, and late -- and the late ones are the
+cases a go/no-go should turn on.
+
+Two meshes are run natively (90x30 and the production 180x60); 360x120 is not run, and is
+instead obtained at load time by a nearest-neighbour 2x block repeat of the 180x60 design
+(`load_designs`). Nearest-neighbour, not interpolation: a near-binary design must stay
+near-binary, and bilinear upscaling would manufacture intermediate densities and quietly
+soften the conditioning that is the property under test. The upscaled 360x120 design
+therefore has features twice as coarse in element units as a natively-converged 360x120
+design would -- it preserves the hard 0/1 contrast and the void topology, which is what
+drives the conditioning, not the feature scale.
+
+Filter radii are in element units, so the 90x30 run halves them to pose the same physical
+problem. `lrmin` is the exception: production `lrmin = 2.0` already resolves to the
+minimum 3x3 stencil (`filters._neighbor_offsets` uses `ceil(r) - 1`), and halving it to
+1.0 leaves an empty stencil, so 90x30 keeps `lrmin = 2.0`.
+"""
+
+import argparse
+from pathlib import Path
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=Path(__file__).parent / "torch_port_designs.npz",
+        help="output .npz path",
+    )
+    parser.add_argument(
+        "--nloop", type=int, default=800, help="iterations per run (production length)"
+    )
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+
+import time
+
+import numpy as np
+
+import sttopt.optimize as optimize
+
+# Matches tests/test_e2e_slow.py's reproduction of the thesis Chapter 4.4 experiment.
+NSTAGE = 8
+VOLFRAC = 0.5
+THETA = 0.1
+TCR = 0.8
+TFIELD = 3
+BETA_INIT = 1.0
+
+# (nelx, nely, rmin, lrmin, rmin_cond). Radii are in element units; see module docstring
+# for why 90x30 keeps lrmin at 2.0 rather than halving it.
+MESHES = [
+    (90, 30, 2.0, 2.0, 6.0),
+    (180, 60, 4.0, 2.0, 12.0),
+]
+
+# Iterations to snapshot, as a fraction-free list of loop indices into the trajectory
+# (index 0 is the initial uniform field, which is deliberately excluded -- it is the
+# unrealistic case these snapshots exist to replace). beta_d doubles every 50 iterations
+# from 1.0 and saturates at 128 by iteration 350, so 400+ are the hard, near-binary cases.
+SNAPSHOT_LOOPS = [25, 100, 200, 400, 600, 800]
+
+
+def binariness(x: np.ndarray) -> float:
+    """Fraction of elements within 0.01 of 0 or 1 -- a one-number summary of how far the
+    Heaviside projection has driven a density field toward a hard 0/1 contrast.
+    """
+    return float(np.mean((x < 0.01) | (x > 0.99)))
+
+
+def generate(nloop: int) -> dict[str, np.ndarray]:
+    out: dict[str, np.ndarray] = {}
+    for nelx, nely, rmin, lrmin, rmin_cond in MESHES:
+        t0 = time.perf_counter()
+        result = optimize.run(
+            nelx,
+            nely,
+            nloop,
+            NSTAGE,
+            VOLFRAC,
+            THETA,
+            TCR,
+            TFIELD,
+            rmin,
+            lrmin,
+            rmin_cond,
+            beta_d=BETA_INIT,
+        )
+        elapsed = time.perf_counter() - t0
+        print(
+            f"{nelx}x{nely}: {nloop} iterations in {elapsed / 60:.1f} min", flush=True
+        )
+        for loop in SNAPSHOT_LOOPS:
+            if loop > nloop:
+                continue
+            x = result.xPhys_traj[loop]
+            t = result.tPhys_traj[loop]
+            out[f"x_{nelx}x{nely}_it{loop:04d}"] = x
+            out[f"t_{nelx}x{nely}_it{loop:04d}"] = t
+            print(
+                f"  it{loop:04d}: binariness={binariness(x):.3f} "
+                f"vol={x.mean():.3f} x in [{x.min():.2e}, {x.max():.4f}]",
+                flush=True,
+            )
+    return out
+
+
+if __name__ == "__main__":
+    designs = generate(args.nloop)
+    np.savez_compressed(args.out, **designs)
+    print(f"wrote {args.out} ({args.out.stat().st_size / 1e6:.1f} MB)")
