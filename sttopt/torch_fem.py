@@ -173,11 +173,18 @@ def pcg(
 
     x = torch.zeros_like(b) if x0 is None else x0.clone()
     r = b - apply_A(x)
+    rel_resid = r.norm(dim=-1) / b_norm_safe
+
+    n_iter = 0
+    # Checked before the first iteration, not only after: a warm start can already be
+    # converged, and an exact one makes the first alpha a 0/0 nan.
+    if torch.all(rel_resid <= rtol):
+        return x, n_iter
+
     z = apply_M(r)
     p = z.clone()
     rz_old = (r * z).sum(dim=-1)
 
-    n_iter = 0
     for it in range(1, max_iter + 1):
         n_iter = it
         Ap = apply_A(p)

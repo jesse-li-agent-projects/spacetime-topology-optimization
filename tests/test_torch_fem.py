@@ -203,6 +203,25 @@ def test_warm_start_converges_in_fewer_iterations():
     assert_close(U_warm.numpy(), U_cold.numpy(), tier="solved")
 
 
+def test_warm_start_from_exact_solution_is_returned_unchanged():
+    """An already-converged warm start must short-circuit rather than take a step: at a
+    zero residual the first `alpha` is a 0/0 nan, which would corrupt a correct answer.
+    """
+    nelx, nely = 12, 8
+    F_np, freedofs_np, ndof, KE_np, edofMat_np, KE, edofMat, mask = _setup(nelx, nely)
+    xPhys = torch.full((nelx * nely,), 0.4, dtype=torch.float64)
+    F = torch.tensor(F_np, dtype=torch.float64)
+
+    U, _ = torch_fem.solve(F, xPhys, edofMat, KE, EMIN, EMAX, PENAL, mask, rtol=1e-10)
+    U_again, n_iter = torch_fem.solve(
+        F, xPhys, edofMat, KE, EMIN, EMAX, PENAL, mask, rtol=1e-10, x0=U
+    )
+
+    assert n_iter == 0
+    assert torch.isfinite(U_again).all()
+    assert torch.equal(U_again, U)
+
+
 # --- Multigrid (sttopt.torch_mg) -------------------------------------------------
 # Test meshes are deliberately small, so `max_coarse_elements` is forced down; the
 # module default is sized for the production meshes and would leave these solved
