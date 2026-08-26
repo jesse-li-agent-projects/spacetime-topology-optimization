@@ -195,6 +195,66 @@ today.
 worth fixing on their own merits, independent of this plan's outcome. Log them in
 `plans/code_quality_review.md` rather than absorbing them here.
 
+### Results (2026-08-27)
+
+Script: `benchmarks/profile_step.py`. Profiled `optimize.step` at 180x60/`nStage=8`
+around the `it0800` snapshot in `tests/fixtures/torch_port_designs.npz`
+(`beta_d=128`, `beta_t=50` -- both continuation schedules saturated by loop 800, per
+`optimize.step`'s own schedule simulated out to loop 800). `State` fields not stored
+by the fixture (`xTilde`, raw `x`/`t`, MMA history) are reconstructed as documented in
+`build_realistic_state`'s docstring; the approximations there don't affect any of the
+costs measured (all suspects are shape/algorithm-driven, not value-driven). 1 warm-up
+`step()` call discarded, then 5 timed calls (45 FEM solves), all consistent across
+iterations. `cProfile` plus wall-clock timers installed by monkeypatching the five
+suspect call sites (no `sttopt/` file modified).
+
+Per-`step` totals (`ndof=22082`, `npairs=4204240`; mean over 5 iterations,
+per-step wall time 3060 ms):
+
+| suspect | calls/step | total/step (ms) | per-call (ms) | % of step |
+|---|---|---|---|---|
+| `spsolve` | 9 | 1257 | 139.7 | 41.1% |
+| `mma.mmasub` | 1 | 1109 | 1109.5 | 36.3% |
+| `conductivity.hotspot_constraint` | 1 | 539 | 539.3 | 17.6% |
+| `fem.assemble_stiffness` | 9 | 102 | 11.4 | 3.3% |
+| `K[np.ix_(freedofs, freedofs)]` reindex | 9 | 12 | 1.3 | 0.4% |
+| everything else (filter/gravity matvecs, elementwise compliance algebra) | -- | ~41 | -- | ~1.3% |
+
+**The `spsolve` number Phase 2 must beat: 139.7 ms/call (0.1397 s/call), at 180x60 on
+the near-binary `it0800` design.** `fem.solve_fe` as a whole (`spsolve` + reindex) is
+141.0 ms/call, so `spsolve` itself is 99.1% of `solve_fe` -- **the `np.ix_` reindex is
+not a meaningful artefact** (0.4% of step time, 0.9% of `solve_fe`). Phase 2's baseline
+can be timed against `solve_fe` as it stands today without correcting for it.
+
+Other findings:
+
+- **`mma.mmasub` rivals the FEM solve** (36.3% of step time vs. 41.1%), which the plan
+  did not predict ("Probably not dominant, but measure rather than assume" -- measured:
+  it's the second-largest single item). Almost all of it is `subsolv`'s primal-dual
+  Newton loop (`mma.py:129`), specifically ~35 `residual` evaluations per `mmasub` call
+  doing dense dot products over `n=21600`-ish vectors and an `m=79` linear system each
+  sweep. This is ordinary dense array algebra with no `scipy.sparse` dependency --
+  ports to torch directly and is GPU-friendly, so it's a real target for Phase 3, not
+  just FEM.
+- **`hotspot_constraint` is real but not dominant** (17.6%), and its cost is *not* where
+  the plan's prior expected it. `np.add.at` totals only ~29 ms/step across all 6 calls
+  (~4.8 ms/call, ~5% of `hotspot_constraint`'s own cost, <1% of step time) -- far from
+  "rival[ing] or exceed[ing] the FEM solve." The dominant cost inside
+  `hotspot_constraint` is `_pairwise_sigmoid_terms` (two calls/call, ~177 ms/call
+  combined, ~33%) plus the surrounding elementwise `npairs`-sized algebra (`cond_p`,
+  `N_sub1`/`N_sub2`, `Tsub_pow`, etc.) -- ordinary vectorized NumPy work over 4.2M-length
+  arrays, not the `np.add.at` reductions specifically.
+- **`assemble_stiffness` is cheap** (3.3%), consistent with the plan's "probably not
+  dominant" framing for pure COO-to-CSR assembly.
+- Neither `np.add.at` (<1% of step time) nor the `np.ix_` reindex (0.4% of step time)
+  crosses any reasonable bar for "significant" here, so per the plan's own note, no
+  entries were added to `plans/code_quality_review.md` for either.
+
+Environment note: `spsolve`'s wall time (SuperLU) showed high `user` vs. `real` time in
+a raw `time` invocation, i.e. BLAS/SuperLU used multiple threads; the CPU was otherwise
+idle during this run (no other heavy process), so the reported per-call number should
+be a clean single-machine measurement, not a symptom of contention.
+
 ---
 
 ## Phase 1: Implement and validate a GPU CG solver
