@@ -9,6 +9,7 @@ import torch
 
 import sttopt.fem as fem
 import sttopt.torch_fem as torch_fem
+import sttopt.torch_mg as torch_mg
 from conftest import assert_close, point_load_problem
 
 EMIN, EMAX, PENAL = 1e-9, 1.0, 3
@@ -200,3 +201,308 @@ def test_warm_start_converges_in_fewer_iterations():
 
     assert n_iter_warm < n_iter_cold
     assert_close(U_warm.numpy(), U_cold.numpy(), tier="solved")
+
+
+# --- Multigrid (sttopt.torch_mg) -------------------------------------------------
+# Test meshes are deliberately small, so `max_coarse_elements` is forced down; the
+# module default is sized for the production meshes and would leave these solved
+# directly on level 0, exercising no V-cycle at all.
+MG_KW = {"max_coarse_elements": 24}
+MG_MESH_SIZES = [(12, 8), (18, 12), (24, 16)]
+
+
+def _binary_design(nelx, nely):
+    """Connected solid/void cantilever, exact 0.0/1.0 -- the full ~1e9 SIMP contrast.
+
+    Chords along the top, bottom and clamped edge plus a diagonal brace, so the loaded
+    corner has a real load path. A thresholded random field would instead leave solid
+    islands floating on `Emin`, and the resulting system is so ill-conditioned that even
+    `spsolve` cannot reach a 1e-4 relative residual -- an unsolvable problem rather than
+    a hard one, and no test of the preconditioner.
+    """
+    rows, cols = np.mgrid[0:nely, 0:nelx]
+    x = np.zeros((nely, nelx))
+    x[np.abs(rows / max(nely - 1, 1) - cols / max(nelx - 1, 1)) < 0.15] = 1.0
+    x[:2, :] = 1.0
+    x[-2:, :] = 1.0
+    x[:, :2] = 1.0
+    return x.ravel()
+
+
+def _mg_density_fields(nelx, nely, rng):
+    return {
+        "uniform": np.full(nelx * nely, 0.4),
+        "random": rng.uniform(0.05, 1.0, nelx * nely),
+        "binary": _binary_design(nelx, nely),
+    }
+
+
+def _mg_solve(nelx, nely, xPhys, **kw):
+    _, _, _, _, _, KE, edofMat, mask = _setup(nelx, nely)
+    F_np, _, _ = point_load_problem(nelx, nely)
+    return torch_mg.solve(
+        torch.tensor(F_np, dtype=torch.float64),
+        torch.tensor(xPhys, dtype=torch.float64),
+        edofMat,
+        KE,
+        EMIN,
+        EMAX,
+        PENAL,
+        mask,
+        nelx,
+        nely,
+        **{**MG_KW, **kw},
+    )
+
+
+def _hierarchy(nelx, nely, xPhys, **kw):
+    _, _, _, _, _, KE, edofMat, mask = _setup(nelx, nely)
+    density = torch_fem.simp_density(
+        torch.tensor(xPhys, dtype=torch.float64), EMIN, EMAX, PENAL
+    )
+    return torch_mg.build_hierarchy(
+        density, edofMat, KE, mask, nelx, nely, **{**MG_KW, **kw}
+    )
+
+
+@pytest.mark.parametrize("kx, ky", [(1, 1), (2, 2), (3, 3), (3, 1), (2, 3)])
+def test_restriction_is_the_exact_adjoint_of_prolongation(kx, ky):
+    """`<P c, f> == <c, R f>`. If this fails the V-cycle is not symmetric, and CG's
+    convergence theory stops applying to it without any visible symptom.
+    """
+    nCx, nCy = 3, 2
+    rng = np.random.default_rng(0)
+    c = torch.tensor(rng.standard_normal(2 * (nCx + 1) * (nCy + 1)))
+    f = torch.tensor(rng.standard_normal(2 * (nCx * kx + 1) * (nCy * ky + 1)))
+    Pc = torch_mg._on_node_grid(c, nCx + 1, nCy + 1, kx, ky, torch_mg._interp_axis)
+    Rf = torch_mg._on_node_grid(
+        f, nCx * kx + 1, nCy * ky + 1, kx, ky, torch_mg._restrict_axis
+    )
+    assert Pc.shape == f.shape
+    assert_close((Pc * f).sum().item(), (c * Rf).sum().item(), tier="algebraic")
+
+
+@pytest.mark.parametrize("nelx, nely", [(12, 8), (18, 12)])
+def test_coarse_operator_is_exact_galerkin(nelx, nely):
+    """Every coarse level must equal `R A P` of the level above, to machine precision.
+
+    This is the load-bearing claim of the element-wise coarsening: that it really is
+    Galerkin, not a re-discretization that resembles it.
+    """
+    rng = np.random.default_rng(1)
+    levels = _hierarchy(nelx, nely, _binary_design(nelx, nely), max_coarse_elements=4)
+    assert len(levels) >= 3
+    for fine, coarse in zip(levels, levels[1:]):
+        v = torch_fem.project(
+            torch.tensor(rng.standard_normal(coarse.ndof)), coarse.mask
+        )
+        Pv = torch_fem.project(
+            torch_mg._on_node_grid(
+                v,
+                coarse.nelx + 1,
+                coarse.nely + 1,
+                fine.kx,
+                fine.ky,
+                torch_mg._interp_axis,
+            ),
+            fine.mask,
+        )
+        RAPv = torch_fem.project(
+            torch_mg._on_node_grid(
+                fine.apply_A(Pv),
+                fine.nelx + 1,
+                fine.nely + 1,
+                fine.kx,
+                fine.ky,
+                torch_mg._restrict_axis,
+            ),
+            coarse.mask,
+        )
+        assert_close(coarse.apply_A(v).numpy(), RAPv.numpy(), tier="algebraic")
+
+
+def test_coarsening_stops_rather_than_mis_coarsening_odd_dimensions():
+    """45x15 is the case that actually arises on the production meshes: odd in both
+    dimensions, so a factor of 2 is unavailable and the policy must say something
+    definite rather than silently mis-coarsening.
+    """
+    assert torch_mg.coarsening_factors(180, 60) == (2, 2)
+    assert torch_mg.coarsening_factors(45, 15) == (3, 3)
+    assert torch_mg.coarsening_factors(15, 5) == (3, 1)  # x only; y cannot coarsen
+    assert torch_mg.coarsening_factors(5, 5) == (1, 1)  # nothing left to do
+    # Every level's dimensions are exactly the parent's divided by the factors used.
+    levels = _hierarchy(24, 16, np.full(24 * 16, 0.4), max_coarse_elements=4)
+    for fine, coarse in zip(levels, levels[1:]):
+        assert (coarse.nelx, coarse.nely) == (
+            fine.nelx // fine.kx,
+            fine.nely // fine.ky,
+        )
+    assert torch_mg.coarsening_factors(levels[-1].nelx, levels[-1].nely) == (1, 1)
+
+
+@pytest.mark.parametrize("nelx, nely", MG_MESH_SIZES)
+def test_vcycle_is_symmetric_and_positive_definite(nelx, nely):
+    """`<Mx, y> == <x, My>` and `<x, Mx> > 0`, across all three density fields.
+
+    A nonsymmetric preconditioner does not announce itself -- CG just stops converging
+    at the rate it should -- so this is checked directly rather than inferred from
+    iteration counts.
+    """
+    rng = np.random.default_rng(2)
+    for xPhys in _mg_density_fields(nelx, nely, rng).values():
+        levels = _hierarchy(nelx, nely, xPhys)
+        M = torch_mg.VCycle(levels)
+        mask = levels[0].mask
+        u = torch_fem.project(torch.tensor(rng.standard_normal(levels[0].ndof)), mask)
+        v = torch_fem.project(torch.tensor(rng.standard_normal(levels[0].ndof)), mask)
+        Mu, Mv = M(u), M(v)
+        assert_close((Mu * v).sum().item(), (u * Mv).sum().item(), tier="algebraic")
+        assert (u * Mu).sum().item() > 0.0
+        assert torch.all(Mu[~mask] == 0.0)
+
+
+@pytest.mark.parametrize("nelx, nely", MG_MESH_SIZES)
+def test_mgcg_matches_spsolve(nelx, nely):
+    """MGCG must reproduce `spsolve`'s answer, and satisfy the system in its own right.
+
+    The comparison is scaled by `||U||_inf` rather than made element by element. At the
+    binary field's ~1e9 contrast `cond(K)` reaches ~1e11, so `U` itself is only pinned
+    down to about `cond * eps * ||U||` by float64 -- both solvers sit at that limit and
+    a strict element-wise relative check would be testing the oracle's rounding, not
+    this solver. The true-residual assertion is what actually pins correctness down,
+    and it is independent of the oracle: CG tracks its residual by a recurrence that
+    can drift from the real one, so it is recomputed here from scratch.
+    """
+    rng = np.random.default_rng(3)
+    F_np, freedofs_np, ndof, KE_np, edofMat_np, _, _, _ = _setup(nelx, nely)
+    fixed = np.setdiff1d(np.arange(ndof), freedofs_np)
+    for xPhys in _mg_density_fields(nelx, nely, rng).values():
+        K = fem.assemble_stiffness(KE_np, xPhys, EMIN, EMAX, PENAL, edofMat_np, ndof)
+        expected = fem.solve_fe(K, F_np, freedofs_np)
+        actual, n_iter = _mg_solve(nelx, nely, xPhys, rtol=1e-11)
+        assert n_iter > 0
+
+        b = F_np.copy()
+        b[fixed] = 0.0
+        residual = b - K @ actual.numpy()
+        residual[fixed] = 0.0
+        assert np.linalg.norm(residual) / np.linalg.norm(b) < 1e-10
+
+        assert_close(
+            actual.numpy(),
+            expected,
+            tier="solved",
+            atol=1e-6 * np.abs(expected).max(),
+        )
+
+
+@pytest.mark.parametrize("nelx, nely", MG_MESH_SIZES)
+def test_mgcg_matches_jacobi_pcg_in_far_fewer_iterations(nelx, nely):
+    """Same system, same answer; the only thing that changes is the iteration count."""
+    _, _, _, _, _, KE, edofMat, mask = _setup(nelx, nely)
+    F_np, _, _ = point_load_problem(nelx, nely)
+    F = torch.tensor(F_np, dtype=torch.float64)
+    xPhys = _binary_design(nelx, nely)
+    U_jac, n_jac = torch_fem.solve(
+        F,
+        torch.tensor(xPhys, dtype=torch.float64),
+        edofMat,
+        KE,
+        EMIN,
+        EMAX,
+        PENAL,
+        mask,
+        rtol=1e-11,
+        max_iter=50000,
+    )
+    U_mg, n_mg = _mg_solve(nelx, nely, xPhys, rtol=1e-11)
+    assert n_mg < n_jac / 5
+    # Scaled atol for the same reason as test_mgcg_matches_spsolve.
+    assert_close(
+        U_mg.numpy(),
+        U_jac.numpy(),
+        tier="solved",
+        atol=1e-6 * np.abs(U_jac.numpy()).max(),
+    )
+
+
+def test_mgcg_batched_matches_sequential():
+    """Batched over both right-hand side and density field, as the nStage solves are."""
+    nelx, nely = 18, 12
+    rng = np.random.default_rng(4)
+    _, _, ndof, _, _, KE, edofMat, mask = _setup(nelx, nely)
+    F_np, _, _ = point_load_problem(nelx, nely)
+    F = torch.tensor(F_np, dtype=torch.float64)
+    n_stage = 3
+    xPhys = np.stack(
+        [
+            _binary_design(nelx, nely),
+            np.full(nelx * nely, 0.4),
+            rng.uniform(0.05, 1.0, nelx * nely),
+        ]
+    )
+    sequential = [
+        _mg_solve(nelx, nely, xPhys[s], rtol=1e-11)[0] for s in range(n_stage)
+    ]
+
+    batched, _ = torch_mg.solve(
+        F.unsqueeze(0).expand(n_stage, -1),
+        torch.tensor(xPhys, dtype=torch.float64),
+        edofMat,
+        KE,
+        EMIN,
+        EMAX,
+        PENAL,
+        mask,
+        nelx,
+        nely,
+        rtol=1e-11,
+        **MG_KW,
+    )
+    assert batched.shape == (n_stage, ndof)
+    for s in range(n_stage):
+        assert_close(
+            batched[s].numpy(),
+            sequential[s].numpy(),
+            tier="solved",
+            atol=1e-6 * np.abs(sequential[s].numpy()).max(),
+        )
+
+
+def test_mgcg_warm_start_and_boundary_conditions():
+    nelx, nely = 18, 12
+    _, _, ndof, _, _, _, _, mask = _setup(nelx, nely)
+    xPhys = _binary_design(nelx, nely)
+    U_cold, n_cold = _mg_solve(nelx, nely, xPhys, rtol=1e-11)
+    assert torch.all(U_cold[~mask] == 0.0)
+
+    rng = np.random.default_rng(5)
+    x0 = torch_fem.project(
+        U_cold + torch.tensor(rng.standard_normal(ndof) * 1e-6), mask
+    )
+    U_warm, n_warm = _mg_solve(nelx, nely, xPhys, rtol=1e-11, x0=x0)
+    assert n_warm < n_cold
+    assert_close(
+        U_warm.numpy(),
+        U_cold.numpy(),
+        tier="solved",
+        atol=1e-6 * np.abs(U_cold.numpy()).max(),
+    )
+
+
+def test_mgcg_nonconvergence_raises():
+    nelx, nely = 18, 12
+    with pytest.raises(torch_fem.CGConvergenceError) as excinfo:
+        _mg_solve(nelx, nely, _binary_design(nelx, nely), rtol=1e-14, max_iter=2)
+    assert excinfo.value.n_iter == 2
+
+
+def test_mgcg_dtype_float64_end_to_end():
+    nelx, nely = 12, 8
+    xPhys = _binary_design(nelx, nely)
+    U, _ = _mg_solve(nelx, nely, xPhys, rtol=1e-10)
+    assert U.dtype == torch.float64
+    levels = _hierarchy(nelx, nely, xPhys)
+    for level in levels:
+        assert level.diag.dtype == torch.float64
+    assert levels[-1].chol.dtype == torch.float64
