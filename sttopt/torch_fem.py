@@ -140,13 +140,13 @@ def jacobi_preconditioner_diag(
 def pcg(
     apply_A,
     b: Float[Tensor, "*batch ndof"],
-    diag_precond: Float[Tensor, "*batch ndof"],
+    apply_M,
     *,
     rtol: float = 1e-8,
     max_iter: int = 10000,
     x0: Float[Tensor, "*batch ndof"] | None = None,
 ) -> tuple[Float[Tensor, "*batch ndof"], int]:
-    """Jacobi-preconditioned CG on the batched system `apply_A(x) = b`.
+    """Preconditioned CG on the batched system `apply_A(x) = b`.
 
     Every batch member runs the same number of iterations (the batch shares one matmul
     schedule, which is the point of batching), continuing until every member has
@@ -154,9 +154,15 @@ def pcg(
     `x0`. Raises `CGConvergenceError` -- never returns an unconverged result -- if any
     batch member fails to converge within `max_iter`.
 
+    `apply_M` must be a fixed symmetric positive-definite linear operator; anything
+    state-dependent or nonsymmetric (an inner CG, an unequal-sweep multigrid cycle)
+    silently invalidates the short recurrence this algorithm relies on.
+
     :param apply_A: callable, `Tensor -> Tensor`, the (implicitly batched) operator.
     :param b: right-hand side.
-    :param diag_precond: diagonal of `A`, used as the Jacobi preconditioner `1/diag`.
+    :param apply_M: callable, `Tensor -> Tensor`, the preconditioner approximating `A^-1`
+        (`1/jacobi_preconditioner_diag` for the diagonal one, `torch_mg.VCycle` for
+        multigrid).
     :param rtol: relative residual tolerance `||r|| / ||b||`.
     :param max_iter: maximum CG iterations before raising.
     :param x0: optional warm-start initial guess, defaults to zero.
@@ -167,7 +173,7 @@ def pcg(
 
     x = torch.zeros_like(b) if x0 is None else x0.clone()
     r = b - apply_A(x)
-    z = r / diag_precond
+    z = apply_M(r)
     p = z.clone()
     rz_old = (r * z).sum(dim=-1)
 
@@ -181,7 +187,7 @@ def pcg(
         rel_resid = r.norm(dim=-1) / b_norm_safe
         if torch.all(rel_resid <= rtol):
             return x, n_iter
-        z = r / diag_precond
+        z = apply_M(r)
         rz_new = (r * z).sum(dim=-1)
         beta = rz_new / rz_old
         p = z + beta[..., None] * p
@@ -219,5 +225,5 @@ def solve(
 
     diag = jacobi_preconditioner_diag(density, edofMat, KE, ndof, mask)
     b = project(F, mask)
-    U, n_iter = pcg(apply_A, b, diag, rtol=rtol, max_iter=max_iter, x0=x0)
+    U, n_iter = pcg(apply_A, b, lambda r: r / diag, rtol=rtol, max_iter=max_iter, x0=x0)
     return project(U, mask), n_iter
