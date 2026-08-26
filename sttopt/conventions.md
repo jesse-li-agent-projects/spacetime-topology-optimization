@@ -93,10 +93,11 @@ original MATLAB, not a deliberate design choice, so this port fixed it
 than `t[a] == t[b]` by value) rather than reproducing it — correctness of the port
 takes priority over bug-for-bug fidelity to the source.
 
-Not a measure-zero edge case, either: `TimeField.EDGE` (linear ramp, constant down
-each column) produces structural off-diagonal ties on ~5% of neighbor pairs at a
-realistic 180x60 mesh, surviving density filtering — so with that timefield choice
-this branch is live from iteration 0, not a rare coincidence. The old bug was also
-worse than "wrong on a small set": `DFT` was ~`rouf/4` approaching a tie and exactly
-`0` at one, so `dt1` was discontinuous in `t` — a hole in the gradient field that an
-optimizer driving a symmetric design toward equal print times would walk straight into.
+Not a measure-zero edge case, either: a time field with exact repeated values along a
+grid axis (e.g. a linear ramp) produces structural off-diagonal ties on a nontrivial
+fraction of neighbor pairs, surviving density filtering — so under that kind of
+initialization this branch is live from iteration 0, not a rare coincidence. The old
+bug was also worse than "wrong on a small set": `DFT`
+was ~`rouf/4` approaching a tie and exactly `0` at one, so `dt1` was discontinuous in
+`t` — a hole in the gradient field that an optimizer driving a symmetric design toward
+equal print times would walk straight into.

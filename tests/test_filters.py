@@ -79,7 +79,7 @@ def test_continuity_filter_annihilates_constant_fields(c):
 
 def test_continuity_filter_on_linear_ramp_closed_form():
     """A ramp increasing by 1 per column is the canonical "perfectly continuous" build
-    order (`TimeField.EDGE`'s shape). Its 3x3 neighbourhood is symmetric about the centre
+    order. Its 3x3 neighbourhood is symmetric about the centre
     everywhere except the first and last columns, so `L @ t` must vanish identically off
     those two columns, whatever the mesh size -- an operator that leaked a nonzero
     residual into the interior would penalize the very build order it exists to reward.
