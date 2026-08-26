@@ -353,6 +353,10 @@ def test_vcycle_is_symmetric_and_positive_definite(nelx, nely):
         levels = _hierarchy(nelx, nely, xPhys)
         M = torch_mg.VCycle(levels)
         mask = levels[0].mask
+        # The smoother divides by these. `Emin` keeps them positive even where xPhys is
+        # exactly 0.0, at every level -- assert it rather than trusting it.
+        for level in levels:
+            assert torch.all(level.diag > 0.0)
         u = torch_fem.project(torch.tensor(rng.standard_normal(levels[0].ndof)), mask)
         v = torch_fem.project(torch.tensor(rng.standard_normal(levels[0].ndof)), mask)
         Mu, Mv = M(u), M(v)

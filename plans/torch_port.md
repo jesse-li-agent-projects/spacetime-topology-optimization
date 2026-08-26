@@ -287,6 +287,49 @@ tolerance policy, and the existing fixtures are the strongest available oracle.
    solver.
 10. **CPU/GPU parity.** The same CG on CPU and on GPU agree to `solved` tier.
 
+### Phase 1 results (MGCG)
+
+Implemented in `sttopt/torch_mg.py`. Iteration counts at `rtol = 1e-8`, RTX PRO 1000,
+float64, cold start, single right-hand side:
+
+| mesh | ndof | field | Jacobi-PCG it | MGCG it | MGCG ms |
+|---|---|---|---|---|---|
+| 90x30 | 5642 | uniform | 527 | 9 | 19 |
+| 90x30 | 5642 | hard 0/1 | 1433 | 31 | 39 |
+| 180x60 | 22082 | uniform | 1048 | 10 | 25 |
+| 180x60 | 22082 | hard 0/1 | 2825 | 44 | 81 |
+| 360x120 | 87362 | uniform | 2086 | 10 | 43 |
+| 360x120 | 87362 | hard 0/1 | 5649 | 47 | 162 |
+
+Mesh-independent on uniform density, as multigrid should be. On hard 0/1 designs it
+lands at 31-47 rather than the hoped-for 5-30 -- the ~1e9 contrast costs roughly a
+factor of four, and the count drifts up slowly with refinement. Still a 46-120x
+reduction in iterations over Jacobi and 3-14x in wall clock.
+
+Two findings worth carrying into Phase 2:
+
+- **Do not coarsen as far as the grid allows.** A coarse grid helps only while it still
+  resolves the design's bars. At 90x30 on a hard 0/1 field, descending
+  90x30 -> 45x15 -> 15x5 -> 5x5 costs 119 iterations against 31 for stopping at 45x15.
+  A W-cycle recovers part of the loss (119 -> 80) but costs more wall clock than it
+  saves. `MAX_COARSE_ELEMENTS` encodes the early stop.
+- **The GPU is latency-bound at these sizes, as predicted.** At 180x60 a hard-field
+  solve is 81 ms for 44 iterations, ~1.8 ms per iteration on a 22082-dof problem whose
+  arithmetic is microseconds. Phase 2 should expect kernel-launch overhead, not
+  bandwidth, to set the time, and should test CUDA graphs and stage batching before
+  concluding anything about the device.
+
+**Determinism.** `index_add_`'s atomics make the default nondeterministic: 2.1e-16
+relative drift on a matvec, 1.4e-12 on a full solve -- far below the `solved` tier's
+1e-6, but not bitwise. Both fixes work and neither is free:
+`torch.use_deterministic_algorithms(True)` costs 1.69x at 180x60 and 2.30x at 360x120
+end to end; 4-colouring the elements (no two elements in a colour share a dof, so the
+atomics never collide) is bitwise-reproducible at 1.61x on the matvec alone, so
+perhaps 1.3-1.4x end to end. Recommendation: keep the nondeterministic default and
+treat `use_deterministic_algorithms(True)` as an opt-in debugging switch. Paying 30-130%
+of the solve for reproducibility below the tolerance the tests already use is a bad
+trade; the E2E trajectory comparisons should absorb 1e-12 via `e2e_rtol` instead.
+
 ---
 
 ## Phase 2: Benchmark
