@@ -10,6 +10,8 @@ from pathlib import Path
 import numpy as np
 import scipy.io
 
+import sttopt.fem as fem
+
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
@@ -23,6 +25,53 @@ def fixture_element_perm(nelx: int, nely: int) -> np.ndarray:
     return j * nelx + i  # C-order encode
 
 
+def fixture_node_perm(nelx: int, nely: int) -> np.ndarray:
+    """`fixture_element_perm`, for the `(nely+1, nelx+1)` *node* grid rather than the
+    element grid. `perm[n_fixture] == n_sttopt`.
+    """
+    n = np.arange((nelx + 1) * (nely + 1))
+    c, r = n // (nely + 1), n % (nely + 1)  # F-order decode
+    return fem.node_grid(nelx, nely)[r, c]
+
+
+def fixture_dof_perm(nelx: int, nely: int) -> np.ndarray:
+    """`fixture_node_perm`, lifted to dofs: each node `n` owns the interleaved `(x, y)`
+    pair `2n`, `2n+1`, so a dof keeps its component and follows its node.
+    """
+    node_perm = fixture_node_perm(nelx, nely)
+    return np.stack([2 * node_perm, 2 * node_perm + 1], axis=-1).ravel()
+
+
+def node_positions(nelx: int, nely: int) -> tuple[np.ndarray, np.ndarray]:
+    """Inverse of `fem.node_grid`: the `(row, col)` grid position of every node, as two
+    arrays indexed by global node number. Lets a test that knows a node's mesh position
+    state an expectation per dof without re-deriving the numbering formula.
+    """
+    nodes = fem.node_grid(nelx, nely)
+    rows, cols = np.indices(nodes.shape)
+    row_of = np.empty(nodes.size, int)
+    col_of = np.empty(nodes.size, int)
+    row_of[nodes.ravel()] = rows.ravel()
+    col_of[nodes.ravel()] = cols.ravel()
+    return row_of, col_of
+
+
+def point_load_problem(nelx: int, nely: int) -> tuple[np.ndarray, np.ndarray, int]:
+    """`(F, freedofs, ndof)` for the fixed cantilever load case the fixtures were
+    generated under: unit downward point load on the bottom-right node, left edge
+    clamped in both directions. This is the geometry MATLAB's `F(2*(nelx+1)*(nely+1))
+    = -1` / `fixeddofs = 1:2*(nely+1)` denote; keeping it here rather than restating
+    those formulas per test file keeps it in step with `optimize.build_problem`.
+    """
+    nodes = fem.node_grid(nelx, nely)
+    ndof = 2 * nodes.size
+    F = np.zeros(ndof)
+    F[2 * nodes[-1, -1] + 1] = -1.0
+    left_edge = nodes[:, 0]
+    fixeddofs = np.stack([2 * left_edge, 2 * left_edge + 1], axis=-1).ravel()
+    return F, np.setdiff1d(np.arange(ndof), fixeddofs), ndof
+
+
 def reindex_fixture(arr: np.ndarray, nelx: int, nely: int, axis: int = 0) -> np.ndarray:
     """Reindexes a fixture-derived array's element axis (length `nelx*nely`) from the
     fixture's F-order to `sttopt`'s C-order (`fixture_element_perm`), leaving any other
@@ -30,6 +79,18 @@ def reindex_fixture(arr: np.ndarray, nelx: int, nely: int, axis: int = 0) -> np.
     matrix), call this once per axis.
     """
     perm = fixture_element_perm(nelx, nely)
+    out = np.empty_like(arr)
+    out.swapaxes(0, axis)[perm] = arr.swapaxes(0, axis)
+    return out
+
+
+def reindex_fixture_nodes(
+    arr: np.ndarray, nelx: int, nely: int, axis: int = 0
+) -> np.ndarray:
+    """`reindex_fixture`, for a node-indexed axis (length `(nelx+1)*(nely+1)`) rather
+    than an element-indexed one.
+    """
+    perm = fixture_node_perm(nelx, nely)
     out = np.empty_like(arr)
     out.swapaxes(0, axis)[perm] = arr.swapaxes(0, axis)
     return out

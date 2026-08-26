@@ -29,21 +29,32 @@ def plane_stress_KE(nu: float) -> Float[np.ndarray, "8 8"]:
     return (A + nu * B) / (1 - nu**2) / 24
 
 
+def node_grid(nelx: int, nely: int) -> Int[np.ndarray, "nely+1 nelx+1"]:
+    """Global node number (0-indexed) at each mesh corner position `(row, col)`.
+
+    The single definition of the mesh's node numbering, in C order per conventions.md.
+    Anything that needs to name specific nodes -- element connectivity, self-weight
+    loads, boundary conditions -- should index this grid geometrically rather than
+    re-deriving the linear-index formula, so node numbering stays a choice made in one
+    place.
+    """
+    return np.arange((nely + 1) * (nelx + 1)).reshape(nely + 1, nelx + 1)
+
+
 def element_dof_map(nelx: int, nely: int) -> Int[np.ndarray, "n 8"]:
     """Per-element global dof indices (0-indexed), in element order matching `xPhys.flatten()`.
 
     Each row lists the 8 dofs (x, y for each of the 4 corner nodes) of one element,
     the corners taken in the local node order `plane_stress_KE` expects. Element `e`
     (0-indexed, C order per conventions.md) corresponds to grid position
-    `(e // nelx, e % nelx)`. Node numbering itself (`nodenrs` below) is an unrelated
-    internal dof-labeling choice, not tied to that element-order convention -- it stays
-    column-major regardless, since nothing outside this module and `gravity.py` (which
-    mirrors it) observes node numbers directly.
+    `(e // nelx, e % nelx)`, and node numbering follows `node_grid`.
     """
-    nodenrs = np.arange((1 + nelx) * (1 + nely)).reshape(1 + nely, 1 + nelx, order="F")
-    top_left = nodenrs[:-1, :-1].flatten()
-    # Local node order, counterclockwise against the physical y = -row axis.
-    corners = top_left[:, None] + np.array([1, nely + 2, nely + 1, 0])[None, :]
+    nodes = node_grid(nelx, nely)
+    # Local node order, counterclockwise against the physical y = -row axis: bottom
+    # left, bottom right, top right, top left, relative to each element's top-left node.
+    corners = np.stack(
+        [nodes[1:, :-1], nodes[1:, 1:], nodes[:-1, 1:], nodes[:-1, :-1]], axis=-1
+    ).reshape(-1, 4)
     return np.stack([2 * corners, 2 * corners + 1], axis=-1).reshape(-1, 8)
 
 
@@ -70,8 +81,8 @@ def assemble_stiffness(
     # NB: these three flattens are row-major ('C', NumPy's default) over the per-element
     # (nel, 64) block layout built by tile/repeat, and KE.flatten(order='F') pairs with
     # them to match local dof indices (row=k%8, col=k//8) -- an internal-consistency
-    # choice for KE's own 8x8 layout, unrelated to conventions.md's grid-element-order
-    # convention (which governs `xPhys.flatten()` below, not KE's).
+    # choice for KE's own 8x8 layout -- the last `order=` left in the package, and not a
+    # grid array, so conventions.md's C-order rule does not reach it.
     iK = np.tile(edofMat, (1, 8)).flatten()
     jK = np.repeat(edofMat, 8, axis=1).flatten()
     density = Emin + xPhys.flatten() ** penal * (Emax - Emin)

@@ -173,11 +173,14 @@ def build_problem(
     edofMat = fem.element_dof_map(nelx, nely)
     ndof = 2 * (nelx + 1) * (nely + 1)
 
-    # Fixed point load + boundary condition, matching generate_fixtures.m / test_fem.py:
-    # MATLAB's 1-indexed `F(2*(nelx+1)*(nely+1))=-1`, `fixeddofs=1:2*(nely+1)`.
+    # Fixed cantilever load case, stated geometrically rather than as a linear-index
+    # formula so it survives a change of node numbering: unit downward point load on the
+    # bottom-right node, left edge clamped in both directions.
+    nodes = fem.node_grid(nelx, nely)
     F = np.zeros(ndof)
-    F[2 * (nelx + 1) * (nely + 1) - 1] = -1.0
-    fixeddofs = np.arange(2 * (nely + 1))
+    F[2 * nodes[-1, -1] + 1] = -1.0
+    left_edge = nodes[:, 0]
+    fixeddofs = np.stack([2 * left_edge, 2 * left_edge + 1], axis=-1).ravel()
     freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)
 
     H, Hs = filters.density_filter(nelx, nely, rmin)

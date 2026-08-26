@@ -12,20 +12,24 @@ column index.
 
 The Python port keeps every field shaped `(nely, nelx)` but uses NumPy's native
 row-major order (`order='C'`, the default — every `.flatten()`/`.reshape()` below omits
-`order=` entirely) for the element enumeration, rather than mirroring MATLAB's
+`order=` entirely) for both the element and node enumerations, rather than MATLAB's
 column-major layout: a linear element index `e` (0-indexed, C order) maps to grid
 position `(e // nelx, e % nelx)`. `nelx != nely`, mixed with a genuinely asymmetric
 field, is what makes a C/Fortran-order mismatch visible at all — see "Consequence for
 fixtures" below — so this was safe to flip once nothing depended on bit-matching the
 frozen `.mat` fixtures' *element order* any more.
 
-Node numbering (`fem.element_dof_map`'s and `gravity.py`'s `nodenrs`) is a separate,
-purely internal dof-labeling scheme, unrelated to this element-order convention — it
-stays column-major, since nothing outside those two (mutually consistent) call sites
-observes node numbers directly. Likewise `fem.assemble_stiffness`'s
-`KE.flatten(order='F')` flattens the local 8x8 element stiffness matrix, not a grid
-array, and is an unrelated internal-consistency choice paired with that function's own
-`iK`/`jK` construction — not a grid-order violation to fix here.
+Node numbering follows the same C order, and is defined once by `fem.node_grid`: node
+`(row, col)` of the `(nely+1, nelx+1)` corner grid is number `row*(nelx+1) + col`. Dofs
+interleave `(x, y)` per node, so node `n` owns dofs `2n` and `2n+1`. Name specific nodes
+by indexing `node_grid` geometrically (`nodes[:, 0]` for the left edge) rather than by
+writing the linear-index formula out — a boundary condition keyed to a linear formula
+silently clamps a different part of the mesh if the numbering ever changes again, while
+leaving the problem well-posed and the tests green.
+
+`fem.assemble_stiffness`'s `KE.flatten(order='F')` flattens the local 8x8 element
+stiffness matrix, not a grid array, and is an unrelated internal-consistency choice
+paired with that function's own `iK`/`jK` construction — not a grid-order violation.
 
 **Consequence for fixtures**: every fixture must use `nelx != nely` and an asymmetric
 field. A square or symmetric test case can pass a transposed port undetected.
