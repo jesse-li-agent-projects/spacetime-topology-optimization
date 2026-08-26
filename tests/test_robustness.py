@@ -17,7 +17,7 @@ import io
 
 import numpy as np
 import scipy.sparse as sp
-from conftest import e2e_rtol, load_fixture, matlab_init_state, reindex_fixture_halves
+from conftest import e2e_rtol, load_fixture_npz
 
 import sttopt.conductivity as conductivity
 import sttopt.mma as mma
@@ -34,9 +34,9 @@ def test_e2e_agreement_is_at_machine_precision():
     iteration 5 to 1e-4".
 
     That amplification does not actually happen at this problem size: measured
-    agreement against `e2e.mat`/`constraints.mat` is <= ~3e-14 at *every* iteration,
-    including the third. The ladder therefore leaves six to eight decades of slack, so
-    `test_e2e_trajectory_matches_fixture` and `test_constraints_stacking_matches_fixture`
+    agreement against `e2e.npz`/`constraints.npz` is at machine precision at *every*
+    iteration, including the third. The ladder therefore leaves many decades of slack,
+    so `test_e2e_trajectory_matches_fixture` and `test_constraints_stacking_matches_fixture`
     would still pass with a substantial regression present.
 
     This test pins the agreement that is actually achieved. It is the sensitive version
@@ -44,21 +44,16 @@ def test_e2e_agreement_is_at_machine_precision():
     drift, this is where it will show up, and *then* is the time to decide whether the
     ladder is justified -- rather than assuming it up front.
     """
-    e2e = load_fixture("e2e")
-    cons = load_fixture("constraints")
+    e2e = load_fixture_npz("e2e")
+    cons = load_fixture_npz("constraints")
     problem = optimize.build_problem(
         NELX, NELY, NSTAGE, 0.5, 0.1, 0.8, 3, 2.0, 2.0, 3.0
     )
-    result = optimize.run_from_state(problem, matlab_init_state(problem, 1.0), NLOOP)
+    result = optimize.run_from_state(problem, optimize.init_state(problem, 1.0), NLOOP)
 
     strict = 1e-12
     for k in range(1, NLOOP + 1):
         rec = result.records[k - 1]
-        # dfdx's columns are element-indexed (raw [x; t] variable order); reindex the
-        # fixture's F-order halves to sttopt's C-order before comparing.
-        expected_dfdx = reindex_fixture_halves(
-            cons["dfdx_all"][:, :, k - 1], NELX, NELY, axis=1
-        )
         for name, got, want in [
             ("xPhys", result.xPhys_traj[k], e2e["xPhys_traj"][:, :, k]),
             ("tPhys", result.tPhys_traj[k], e2e["tPhys_traj"][:, :, k]),
@@ -66,7 +61,7 @@ def test_e2e_agreement_is_at_machine_precision():
             ("vol", np.array([rec.vol]), np.array([e2e["vol"][k - 1]])),
             ("tru_max", np.array([rec.tru_max]), np.array([e2e["tru_max_all"][k - 1]])),
             ("fval", rec.fval, cons["fval_all"][:, k - 1]),
-            ("dfdx", rec.dfdx, expected_dfdx),
+            ("dfdx", rec.dfdx, cons["dfdx_all"][:, :, k - 1]),
         ]:
             got, want = np.asarray(got, float), np.asarray(want, float)
             err = np.abs(got - want).max() / max(np.abs(want).max(), 1e-30)

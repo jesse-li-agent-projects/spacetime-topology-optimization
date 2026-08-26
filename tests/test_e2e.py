@@ -1,23 +1,18 @@
-"""End-to-end test for sttopt.optimize against the full small-grid MATLAB run
-(`tests/fixtures/generate_fixtures.m`'s main loop).
+"""End-to-end test for sttopt.optimize against the full small-grid trajectory
+(`tests/fixtures/generate_fixtures.py`'s main loop) -- a golden-regression fixture,
+not a MATLAB cross-check (see conftest.py, conventions.md).
 
 Split into three layers, ordered from most to least diagnostic on failure:
   1. `test_iteration1_assembly_matches_fixture` -- iteration 1's assembled f0val/df0dx
-     and fval/dfdx against `mma.mat`'s single-shot snapshot (the only ground truth for
+     and fval/dfdx against `mma.npz`'s single-shot snapshot (the only ground truth for
      the *assembled* objective, since no other fixture covers df0dx). A pass here rules
      out objective/constraint-stacking bugs before trajectory drift can hide them.
   2. `test_mma_state_threading_matches_fixture` -- per-iteration xmma/low/upp/lam against
-     `mma.mat`'s xmma_all/low_all/upp_all/lam_all, validating mmasub's stateful low/upp
+     `mma.npz`'s xmma_all/low_all/upp_all/lam_all, validating mmasub's stateful low/upp
      threading across multiple calls (no other test exercises this: test_mma.py only
      covers iteration 1, where low/upp start at 0 and are simply reinitialized).
-  3. `test_e2e_trajectory_matches_fixture` -- the primary correctness check: xPhys/tPhys
+  3. `test_e2e_trajectory_matches_fixture` -- the primary regression check: xPhys/tPhys
      trajectory, objf, vol, tru_max_all, via optimize.run().
-
-See conventions.md's tolerance policy: iteration 3 is where mmasub's `zzz == 0` asymptote
-ties (test_mma.py's `test_mmasub_asymptote_update_branch` docstring) can amplify a ~1e-15
-input difference into a 20-30% swing in a handful of low/upp entries -- a known, documented
-hazard, not evidence of a wiring bug, if iterations 1-2 match tightly and only isolated
-entries at iteration 3 exceed tolerance.
 """
 
 import numpy as np
@@ -25,12 +20,7 @@ import numpy as np
 import sttopt.conductivity as conductivity
 import sttopt.filters as filters
 import sttopt.optimize as optimize
-from conftest import (
-    assert_close,
-    load_fixture,
-    matlab_init_state,
-    reindex_fixture_halves,
-)
+from conftest import assert_close, load_fixture_npz
 
 NELX, NELY = 7, 5
 NSTAGE = 3
@@ -44,60 +34,47 @@ BETA_INIT = 1.0
 
 
 def _run():
-    """`optimize.run`'s loop entered at the fixtures' own starting state -- see
-    `conftest.matlab_init_state` for why these tests do not start from `init_state`.
-    """
     problem = optimize.build_problem(
         NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
     )
     return optimize.run_from_state(
-        problem, matlab_init_state(problem, BETA_INIT), NLOOP
+        problem, optimize.init_state(problem, BETA_INIT), NLOOP
     )
 
 
 def test_iteration1_assembly_matches_fixture():
-    """Checks f0val/df0dx and fval/dfdx at iteration 1 against mma.mat's single-shot
+    """Checks f0val/df0dx and fval/dfdx at iteration 1 against mma.npz's single-shot
     snapshot. f0val in particular has no other coverage anywhere in this test suite --
     mmasub itself never reads it (see mma.py's docstring), so a wrong Theta-weighting
     or wrong per-stage `ti` in the objective sum would pass every other test here.
     """
-    fx = load_fixture("mma")
+    fx = load_fixture_npz("mma")
     problem = optimize.build_problem(
         NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
     )
-    state = matlab_init_state(problem, BETA_INIT)
+    state = optimize.init_state(problem, BETA_INIT)
 
     _, record = optimize.step(problem, state)
 
     # f0val/df0dx are downstream of a sparse linear solve (compliance), so "solved" tier.
-    # df0dx/dfdx are element-indexed (raw [x; t] variable order); reindex the fixture's
-    # F-order halves to sttopt's C-order before comparing (see conventions.md).
     assert_close(record.f0val, fx["f0val_1"], tier="solved")
-    expected_df0dx = reindex_fixture_halves(fx["df0dx_1"], NELX, NELY, axis=0)
-    assert_close(record.df0dx, expected_df0dx, tier="solved")
+    assert_close(record.df0dx, fx["df0dx_1"], tier="solved")
     assert_close(record.fval, fx["fval_1"], tier="algebraic")
-    expected_dfdx = reindex_fixture_halves(fx["dfdx_1"], NELX, NELY, axis=1)
-    assert_close(record.dfdx, expected_dfdx, tier="algebraic")
+    assert_close(record.dfdx, fx["dfdx_1"], tier="algebraic")
 
 
 def test_mma_state_threading_matches_fixture():
-    fx = load_fixture("mma")
+    fx = load_fixture_npz("mma")
     problem = optimize.build_problem(
         NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
     )
-    state = matlab_init_state(problem, BETA_INIT)
+    state = optimize.init_state(problem, BETA_INIT)
 
-    # xmma/low/upp are element-indexed (raw [x; t] variable order); reindex the
-    # fixture's F-order halves to sttopt's C-order. lam is constraint-indexed, not
-    # element-indexed, so it needs no reindex.
     for k in range(NLOOP):
         state, record = optimize.step(problem, state)
-        expected_xmma = reindex_fixture_halves(fx["xmma_all"][:, k], NELX, NELY)
-        expected_low = reindex_fixture_halves(fx["low_all"][:, k], NELX, NELY)
-        expected_upp = reindex_fixture_halves(fx["upp_all"][:, k], NELX, NELY)
-        assert_close(record.xmma, expected_xmma, tier="e2e", iteration=k + 1)
-        assert_close(record.low, expected_low, tier="e2e", iteration=k + 1)
-        assert_close(record.upp, expected_upp, tier="e2e", iteration=k + 1)
+        assert_close(record.xmma, fx["xmma_all"][:, k], tier="e2e", iteration=k + 1)
+        assert_close(record.low, fx["low_all"][:, k], tier="e2e", iteration=k + 1)
+        assert_close(record.upp, fx["upp_all"][:, k], tier="e2e", iteration=k + 1)
         assert_close(record.lam, fx["lam_all"][:, k], tier="e2e", iteration=k + 1)
 
 
@@ -107,28 +84,22 @@ def test_constraints_stacking_matches_fixture():
     same order the reference loop does, which per-constraint tests can't catch (a
     swapped-but-correctly-shaped row wouldn't fail them).
     """
-    fx = load_fixture("constraints")
+    fx = load_fixture_npz("constraints")
     problem = optimize.build_problem(
         NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
     )
-    state = matlab_init_state(problem, BETA_INIT)
+    state = optimize.init_state(problem, BETA_INIT)
 
     for k in range(NLOOP):
         state, record = optimize.step(problem, state)
         assert_close(record.fval, fx["fval_all"][:, k], tier="e2e", iteration=k + 1)
-        expected_dfdx = reindex_fixture_halves(
-            fx["dfdx_all"][:, :, k], NELX, NELY, axis=1
-        )
-        assert_close(record.dfdx, expected_dfdx, tier="e2e", iteration=k + 1)
+        assert_close(record.dfdx, fx["dfdx_all"][:, :, k], tier="e2e", iteration=k + 1)
 
 
 def test_e2e_trajectory_matches_fixture():
-    fx = load_fixture("e2e")
+    fx = load_fixture_npz("e2e")
     result = _run()
 
-    # Slice 0 is this test's own entry state, so comparing it against the fixture would
-    # only restate `matlab_init_state`. What `init_state` actually produces is pinned by
-    # test_optimize.py's three init invariant tests instead.
     for k in range(1, NLOOP + 1):
         assert_close(
             result.xPhys_traj[k], fx["xPhys_traj"][:, :, k], tier="e2e", iteration=k
@@ -166,7 +137,7 @@ def test_hotspot_factor_refresh_at_loop_25():
     problem = optimize.build_problem(
         NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
     )
-    state = matlab_init_state(problem, BETA_INIT)
+    state = optimize.init_state(problem, BETA_INIT)
     for _ in range(24):
         state, _ = optimize.step(problem, state)
     assert state.loop == 24

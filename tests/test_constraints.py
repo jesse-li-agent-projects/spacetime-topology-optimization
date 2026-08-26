@@ -1,20 +1,6 @@
-"""Tests for sttopt.constraints against MATLAB fixtures and finite-difference checks.
-
-See conftest.py/conventions.md for fixture format and tolerance policy.
-
-xTilde/dx reconstruction (needed for the density-sensitivity chain rule, constraints (1)
-and (4) only -- (2)/(3) are pure functions of tPhys and need no Heaviside term): the MATLAB
-main loop only updates `xTilde` at the *end* of each iteration (`xTilde(:) = (H*s(:))./Hs`,
-`s` = the density half of that iteration's raw MMA output `xmma`), so the `xTilde` used by
-iteration `k`'s constraint block is:
-  - k=0: the initial uniform field `xTilde = volfrac` (`generate_fixtures.m`'s init, before
-    the loop runs at all).
-  - k>=1: `H @ s_{k-1}.flatten('F') / Hs`, where `s_{k-1}` is the density half of
-    `xmma_all[:, k-1]` (`mma.mat`, saved for *every* loop iteration, unlike the single-shot
-    `xval_1`/`fval_1`/etc. "loop==1" snapshot also in that fixture).
-This makes all 3 fixture iterations reconstructable (not just iteration 0): `xmma_all`
-gives an exact, non-shaky path to `xTilde`/`dx` at every iteration, so no subset-testing
-fallback was needed.
+"""Tests for sttopt.constraints against golden-regression fixtures and
+finite-difference checks. See conftest.py/conventions.md for fixture format and
+tolerance policy.
 """
 
 import numpy as np
@@ -22,7 +8,7 @@ import numpy as np
 import sttopt.compliance as compliance
 import sttopt.constraints as constraints
 import sttopt.filters as filters
-from conftest import assert_close, load_fixture, reindex_fixture
+from conftest import assert_close, load_fixture_npz
 
 NELX, NELY = 7, 5
 RMIN = LRMIN = 2
@@ -30,55 +16,30 @@ BETA, ETA = 1.0, 0.5
 ROU = 10.0
 
 
-def _reconstruct_xTilde_traj(xmma_all, H, Hs, nelx, nely, volfrac, nloop):
-    """xTilde at the start of each iteration k=0..nloop-1; see module docstring.
-
-    `xmma_all` is raw `.mat`-fixture data (F-order element numbering); `H`/`Hs` are
-    `sttopt`'s own (C-order) filter, so the density slice must be reindexed before the
-    filter is applied.
-    """
-    nel = nelx * nely
-    traj = [np.full((nely, nelx), volfrac)]
-    for k in range(nloop - 1):
-        s = reindex_fixture(xmma_all[:nel, k], nelx, nely, axis=0)
-        xTilde = (H @ s) / Hs
-        traj.append(xTilde.reshape((nely, nelx)))
-    return traj
-
-
 def test_constraints_match_fixture():
-    fx = load_fixture("constraints")
-    e2e = load_fixture("e2e")
-    mma = load_fixture("mma")
+    fx = load_fixture_npz("constraints")
+    e2e = load_fixture_npz("e2e")
     nelx, nely = int(fx["nelx"]), int(fx["nely"])
     nStage, volfrac, tfield = int(fx["nStage"]), float(fx["volfrac"]), int(fx["tfield"])
     nloop = e2e["xPhys_traj"].shape[2] - 1
     nel = nelx * nely
-    # Nei = 1:nely (0-indexed: 0..nely-1), not the tfield==1 singleton
+    # Nei = 0..nely-1 (0-indexed), not the tfield==1 singleton
     assert tfield == 3
 
     H, Hs = filters.density_filter(nelx, nely, RMIN)
     L = filters.continuity_filter(nelx, nely, LRMIN)
-    # column 0 (all rows), physical top-to-bottom order -- matches the fixture's own
-    # Nei row order under the old convention (see conventions.md's element ordering)
+    # column 0 (all rows), per conventions.md's C-order element enumeration
     Nei = np.arange(nely) * nelx
-
-    xTilde_traj = _reconstruct_xTilde_traj(
-        mma["xmma_all"], H, Hs, nelx, nely, volfrac, nloop
-    )
 
     for k in range(nloop):
         xPhys = e2e["xPhys_traj"][:, :, k]
         tPhys = e2e["tPhys_traj"][:, :, k]
-        xTilde = xTilde_traj[k]
-        dx = filters.heaviside_projection_derivative(xTilde, BETA, ETA)
+        dx = e2e["dx_all"][:, :, k]
 
         fval_all = fx["fval_all"][:, k]
         dfdx_all = fx["dfdx_all"][:, :, k]
-        # dfdx_all's two nel-wide column blocks are each element-indexed (fixture
-        # F-order); reindex both to sttopt's C-order before comparing.
-        dfdx_x = reindex_fixture(dfdx_all[:, :nel], nelx, nely, axis=1)
-        dfdx_t = reindex_fixture(dfdx_all[:, nel:], nelx, nely, axis=1)
+        dfdx_x = dfdx_all[:, :nel]
+        dfdx_t = dfdx_all[:, nel:]
 
         # (1) global volume
         fval, dfx, dft = constraints.global_volume_fraction(xPhys, dx, H, Hs, volfrac)

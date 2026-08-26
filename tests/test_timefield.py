@@ -1,10 +1,11 @@
-"""Tests for sttopt.timefield against MATLAB fixtures (see conftest.py, conventions.md)."""
+"""Tests for sttopt.timefield: golden-regression fixture checks (see conftest.py,
+conventions.md)."""
 
 import numpy as np
 import pytest
 
 import sttopt.timefield as timefield
-from conftest import assert_close, load_fixture
+from conftest import assert_close, load_fixture_npz
 
 _VARIANTS = [
     (timefield.TimeField.CORNER, "tfield1"),
@@ -17,7 +18,7 @@ _VARIANTS = [
 def test_timefield_variant_matches_fixture(variant, key):
     """`init_timefield` is the only entry point, so this covers both the field itself and
     the dispatch mapping each `TimeField` to the right one."""
-    fx = load_fixture("timefield")
+    fx = load_fixture_npz("timefield")
     nelx, nely = int(fx["nelx"]), int(fx["nely"])
 
     got = timefield.init_timefield(nelx, nely, variant)

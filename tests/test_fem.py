@@ -1,43 +1,31 @@
-"""Tests for sttopt.fem: MATLAB-fixture regression tests, plus closed-form elasticity
-patch tests that check the FEM assembly against elasticity theory directly rather than
-against the MATLAB port (see conftest.py, conventions.md).
+"""Tests for sttopt.fem: golden-regression fixture tests, plus closed-form elasticity
+patch tests that check the FEM assembly against elasticity theory directly (see
+conftest.py, conventions.md).
 """
 
 import numpy as np
 import pytest
 
 import sttopt.fem as fem
-from conftest import (
-    assert_close,
-    fixture_dof_perm,
-    load_fixture,
-    node_positions,
-    point_load_problem,
-    reindex_fixture,
-)
+from conftest import assert_close, load_fixture_npz, node_positions, point_load_problem
 
 # SIMP constants for the patch tests below; matches test_assemble_and_solve's convention.
 EMIN, EMAX, PENAL = 1e-9, 1.0, 3
 
 
 def test_plane_stress_KE():
-    fx = load_fixture("fem_setup")
+    fx = load_fixture_npz("fem_setup")
     KE = fem.plane_stress_KE(nu=0.3)
     assert KE.shape == fx["KE"].shape
     assert_close(KE, fx["KE"], tier="algebraic")
 
 
 def test_element_dof_map():
-    fx = load_fixture("fem_setup")
+    fx = load_fixture_npz("fem_setup")
     nelx, nely = int(fx["nelx"]), int(fx["nely"])
     edofMat = fem.element_dof_map(nelx, nely)
-    expected = fx["edofMat"].astype(np.int64) - 1  # MATLAB 1-indexed -> 0-indexed
-    # The fixture is F-order on both axes: its rows are F-order elements, and the dof
-    # numbers it stores are F-order node numbers. Reindex the rows, relabel the values.
-    expected = reindex_fixture(expected, nelx, nely, axis=0)
-    expected = fixture_dof_perm(nelx, nely)[expected]
-    assert edofMat.shape == expected.shape
-    assert_close(edofMat, expected, tier="algebraic")
+    assert edofMat.shape == fx["edofMat"].shape
+    assert_close(edofMat, fx["edofMat"], tier="algebraic")
 
 
 def test_node_grid():
@@ -71,14 +59,13 @@ def test_element_dof_map_corner_geometry(nelx, nely):
 
 
 def test_assemble_and_solve():
-    fx = load_fixture("fem_solve")
+    fx = load_fixture_npz("fem_solve")
     nelx, nely = int(fx["nelx"]), int(fx["nely"])
     xPhys0 = fx["xPhys0"]
     U0 = fx["U0"]
     assert xPhys0.shape == (nely, nelx)
 
-    # Fixed problem constants used throughout generate_fixtures.m (not saved to any
-    # fixture); mirrors generate_fixtures.m line ~66.
+    # Fixed problem constants used by generate_fixtures.py (not saved to any fixture).
     Emin, Emax, penal = 1e-9, 1.0, 3
     F, freedofs, ndof = point_load_problem(nelx, nely)
 
@@ -87,11 +74,8 @@ def test_assemble_and_solve():
     K = fem.assemble_stiffness(KE, xPhys0, Emin, Emax, penal, edofMat, ndof)
     U = fem.solve_fe(K, F, freedofs)
 
-    # U0 is indexed by the fixture's F-order node numbering; relabel to sttopt's.
-    expected = np.empty_like(U0)
-    expected[fixture_dof_perm(nelx, nely)] = U0
-    assert U.shape == expected.shape
-    assert_close(U, expected, tier="solved")
+    assert U.shape == U0.shape
+    assert_close(U, U0, tier="solved")
 
 
 def test_assemble_respects_row_major_element_order():

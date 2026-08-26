@@ -21,7 +21,11 @@ reaches cond ~1e10 and the dense-vs-sparse solvers legitimately part company aro
 import matlab_reference as ref
 import numpy as np
 import pytest
-from conftest import fixture_dof_perm, point_load_problem, reindex_fixture_nodes
+from conftest import (
+    matlab_reference_dof_perm,
+    point_load_problem,
+    reindex_matlab_reference_nodes,
+)
 from matlab_reference_loop import run_reference_loop
 
 import sttopt.compliance as compliance
@@ -116,7 +120,9 @@ def test_timefield_matches_reference(nelx, nely, variant):
 def test_gravity_matrix_matches_reference(nelx, nely):
     got = gravity.gravity_load_matrix(nelx, nely).toarray()
     # The reference's rows are column-major node numbers; reindex to the port's.
-    expected = reindex_fixture_nodes(ref.ref_gravity_C(nelx, nely), nelx, nely, axis=0)
+    expected = reindex_matlab_reference_nodes(
+        ref.ref_gravity_C(nelx, nely), nelx, nely, axis=0
+    )
     assert rel(got, expected) < TIGHT
 
 
@@ -128,7 +134,7 @@ def test_KE_matches_reference(nu):
 @pytest.mark.parametrize("nelx,nely", [(7, 5), (5, 7), (9, 3), (2, 3)])
 def test_edof_map_matches_reference(nelx, nely):
     # The reference's dof *values* are column-major node numbers; relabel to the port's.
-    expected = fixture_dof_perm(nelx, nely)[ref.ref_edofMat(nelx, nely) - 1]
+    expected = matlab_reference_dof_perm(nelx, nely)[ref.ref_edofMat(nelx, nely) - 1]
     assert rel(fem.element_dof_map(nelx, nely), expected) < TIGHT
 
 
