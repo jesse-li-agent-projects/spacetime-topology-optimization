@@ -9,18 +9,18 @@ is the per-element weight for unit total density. `C @ x.flatten()` (see
 import numpy as np
 import scipy.sparse as sp
 
+from sttopt import fem
+
 
 def gravity_load_matrix(nelx: int, nely: int) -> sp.csr_matrix:
     """Sparse matrix distributing per-element self-weight to corner-node loads.
 
     Shape `((nelx+1)*(nely+1), nelx*nely)`: column `e` (element index, 0-indexed,
     C order per conventions.md) has `fe/4` in the rows of its element's 4 corner
-    nodes. Node numbering itself (`nodenrs`) stays column-major, matching
-    `fem.element_dof_map`'s internal dof-labeling convention -- an unrelated choice
-    from the element-order convention that governs the flattens below.
+    nodes, numbered by `fem.node_grid`.
     """
     fe = 1 / (nelx * nely)
-    nodenrs = np.arange((nelx + 1) * (nely + 1)).reshape(nely + 1, nelx + 1, order="F")
+    nodenrs = fem.node_grid(nelx, nely)
     top_left = nodenrs[:-1, :-1].flatten()
     bottom_left = nodenrs[1:, :-1].flatten()
     top_right = nodenrs[:-1, 1:].flatten()

@@ -21,6 +21,7 @@ reaches cond ~1e10 and the dense-vs-sparse solvers legitimately part company aro
 import matlab_reference as ref
 import numpy as np
 import pytest
+from conftest import fixture_dof_perm, point_load_problem, reindex_fixture_nodes
 from matlab_reference_loop import run_reference_loop
 
 import sttopt.compliance as compliance
@@ -114,7 +115,9 @@ def test_timefield_matches_reference(nelx, nely, variant):
 @pytest.mark.parametrize("nelx,nely", [(7, 5), (5, 7), (9, 3), (1, 1), (3, 1)])
 def test_gravity_matrix_matches_reference(nelx, nely):
     got = gravity.gravity_load_matrix(nelx, nely).toarray()
-    assert rel(got, ref.ref_gravity_C(nelx, nely)) < TIGHT
+    # The reference's rows are column-major node numbers; reindex to the port's.
+    expected = reindex_fixture_nodes(ref.ref_gravity_C(nelx, nely), nelx, nely, axis=0)
+    assert rel(got, expected) < TIGHT
 
 
 @pytest.mark.parametrize("nu", [0.0, 0.3, 0.45])
@@ -124,27 +127,37 @@ def test_KE_matches_reference(nu):
 
 @pytest.mark.parametrize("nelx,nely", [(7, 5), (5, 7), (9, 3), (2, 3)])
 def test_edof_map_matches_reference(nelx, nely):
-    assert rel(fem.element_dof_map(nelx, nely), ref.ref_edofMat(nelx, nely) - 1) < TIGHT
+    # The reference's dof *values* are column-major node numbers; relabel to the port's.
+    expected = fixture_dof_perm(nelx, nely)[ref.ref_edofMat(nelx, nely) - 1]
+    assert rel(fem.element_dof_map(nelx, nely), expected) < TIGHT
 
 
 def _fe_setup(nelx, nely):
-    ndof = 2 * (nelx + 1) * (nely + 1)
-    F = np.zeros(ndof)
-    F[ndof - 1] = -1.0
-    freedofs1 = np.setdiff1d(np.arange(1, ndof + 1), np.arange(1, 2 * (nely + 1) + 1))
-    return ndof, F, freedofs1
+    """Load case for both sides of the comparison: unit downward load on the bottom-
+    right node, left edge clamped.
+
+    The reference numbers nodes column-major (MATLAB's convention, which
+    `matlab_reference.py` transliterates) and the port row-major, so "the left edge" is
+    a different dof set on each side and the two `freedofs` are not interchangeable.
+    The load dof happens to coincide -- both orderings put the bottom-right node last.
+    """
+    F, freedofs, ndof = point_load_problem(nelx, nely)
+    freedofs1_ref = np.setdiff1d(
+        np.arange(1, ndof + 1), np.arange(1, 2 * (nely + 1) + 1)
+    )
+    return ndof, F, freedofs1_ref, freedofs
 
 
 @pytest.mark.parametrize("nelx,nely", [(7, 5), (5, 7), (9, 3)])
 def test_whole_compliance_matches_reference(nelx, nely):
-    ndof, F, freedofs1 = _fe_setup(nelx, nely)
+    ndof, F, freedofs1_ref, freedofs = _fe_setup(nelx, nely)
     KE = ref.ref_KE(0.3)
     xP = np.random.default_rng(7).uniform(0.2, 1.0, (nely, nelx))
     c_ref, dcx_ref = ref.ref_whole_compliance(
-        nelx, nely, KE, xP, 1e-9, 1.0, 3, freedofs1, F
+        nelx, nely, KE, xP, 1e-9, 1.0, 3, freedofs1_ref, F
     )
     c, dcx = compliance.whole_compliance(
-        xP, KE, fem.element_dof_map(nelx, nely), 1e-9, 1.0, 3, freedofs1 - 1, F, ndof
+        xP, KE, fem.element_dof_map(nelx, nely), 1e-9, 1.0, 3, freedofs, F, ndof
     )
     assert abs(c - c_ref) / abs(c_ref) < SOLVED
     assert rel(dcx, dcx_ref) < SOLVED
@@ -170,14 +183,14 @@ def test_gravity_compliance_matches_reference(nelx, nely, ti):
     can actually deliver -- 1e-11 for the well-conditioned cases, 1e-3 only for the
     genuinely singular-ish one.
     """
-    ndof, F, freedofs1 = _fe_setup(nelx, nely)
+    ndof, F, freedofs1_ref, freedofs = _fe_setup(nelx, nely)
     KE = ref.ref_KE(0.3)
     rng = np.random.default_rng(11)
     xP = rng.uniform(0.2, 1.0, (nely, nelx))
     tP = rng.uniform(0.0, 1.0, (nely, nelx))
     C_ref = ref.ref_gravity_C(nelx, nely)
     c_ref, dcx_ref, dct_ref = ref.ref_gravity_compliance(
-        nelx, nely, KE, xP, tP, 1e-9, 1.0, 3, ti, C_ref, 10.0, freedofs1
+        nelx, nely, KE, xP, tP, 1e-9, 1.0, 3, ti, C_ref, 10.0, freedofs1_ref
     )
     c, dcx, dct = compliance.gravity_compliance(
         xP,
@@ -190,13 +203,15 @@ def test_gravity_compliance_matches_reference(nelx, nely, ti):
         ti,
         gravity.gravity_load_matrix(nelx, nely),
         10.0,
-        freedofs1 - 1,
+        freedofs,
         ndof,
     )
     ft = compliance.time_mask(tP, ti, 10.0)
     dens = 1e-9 + (xP * ft).flatten() ** 3 * (1.0 - 1e-9)
+    # Conditioning only -- cond is invariant under the node relabelling, so it does not
+    # matter that this is assembled in the reference's numbering.
     K_free = ref._assemble(KE, dens, ref.ref_edofMat(nelx, nely), ndof)[
-        np.ix_(freedofs1 - 1, freedofs1 - 1)
+        np.ix_(freedofs1_ref - 1, freedofs1_ref - 1)
     ]
     tol = 10 * np.finfo(float).eps * np.linalg.cond(K_free)
 

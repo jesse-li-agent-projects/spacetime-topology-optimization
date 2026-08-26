@@ -4,7 +4,13 @@ import numpy as np
 
 import sttopt.fem as fem
 import sttopt.gravity as gravity
-from conftest import assert_close, load_fixture, reindex_fixture
+from conftest import (
+    assert_close,
+    load_fixture,
+    node_positions,
+    reindex_fixture,
+    reindex_fixture_nodes,
+)
 
 
 def test_gravity_load_matrix():
@@ -12,8 +18,10 @@ def test_gravity_load_matrix():
     nelx, nely = int(fx["nelx"]), int(fx["nely"])
 
     C = gravity.gravity_load_matrix(nelx, nely)
-    # sparse fixture, small problem size -- densify for comparison only
+    # sparse fixture, small problem size -- densify for comparison only. Columns are
+    # element-indexed and rows node-indexed, both F-order in the fixture.
     expected = reindex_fixture(fx["C"].toarray(), nelx, nely, axis=1)
+    expected = reindex_fixture_nodes(expected, nelx, nely, axis=0)
 
     assert C.shape == expected.shape == ((nelx + 1) * (nely + 1), nelx * nely)
     assert_close(C.toarray(), expected, tier="algebraic")
@@ -51,10 +59,9 @@ def test_gravity_self_weight_column_patch():
     # sign/scatter convention matches compliance.gravity_compliance: gravity acts in -y
     F[1::2] = -C @ xPhys.flatten()
 
-    num_nodes = (nelx + 1) * (nely + 1)
-    node_row = np.arange(num_nodes) % (nely + 1)
+    node_row, _ = node_positions(nelx, nely)
     # row=0 is the top, per test_fem.py's convention
-    top_nodes = np.where(node_row == 0)[0]
+    top_nodes = fem.node_grid(nelx, nely)[0, :]
     fixeddofs = np.concatenate([2 * top_nodes, 2 * top_nodes + 1])
     freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)
 

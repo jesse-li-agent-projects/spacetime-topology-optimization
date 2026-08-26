@@ -11,17 +11,13 @@ import scipy.sparse as sp
 import sttopt.compliance as compliance
 import sttopt.fem as fem
 import sttopt.gravity as gravity
-from conftest import assert_close, load_fixture, reindex_fixture
-
-
-def _build_point_load_problem(nelx, nely):
-    """F/freedofs for the fixed point-load problem, matching test_fem.py/generate_fixtures.m."""
-    ndof = 2 * (nelx + 1) * (nely + 1)
-    F = np.zeros(ndof)
-    F[2 * (nelx + 1) * (nely + 1) - 1] = -1.0
-    fixeddofs = np.arange(2 * (nely + 1))
-    freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)
-    return F, freedofs, ndof
+from conftest import (
+    assert_close,
+    load_fixture,
+    point_load_problem,
+    reindex_fixture,
+    reindex_fixture_nodes,
+)
 
 
 def test_whole_compliance_matches_fixture():
@@ -32,7 +28,7 @@ def test_whole_compliance_matches_fixture():
 
     KE = fem.plane_stress_KE(nu=0.3)
     edofMat = fem.element_dof_map(nelx, nely)
-    F, freedofs, ndof = _build_point_load_problem(nelx, nely)
+    F, freedofs, ndof = point_load_problem(nelx, nely)
 
     for k in range(nloop):
         xPhys = e2e["xPhys_traj"][:, :, k]
@@ -54,10 +50,11 @@ def test_gravity_compliance_matches_fixture():
 
     KE = fem.plane_stress_KE(nu=0.3)
     edofMat = fem.element_dof_map(nelx, nely)
-    _, freedofs, ndof = _build_point_load_problem(nelx, nely)
-    # grav["C"]'s columns are element-indexed (fixture F-order); reindex to sttopt's
-    # C-order before it's used as gravity_compliance's own gravity-load matrix.
-    C = sp.csr_matrix(reindex_fixture(grav["C"].toarray(), nelx, nely, axis=1))
+    _, freedofs, ndof = point_load_problem(nelx, nely)
+    # grav["C"] is F-order on both axes (element columns, node rows); reindex both to
+    # sttopt's C-order before it's used as gravity_compliance's own gravity-load matrix.
+    C = reindex_fixture(grav["C"].toarray(), nelx, nely, axis=1)
+    C = sp.csr_matrix(reindex_fixture_nodes(C, nelx, nely, axis=0))
 
     tP = np.linspace(0, 1, nStage + 1)
 
@@ -98,13 +95,16 @@ def test_gravity_compliance_matches_fixture():
 # reasoning (Q4 elements are exact for constant-strain fields).
 
 
-def _node_id(row: int, col: int, nely: int) -> int:
-    return col * (nely + 1) + row
+def _x_dofs(nodes) -> np.ndarray:
+    return 2 * np.asarray(nodes)
 
 
-def _dofs(row: int, col: int, nely: int) -> tuple[int, int]:
-    n = _node_id(row, col, nely)
-    return 2 * n, 2 * n + 1
+def _y_dofs(nodes) -> np.ndarray:
+    return 2 * np.asarray(nodes) + 1
+
+
+def _dofs(nodes) -> np.ndarray:
+    return np.stack([_x_dofs(nodes), _y_dofs(nodes)], axis=-1).ravel()
 
 
 def _add_edge_traction(F, nodes, traction):
@@ -139,14 +139,12 @@ def test_whole_compliance_axial_bar_patch(t, Emax):
     edofMat = fem.element_dof_map(nelx, nely)
 
     # Rollers: pin the x=0 and y=0 lines, matching the tension field's zeros there.
-    fixeddofs = [_dofs(row, 0, nely)[0] for row in range(nely + 1)]
-    fixeddofs += [_dofs(0, col, nely)[1] for col in range(nelx + 1)]
+    nodes = fem.node_grid(nelx, nely)
+    fixeddofs = np.concatenate([_x_dofs(nodes[:, 0]), _y_dofs(nodes[0, :])])
     freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)
 
     F = np.zeros(ndof)
-    _add_edge_traction(
-        F, [_node_id(row, nelx, nely) for row in range(nely + 1)], (t, 0.0)
-    )
+    _add_edge_traction(F, nodes[:, -1], (t, 0.0))
 
     c, dcx = compliance.whole_compliance(
         xPhys, KE, edofMat, Emin, Emax, penal, freedofs, F, ndof
@@ -188,15 +186,12 @@ def _cantilever_beam_compliance(
     KE = fem.plane_stress_KE(nu)
     edofMat = fem.element_dof_map(nelx, nely)
 
-    fixeddofs = [d for row in range(nely + 1) for d in _dofs(row, 0, nely)]
+    nodes = fem.node_grid(nelx, nely)
+    fixeddofs = _dofs(nodes[:, 0])
     freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)
 
     F = np.zeros(ndof)
-    _add_edge_traction(
-        F,
-        [_node_id(row, nelx, nely) for row in range(nely + 1)],
-        (0.0, -P / nely),
-    )
+    _add_edge_traction(F, nodes[:, -1], (0.0, -P / nely))
 
     c, dcx = compliance.whole_compliance(
         xPhys, KE, edofMat, Emin, Emax, penal, freedofs, F, ndof
@@ -270,7 +265,7 @@ def test_whole_compliance_scales_as_load_squared_and_inverse_modulus():
     penal = 3
     KE = fem.plane_stress_KE(nu=0.3)
     edofMat = fem.element_dof_map(nelx, nely)
-    F, freedofs, ndof = _build_point_load_problem(nelx, nely)
+    F, freedofs, ndof = point_load_problem(nelx, nely)
     xPhys = _random_field(np.random.default_rng(3), nely, nelx)
 
     def c_of(alpha, Emax):
@@ -312,7 +307,7 @@ def _gravity_cantilever_compliance(
     KE = fem.plane_stress_KE(nu=0.3)
     edofMat = fem.element_dof_map(nelx, nely)
 
-    fixeddofs = [d for row in range(nely + 1) for d in _dofs(row, 0, nely)]
+    fixeddofs = _dofs(fem.node_grid(nelx, nely)[:, 0])
     freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)
     C = gravity.gravity_load_matrix(nelx, nely) * w_scale
 
@@ -415,7 +410,7 @@ def test_whole_compliance_fd_dcx():
     Emin, Emax, penal = 1e-9, 1.0, 3
     KE = fem.plane_stress_KE(nu=0.3)
     edofMat = fem.element_dof_map(nelx, nely)
-    F, freedofs, ndof = _build_point_load_problem(nelx, nely)
+    F, freedofs, ndof = point_load_problem(nelx, nely)
     h = 1e-6
 
     rng = np.random.default_rng(0)
@@ -448,7 +443,7 @@ def test_gravity_compliance_fd_dcx_and_dct():
     ti = 0.5
     KE = fem.plane_stress_KE(nu=0.3)
     edofMat = fem.element_dof_map(nelx, nely)
-    _, freedofs, ndof = _build_point_load_problem(nelx, nely)
+    _, freedofs, ndof = point_load_problem(nelx, nely)
 
     C = gravity.gravity_load_matrix(nelx, nely)
     h = 1e-4
