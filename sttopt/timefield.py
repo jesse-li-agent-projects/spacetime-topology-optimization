@@ -8,8 +8,10 @@ Euclidean-distance or linear ramps over the `(nely, nelx)` element grid; see
 
 A lone-1 mesh (`nelx == 1` xor `nely == 1`) is well-defined but doesn't necessarily
 span `[0, 1]`: EDGE is constant at 0 when `nelx == 1`, and OPPOSITE_CORNER never
-reaches 0 when `nely == 1`. Only `nelx == nely == 1` is rejected, since CORNER's
-distance normalization divides by a zero max distance there.
+reaches 0 when `nely == 1`. At `nelx == nely == 1` the two distance variants are
+undefined (a zero max distance to normalize by, giving `nan`); rejecting that mesh is
+`optimize.build_problem`'s job, since the same mesh also degenerates the continuity
+filter and `build_problem` is where both are first constructed.
 """
 
 from enum import IntEnum
@@ -26,27 +28,22 @@ class TimeField(IntEnum):
     OPPOSITE_CORNER = 3  # bottom-left corner distance
 
 
-def _check_grid_size(nelx: int, nely: int) -> None:
-    """Reject only `nelx == nely == 1`, where CORNER's distance normalization divides
-    by a zero max distance -- see the module docstring for the (allowed) lone-1 cases.
-    """
-    if nelx == 1 and nely == 1:
-        raise ValueError(
-            f"nelx and nely cannot both be 1, got nelx={nelx}, nely={nely}"
-        )
-
-
 def _corner_distance_grid(
     nelx: int, nely: int, corner: tuple[float, float]
 ) -> Float[np.ndarray, "nely nelx"]:
-    """Euclidean distance from `corner` (x, y) to each element grid position, normalized by its max.
+    """
+    Euclidean distance from `corner` to each element grid position, normalized by its max.
 
     Grid coordinates are `linspace(0, nel, nel)` per the source -- `nel` points spanning
     `[0, nel]`, spacing `nel/(nel-1)`, not a unit-spaced grid. This is a faithful port of
     the MATLAB source, not an off-by-one to "fix": since the x- and y-axis spacings
     differ whenever `nelx != nely`, changing this shifts the field's shape (not just an
     overall scale), so it must stay exactly as the source has it to match the fixture.
-    Undefined only at `nelx == nely == 1` (see `_check_grid_size`).
+
+    :param nelx: element count in x
+    :param nely: element count in y
+    :param corner: `(x, y)` position to measure distance from
+    :return: normalized distances, shape `(nely, nelx)`
     """
     xpos = np.linspace(0, nelx, nelx)
     ypos = np.linspace(0, nely, nely)
@@ -56,33 +53,27 @@ def _corner_distance_grid(
     return dist / dist.max()
 
 
-def timefield_corner(nelx: int, nely: int) -> Float[np.ndarray, "nely nelx"]:
-    """Normalized distance from the top-left grid corner (x=0, y=0)."""
-    _check_grid_size(nelx, nely)
-    return _corner_distance_grid(nelx, nely, (0, 0))
-
-
-def timefield_edge(nelx: int, nely: int) -> Float[np.ndarray, "nely nelx"]:
-    """Left-to-right linear ramp in x, constant down each column."""
-    _check_grid_size(nelx, nely)
-    return np.tile(np.linspace(0, 1, nelx), (nely, 1))
-
-
-def timefield_opposite_corner(nelx: int, nely: int) -> Float[np.ndarray, "nely nelx"]:
-    """Normalized distance from the bottom-left grid corner (x=0, y=nely)."""
-    _check_grid_size(nelx, nely)
-    return _corner_distance_grid(nelx, nely, (0, nely))
-
-
 def init_timefield(
     nelx: int, nely: int, variant: TimeField
 ) -> Float[np.ndarray, "nely nelx"]:
-    """Dispatch to one of the three named time-field initializations."""
+    """
+    Build one of the three named time-field initializations.
+
+    CORNER and OPPOSITE_CORNER are normalized distances from the top-left (x=0, y=0)
+    and bottom-left (x=0, y=nely) grid corners; EDGE is a left-to-right linear ramp in
+    x, constant down each column.
+
+    :param nelx: element count in x
+    :param nely: element count in y
+    :param variant: which field to build
+    :return: the time field, shape `(nely, nelx)`
+    :raises ValueError: if `variant` is not a `TimeField` member
+    """
     if variant == TimeField.CORNER:
-        return timefield_corner(nelx, nely)
+        return _corner_distance_grid(nelx, nely, (0, 0))
     elif variant == TimeField.EDGE:
-        return timefield_edge(nelx, nely)
+        return np.tile(np.linspace(0, 1, nelx), (nely, 1))
     elif variant == TimeField.OPPOSITE_CORNER:
-        return timefield_opposite_corner(nelx, nely)
+        return _corner_distance_grid(nelx, nely, (0, nely))
     else:
         raise ValueError(f"variant must be a TimeField member, got {variant!r}")

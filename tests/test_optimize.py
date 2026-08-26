@@ -78,6 +78,19 @@ def _problem(nelx=7, nely=5, nStage=3, tfield=3, Theta=1.0):
     )
 
 
+@pytest.mark.parametrize("tfield", [1, 2, 3])
+def test_build_problem_rejects_the_1x1_mesh(tfield):
+    """A 1x1 mesh degenerates two of `build_problem`'s pieces -- the distance time fields
+    normalize by a zero max distance, and the continuity filter divides by a zero
+    neighbour count -- so it must be rejected up front, before either produces a `nan` or
+    a divide-by-zero warning. Lone-1 meshes stay legal (see `test_timefield.py`)."""
+    with pytest.raises(ValueError):
+        _problem(nelx=1, nely=1, tfield=tfield)
+
+    _problem(nelx=1, nely=4, tfield=tfield)
+    _problem(nelx=4, nely=1, tfield=tfield)
+
+
 def test_density_filter_fixes_constant_fields():
     """`H @ 1 / Hs == 1` up to rounding, because `Hs` is by construction `H`'s row sum.
     This is what makes filtering the uniform density seed a no-op in practice, so that

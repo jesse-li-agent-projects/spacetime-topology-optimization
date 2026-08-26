@@ -122,7 +122,7 @@ def test_hotspot_constraint_matches_fixture():
     # report doesn't overclaim fixture coverage of the distinct-element-tie branch (that
     # branch is exercised only by the synthetic `_at_ties` test below). Corner-distance
     # fields (tfield 1/3) are tie-free by construction (irrational-ish Euclidean distances
-    # rarely coincide), but tfield 2 (`timefield_edge`, a linear ramp constant down each
+    # rarely coincide), but tfield 2 (`TimeField.EDGE`, a linear ramp constant down each
     # column) is NOT: at a realistic 180x60 mesh it produces structural off-diagonal ties
     # on ~5% of neighbor pairs, surviving density filtering -- so the distinct-element-tie
     # branch is far from a synthetic-only corner case for that timefield choice.
@@ -941,7 +941,7 @@ def test_hotspot_constraint_fd_time_at_ties():
     (checked in `test_hotspot_constraint_matches_fixture`), so this branch is validated
     only by this synthetic test, not cross-checked against MATLAB output. That's a
     property of the fixture's corner-distance timefield, though, not of ties being rare
-    in general: `timefield_edge` (a linear ramp, constant down each column) produces
+    in general: `TimeField.EDGE` (a linear ramp, constant down each column) produces
     ~5% of neighbor pairs as structural exact ties at a realistic 180x60 mesh, surviving
     density filtering -- so this isn't a hypothetical edge case for that timefield choice.
     Before the fix, the bug wasn't just "wrong at a measure-zero set": DFT was ~rouf/4 for
