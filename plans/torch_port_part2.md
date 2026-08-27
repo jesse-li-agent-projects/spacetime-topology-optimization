@@ -73,6 +73,10 @@ golden snapshots. Both survive the deletion untouched. So the sequence is: port,
 against the oracle, then delete the hand-derived sensitivities in a *separate, later*
 commit.
 
+This is about the *production path*, not about hand-derived algebra as such: a hand-derived
+backward inside a `torch.autograd.Function` is torch code on the GPU and stays if Phase
+3.4's benchmark says it earns its place.
+
 Two NumPy things stay on purpose:
 - `sttopt/fem.py`'s `assemble_stiffness` / `solve_fe`. Small, and it is the solver oracle
   `tests/test_torch_fem.py` compares MGCG against. Deleting it would remove the only check
@@ -125,17 +129,40 @@ waiting for an exact zero.** Phase 3.4 must grep for them before trusting any au
 output, and the guard already in `conductivity.py` (`if r * p < 1 and np.any(x == 0)`)
 must survive the port, keyed to the quantity that is actually inconsistent.
 
-**Full-Jacobian extraction (high).** MMA needs a dense `dfdx` of shape `(m, n)` = `(79,
+**Autograd can be slower than the hand-derived algebra (high).** Reverse mode reuses
+common subexpressions along the graph automatically, so the naive worry -- "the hand
+version shares terms and autograd will not" -- is mostly unfounded. The real losses are
+elsewhere, and this code has an instance of each:
+
+- **Lost analytic cancellations.** These are asymptotic, not constant-factor, and they are
+  the ones that actually hurt. The known case is `hotspot_constraint`'s diagonal
+  self-heating term: the hand-derived form is `r * T_val**p * x**(r*p - 1)`, one
+  *element*-sized expression (10800 entries), and getting there let Phase 0a delete a
+  4.2M-entry *pair*-sized expansion that existed only to use 10800 of its entries.
+  Mechanical differentiation of the pair block will not find that collapse, so it pays the
+  full `npairs` cost on a term whose answer is `nel`-sized. Assume autograd is ~400x worse
+  on this one term and check whether that matters in context.
+- **Memory traffic for saved activations.** Every `npairs`-sized intermediate the forward
+  saves is 34 MB read back during backward. The hand-derived version recomputes some of
+  these and stores fewer.
+- **A second linear solve per FEM solve.** Addressed in Phase 3.3, where it turns out to be
+  avoidable.
+
+Some loss is acceptable -- the GPU port is buying multiples, not percentages, and the
+end-to-end target in Phase 3.7 is what the port is actually judged on. But it has to be
+*measured* loss, not assumed-negligible loss. Phase 3.4 adds a dedicated benchmark and a
+ranked set of escape hatches, of which "wrap the expensive block in an `autograd.Function`
+with its hand-derived backward" is the main one: the choice is per-term, not
+all-or-nothing.
+
+**Full-Jacobian extraction (medium).** MMA needs a dense `dfdx` of shape `(m, n)` = `(79,
 21600)` at production settings -- 79 rows of reverse-mode. The saving grace is that the
 expensive graph nodes appear in exactly one row each (the FEM solves only in `f0val`, the
 4.2M-pair hotspot algebra only in the hotspot row), and reverse mode only traverses the
 subgraph reachable from the output being differentiated. So the *structure* is fine; the
 question is constant factors. Plan for `torch.autograd.grad(..., is_grads_batched=True)`
 per constraint group (one call covering the 60 start-point rows, one covering the 8
-distinct stage-bound rows) rather than 79 separate calls, and **measure before
-committing**: if autograd's hotspot backward costs more than the 539 ms the hand-derived
-version costs today, that row keeps its hand-derived gradient and the plan says so out
-loud rather than pretending.
+distinct stage-bound rows) rather than 79 separate calls.
 
 **MMA's scalar control flow synchronizes the GPU (medium).** `subsolv` has a `while epsi >
 epsimin` outer loop, a `while residumax > 0.9*epsi and ittt < 200` Newton loop, and an
@@ -259,13 +286,37 @@ dL/dd_e = -(lambda_e @ KE) . U_e       (elementwise contraction over the 8 eleme
 
 Two consequences worth stating because they are free tests:
 
-- For the whole-compliance case `L = F . U` with `F` fixed, `g = F`, so `lambda == U`
-  exactly and `dL/dd_e == -ce`. **Assert this**: it checks the adjoint machinery against a
-  quantity the existing fixtures already pin.
+- For the compliance objectives, `lambda` is a multiple of `U` and the adjoint solve is
+  free -- see below. `dL/dd_e` then reduces to `-ce`, which the existing fixtures already
+  pin. **Assert this.**
 - `gravity_compliance`'s "extra adjoint term" and its factor of 2 -- currently hand-derived
   as `dcx2`/`dct2` and explained in a paragraph of docstring -- fall out of `dL/dF` with no
   special-casing, because the gravity load is just another differentiable function of the
   density. That paragraph gets deleted, not ported.
+
+**The adjoint's cost, and why it is nearly zero here.** A generic adjoint runs a second CG
+solve per forward solve, which would take the loop from 9 solves per iteration to 18 --
+the largest single performance risk the switch to autograd carries, and one that would
+eat a good fraction of part 1's 4.36x. It does not apply here, because compliance is
+self-adjoint. The scalar both compliance functions compute is `sum_e simp_e * ce_e` with
+`ce_e = Ue^T KE Ue`, whose derivative with respect to `U` is `2 K U = 2 F` -- so
+`lambda = 2 U` exactly, with no solve. Verified at 6x4 against the real
+`assemble_stiffness`/`solve_fe` path:
+
+```
+max|g - 2F| : 4.66e-14   (against |2F| = 2.0)
+alpha       : 2.0000000000001346
+```
+
+Rather than special-casing the compliance objective inside `FemSolve` -- which would be a
+correctness trap the moment a non-compliance scalar is differentiated -- take the general
+route that happens to be exact here: **warm-start the adjoint CG from the best multiple of
+`U`**, `alpha = (U . g) / (U . F)`, which is the least-squares fit of `alpha*U` to
+`K^-1 g` and costs two dot products. When `g` is parallel to `F` it lands on the exact
+answer and CG returns at iteration zero (`pcg` already checks convergence *before* the
+first iteration, for exactly this reason). When it is not, it is still a good warm start
+and the solve is correct. Assert the iteration count is zero for the compliance case, so
+a future non-self-adjoint objective shows up as a performance change rather than silently.
 
 **Implementation.**
 
@@ -297,7 +348,9 @@ Two consequences worth stating because they are free tests:
    `compliance.whole_compliance` and `gravity_compliance`, element-wise on max relative
    error (not a norm -- part 1's Phase 1 made this point and it still holds; MMA reads
    every element). `solved` tier.
-3. `lambda == U` for the whole-compliance case, to `algebraic` tier.
+3. `lambda == 2 U` for both compliance cases, to `algebraic` tier, **and the adjoint solve
+   reports zero CG iterations** -- the check that the self-adjoint shortcut is actually
+   being taken and not merely available.
 4. The batched `(9, ndof)` path against nine sequential single solves.
 5. Warm-started vs cold-started results agree to `solved` tier, and the warm one uses
    fewer iterations on a real consecutive snapshot pair (the fixture stores loop 799 next
@@ -326,10 +379,56 @@ Order:
    `ss` matrix construction entirely (it becomes `tPhys[Nei]`). Note that
    `stage_volume_bounds`' lower row is exactly the negation of the upper -- keep that as an
    explicit negation rather than differentiating it twice.
-3. **The hotspot constraint.** The big one, and the one with the measured go/no-go: if its
-   autograd backward costs more than today's 539 ms hand-derived version, keep the
-   hand-derived gradient for this row and record the measurement here. Do not port it on
-   principle.
+3. **The hotspot constraint.** The big one. Port it, then read the benchmark below before
+   deciding whether it keeps its autograd gradient. Do not port it on principle.
+
+### Benchmark: autograd against the hand-derived sensitivities
+
+**`benchmarks/bench_sensitivities.py`**, and it must be written and run *during* this
+phase, not after it. Each commit here keeps the hand-derived version alive until the
+following commit removes it, and that overlap is the only window in which the two can be
+timed against each other on the same machine, the same device and the same inputs. Once
+Phase 3.7 deletes the hand-derived code the measurement is no longer available, and "we
+never checked" becomes permanent.
+
+**Method.** For each of the six sensitivity-producing call sites -- `whole_compliance`,
+`gravity_compliance`, the four constraints, and `hotspot_constraint` -- time the
+hand-derived value-plus-sensitivity call against the autograd forward-plus-backward, at
+90x30 / 180x60 / 360x120, on the `it0800` near-binary snapshots. Report forward and
+backward separately: a slow backward and a slow forward have different fixes. Report peak
+memory alongside, since the `npairs` activations are the other thing that can bite.
+Standard hygiene from part 1 applies -- `torch.cuda.synchronize()` around every timing
+region, discard warm-up, idle machine, and say the machine was idle.
+
+**The methodological trap to avoid**, in the spirit of the two part 1 recorded: **both
+sides must be torch, on the same device.** Timing autograd-on-GPU against the original
+NumPy-on-CPU hand-derived code measures the port and the autodiff together and cannot
+separate them -- and it would flatter autograd badly. Phase 3.2 exists in part to make
+this comparison fair: it leaves a torch hand-derived implementation in place.
+
+**What to do with the answer.** There is no pass/fail here; the gate is the end-to-end
+number in Phase 3.7, and some loss is expected and acceptable given the GPU port is buying
+multiples. The per-module table's job is to say *where* to spend effort if the end-to-end
+number comes in under target. Escape hatches, in increasing order of how much hand-written
+code they cost:
+
+1. **`torch.compile` the forward.** Part 1 found `hotspot_constraint`'s cost is
+   `_pairwise_sigmoid_terms` plus the surrounding `npairs`-sized elementwise algebra --
+   exactly the shape inductor fuses well, and fusing the forward shrinks the saved
+   activations too. Try this before writing anything by hand.
+2. **A custom `autograd.Function` around one block, with its hand-derived backward.**
+   This is the granular middle ground, and the reason the choice is per-term rather than
+   all-or-nothing: `hotspot_constraint`'s diagonal self-heating term is a `nel`-sized
+   analytic expression that mechanical differentiation will compute as a `npairs`-sized
+   one, so wrapping the pair block and supplying the cancelled backward keeps autograd
+   everywhere else while recovering the one place it is asymptotically worse. Phase 3.3's
+   `FemSolve` is the same pattern and the template to copy.
+3. **`torch.utils.checkpoint` on the pair block.** Trades recompute for activation memory
+   -- the opposite trade to (1), and the right one only if memory rather than time is the
+   binding constraint (likely at 360x120, where the pair activations are ~1.4 GB).
+4. **Keep the hand-derived gradient for that row.** Always available, and not a failure.
+   If it is taken, record the measurement that justified it here, so the decision is
+   revisitable when a later torch version changes the arithmetic.
 
 **Jacobian assembly.** `optimize.step` needs `dfdx` as a dense `(m, n)`. Write one helper
 that takes a group of constraint outputs and the `(x, t)` leaves and returns the
@@ -437,6 +536,12 @@ result below 5x is not a failure to report quietly -- it means one of the three 
 did not port as well as projected, and the profile will say which. Record it here either
 way.
 
+Note what the hotspot row assumes: **5x is the projection for the whole constraint
+including its sensitivity, so it presumes autograd roughly matches the hand-derived
+algebra there.** Phase 3.4's `bench_sensitivities.py` is what tests that presumption, and
+its table is where to look first if this row misses. The FEM row assumes the self-adjoint
+shortcut in Phase 3.3 holds -- without it that row roughly doubles.
+
 **Correctness, at three scales:**
 
 1. **Unit and fixture suites.** Everything under `tests/` except the slow marker, passing.
@@ -457,7 +562,10 @@ way.
 **Then delete.** In a final, separate commit: remove the hand-derived sensitivity code from
 `sttopt/compliance.py`, `sttopt/constraints.py`, `sttopt/conductivity.py`, and the
 now-unused `filters.heaviside_projection_derivative`. Keep `sttopt/fem.py` and the
-`tests/matlab_reference*.py` oracles. Any test that existed only to compare autograd
+`tests/matlab_reference*.py` oracles -- and keep any hand-derived backward that Phase
+3.4's benchmark justified retaining inside an `autograd.Function`, with the measurement
+that justified it recorded next to it. Take the `bench_sensitivities.py` numbers before
+this commit lands; afterwards they cannot be reproduced. Any test that existed only to compare autograd
 against the hand-derived version goes with it -- the oracle tests are what remain.
 
 Sanity check on the diff: this port should make `sttopt/` *shorter*. If it has grown,
