@@ -90,6 +90,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(args: argparse.Namespace) -> None:
     import sttopt.conductivity as conductivity
     import sttopt.optimize as optimize
+    import sttopt.torch_util as torch_util
     import sttopt.viz as viz
 
     # Fail fast on an unwritable output dir, before spending nloop iterations of compute.
@@ -119,24 +120,26 @@ def main(args: argparse.Namespace) -> None:
             f"Vol.: {state.xPhys.mean():6.3f} Tm.: {record.tru_max:7.3f}"
         )
 
+    # Tensor boundary: `viz` and `conductivity.estimated_conductivity` (unported as of
+    # Phase 3.1) take plain arrays -- see sttopt/torch_util.py.
+    xPhys = torch_util.to_numpy(prev_state.xPhys)
+    tPhys = torch_util.to_numpy(prev_state.tPhys)
     K_est = conductivity.estimated_conductivity(
-        prev_state.xPhys,
-        prev_state.tPhys,
-        problem.e1,
-        problem.e2,
-        problem.w,
+        xPhys,
+        tPhys,
+        torch_util.to_numpy(problem.e1),
+        torch_util.to_numpy(problem.e2),
+        torch_util.to_numpy(problem.w),
         problem.q,
         problem.rouf,
     ).reshape(problem.nely, problem.nelx)
-    XPhys = (prev_state.xPhys > 0.5).astype(float)
+    XPhys = (xPhys > 0.5).astype(float)
     # Same quantity as hotspot_constraint's internal T_val (conductivity.py), density-masked
     # for display -- not a print time, despite feeding combination_plot's "timing" slot.
     hotspot_severity = (1 - K_est) * XPhys
 
     ax = viz.combination_plot(XPhys, hotspot_severity, eps=1.0e-1)
-    viz.stage_boundary_plot(
-        prev_state.tPhys, args.nStage, ax=ax, combination_coords=True
-    )
+    viz.stage_boundary_plot(tPhys, args.nStage, ax=ax, combination_coords=True)
 
     out_path = args.output_dir / "final_structure.png"
     ax.figure.savefig(out_path, dpi=150)

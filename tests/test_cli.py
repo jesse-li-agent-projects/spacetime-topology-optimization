@@ -11,6 +11,7 @@ import numpy as np
 import sttopt.cli as cli
 import sttopt.conductivity as conductivity
 import sttopt.optimize as optimize
+import sttopt.torch_util as torch_util
 import sttopt.viz as viz
 
 ARGV = [
@@ -110,16 +111,17 @@ def test_cli_closing_plot_uses_pre_final_update_state(tmp_path, monkeypatch):
         differ, as they do on this fixture -- checked and confirmed not a reliable
         discriminator here).
         """
+        xPhys = torch_util.to_numpy(state.xPhys)
         K_est = conductivity.estimated_conductivity(
-            state.xPhys,
-            state.tPhys,
-            problem.e1,
-            problem.e2,
-            problem.w,
+            xPhys,
+            torch_util.to_numpy(state.tPhys),
+            torch_util.to_numpy(problem.e1),
+            torch_util.to_numpy(problem.e2),
+            torch_util.to_numpy(problem.w),
             problem.q,
             problem.rouf,
         ).reshape(problem.nely, problem.nelx)
-        XPhys = (state.xPhys > 0.5).astype(float)
+        XPhys = (xPhys > 0.5).astype(float)
         return (1 - K_est) * XPhys
 
     prev_T1 = _expected_T1(prev_state)

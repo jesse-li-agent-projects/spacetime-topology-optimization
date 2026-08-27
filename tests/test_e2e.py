@@ -20,6 +20,7 @@ import numpy as np
 import sttopt.conductivity as conductivity
 import sttopt.filters as filters
 import sttopt.optimize as optimize
+import sttopt.torch_util as torch_util
 from conftest import assert_close, load_fixture_npz
 
 NELX, NELY = 7, 5
@@ -146,20 +147,30 @@ def test_hotspot_factor_refresh_at_loop_25():
     new_state, record = optimize.step(problem, state)
     assert new_state.loop == 25
 
+    # Tensor boundary: `filters`/`conductivity` are unported as of Phase 3.1 (see
+    # sttopt/torch_util.py), so convert `problem`/`state`'s tensor fields to arrays here.
+    xPhys = torch_util.to_numpy(state.xPhys)
+    tPhys = torch_util.to_numpy(state.tPhys)
+    e1 = torch_util.to_numpy(problem.e1)
+    e2 = torch_util.to_numpy(problem.e2)
+    w = torch_util.to_numpy(problem.w)
+    H = torch_util.csr_to_scipy(problem.H)
+    Hs = torch_util.to_numpy(problem.Hs)
+
     # Independent recomputation of the refresh formula (factor = max_g / numer), using
     # the pre-update xPhys/tPhys/dx the refresh actually saw.
     dx = filters.heaviside_projection_derivative(
-        state.xTilde, state.beta_d, problem.eta
+        torch_util.to_numpy(state.xTilde), state.beta_d, problem.eta
     )
     old = conductivity.hotspot_constraint(
-        state.xPhys,
-        state.tPhys,
-        problem.e1,
-        problem.e2,
-        problem.w,
+        xPhys,
+        tPhys,
+        e1,
+        e2,
+        w,
         dx,
-        problem.H,
-        problem.Hs,
+        H,
+        Hs,
         state.factor,
         problem.Tcr,
         problem.p,
@@ -169,15 +180,15 @@ def test_hotspot_factor_refresh_at_loop_25():
     )
     numer = (old.fval + 1) * problem.Tcr / state.factor
     K_est = conductivity.estimated_conductivity(
-        state.xPhys,
-        state.tPhys,
-        problem.e1,
-        problem.e2,
-        problem.w,
+        xPhys,
+        tPhys,
+        e1,
+        e2,
+        w,
         problem.q,
         problem.rouf,
     )
-    max_g = np.max((1 - K_est) * state.xPhys.flatten() ** problem.r)
+    max_g = np.max((1 - K_est) * xPhys.flatten() ** problem.r)
     expected_factor = max_g / numer
 
     assert not np.isclose(expected_factor, state.factor), "refresh must be non-vacuous"
