@@ -386,6 +386,7 @@ def solve(
     rtol: float = 1e-8,
     max_iter: int = 500,
     x0: Float[Tensor, "*batch ndof"] | None = None,
+    check_every: int = 1,
     omega: float = 0.6,
     n_smooth: int = 2,
     gamma: int = 1,
@@ -402,6 +403,7 @@ def solve(
     :param omega: damped-Jacobi relaxation factor for the smoother.
     :param n_smooth: pre- and post-smoothing sweeps per level.
     :param gamma: coarse cycles per visit; 1 is a V-cycle, 2 a W-cycle.
+    :param check_every: iterations between convergence checks; see `torch_fem.pcg`.
     :param max_coarse_elements: coarsening stops at or below this element count.
     :return: `(U, n_iter)`.
     """
@@ -423,5 +425,6 @@ def solve(
         rtol=rtol,
         max_iter=max_iter,
         x0=x0,
+        check_every=check_every,
     )
     return torch_fem.project(U, mask), n_iter

@@ -6,8 +6,11 @@ CPU and in float64 -- see plans/torch_port.md's Phase 1.
 import numpy as np
 import pytest
 
+import sttopt.compliance as compliance
 import sttopt.fem as fem
-from conftest import assert_close, point_load_problem
+import sttopt.optimize as optimize
+import test_e2e as e2e_mod
+from conftest import assert_close, load_fixture_npz, point_load_problem
 
 # torch is an optional dependency (see pyproject.toml), so skip rather than fail
 # collection where it isn't installed.
@@ -606,3 +609,148 @@ def test_mgcg_sensitivity_matches_finite_difference():
     elements = rng.choice(nelx * nely, 4, replace=False)
     err = calib.finite_difference_check(setup, x, calib.RECOMMENDED_RTOL, elements)
     assert err < 1e-5
+
+
+# --- Existing-fixture regression through the CG backend (the plan's test 5) -------
+# The highest-value check available: these fixtures are validated against the MATLAB
+# reference, so passing them with the solver swapped underneath says the substitution is
+# invisible to everything downstream -- not merely self-consistent.
+
+
+def test_whole_compliance_fixture_regression_through_mgcg():
+    """`test_compliance.py`'s golden regression, re-run with MGCG in place of `spsolve`."""
+    fx = load_fixture_npz("compliance")
+    e2e = load_fixture_npz("e2e")
+    nelx, nely = int(fx["nelx"]), int(fx["nely"])
+    nloop = e2e["xPhys_traj"].shape[2] - 1
+    setup = calib.mesh_setup(nelx, nely)
+    F, freedofs, ndof = point_load_problem(nelx, nely)
+    KE = fem.plane_stress_KE(nu=0.3)
+    edofMat = fem.element_dof_map(nelx, nely)
+
+    with calib.mgcg_backend(setup, rtol=calib.RECOMMENDED_RTOL):
+        for k in range(nloop):
+            xPhys = e2e["xPhys_traj"][:, :, k]
+            c, dcx = compliance.whole_compliance(
+                xPhys, KE, edofMat, EMIN, EMAX, PENAL, freedofs, F, ndof
+            )
+            assert_close(c, fx["c_whole_all"][k], tier="solved")
+            assert_close(dcx, fx["dcx_whole_all"][:, :, k], tier="solved")
+
+
+def test_e2e_trajectory_through_mgcg():
+    """The `nloop=3` end-to-end fixture with every FEM solve routed through MGCG.
+
+    Substituting the solver inside a *closed loop* is a strictly stronger check than
+    any single-solve comparison: an error that a one-shot test would absorb inside its
+    tolerance instead feeds MMA, moves the design, and compounds over iterations.
+    """
+    fx = load_fixture_npz("e2e")
+    problem = optimize.build_problem(
+        e2e_mod.NELX,
+        e2e_mod.NELY,
+        e2e_mod.NSTAGE,
+        e2e_mod.VOLFRAC,
+        e2e_mod.THETA,
+        e2e_mod.TCR,
+        e2e_mod.TFIELD,
+        e2e_mod.RMIN,
+        e2e_mod.LRMIN,
+        e2e_mod.RMIN_COND,
+    )
+    setup = calib.mesh_setup(e2e_mod.NELX, e2e_mod.NELY)
+    with calib.mgcg_backend(setup, rtol=calib.RECOMMENDED_RTOL) as iters:
+        result = optimize.run_from_state(
+            problem,
+            optimize.init_state(problem, e2e_mod.BETA_INIT),
+            e2e_mod.NLOOP,
+        )
+    assert len(iters) == e2e_mod.NLOOP * (1 + e2e_mod.NSTAGE)
+
+    for k in range(1, e2e_mod.NLOOP + 1):
+        assert_close(
+            result.xPhys_traj[k], fx["xPhys_traj"][:, :, k], tier="e2e", iteration=k
+        )
+        assert_close(
+            result.tPhys_traj[k], fx["tPhys_traj"][:, :, k], tier="e2e", iteration=k
+        )
+        assert_close(
+            result.records[k - 1].obj, fx["objf"][k - 1], tier="e2e", iteration=k
+        )
+
+
+# --- Device tests (the plan's tests 8 and 10) ------------------------------------
+
+requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="no CUDA device available"
+)
+
+
+def _mg_solve_on(nelx, nely, xPhys, device, **kw):
+    """`_mg_solve` with every tensor placed on `device`."""
+    F_np, freedofs_np, ndof = point_load_problem(nelx, nely)
+    t = lambda a, dt: torch.tensor(a, dtype=dt, device=device)  # noqa: E731
+    return torch_mg.solve(
+        t(F_np, torch.float64),
+        t(xPhys, torch.float64),
+        t(fem.element_dof_map(nelx, nely), torch.int64),
+        t(fem.plane_stress_KE(NU), torch.float64),
+        EMIN,
+        EMAX,
+        PENAL,
+        torch_fem.free_mask(ndof, t(freedofs_np, torch.int64), device),
+        nelx,
+        nely,
+        **{**MG_KW, **kw},
+    )
+
+
+@requires_cuda
+def test_cpu_and_gpu_solutions_agree():
+    """The plan's test 10. Same solver, same design, two devices."""
+    nelx, nely = 30, 10
+    rng = np.random.default_rng(10)
+    x = rng.uniform(0.0, 1.0, nely * nelx)
+    U_cpu, n_cpu = _mg_solve_on(nelx, nely, x, "cpu")
+    U_gpu, n_gpu = _mg_solve_on(nelx, nely, x, "cuda")
+
+    assert n_cpu == n_gpu
+    assert_close(U_gpu.cpu().numpy(), U_cpu.numpy(), tier="solved")
+
+
+@requires_cuda
+def test_gpu_solve_is_reproducible_within_tolerance_but_not_bitwise():
+    """The plan's test 8, recording the decision rather than leaving it undiscovered.
+
+    `index_add_`'s atomics reorder float additions between runs, so two GPU solves of
+    the same system are not bitwise identical. The drift is ~1e-12 relative -- six
+    orders below the `solved` tier the sensitivities are calibrated at -- and removing
+    it costs 1.7-2.3x end to end via `use_deterministic_algorithms`. The default
+    therefore stays nondeterministic and that switch stays an opt-in debugging tool;
+    this test pins both halves of that claim so a future change to either is visible.
+    """
+    nelx, nely = 60, 20
+    rng = np.random.default_rng(8)
+    x = rng.uniform(0.0, 1.0, nely * nelx)
+    U1, _ = _mg_solve_on(nelx, nely, x, "cuda")
+    U2, _ = _mg_solve_on(nelx, nely, x, "cuda")
+
+    assert_close(U2.cpu().numpy(), U1.cpu().numpy(), tier="solved")
+    drift = (U2 - U1).norm() / U1.norm()
+    assert drift < 1e-9, f"drift {drift:.2e} is larger than the recorded ~1e-12"
+
+
+@pytest.mark.parametrize("check_every", [1, 4, 8])
+def test_periodic_convergence_check_does_not_change_the_answer(check_every):
+    """Checking the residual less often may overshoot the tolerance but must never
+    undershoot it, so the answer can only get more accurate, never less.
+    """
+    nelx, nely = 40, 20
+    rng = np.random.default_rng(4)
+    x = rng.uniform(0.0, 1.0, nely * nelx)
+    U_ref, n_ref = _mg_solve(nelx, nely, x, rtol=1e-8, check_every=1)
+    U, n = _mg_solve(nelx, nely, x, rtol=1e-8, check_every=check_every)
+
+    assert n >= n_ref and n % check_every == 0
+    assert n - n_ref < check_every
+    assert_close(U.numpy(), U_ref.numpy(), tier="solved")

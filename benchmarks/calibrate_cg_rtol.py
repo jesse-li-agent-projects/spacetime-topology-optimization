@@ -166,6 +166,14 @@ def mgcg_backend(setup: dict, *, rtol: float, max_iter: int = 2000):
         return None
 
     def solve_fe(K, F, freedofs):
+        # The mask comes from the caller's own `freedofs`, not from `setup`, so this
+        # backend honours whatever boundary conditions the substituted-into code uses
+        # rather than assuming `mesh_setup`'s cantilever.
+        mask = torch_fem.free_mask(
+            F.shape[-1],
+            torch.tensor(freedofs, dtype=torch.int64, device=setup["device"]),
+            setup["device"],
+        )
         U, n_iter = torch_mg.solve(
             torch.tensor(F, dtype=setup["dtype"], device=setup["device"]),
             torch.tensor(
@@ -178,7 +186,7 @@ def mgcg_backend(setup: dict, *, rtol: float, max_iter: int = 2000):
             EMIN,
             EMAX,
             PENAL,
-            setup["mask"],
+            mask,
             setup["nelx"],
             setup["nely"],
             rtol=rtol,
