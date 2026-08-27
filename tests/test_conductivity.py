@@ -1021,3 +1021,170 @@ def test_hotspot_constraint_fd_density_near_binary():
         f"max|df1|={np.abs(df1).max():.3e} max|df1-fd|={np.abs(df1 - fd_x).max():.3e}"
     )
     np.testing.assert_allclose(df1, fd_x, rtol=1e-3, atol=1e-4)
+
+
+# --- Phase 3.4 (plans/torch_port_part2.md): hotspot_value, autograd sensitivities ----
+#
+# hotspot_constraint's df1/dt1 are hand-derived; hotspot_value returns only (numer,
+# K_est), differentiable end to end w.r.t. xPhys/tPhys, and its sensitivity is meant to
+# come from autograd instead. These tests build the same H/Hs/dx chain by hand (the
+# density filter's own adjoint, plus the Heaviside chain rule optimize.step's autograd
+# path threads automatically) so the comparison lines up with hotspot_constraint's
+# already-chained df1/dt1.
+
+
+def test_hotspot_value_matches_hand_derived_sensitivities_on_fixture():
+    """Autograd sensitivity of `hotspot_value`'s `numer` (`d(numer)/d(xPhys)`,
+    `d(numer)/d(tPhys)`) against the hand-derived `df1`/`dt1`, at the fixture's 3
+    snapshots -- `algebraic` tier (no FE solve involved). Reuses the fixture's own
+    `dx` (the Heaviside-derivative field, `heaviside_projection_derivative`'s output
+    for that snapshot) to finish the same `H @ (... * dx / Hs)` chain
+    `hotspot_constraint`'s `df1` already is, rather than re-deriving `xPhys` from a raw
+    `xTilde` the fixture doesn't store.
+    """
+    fx = load_fixture_npz("conductivity")
+    e2e = load_fixture_npz("e2e")
+    nelx, nely = int(e2e["nelx"]), int(e2e["nely"])
+    nloop = e2e["xPhys_traj"].shape[2] - 1
+    factor_all = fx["factor_all"]
+
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    H, Hs = filters.density_filter(nelx, nely, 2)
+    H_t = torch_util.csr_to_tensor(H, "cpu", torch.float64)
+    Hs_t = tt(Hs)
+    e1_t, e2_t, w_t = tti(e1), tti(e2), tt(w)
+
+    for k in range(nloop):
+        xPhys = tt(e2e["xPhys_traj"][:, :, k]).requires_grad_(True)
+        tPhys = tt(e2e["tPhys_traj"][:, :, k]).requires_grad_(True)
+        dx = tt(e2e["dx_all"][:, :, k]).flatten()
+        factor = float(factor_all[k])
+
+        numer, _ = conductivity.hotspot_value(
+            xPhys, tPhys, e1_t, e2_t, w_t, P, Q, R, ROUF
+        )
+        fval = factor * numer / TCR - 1
+        d_xPhys, d_tPhys = torch.autograd.grad(fval, (xPhys, tPhys))
+
+        df1 = (H_t @ (d_xPhys.flatten() * dx / Hs_t)).detach().numpy()
+        dt1 = (H_t @ (d_tPhys.flatten() / Hs_t)).detach().numpy()
+
+        assert_close(df1, fx["df1_all"][:, k], tier="algebraic")
+        assert_close(dt1, fx["dt1_all"][:, k], tier="algebraic")
+
+
+def test_hotspot_value_fd_density_and_time():
+    """`hotspot_value`'s autograd sensitivity against central differences, at a small
+    mesh -- an oracle-free check independent of both `hotspot_value` and
+    `hotspot_constraint`.
+    """
+    nelx, nely = 8, 6
+    nel = nelx * nely
+    h = 1e-6
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+
+    rng = np.random.default_rng(40)
+    xPhys0 = rng.uniform(0.2, 0.9, size=(nely, nelx))
+    tPhys0 = rng.uniform(0.0, 1.0, size=(nely, nelx))
+
+    def numer_of(xPhys, tPhys):
+        n, _ = conductivity.hotspot_value(
+            tt(xPhys), tt(tPhys), e1, e2, w, P, Q, R, ROUF
+        )
+        return float(n)
+
+    xPhys_t = tt(xPhys0).requires_grad_(True)
+    tPhys_t = tt(tPhys0).requires_grad_(True)
+    numer, _ = conductivity.hotspot_value(xPhys_t, tPhys_t, e1, e2, w, P, Q, R, ROUF)
+    d_x, d_t = torch.autograd.grad(numer, (xPhys_t, tPhys_t))
+    d_x, d_t = d_x.numpy().flatten(), d_t.numpy().flatten()
+
+    fd_x = np.zeros(nel)
+    fd_t = np.zeros(nel)
+    for e in range(nel):
+        j, i = e // nelx, e % nelx
+        xp, xm = xPhys0.copy(), xPhys0.copy()
+        xp[j, i] += h
+        xm[j, i] -= h
+        fd_x[e] = (numer_of(xp, tPhys0) - numer_of(xm, tPhys0)) / (2 * h)
+
+        tp, tm = tPhys0.copy(), tPhys0.copy()
+        tp[j, i] += h
+        tm[j, i] -= h
+        fd_t[e] = (numer_of(xPhys0, tp) - numer_of(xPhys0, tm)) / (2 * h)
+
+    np.testing.assert_allclose(d_x, fd_x, rtol=1e-4, atol=1e-7)
+    np.testing.assert_allclose(d_t, fd_t, rtol=1e-4, atol=1e-7)
+
+
+def test_hotspot_value_finite_at_exact_zero_density():
+    """`hotspot_value`'s autograd gradient must stay finite at exact-zero `xPhys`
+    (reached routinely once `beta_d` saturates), the autograd counterpart of
+    `test_hotspot_constraint_finite_at_exact_zero_density`. Before the NaN-safe
+    rewrite (`cond_p = T_val**p * x**(r*p)` instead of `(T_val * x**r)**p`), this
+    reproduces Phase 0a's bug under autograd: `d(x**r)/dx` is `inf` at `x == 0`.
+    """
+    nelx, nely = 12, 8
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+
+    rng = np.random.default_rng(41)
+    xPhys = (rng.uniform(size=(nely, nelx)) > 0.5).astype(float)
+    assert np.any(xPhys == 0.0)
+    tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
+
+    xPhys_t = tt(xPhys).requires_grad_(True)
+    tPhys_t = tt(tPhys).requires_grad_(True)
+    numer, _ = conductivity.hotspot_value(xPhys_t, tPhys_t, e1, e2, w, P, Q, R, ROUF)
+    d_x, d_t = torch.autograd.grad(numer, (xPhys_t, tPhys_t))
+    assert torch.all(torch.isfinite(d_x))
+    assert torch.all(torch.isfinite(d_t))
+
+
+def test_hotspot_value_naive_form_would_have_produced_nan():
+    """Demonstrates the NaN-safe rewrite is load-bearing: the naive, algebraically
+    equivalent `(T_val * x**r) ** p` form (the transliteration a mechanical port would
+    produce) gives a `nan` gradient at the same exact-zero density where
+    `hotspot_value`'s rewritten form stays finite -- proof the regression test above
+    would actually have caught Phase 0a's bug resurrected under autograd, not merely
+    that finite gradients happen to occur here.
+    """
+    nelx, nely = 12, 8
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+
+    rng = np.random.default_rng(41)
+    xPhys = (rng.uniform(size=(nely, nelx)) > 0.5).astype(float)
+    assert np.any(xPhys == 0.0)
+    tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
+
+    x = tt(xPhys).flatten().requires_grad_(True)
+    t = tt(tPhys).flatten()
+    core = conductivity._conductivity_core(x, t, e1, e2, w, Q, ROUF)
+    T_val = 1 - core.K_est
+    cond_p = (T_val * x**R) ** P  # naive, pre-Phase-0a-fix form
+    numer = (torch.sum(cond_p) / x.numel()) ** (1 / P)
+    (d_x,) = torch.autograd.grad(numer, (x,))
+    assert torch.any(torch.isnan(d_x))
+
+
+def test_hotspot_value_fully_solid_part_gradient_is_finite():
+    """`sum_cond == 0` (every element `T_val == 0`, i.e. a fully solid, maximally
+    "cool" part) makes the naive `u**(1/p)` gradient diverge (`1/p - 1 < 0`);
+    `_safe_pmean` gives it, and hence `hotspot_value`, a `0` gradient there instead --
+    the analytic limit `hotspot_constraint`'s own `scale = 0.0 if sum_cond == 0` comment
+    already derives for the hand-derived path.
+    """
+    nelx, nely = 6, 4
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+    xPhys = torch.ones(nely, nelx, dtype=torch.float64, requires_grad=True)
+    tPhys = torch.rand(nely, nelx, dtype=torch.float64)
+
+    numer, K_est = conductivity.hotspot_value(xPhys, tPhys, e1, e2, w, P, Q, R, ROUF)
+    assert float(numer.detach()) == 0.0
+    assert torch.all(K_est == 1.0)
+    (d_x,) = torch.autograd.grad(numer, (xPhys,))
+    assert torch.all(torch.isfinite(d_x))
+    assert torch.all(d_x == 0.0)

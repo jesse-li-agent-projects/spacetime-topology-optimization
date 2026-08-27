@@ -151,6 +151,66 @@ def _conductivity_terms(
     return _ConductivityTerms(core.K_est, core.Nsum3, FT_ba, DFT_ba, S1, S2)
 
 
+def _safe_pmean(u: Float[Tensor, ""], p: float) -> Float[Tensor, ""]:
+    """`u**(1/p)`, with value and gradient both `0` at `u == 0` (`1/p - 1 < 0` for `p >
+    1`, so the naive gradient diverges there) rather than the finite forward value
+    followed by a `nan` backward.
+
+    `u = sum_cond / nel == 0` means every element has `T_val == 0` (a fully "cool",
+    well-supported part) -- a legitimate optimizer state, not a corner case, and one
+    `hotspot_constraint`'s hand-derived sensitivity already special-cases (`scale = 0.0
+    if sum_cond == 0`, whose docstring comment derives the same zero limit). Standard
+    "safe input, then re-select" pattern: evaluate the singular branch at a substitute
+    input that never actually triggers the singularity, so its local gradient is
+    finite, then `where`-select the *value* -- `torch.where`'s backward routes zero
+    incoming gradient into the discarded branch precisely where it was substituted, so
+    the substitute's finite-but-irrelevant gradient never multiplies a `0 * inf`.
+    """
+    safe_u = torch.where(u == 0, torch.ones_like(u), u)
+    val = safe_u ** (1 / p)
+    return torch.where(u == 0, torch.zeros_like(val), val)
+
+
+def hotspot_value(
+    xPhys: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+    e1: Int[Tensor, " npairs"],
+    e2: Int[Tensor, " npairs"],
+    w: Float[Tensor, " npairs"],
+    p: float,
+    q: float,
+    r: float,
+    rouf: float,
+) -> tuple[Float[Tensor, ""], Float[Tensor, " nely*nelx"]]:
+    """`hotspot_constraint`'s value alone (`numer`, `K_est`), differentiable end to end
+    w.r.t. `xPhys`/`tPhys` (autograd sensitivity path, `plans/torch_port_part2.md`
+    Phase 3.4 -- see `hotspot_constraint` for the hand-derived predecessor
+    `bench_sensitivities.py` times this against).
+
+    Written in the NaN-safe form the plan's Risks section requires: `cond_p =
+    (T_val * x**r) ** p` differentiates to `inf` at `x == 0` (density does reach exact
+    zero once the Heaviside projection saturates), so this computes the algebraically
+    identical `T_val**p * x**(r*p)` instead, whose gradient is finite because
+    `r*p > 1` at production settings (`r=0.05, p=25`). Also guards `_safe_pmean`'s
+    input against the (rarer) fully-solid-part singularity. Callers needing the caller
+    owned `factor`/`Tcr` scaling and the constraint value build them from `numer`
+    directly, as `hotspot_constraint` does.
+    """
+    nely, nelx = xPhys.shape
+    nel = nely * nelx
+    x = xPhys.flatten()
+    t = tPhys.flatten()
+
+    core = _conductivity_core(x, t, e1, e2, w, q, rouf)
+    K_est = core.K_est
+    T_val = 1 - K_est
+
+    cond_p = T_val**p * x ** (r * p)
+    sum_cond = torch.sum(cond_p)
+    numer = _safe_pmean(sum_cond / nel, p)
+    return numer, K_est
+
+
 def estimated_conductivity(
     xPhys: Float[Tensor, "nely nelx"],
     tPhys: Float[Tensor, "nely nelx"],
