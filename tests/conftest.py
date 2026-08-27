@@ -29,6 +29,18 @@ def _as_numpy(x) -> np.ndarray:
     return np.asarray(x)
 
 
+def tt(x, dtype: torch.dtype = torch.float64) -> torch.Tensor:
+    """Convert a NumPy array (or other array-like) to a CPU tensor, for tests that
+    build plain-NumPy inputs to feed the (now torch) leaf math in `sttopt`.
+    """
+    return torch.as_tensor(np.asarray(x), dtype=dtype)
+
+
+def tti(x) -> torch.Tensor:
+    """`tt`, for integer index/mask arrays (`edofMat`, `freedofs`, ...)."""
+    return tt(x, dtype=torch.int64)
+
+
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
