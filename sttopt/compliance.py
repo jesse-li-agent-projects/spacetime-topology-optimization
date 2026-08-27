@@ -116,6 +116,34 @@ def _solve_fe_batched(
     return torch_solve.femsolve(density, F, edofMat, KE, mask, nelx, nely, x0=x0)
 
 
+def whole_compliance_value(
+    xPhys: Float[Tensor, "nely nelx"],
+    KE: Float[Tensor, "8 8"],
+    edofMat: Int[Tensor, "nelx*nely 8"],
+    Emin: float,
+    Emax: float,
+    penal: float,
+    freedofs: Int[Tensor, " n_free"],
+    F: Float[Tensor, " ndof"],
+    ndof: int,
+    *,
+    x0: Float[Tensor, " ndof"] | None = None,
+) -> tuple[Float[Tensor, ""], Float[Tensor, " ndof"]]:
+    """`whole_compliance`'s value alone, kept differentiable end to end w.r.t. `xPhys`
+    (autograd sensitivity path, `plans/torch_port_part2.md` Phase 3.4) instead of
+    returning the hand-derived `dcx`. See `whole_compliance` for that predecessor,
+    which `benchmarks/bench_sensitivities.py` times this against.
+
+    :param x0: optional warm start for the solve.
+    :return: `(c, U)` -- `U` for the caller's next-iteration warm start.
+    """
+    U = _solve_fe(KE, xPhys, Emin, Emax, penal, edofMat, freedofs, F, ndof, x0=x0)
+    nely, nelx = xPhys.shape
+    ce = _element_strain_energy(U, edofMat, KE, nely, nelx)
+    simp = Emin + xPhys**penal * (Emax - Emin)
+    return torch.sum(simp * ce), U
+
+
 def _whole_compliance_from_U(
     xPhys: Float[Tensor, "nely nelx"],
     KE: Float[Tensor, "8 8"],
@@ -179,6 +207,36 @@ def _gravity_load(
     F = torch.zeros(ndof, dtype=xPhys.dtype, device=xPhys.device)
     F[1::2] = f  # y-dof of each node; x-dof stays 0 (gravity acts in -y)
     return t_mask, dfdt, xtJoint, F
+
+
+def gravity_compliance_value(
+    xPhys: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+    KE: Float[Tensor, "8 8"],
+    edofMat: Int[Tensor, "nelx*nely 8"],
+    Emin: float,
+    Emax: float,
+    penal: float,
+    ti: float,
+    C: Tensor,
+    beta_t: float,
+    freedofs: Int[Tensor, " n_free"],
+    ndof: int,
+    *,
+    x0: Float[Tensor, " ndof"] | None = None,
+) -> tuple[Float[Tensor, ""], Float[Tensor, " ndof"]]:
+    """`gravity_compliance`'s value alone, autograd counterpart of
+    `whole_compliance_value` -- see that function's docstring.
+
+    :param x0: optional warm start for the solve.
+    :return: `(cg, U)`.
+    """
+    t_mask, dfdt, xtJoint, F = _gravity_load(xPhys, tPhys, ti, C, beta_t, ndof)
+    U = _solve_fe(KE, xtJoint, Emin, Emax, penal, edofMat, freedofs, F, ndof, x0=x0)
+    nely, nelx = xPhys.shape
+    ce = _element_strain_energy(U, edofMat, KE, nely, nelx)
+    simp = Emin + xtJoint**penal * (Emax - Emin)
+    return torch.sum(simp * ce), U
 
 
 def _gravity_compliance_from_U(
@@ -320,3 +378,63 @@ def batched_whole_and_gravity_compliance(
         for i, (xtJoint, t_mask, dfdt) in enumerate(stage_loads)
     ]
     return c, dcx, stages, U
+
+
+def batched_whole_and_gravity_compliance_value(
+    xPhys: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+    KE: Float[Tensor, "8 8"],
+    edofMat: Int[Tensor, "nelx*nely 8"],
+    Emin: float,
+    Emax: float,
+    penal: float,
+    freedofs: Int[Tensor, " n_free"],
+    F: Float[Tensor, " ndof"],
+    ndof: int,
+    C: Tensor,
+    beta_t: float,
+    stage_times: list[float],
+    *,
+    x0: Float[Tensor, "n_stage_plus_1 ndof"] | None = None,
+) -> tuple[
+    Float[Tensor, ""],
+    list[Float[Tensor, ""]],
+    Float[Tensor, "n_stage_plus_1 ndof"],
+]:
+    """`batched_whole_and_gravity_compliance`'s values alone, autograd counterpart --
+    same batched `FemSolve` call, but the per-row algebra is `whole_compliance_value`/
+    `gravity_compliance_value`'s (value only, kept differentiable) rather than the
+    hand-derived `_whole_compliance_from_U`/`_gravity_compliance_from_U`.
+
+    :param stage_times: this iteration's `ti` for each gravity stage, in order.
+    :param x0: optional warm start, `(1 + len(stage_times), ndof)`.
+    :return: `(c, [cg, ...], U)`, `U` for the next iteration's `x0`.
+    """
+    nely, nelx = xPhys.shape
+    mask = torch_fem.free_mask(ndof, freedofs, device=xPhys.device)
+
+    density_rows = [torch_fem.simp_density(xPhys, Emin, Emax, penal).flatten()]
+    F_rows = [F]
+    xtJoints = []
+    for ti in stage_times:
+        _, _, xtJoint, F_g = _gravity_load(xPhys, tPhys, ti, C, beta_t, ndof)
+        density_rows.append(
+            torch_fem.simp_density(xtJoint, Emin, Emax, penal).flatten()
+        )
+        F_rows.append(F_g)
+        xtJoints.append(xtJoint)
+
+    density = torch.stack(density_rows)
+    F_stack = torch.stack(F_rows)
+    U = _solve_fe_batched(KE, density, edofMat, mask, nelx, nely, F_stack, x0=x0)
+
+    ce_whole = _element_strain_energy(U[0], edofMat, KE, nely, nelx)
+    simp_whole = Emin + xPhys**penal * (Emax - Emin)
+    c = torch.sum(simp_whole * ce_whole)
+
+    stages = []
+    for i, xtJoint in enumerate(xtJoints):
+        ce = _element_strain_energy(U[1 + i], edofMat, KE, nely, nelx)
+        simp = Emin + xtJoint**penal * (Emax - Emin)
+        stages.append(torch.sum(simp * ce))
+    return c, stages, U

@@ -586,3 +586,184 @@ def test_time_mask_derivative_matches_fd():
         - compliance.time_mask(tPhys - h, ti, beta_t)
     ) / (2 * h)
     np.testing.assert_allclose(analytic, fd, rtol=1e-6, atol=1e-8)
+
+
+# --- Phase 3.4 (plans/torch_port_part2.md): autograd sensitivities against hand-derived --
+
+from benchmarks import calibrate_cg_rtol as calib  # noqa: E402
+
+
+def _near_binary_snapshot(mesh="90x30"):
+    nelx, nely = (int(v) for v in mesh.split("x"))
+    with np.load(calib.FIXTURES) as data:
+        x = data[f"x_{mesh}_it0800"]
+        t = data[f"t_{mesh}_it0800"]
+    return calib.mesh_setup(nelx, nely), x, t
+
+
+def test_whole_compliance_value_matches_hand_derived_near_binary():
+    """`whole_compliance_value`'s autograd sensitivity against `whole_compliance`'s
+    hand-derived `dcx`, at a near-binary snapshot -- `solved` tier (downstream of the
+    FEM solve). The value-only function is the one `optimize.step` calls for the
+    production sensitivity (Phase 3.4); this is `bench_sensitivities.py`'s correctness
+    counterpart.
+    """
+    setup, x, t = _near_binary_snapshot()
+    xPhys = torch.tensor(x, dtype=torch.float64, requires_grad=True)
+
+    c_ref, dcx_ref = compliance.whole_compliance(
+        xPhys.detach(),
+        setup["KE_t"],
+        setup["edofMat_t"],
+        calib.EMIN,
+        calib.EMAX,
+        calib.PENAL,
+        setup["freedofs_t"],
+        setup["F_t"],
+        setup["ndof"],
+    )
+    c, _U = compliance.whole_compliance_value(
+        xPhys,
+        setup["KE_t"],
+        setup["edofMat_t"],
+        calib.EMIN,
+        calib.EMAX,
+        calib.PENAL,
+        setup["freedofs_t"],
+        setup["F_t"],
+        setup["ndof"],
+    )
+    (dcx,) = torch.autograd.grad(c, (xPhys,))
+
+    assert_close(c.detach().numpy(), c_ref, tier="solved")
+    rel_active, abs_over_peak = calib.elementwise_errors(
+        dcx.numpy().ravel(), dcx_ref.numpy().ravel()
+    )
+    assert rel_active < calib.SENSITIVITY_TOL
+    assert abs_over_peak < calib.SENSITIVITY_TOL
+
+
+def test_gravity_compliance_value_matches_hand_derived_near_binary():
+    """`gravity_compliance_value`'s autograd sensitivities against `gravity_compliance`'s
+    hand-derived `dcx`/`dct`, at a near-binary snapshot -- `solved` tier. In particular
+    this pins the "extra adjoint term" (`gravity_compliance`'s docstring) falling out of
+    autograd for free, with no special-casing.
+    """
+    setup, x, t = _near_binary_snapshot()
+    xPhys = torch.tensor(x, dtype=torch.float64, requires_grad=True)
+    tPhys = torch.tensor(t, dtype=torch.float64, requires_grad=True)
+    ti, beta_t = 0.5, calib.BETA_T
+
+    c_ref, dcx_ref, dct_ref = compliance.gravity_compliance(
+        xPhys.detach(),
+        tPhys.detach(),
+        setup["KE_t"],
+        setup["edofMat_t"],
+        calib.EMIN,
+        calib.EMAX,
+        calib.PENAL,
+        ti,
+        setup["C_t"],
+        beta_t,
+        setup["freedofs_t"],
+        setup["ndof"],
+    )
+    cg, _U = compliance.gravity_compliance_value(
+        xPhys,
+        tPhys,
+        setup["KE_t"],
+        setup["edofMat_t"],
+        calib.EMIN,
+        calib.EMAX,
+        calib.PENAL,
+        ti,
+        setup["C_t"],
+        beta_t,
+        setup["freedofs_t"],
+        setup["ndof"],
+    )
+    dcx, dct = torch.autograd.grad(cg, (xPhys, tPhys))
+
+    assert_close(cg.detach().numpy(), c_ref, tier="solved")
+    for grad, ref, name in ((dcx, dcx_ref, "dcx"), (dct, dct_ref, "dct")):
+        rel_active, abs_over_peak = calib.elementwise_errors(
+            grad.numpy().ravel(), ref.numpy().ravel()
+        )
+        assert rel_active < calib.SENSITIVITY_TOL, name
+        assert abs_over_peak < calib.SENSITIVITY_TOL, name
+
+
+def test_batched_whole_and_gravity_compliance_value_matches_sequential():
+    """`batched_whole_and_gravity_compliance_value`'s values and autograd sensitivities
+    against calling `whole_compliance_value`/`gravity_compliance_value` sequentially,
+    one `FemSolve` call each -- the batched path must agree with the unbatched one it
+    replaces in `optimize.step` when `Problem.batch_fem_solves` is on.
+    """
+    setup, x, t = _near_binary_snapshot()
+    nstage = 3
+    stage_times = [0.3, 0.6, 1.0]
+
+    def run(batched):
+        xPhys = torch.tensor(x, dtype=torch.float64, requires_grad=True)
+        tPhys = torch.tensor(t, dtype=torch.float64, requires_grad=True)
+        if batched:
+            c, stage_cs, _U = compliance.batched_whole_and_gravity_compliance_value(
+                xPhys,
+                tPhys,
+                setup["KE_t"],
+                setup["edofMat_t"],
+                calib.EMIN,
+                calib.EMAX,
+                calib.PENAL,
+                setup["freedofs_t"],
+                setup["F_t"],
+                setup["ndof"],
+                setup["C_t"],
+                calib.BETA_T,
+                stage_times,
+            )
+        else:
+            c, _U = compliance.whole_compliance_value(
+                xPhys,
+                setup["KE_t"],
+                setup["edofMat_t"],
+                calib.EMIN,
+                calib.EMAX,
+                calib.PENAL,
+                setup["freedofs_t"],
+                setup["F_t"],
+                setup["ndof"],
+            )
+            stage_cs = [
+                compliance.gravity_compliance_value(
+                    xPhys,
+                    tPhys,
+                    setup["KE_t"],
+                    setup["edofMat_t"],
+                    calib.EMIN,
+                    calib.EMAX,
+                    calib.PENAL,
+                    ti,
+                    setup["C_t"],
+                    calib.BETA_T,
+                    setup["freedofs_t"],
+                    setup["ndof"],
+                )[0]
+                for ti in stage_times
+            ]
+        f0val = c + sum(stage_cs)
+        dcx, dct = torch.autograd.grad(f0val, (xPhys, tPhys))
+        return float(c), [float(cg) for cg in stage_cs], dcx.numpy(), dct.numpy()
+
+    c_b, cg_b, dcx_b, dct_b = run(True)
+    c_s, cg_s, dcx_s, dct_s = run(False)
+
+    assert_close(c_b, c_s, tier="solved")
+    for a, b in zip(cg_b, cg_s):
+        assert_close(a, b, tier="solved")
+    rel_active, abs_over_peak = calib.elementwise_errors(dcx_b.ravel(), dcx_s.ravel())
+    assert rel_active < calib.SENSITIVITY_TOL
+    assert abs_over_peak < calib.SENSITIVITY_TOL
+    rel_active, abs_over_peak = calib.elementwise_errors(dct_b.ravel(), dct_s.ravel())
+    assert rel_active < calib.SENSITIVITY_TOL
+    assert abs_over_peak < calib.SENSITIVITY_TOL
