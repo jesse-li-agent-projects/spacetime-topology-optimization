@@ -628,8 +628,9 @@ them. Roughly in decreasing order of expected return:
    `omega = 0.6` and `n_smooth = 2` were all chosen in Phase 1 against a *synthetic* hard
    0/1 field at 90x30. The real near-binary designs behave differently enough (90x30 is
    harder than 180x60, which the synthetic proxy did not predict) that the optimum may
-   have moved. `sweep_mg_params.tmp.py` in the Phase 2 branch history is a starting
-   point. Note the tension the sweep must weigh: `max_coarse_elements = 700` bottoms out
+   have moved. Sweep `(max_coarse_elements, n_smooth, omega, gamma)` against the
+   `it0800` snapshots, timing as well as counting iterations, since the two disagree:
+   note the tension the sweep must weigh, that `max_coarse_elements = 700` bottoms out
    at 45x15 and costs 6.9 ms/solve of hierarchy build, against 0.4 ms at 200 -- but a
    coarser bottom cost 119 iterations against 31 in Phase 1's measurement.
 4. **A cheaper coarse solve.** The coarsest level is factorized by dense Cholesky on a
