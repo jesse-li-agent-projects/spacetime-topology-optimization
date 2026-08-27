@@ -15,13 +15,25 @@ iteration's move-limit bounds read); `xTilde`/`xPhys`/`tPhys` are the *filtered*
 for density, Heaviside-projected) fields the physics uses.
 `xTilde` alone is carried an extra step (needed for the Heaviside-derivative chain rule
 at the *start* of the next iteration, before that iteration's own update).
+
+**The tensor boundary (`plans/torch_port_part2.md` Phase 3.1).** `Problem` and `State`
+hold torch tensors -- `Problem.device`/`.dtype` say where -- but `compliance.py`/
+`constraints.py`/`conductivity.py`/`filters.py`/`mma.py` are still the original
+NumPy/SciPy implementations (later phases in that plan port them). `step` and
+`init_state` bridge the two: convert the tensor fields they need to NumPy/SciPy once at
+the top, run the existing array-library computation unchanged, then convert the results
+back to tensors for the returned `State`. This bridging -- not any change to the
+arithmetic -- is the only thing this phase adds to `step`/`init_state`; it goes away
+once Phase 3.2 ports the leaf math itself.
 """
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import numpy as np
-import scipy.sparse as sp
-from jaxtyping import Float, Int
+import torch
+from jaxtyping import Bool, Float, Int
+from torch import Tensor
 
 import sttopt.compliance as compliance
 import sttopt.conductivity as conductivity
@@ -31,6 +43,8 @@ import sttopt.filters as filters
 import sttopt.gravity as gravity
 import sttopt.mma as mma
 import sttopt.timefield as timefield
+import sttopt.torch_fem as torch_fem
+import sttopt.torch_util as torch_util
 
 
 @dataclass(frozen=True)
@@ -48,19 +62,23 @@ class Problem:
     Tcr: float
     tfield: timefield.TimeField
 
-    KE: Float[np.ndarray, "8 8"]
-    edofMat: Int[np.ndarray, "nelx*nely 8"]
-    freedofs: Int[np.ndarray, " n_free"]
-    F: Float[np.ndarray, " ndof"]
+    device: torch.device
+    dtype: torch.dtype
+
+    KE: Float[Tensor, "8 8"]
+    edofMat: Int[Tensor, "nelx*nely 8"]
+    freedofs: Int[Tensor, " n_free"]
+    free_mask: Bool[Tensor, " ndof"]  # True at free dofs; the matrix-free path's mask
+    F: Float[Tensor, " ndof"]
     ndof: int
-    H: sp.spmatrix | sp.sparray
-    Hs: Float[np.ndarray, " nel"]
-    L: sp.spmatrix | sp.sparray
-    C: sp.spmatrix | sp.sparray
-    e1: Int[np.ndarray, " npairs"]
-    e2: Int[np.ndarray, " npairs"]
-    w: Float[np.ndarray, " npairs"]
-    Nei: Int[np.ndarray, " k"]
+    H: Tensor  # sparse CSR, shape (nel, nel)
+    Hs: Float[Tensor, " nel"]
+    L: Tensor  # sparse CSR, shape (nel, nel)
+    C: Tensor  # sparse CSR, shape ((nelx+1)*(nely+1), nel)
+    e1: Int[Tensor, " npairs"]
+    e2: Int[Tensor, " npairs"]
+    w: Float[Tensor, " npairs"]
+    Nei: Int[Tensor, " k"]
 
     Emin: float
     Emax: float
@@ -84,15 +102,15 @@ class Problem:
 class State:
     """Iteration-dependent state carried from one `step` call to the next."""
 
-    x: Float[np.ndarray, "nely nelx"]  # raw density (unfiltered MMA output)
-    xTilde: Float[np.ndarray, "nely nelx"]  # density-filtered x
-    xPhys: Float[np.ndarray, "nely nelx"]  # density for physics purposes
-    t: Float[np.ndarray, "nely nelx"]  # raw time field (unfiltered MMA output)
-    tPhys: Float[np.ndarray, "nely nelx"]  # time for physics purposes
-    xold1: Float[np.ndarray, " n"]
-    xold2: Float[np.ndarray, " n"]
-    low: Float[np.ndarray, " n"]
-    upp: Float[np.ndarray, " n"]
+    x: Float[Tensor, "nely nelx"]  # raw density (unfiltered MMA output)
+    xTilde: Float[Tensor, "nely nelx"]  # density-filtered x
+    xPhys: Float[Tensor, "nely nelx"]  # density for physics purposes
+    t: Float[Tensor, "nely nelx"]  # raw time field (unfiltered MMA output)
+    tPhys: Float[Tensor, "nely nelx"]  # time for physics purposes
+    xold1: Float[Tensor, " n"]
+    xold2: Float[Tensor, " n"]
+    low: Float[Tensor, " n"]
+    upp: Float[Tensor, " n"]
     loop: int
     beta_t: float  # gravity/stage-mask sigmoid sharpness
     beta_d: float  # Heaviside projection sharpness
@@ -120,8 +138,8 @@ class IterationRecord:
 class RunResult:
     state: State  # final state after nloop iterations
     # length nloop+1, index 0 is initial field
-    xPhys_traj: list[Float[np.ndarray, "nely nelx"]]
-    tPhys_traj: list[Float[np.ndarray, "nely nelx"]]  # length nloop+1
+    xPhys_traj: list[Float[Tensor, "nely nelx"]]
+    tPhys_traj: list[Float[Tensor, "nely nelx"]]  # length nloop+1
     records: list[IterationRecord]  # length nloop
 
 
@@ -151,6 +169,8 @@ def build_problem(
     mma_c: float = 2500.0,
     move: float = 0.01,
     tmove: float = 0.01,
+    device: torch.device | str = "cpu",
+    dtype: torch.dtype = torch.float64,
 ) -> Problem:
     """Build the fixed FEM/filter/geometry setup once, before the loop starts.
 
@@ -158,7 +178,12 @@ def build_problem(
     conductivity neighborhood) -- passed explicitly rather than hardcoded so callers
     (e.g. the E2E test) can match whatever grid they're running on, since the fixture's
     radii differ from the original full-scale script's.
+
+    :param device: device every tensor field of the returned `Problem` lives on.
+    :param dtype: floating dtype every real-valued tensor field is cast to; integer
+        (index/mask) fields keep their own integer/bool dtype regardless.
     """
+    device = torch.device(device)
     # A 1x1 mesh has neither extent nor neighbours, so two of the pieces built below
     # degenerate: the CORNER/OPPOSITE_CORNER time fields normalize by a zero max
     # distance, and the continuity filter divides by a zero neighbour count. This is the
@@ -203,6 +228,7 @@ def build_problem(
     # tfield != CORNER (Nei has nely rows); computing from len(Nei) generalizes correctly.
     m = 1 + 1 + len(Nei) + 2 * nStage + 1
 
+    freedofs_t = torch_util.to_tensor(freedofs, device, torch.int64)
     return Problem(
         nelx=nelx,
         nely=nely,
@@ -211,19 +237,22 @@ def build_problem(
         Theta=Theta,
         Tcr=Tcr,
         tfield=tfield,
-        KE=KE,
-        edofMat=edofMat,
-        freedofs=freedofs,
-        F=F,
+        device=device,
+        dtype=dtype,
+        KE=torch_util.to_tensor(KE, device, dtype),
+        edofMat=torch_util.to_tensor(edofMat, device, torch.int64),
+        freedofs=freedofs_t,
+        free_mask=torch_fem.free_mask(ndof, freedofs_t, device=device),
+        F=torch_util.to_tensor(F, device, dtype),
         ndof=ndof,
-        H=H,
-        Hs=Hs,
-        L=L,
-        C=C,
-        e1=e1,
-        e2=e2,
-        w=w,
-        Nei=Nei,
+        H=torch_util.csr_to_tensor(H, device, dtype),
+        Hs=torch_util.to_tensor(Hs, device, dtype),
+        L=torch_util.csr_to_tensor(L, device, dtype),
+        C=torch_util.csr_to_tensor(C, device, dtype),
+        e1=torch_util.to_tensor(e1, device, torch.int64),
+        e2=torch_util.to_tensor(e2, device, torch.int64),
+        w=torch_util.to_tensor(w, device, dtype),
+        Nei=torch_util.to_tensor(Nei, device, torch.int64),
         Emin=Emin,
         Emax=Emax,
         penal=penal,
@@ -255,8 +284,13 @@ def init_state(problem: Problem, beta_d: float) -> State:
     nely, nelx = problem.nely, problem.nelx
     nel = nelx * nely
 
+    # Tensor boundary (see module docstring): H/Hs are still applied via SciPy here,
+    # since `filters.heaviside_projection` is unported NumPy.
+    H = torch_util.csr_to_scipy(problem.H)
+    Hs = torch_util.to_numpy(problem.Hs)
+
     def filtered(field):
-        return (problem.H @ field.flatten() / problem.Hs).reshape(nely, nelx)
+        return (H @ field.flatten() / Hs).reshape(nely, nelx)
 
     x = np.full((nely, nelx), problem.volfrac)
     xTilde = filtered(x)
@@ -269,20 +303,71 @@ def init_state(problem: Problem, beta_d: float) -> State:
     # both take mmasub's `iteration < 2.5` reinit branch), reproduced anyway for fidelity.
     xold = np.concatenate([x.flatten(), np.zeros(nel)])
 
+    device, dtype = problem.device, problem.dtype
     return State(
-        x=x,
-        xTilde=xTilde,
-        xPhys=xPhys,
-        t=t,
-        tPhys=tPhys,
-        xold1=xold,
-        xold2=xold.copy(),
-        low=np.zeros(problem.n),
-        upp=np.zeros(problem.n),
+        x=torch_util.to_tensor(x, device, dtype),
+        xTilde=torch_util.to_tensor(xTilde, device, dtype),
+        xPhys=torch_util.to_tensor(xPhys, device, dtype),
+        t=torch_util.to_tensor(t, device, dtype),
+        tPhys=torch_util.to_tensor(tPhys, device, dtype),
+        xold1=torch_util.to_tensor(xold, device, dtype),
+        xold2=torch_util.to_tensor(xold.copy(), device, dtype),
+        low=torch_util.to_tensor(np.zeros(problem.n), device, dtype),
+        upp=torch_util.to_tensor(np.zeros(problem.n), device, dtype),
         loop=0,
         beta_t=10.0,
         beta_d=beta_d,
         factor=1.0,
+    )
+
+
+def _problem_numpy_view(problem: Problem) -> SimpleNamespace:
+    """
+    NumPy/SciPy view of `problem`'s tensor fields, for the still-unported leaf math
+    (`compliance`/`constraints`/`conductivity`/`filters`/`mma`); every non-tensor field
+    passes through unchanged. Transitional scaffolding, per this module's docstring --
+    removed once Phase 3.2 of `plans/torch_port_part2.md` ports that leaf math to torch
+    directly.
+
+    :param problem: the tensor-valued `Problem`.
+    :return: a namespace with the same field names as `Problem`, tensor fields converted.
+    """
+    return SimpleNamespace(
+        nelx=problem.nelx,
+        nely=problem.nely,
+        nStage=problem.nStage,
+        volfrac=problem.volfrac,
+        Theta=problem.Theta,
+        Tcr=problem.Tcr,
+        tfield=problem.tfield,
+        KE=torch_util.to_numpy(problem.KE),
+        edofMat=torch_util.to_numpy(problem.edofMat),
+        freedofs=torch_util.to_numpy(problem.freedofs),
+        F=torch_util.to_numpy(problem.F),
+        ndof=problem.ndof,
+        H=torch_util.csr_to_scipy(problem.H),
+        Hs=torch_util.to_numpy(problem.Hs),
+        L=torch_util.csr_to_scipy(problem.L),
+        C=torch_util.csr_to_scipy(problem.C),
+        e1=torch_util.to_numpy(problem.e1),
+        e2=torch_util.to_numpy(problem.e2),
+        w=torch_util.to_numpy(problem.w),
+        Nei=torch_util.to_numpy(problem.Nei),
+        Emin=problem.Emin,
+        Emax=problem.Emax,
+        penal=problem.penal,
+        eta=problem.eta,
+        beta_d_max=problem.beta_d_max,
+        p=problem.p,
+        q=problem.q,
+        r=problem.r,
+        rouf=problem.rouf,
+        a0=problem.a0,
+        mma_c=problem.mma_c,
+        move=problem.move,
+        tmove=problem.tmove,
+        m=problem.m,
+        n=problem.n,
     )
 
 
@@ -298,7 +383,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     effect starting the *next* iteration rather than rescaling this iteration's own
     `fval`/`df1`/`dt1` mid-loop -- a deliberate simplification, not a fidelity gap.
     """
-    prob = problem
+    # Tensor boundary (see module docstring): `prob` exposes `problem`'s tensor fields
+    # as NumPy/SciPy for the unported leaf math below; converted once here, then this
+    # function's arithmetic is exactly what it was pre-Phase-3.1.
+    prob = _problem_numpy_view(problem)
     nely, nelx, nStage = prob.nely, prob.nelx, prob.nStage
     nel = nelx * nely
 
@@ -312,10 +400,12 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     if beta_d > prob.beta_d_max:
         beta_d = prob.beta_d_max
 
-    xPhys, tPhys = state.xPhys, state.tPhys
+    xPhys, tPhys = torch_util.to_numpy(state.xPhys), torch_util.to_numpy(state.tPhys)
     # Heaviside-derivative chain rule for this iteration's density sensitivities, from
     # the xTilde carried over from the *previous* iteration's update (or init).
-    dx = filters.heaviside_projection_derivative(state.xTilde, beta_d, prob.eta)
+    dx = filters.heaviside_projection_derivative(
+        torch_util.to_numpy(state.xTilde), beta_d, prob.eta
+    )
 
     # -- Objective: whole-structure compliance + Theta-weighted per-stage gravity compliance --
     c, dcx = compliance.whole_compliance(
@@ -357,7 +447,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     f0val = obj
 
     # -- Move-limit bounds on this iteration's raw MMA variables --
-    xflat, tflat = state.x.flatten(), state.t.flatten()
+    xflat = torch_util.to_numpy(state.x).flatten()
+    tflat = torch_util.to_numpy(state.t).flatten()
     xminx = np.maximum(0.0, xflat - prob.move)
     xmaxx = np.minimum(1.0, xflat + prob.move)
     xmint = np.maximum(0.0, tflat - prob.tmove)
@@ -437,14 +528,14 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         xval,
         xmin,
         xmax,
-        state.xold1,
-        state.xold2,
+        torch_util.to_numpy(state.xold1),
+        torch_util.to_numpy(state.xold2),
         f0val,
         df0dx,
         fval,
         dfdx,
-        state.low,
-        state.upp,
+        torch_util.to_numpy(state.low),
+        torch_util.to_numpy(state.upp),
         prob.a0,
         mma_a,
         mma_c,
@@ -458,16 +549,18 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     xPhys_new = filters.heaviside_projection(xTilde_new, beta_d, prob.eta)
     tPhys_new = (prob.H @ t_new.flatten() / prob.Hs).reshape(nely, nelx)
 
+    # Tensor boundary again: back to `problem`'s own device/dtype for the returned State.
+    device, dtype = problem.device, problem.dtype
     new_state = State(
-        x=x_new,
-        xTilde=xTilde_new,
-        xPhys=xPhys_new,
-        t=t_new,
-        tPhys=tPhys_new,
-        xold1=xval,
+        x=torch_util.to_tensor(x_new, device, dtype),
+        xTilde=torch_util.to_tensor(xTilde_new, device, dtype),
+        xPhys=torch_util.to_tensor(xPhys_new, device, dtype),
+        t=torch_util.to_tensor(t_new, device, dtype),
+        tPhys=torch_util.to_tensor(tPhys_new, device, dtype),
+        xold1=torch_util.to_tensor(xval, device, dtype),
         xold2=state.xold1,
-        low=low,
-        upp=upp,
+        low=torch_util.to_tensor(low, device, dtype),
+        upp=torch_util.to_tensor(upp, device, dtype),
         loop=loop,
         beta_t=beta_t,
         beta_d=beta_d,
@@ -532,14 +625,14 @@ def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
     choice -- warm-starting from a previous run's final state, or entering at a
     trajectory recorded elsewhere.
     """
-    xPhys_traj = [state.xPhys.copy()]
-    tPhys_traj = [state.tPhys.copy()]
+    xPhys_traj = [state.xPhys.clone()]
+    tPhys_traj = [state.tPhys.clone()]
     records: list[IterationRecord] = []
 
     for _ in range(nloop):
         state, record = step(problem, state)
-        xPhys_traj.append(state.xPhys.copy())
-        tPhys_traj.append(state.tPhys.copy())
+        xPhys_traj.append(state.xPhys.clone())
+        tPhys_traj.append(state.tPhys.clone())
         records.append(record)
 
     return RunResult(

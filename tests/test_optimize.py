@@ -17,14 +17,18 @@ this unchanged.
 whatever the current code happens to produce.
 """
 
+import dataclasses
+
 import numpy as np
 import pytest
+import torch
 
 import sttopt.compliance as compliance
 import sttopt.fem as fem
 import sttopt.filters as filters
 import sttopt.optimize as optimize
 import sttopt.timefield as timefield
+import sttopt.torch_util as torch_util
 
 VOLFRAC = 0.4
 TCR = 0.8
@@ -32,10 +36,22 @@ RMIN = LRMIN = 2
 RMIN_COND = 3
 BETA_D = 1.0
 
+requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="no CUDA device available"
+)
+
 
 def _filter_field(problem, raw):
-    """`H @ raw / Hs`, on the (nely, nelx) grid -- the density filter's action."""
-    flat = problem.H @ raw.flatten() / problem.Hs
+    """`H @ raw / Hs`, on the (nely, nelx) grid -- the density filter's action.
+
+    `raw` may be a plain array (an FD test's perturbed design point) or a `State`
+    tensor field; `problem.H`/`.Hs` are always tensors (Phase 3.1). Bridge both via
+    `torch_util` -- see `sttopt/optimize.py`'s module docstring -- rather than relying
+    on a SciPy sparse matrix and a tensor mixing implicitly.
+    """
+    H = torch_util.csr_to_scipy(problem.H)
+    Hs = torch_util.to_numpy(problem.Hs)
+    flat = H @ torch_util.to_numpy(raw).flatten() / Hs
     return flat.reshape((problem.nely, problem.nelx))
 
 
@@ -63,7 +79,9 @@ def _assert_state_fields_are_consistent(problem, state, beta_d):
     )
     np.testing.assert_allclose(
         state.xPhys,
-        filters.heaviside_projection(state.xTilde, beta_d, problem.eta),
+        filters.heaviside_projection(
+            torch_util.to_numpy(state.xTilde), beta_d, problem.eta
+        ),
         rtol=1e-12,
         atol=1e-14,
     )
@@ -76,6 +94,78 @@ def _problem(nelx=7, nely=5, nStage=3, tfield=3, Theta=1.0):
     return optimize.build_problem(
         nelx, nely, nStage, VOLFRAC, Theta, TCR, tfield, RMIN, LRMIN, RMIN_COND
     )
+
+
+# --- Phase 3.1 (plans/torch_port_part2.md): the tensor boundary -----------------------
+
+
+def _tensor_fields(obj) -> list[tuple[str, torch.Tensor]]:
+    """Every tensor-valued field of a `Problem`/`State`, as `(name, value)` pairs."""
+    return [
+        (f.name, getattr(obj, f.name))
+        for f in dataclasses.fields(obj)
+        if isinstance(getattr(obj, f.name), torch.Tensor)
+    ]
+
+
+def test_build_problem_default_device_and_dtype():
+    """`build_problem`'s default (`device="cpu"`, `dtype=torch.float64`) must cost every
+    pre-Phase-3.1 caller nothing: every real-valued tensor field lands on CPU/float64,
+    matching what those fields were (as NumPy arrays) before this phase."""
+    problem = _problem()
+    assert problem.device == torch.device("cpu")
+    assert problem.dtype == torch.float64
+    for name, t in _tensor_fields(problem):
+        assert t.device == torch.device("cpu"), name
+        if t.dtype.is_floating_point:
+            assert t.dtype == torch.float64, name
+
+
+def test_build_problem_honors_requested_dtype():
+    """A non-default floating `dtype` reaches every real-valued tensor field; index
+    (`edofMat`/`freedofs`/`e1`/`e2`/`Nei`) and mask (`free_mask`) fields keep their own
+    int64/bool dtype regardless -- `dtype` governs the problem's real-valued fields, not
+    every tensor it happens to hold."""
+    problem = optimize.build_problem(
+        7, 5, 3, VOLFRAC, 1.0, TCR, 3, RMIN, LRMIN, RMIN_COND, dtype=torch.float32
+    )
+    assert problem.dtype == torch.float32
+    for name, t in _tensor_fields(problem):
+        if t.dtype.is_floating_point:
+            assert t.dtype == torch.float32, name
+        else:
+            assert t.dtype in (torch.int64, torch.bool), name
+
+
+def test_init_state_and_step_output_are_tensors_on_problem_device_and_dtype():
+    """`State`'s fields are tensors (Phase 3.1), on `problem`'s own device/dtype, both
+    fresh out of `init_state` and after a `step` call -- the tensor boundary inside
+    `step` must land back on `problem.device`/`.dtype`, not wherever the (still-NumPy)
+    leaf math happened to leave its output."""
+    problem = _problem()
+    state = optimize.init_state(problem, BETA_D)
+    for name, t in _tensor_fields(state):
+        assert t.device == problem.device, name
+        assert t.dtype == problem.dtype, name
+
+    state, _ = optimize.step(problem, state)
+    for name, t in _tensor_fields(state):
+        assert t.device == problem.device, name
+        assert t.dtype == problem.dtype, name
+
+
+@requires_cuda
+def test_build_problem_on_cuda_has_no_lingering_cpu_tensor():
+    """The plan's Phase 3.1 test: every tensor field of a CUDA `Problem` is actually on
+    CUDA. A field left on a stray default device would pass every CPU-only test and
+    only surface as silently wrong, or a device-mismatch crash, once later phases run
+    the loop on the GPU."""
+    problem = optimize.build_problem(
+        7, 5, 3, VOLFRAC, 1.0, TCR, 3, RMIN, LRMIN, RMIN_COND, device="cuda"
+    )
+    assert problem.device.type == "cuda"
+    for name, t in _tensor_fields(problem):
+        assert t.device.type == "cuda", name
 
 
 @pytest.mark.parametrize("tfield", [1, 2, 3])
@@ -135,7 +225,9 @@ def test_init_state_density_half_is_derived_from_its_seed(tfield):
     np.testing.assert_allclose(state.xTilde, VOLFRAC, rtol=1e-14)
     np.testing.assert_allclose(
         state.xPhys,
-        filters.heaviside_projection(state.xTilde, BETA_D, problem.eta),
+        filters.heaviside_projection(
+            torch_util.to_numpy(state.xTilde), BETA_D, problem.eta
+        ),
         rtol=1e-12,
         atol=1e-14,
     )
@@ -228,16 +320,21 @@ MAX_COND = 1e10
 
 
 def _well_conditioned(problem, state, beta_t):
+    # `fem.assemble_stiffness` is unported NumPy (Phase 3.1 leaves it that way -- see
+    # sttopt/optimize.py's module docstring); `problem`'s tensor fields need the same
+    # bridge `optimize.step` uses internally.
     p = problem
+    KE = torch_util.to_numpy(p.KE)
+    edofMat = torch_util.to_numpy(p.edofMat)
+    freedofs = torch_util.to_numpy(p.freedofs)
+
     fields = [state.xPhys]
     tP = np.linspace(0, 1, p.nStage + 1)
     for i in range(1, p.nStage + 1):
         fields.append(state.xPhys * compliance.time_mask(state.tPhys, tP[i], beta_t))
     for field in fields:
-        K = fem.assemble_stiffness(
-            p.KE, field, p.Emin, p.Emax, p.penal, p.edofMat, p.ndof
-        )
-        Kfree = K[np.ix_(p.freedofs, p.freedofs)].toarray()
+        K = fem.assemble_stiffness(KE, field, p.Emin, p.Emax, p.penal, edofMat, p.ndof)
+        Kfree = K[np.ix_(freedofs, freedofs)].toarray()
         if np.linalg.cond(Kfree) >= MAX_COND:
             return False
     return True
