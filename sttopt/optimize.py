@@ -341,10 +341,93 @@ def init_state(problem: Problem, beta_d: float) -> State:
     )
 
 
+def _grad_row(
+    output: Float[Tensor, ""], leaves: tuple[Tensor, Tensor]
+) -> Float[Tensor, " n"]:
+    """Sensitivity of one scalar output w.r.t. both leaves, flattened and concatenated
+    into a single MMA row -- one `torch.autograd.grad` call
+    (`plans/torch_port_part2.md` Phase 3.4). `allow_unused` covers rows that depend on
+    only one leaf (e.g. a density-only constraint never touches `t`): the unused
+    leaf's slice is exactly zero, which is what its hand-derived predecessor returned
+    too.
+    """
+    grads = torch.autograd.grad(output, leaves, retain_graph=True, allow_unused=True)
+    return torch.cat(
+        [
+            (g if g is not None else torch.zeros_like(leaf)).flatten()
+            for g, leaf in zip(grads, leaves)
+        ]
+    )
+
+
+def _grad_rows_batched(
+    outputs: Float[Tensor, " k"],
+    xTilde: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+    H: Tensor,
+    Hs: Float[Tensor, " nel"],
+) -> Float[Tensor, "k n"]:
+    """Sensitivities of `k` independent scalar outputs (e.g. one per print-start
+    element, or one per stage) w.r.t. both raw leaves, as `(k, n)` -- one
+    `torch.autograd.grad(..., is_grads_batched=True)` call with one-hot seeds instead
+    of `k` separate calls (`plans/torch_port_part2.md` Phase 3.4's Jacobian-assembly
+    requirement).
+
+    Differentiates down to the *filtered* fields (`xTilde`, `tPhys` -- density's own
+    filtered field, pre-Heaviside, since `xPhys = heaviside_projection(xTilde, ...)`
+    is itself an ordinary pointwise op `is_grads_batched`'s vmap handles fine) rather
+    than all the way to the raw `x`/`t` leaves, then finishes the last, linear step --
+    the density/continuity filter `field = H @ raw / Hs` -- by hand as a plain sparse
+    matmul: `is_grads_batched`'s vmap has no batching rule for the sparse CSR matmul's
+    backward (`RuntimeError: expand is unsupported for SparseCsc tensors`, confirmed
+    locally), so batching must stop one step short of it. This is not a reintroduction
+    of a hand-derived *physics* sensitivity -- every nonlinear term (Heaviside,
+    hotspot's pairwise sigmoids, SIMP) is still autograd's -- only the filter's own
+    adjoint is applied explicitly, and because `H` is symmetric by construction
+    (`filters.density_filter`'s weight depends only on distance), that adjoint is `H`
+    itself: exactly `torch.autograd.grad` would have produced had vmap been able to
+    reach the sparse op.
+    """
+    k = outputs.shape[0]
+    seeds = torch.eye(k, dtype=outputs.dtype, device=outputs.device)
+    d_xTilde, d_tPhys = torch.autograd.grad(
+        outputs,
+        (xTilde, tPhys),
+        grad_outputs=seeds,
+        is_grads_batched=True,
+        retain_graph=True,
+        allow_unused=True,
+    )
+
+    def _filter_adjoint(d_field: Tensor | None) -> Tensor:
+        if d_field is None:
+            return torch.zeros(
+                k, xTilde.numel(), dtype=xTilde.dtype, device=xTilde.device
+            )
+        flat = d_field.reshape(k, -1)  # (k, nel)
+        return (H @ (flat / Hs).T).T  # (k, nel)
+
+    return torch.cat([_filter_adjoint(d_xTilde), _filter_adjoint(d_tPhys)], dim=1)
+
+
 def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
-    """Run one optimization iteration: build the objective + every constraint's
-    value/sensitivity in the reference's exact row order, call `mma.mmasub`, and
+    """Run one optimization iteration: build the objective + every constraint's value
+    in the reference's exact row order, differentiate the whole graph by autograd
+    (`plans/torch_port_part2.md` Phase 3.4 -- `x`/`t` are the autograd leaves, per
+    Decision 4; the filter and Heaviside projection are ordinary forward operations,
+    not accompanied by a hand-derived `dx` chain-rule factor), call `mma.mmasub`, and
     unpack the result into the next state.
+
+    Recomputing `xTilde`/`xPhys`/`tPhys` from this iteration's own `x`/`t` (rather than
+    reading `state.xPhys`/`state.tPhys`, which the hand-derived predecessor did) is a
+    deliberate side effect of Decision 4, not a separate change: it makes the value
+    autograd differentiates and the value MMA optimizes the same expression, at the
+    same `beta_d`, on every iteration -- including the (rare, one-iteration-wide)
+    `loop % 50 == 0` iteration where `beta_d` itself just doubled, on which the
+    hand-derived predecessor evaluated its `dx` factor at the *new* `beta_d` while
+    still optimizing an `xPhys` value built from the *old* one. Both fields are exactly
+    `state.xTilde`/`state.xPhys`/`state.tPhys`'s own values whenever `beta_d` does not
+    change this iteration (48 iterations out of every 50).
 
     The three periodic state updates below (`beta_t += 5` at loop%30==0, `beta_d *= 2` at
     loop%50==0, the hotspot `factor` refresh at loop%25==0) never trigger against the
@@ -367,19 +450,20 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     if beta_d > problem.beta_d_max:
         beta_d = problem.beta_d_max
 
-    xPhys, tPhys = state.xPhys, state.tPhys
-    # Heaviside-derivative chain rule for this iteration's density sensitivities, from
-    # the xTilde carried over from the *previous* iteration's update (or init).
-    dx = filters.heaviside_projection_derivative(state.xTilde, beta_d, problem.eta)
+    x = state.x.detach().clone().requires_grad_(True)
+    t = state.t.detach().clone().requires_grad_(True)
+    leaves = (x, t)
+    xTilde = ((problem.H @ x.flatten()) / problem.Hs).reshape(nely, nelx)
+    xPhys = filters.heaviside_projection(xTilde, beta_d, problem.eta)
+    tPhys = ((problem.H @ t.flatten()) / problem.Hs).reshape(nely, nelx)
 
     # -- Objective: whole-structure compliance + Theta-weighted per-stage gravity compliance --
     # `Problem.batch_fem_solves` (Phase 3.3, plans/torch_port_part2.md) puts
     # whole_compliance's solve and every gravity stage's solve into one FemSolve call;
-    # off, they run sequentially as before. Either way the value/sensitivity algebra is
-    # the same hand-derived formulas -- only the solve batching differs.
+    # off, they run sequentially as before.
     stage_times = [float(ti) for ti in np.linspace(0, 1, nStage + 1)[1:]]
     if problem.batch_fem_solves:
-        c, dcx, stage_results, U_new = compliance.batched_whole_and_gravity_compliance(
+        c_t, stage_cs, U_new = compliance.batched_whole_and_gravity_compliance_value(
             xPhys,
             tPhys,
             problem.KE,
@@ -396,7 +480,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             x0=state.U,
         )
     else:
-        c, dcx = compliance.whole_compliance(
+        c_t, _ = compliance.whole_compliance_value(
             xPhys,
             problem.KE,
             problem.edofMat,
@@ -407,8 +491,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             problem.F,
             problem.ndof,
         )
-        stage_results = [
-            compliance.gravity_compliance(
+        stage_cs = []
+        for ti in stage_times:
+            cg_t, _ = compliance.gravity_compliance_value(
                 xPhys,
                 tPhys,
                 problem.KE,
@@ -422,22 +507,17 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
                 problem.freedofs,
                 problem.ndof,
             )
-            for ti in stage_times
-        ]
+            stage_cs.append(cg_t)
         U_new = None
 
-    obj_final_only = c  # compliance of final structure only, saved for logging
-    obj = c
-    dc = problem.H @ (dcx.flatten() * dx.flatten() / problem.Hs)
-    dt = torch.zeros(nel, device=device, dtype=dtype)
-
-    for cg, dcx_g, dct_g in stage_results:
-        obj += problem.Theta * cg
-        dc = dc + problem.Theta * (problem.H @ (dcx_g * dx.flatten() / problem.Hs))
-        dt = dt + problem.Theta * (problem.H @ (dct_g / problem.Hs))
-
-    df0dx = torch.cat([dc, dt])
-    f0val = obj
+    obj_final_only = float(
+        c_t.detach()
+    )  # compliance of final structure only, saved for logging
+    f0val_t = c_t
+    for cg_t in stage_cs:
+        f0val_t = f0val_t + problem.Theta * cg_t
+    f0val = float(f0val_t.detach())
+    df0dx = _grad_row(f0val_t, leaves)
 
     # -- Move-limit bounds on this iteration's raw MMA variables --
     xflat = state.x.flatten()
@@ -454,65 +534,66 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     fval_parts: list[Tensor] = []
     dfdx_parts: list[Tensor] = []
 
-    fv, dfx, dft = constraints.global_volume_fraction(
-        xPhys, dx, problem.H, problem.Hs, problem.volfrac
+    fv_vol_t = constraints.global_volume_fraction_value(xPhys, problem.volfrac)
+    vol_diag = float(xPhys.detach().sum() / (nelx * nely))
+    fval_parts.append(fv_vol_t[None])
+    dfdx_parts.append(_grad_row(fv_vol_t, leaves)[None, :])
+
+    fv_cont_t = constraints.time_field_continuity_value(tPhys, problem.L)
+    fval_parts.append(fv_cont_t[None])
+    dfdx_parts.append(_grad_row(fv_cont_t, leaves)[None, :])
+
+    fv_start_t = constraints.start_point_value(tPhys, problem.Nei)
+    fval_parts.append(fv_start_t)
+    dfdx_parts.append(
+        _grad_rows_batched(fv_start_t, xTilde, tPhys, problem.H, problem.Hs)
     )
-    vol_diag = float(torch.sum(xPhys) / (nelx * nely))
-    fval_parts.append(torch.tensor([fv], device=device, dtype=dtype))
-    dfdx_parts.append(torch.cat([dfx, dft])[None, :])
 
-    fv, dfx, dft = constraints.time_field_continuity(
-        tPhys, problem.L, problem.H, problem.Hs
+    stage_upper_t = torch.stack(
+        [
+            constraints.stage_volume_bounds_value(
+                xPhys, tPhys, float(t_stage), problem.volfrac, beta_t
+            )
+            for t_stage in stage_times
+        ]
     )
-    fval_parts.append(torch.tensor([fv], device=device, dtype=dtype))
-    dfdx_parts.append(torch.cat([dfx, dft])[None, :])
-
-    fv, dfx, dft = constraints.start_point(tPhys, problem.Nei, problem.H, problem.Hs)
-    fval_parts.append(fv)
-    dfdx_parts.append(torch.cat([dfx, dft], dim=1))
-
-    for t_stage in np.linspace(0, 1, nStage + 1)[1:]:
-        fu, fl, dfx, dft = constraints.stage_volume_bounds(
-            xPhys,
-            tPhys,
-            dx,
-            problem.H,
-            problem.Hs,
-            float(t_stage),
-            problem.volfrac,
-            beta_t,
-        )
-        fval_parts.append(torch.tensor([fu, fl], device=device, dtype=dtype))
-        dfdx_parts.append(torch.stack([torch.cat([dfx, dft]), torch.cat([-dfx, -dft])]))
+    stage_lower_t = -stage_upper_t - 1.0e-5
+    rows_stage_upper = _grad_rows_batched(
+        stage_upper_t, xTilde, tPhys, problem.H, problem.Hs
+    )
+    rows_stage_lower = -rows_stage_upper
+    for i in range(nStage):
+        fval_parts.append(torch.stack([stage_upper_t[i], stage_lower_t[i]]))
+        dfdx_parts.append(torch.stack([rows_stage_upper[i], rows_stage_lower[i]]))
 
     # Hotspot constraint, evaluated at this iteration's (possibly stale) `factor`.
     # `factor` is refreshed every 25 iterations from this same call's `numer`/`K_est`
     # (both independent of `factor`), but the refresh only takes effect starting next
-    # iteration's `step` call -- `fv`/`df1`/`dt1` below are never rescaled mid-iteration.
-    hotspot = conductivity.hotspot_constraint(
+    # iteration's `step` call -- `fv`/the hotspot row below are never rescaled
+    # mid-iteration.
+    numer_t, K_est_t = conductivity.hotspot_value(
         xPhys,
         tPhys,
         problem.e1,
         problem.e2,
         problem.w,
-        dx,
-        problem.H,
-        problem.Hs,
-        state.factor,
-        problem.Tcr,
         problem.p,
         problem.q,
         problem.r,
         problem.rouf,
     )
-    fv, df1, dt1 = hotspot.fval, hotspot.df1, hotspot.dt1
+    fv_hotspot_t = state.factor * numer_t / problem.Tcr - 1
+    fval_parts.append(fv_hotspot_t[None])
+    dfdx_parts.append(_grad_row(fv_hotspot_t, leaves)[None, :])
+
+    numer = float(numer_t.detach())
     factor = state.factor
     if loop % 25 == 0:
-        max_g = float(torch.max((1 - hotspot.K_est) * xPhys.flatten() ** problem.r))
-        factor = max_g / hotspot.numer
-    tru_max = factor * hotspot.numer
-    fval_parts.append(torch.tensor([fv], device=device, dtype=dtype))
-    dfdx_parts.append(torch.cat([df1, dt1])[None, :])
+        max_g = float(
+            torch.max((1 - K_est_t.detach()) * xPhys.detach().flatten() ** problem.r)
+        )
+        factor = max_g / numer
+    tru_max = factor * numer
 
     fval = torch.cat(fval_parts)
     dfdx = torch.cat(dfdx_parts, dim=0)
