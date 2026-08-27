@@ -243,6 +243,49 @@ def test_self_adjoint_shortcut_gives_zero_adjoint_iterations(load_depends_on_den
     assert info["backward_n_iter"] == 0
 
 
+def test_backward_reuses_forward_hierarchy():
+    """`build_hierarchy` runs exactly once per solve, not once per direction -- the
+    ~24% of one solve's cost the plan's hierarchy-reuse requirement recovers.
+    """
+    import sttopt.torch_mg as torch_mg
+
+    nelx, nely = 18, 12
+    F, ndof, KE, edofMat, mask = _setup(nelx, nely)
+    rng = np.random.default_rng(6)
+    density = torch.tensor(
+        rng.uniform(0.05, 1.0, nelx * nely), dtype=torch.float64, requires_grad=True
+    )
+
+    calls = 0
+    orig = torch_mg.build_hierarchy
+
+    def counting_build_hierarchy(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return orig(*args, **kwargs)
+
+    torch_mg.build_hierarchy = counting_build_hierarchy
+    try:
+        U = torch_solve.femsolve(
+            density,
+            F,
+            edofMat,
+            KE,
+            mask,
+            nelx,
+            nely,
+            rtol=1e-10,
+            max_coarse_elements=24,
+        )
+        assert calls == 1
+        torch.sum(U**2).backward()
+        assert (
+            calls == 1
+        ), "backward rebuilt the hierarchy instead of reusing ctx.levels"
+    finally:
+        torch_mg.build_hierarchy = orig
+
+
 # --- Test 4: batched vs sequential, forward and (one-hot-seeded) backward --------
 
 
