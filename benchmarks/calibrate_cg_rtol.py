@@ -1,5 +1,5 @@
 """Calibrate the MGCG relative-residual tolerance against the *sensitivities*, not the
-compliance, for `plans/torch_port.md` Phase 1 ("Accuracy calibration") and Phase 2.
+compliance, for `plans/archive/torch_port.md` Phase 1 ("Accuracy calibration") and Phase 2.
 
 The asymmetry this exists to measure: `U` minimizes the potential energy, so the
 compliance `c` is stationary at the solution and its error is second-order in the error
@@ -92,7 +92,7 @@ DEFAULT_RTOLS = (1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11)
 #: sensitivity error clears `conftest.assert_close`'s "solved" tier with an order of
 #: margin. Tightening further buys nothing -- `spsolve` and MGCG stop agreeing
 #: element-wise at ~1e-8 regardless, that being what float64 pins down at this
-#: conditioning. See `plans/torch_port.md`'s Phase 2 results for the full table.
+#: conditioning. See `plans/archive/torch_port.md`'s Phase 2 results for the full table.
 RECOMMENDED_RTOL = 1e-8
 
 #: The accuracy bar every solver configuration must clear: the repo's "solved" tier.

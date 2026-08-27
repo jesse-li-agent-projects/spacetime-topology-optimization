@@ -1,5 +1,5 @@
 """Generate realistic near-binary `(xPhys, tPhys)` design snapshots for the PyTorch-port
-investigation (`plans/torch_port.md`, Phase 0a).
+investigation (`plans/archive/torch_port.md`, Phase 0a).
 
 Benchmarking or accuracy-testing a linear solver on the uniform `x = volfrac` field would
 be dishonest: that is the best-conditioned design the optimizer ever holds, and it holds

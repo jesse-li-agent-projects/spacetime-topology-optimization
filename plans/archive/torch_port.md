@@ -1,8 +1,9 @@
 # Plan: PyTorch port, gated on a GPU CG solver benchmark
 
-> **Status (2026-08-27): Phases 0a, 0, 1 and 2 are complete. Phase 2's verdict is GO
-> (4.36x at the gate; see its results section). Phase 3 has not been started** and is to
-> be expanded into its own plan before any of it is written.
+> **Status (2026-08-27): archived. Phases 0a, 0, 1 and 2 are complete; Phase 2's verdict
+> is GO (4.36x at the gate; see its results section).** Phase 3 was expanded into
+> `plans/torch_port_part2.md` and is carried out there -- the sketch below is kept only as
+> the record of what that plan was written from.
 
 ## Goal
 

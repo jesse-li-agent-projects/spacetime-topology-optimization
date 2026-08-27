@@ -1,5 +1,5 @@
 """Profile `optimize.step` at production settings (180x60, nStage=8) on a realistic
-near-binary design, for `plans/torch_port.md` Phase 0.
+near-binary design, for `plans/archive/torch_port.md` Phase 0.
 
 Answers: where does `step` spend its time, and -- separately -- how much of
 `fem.solve_fe` is `scipy.sparse.linalg.spsolve` itself versus the

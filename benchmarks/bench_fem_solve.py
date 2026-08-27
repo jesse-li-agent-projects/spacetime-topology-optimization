@@ -1,4 +1,4 @@
-"""Phase 2 of `plans/torch_port.md`: does GPU MGCG beat `scipy.spsolve` on the FEM solve?
+"""Phase 2 of `plans/archive/torch_port.md`: does GPU MGCG beat `scipy.spsolve` on the FEM solve?
 
 Scope is the solve alone -- assemble plus solve for the SciPy cell, hierarchy build plus
 CG for the torch cells -- not the surrounding optimization loop. Three cells, because
