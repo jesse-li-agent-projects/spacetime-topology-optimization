@@ -154,6 +154,38 @@ trade here. Worth a sentence in the Phase 2 write-up so the numbers are not over
 stored where both the tests and the benchmark can load them, plus the script that
 regenerates them.
 
+### Results (2026-08-27)
+
+`tests/fixtures/generate_torch_port_designs.py` -> `tests/fixtures/torch_port_designs.npz`
+(1.2 MB), loaded via that module's `load_design`. Snapshots at loops 25/100/200/400/600/800.
+
+**Deviation from the plan above, deliberately.** 180x60 is generated **natively** (a 35
+minute run) rather than upscaled from 90x30. The plan accepted an upscaled design as
+"a coarser-featured design at fine resolution", but 180x60 is the mesh the go/no-go
+actually turns on, so it was worth paying for the real thing there. Only 360x120 is
+derived, by a 2x nearest-neighbour block repeat of the native 180x60 (not of 90x30), so
+the accepted limitation now applies to one mesh instead of two -- and to the mesh whose
+result is informational rather than decisive.
+
+`lrmin` does not scale to 90x30: production `lrmin = 2.0` already resolves to the minimum
+3x3 stencil (`filters._neighbor_offsets` uses `ceil(r) - 1`), so halving it to 1.0 leaves
+an empty stencil and raises. 90x30 keeps `lrmin = 2.0`; `rmin` and `rmin_cond` halve as
+planned.
+
+**A correctness bug was found here, outside this plan's scope, and fixed.**
+`conductivity.hotspot_constraint`'s diagonal self-heating term computed
+`(1 - Ka) * r * xa**(r - 1)` and multiplied it by `(T * xb**r)**(p - 1)`. At `r = 0.05`
+and exactly-zero density that is `inf * 0 = nan`. Densities do reach *exactly* zero once
+`beta_d` saturates -- `tanh(128 * (xTilde - 0.5))` returns exactly `-1.0` in float64 for
+`xTilde <~ 0.352`, so the Heaviside numerator cancels to `0.0`. The 90x30 run hit it: 236
+elements went to zero by iteration 400, 94 of 96 elements of `df1` came back NaN on a
+reduced reproduction, MMA stopped moving the design, and iterations 400/600/800 were
+**bitwise identical**. On the diagonal the product is exactly `r * T**p * x**(r*p - 1)`,
+which is one power of `x` rather than a divergence times a zero; that form is now used
+directly, and it also drops a 4.2M-entry pair expansion that existed to use 10800 of its
+entries. 180x60 never reached an exactly-zero density and its snapshots all differ, so it
+was not regenerated.
+
 ---
 
 ## Phase 0: Profile the current code

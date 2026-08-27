@@ -75,7 +75,12 @@ MESHES = [
 # (index 0 is the initial uniform field, which is deliberately excluded -- it is the
 # unrealistic case these snapshots exist to replace). beta_d doubles every 50 iterations
 # from 1.0 and saturates at 128 by iteration 350, so 400+ are the hard, near-binary cases.
-SNAPSHOT_LOOPS = [25, 100, 200, 400, 600, 800]
+# 799 is here so that (799, 800) is a genuinely *consecutive* pair. Warm-started CG is
+# one of the two structural advantages the port rests on, and measuring it needs the
+# design the previous iteration actually left behind -- nothing reconstructed and nothing
+# perturbed by hand. Whether the previous solution is a good initial guess is precisely
+# the question, so the pair must not be manufactured by assuming it is.
+SNAPSHOT_LOOPS = [25, 100, 200, 400, 600, 799, 800]
 
 
 #: Meshes present in the archive natively; anything else is derived by `load_design`.
