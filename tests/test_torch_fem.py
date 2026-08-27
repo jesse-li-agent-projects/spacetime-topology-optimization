@@ -260,11 +260,27 @@ def _binary_design(nelx, nely):
     return x.ravel()
 
 
+def _near_void_design(nelx, nely):
+    """Almost the entire domain at SIMP's `Emin` floor; solid is a single-cell-wide
+    strip along the clamped edge and the loaded row, just enough to connect the two.
+
+    Distinct from `_binary_design`: that one keeps multi-cell chords plus a diagonal
+    brace, so its solid fraction is well above the "near-all-void" regime the plan's
+    Phase 1 test list calls out separately -- a thin load path is closer to what the
+    optimizer actually produces once most of the domain has been driven to void.
+    """
+    x = np.full((nely, nelx), 1e-6)
+    x[-1, :] = 1.0  # bottom row: clamped edge to the loaded corner
+    x[:, 0] = 1.0  # left column: ties the path to the whole clamped edge
+    return x.ravel()
+
+
 def _mg_density_fields(nelx, nely, rng):
     return {
         "uniform": np.full(nelx * nely, 0.4),
         "random": rng.uniform(0.05, 1.0, nelx * nely),
         "binary": _binary_design(nelx, nely),
+        "near_void": _near_void_design(nelx, nely),
     }
 
 
