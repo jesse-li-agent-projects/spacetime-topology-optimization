@@ -137,6 +137,17 @@ def jacobi_preconditioner_diag(
     return torch.where(mask, diag, torch.ones((), dtype=diag.dtype, device=diag.device))
 
 
+def safe_div(
+    num: Float[Tensor, " *batch"], den: Float[Tensor, " *batch"]
+) -> Float[Tensor, " *batch"]:
+    """`num / den`, `0` where `den` is exactly zero -- a converged batch member's
+    `(p, Ap)` inner product (for `alpha`) or `rz_old` (for `beta`), which would
+    otherwise divide `0/0` into a nan. See `pcg`'s docstring.
+    """
+    safe_den = torch.where(den != 0, den, torch.ones_like(den))
+    return torch.where(den != 0, num / safe_den, torch.zeros_like(den))
+
+
 def pcg(
     apply_A,
     b: Float[Tensor, "*batch ndof"],
@@ -158,14 +169,13 @@ def pcg(
     state-dependent or nonsymmetric (an inner CG, an unequal-sweep multigrid cycle)
     silently invalidates the short recurrence this algorithm relies on.
 
-    **Known issue, not yet fixed:** if one batch member's residual hits exact zero
-    before the others converge (e.g. a batch member with an all-zero `b`), its `alpha`
-    becomes a `0/0` nan on the next iteration and poisons that member's `x` for good.
-    CG still raises (the nan keeps that member from ever satisfying `rtol`), but
-    `CGConvergenceError`'s "worst relative residual" and "failed batch indices" come
-    out wrong -- `nan` and `[]` respectively -- because nan comparisons are always
-    `False`. Repro: `pcg(apply_A, torch.stack([torch.zeros(n), b_normal]), apply_M)`
-    for any SPD `apply_A` and nonzero `b_normal`.
+    A batch member whose residual hits exact zero before the others converge (e.g. an
+    all-zero `b`) is frozen rather than divided: `alpha`/`beta` for that member come out
+    of `safe_div` as `0` instead of `0/0` nan, which leaves its `x` (already correct)
+    and `p` (already zero) unchanged on every later iteration. This is not only a
+    finite-difference-gradcheck corner case -- an autograd backward seeded with a
+    one-hot `grad_output` leaves every other batch member with an all-zero right-hand
+    side, so it fires on every batched `FemSolve` backward (`sttopt/torch_solve.py`).
 
     :param apply_A: callable, `Tensor -> Tensor`, the (implicitly batched) operator.
     :param b: right-hand side.
@@ -197,9 +207,7 @@ def pcg(
     for it in range(1, max_iter + 1):
         n_iter = it
         Ap = apply_A(p)
-        # 0/0 nan for an already-converged batch member -- see the docstring's
-        # "Known issue" note.
-        alpha = (rz_old / (p * Ap).sum(dim=-1))[..., None]
+        alpha = safe_div(rz_old, (p * Ap).sum(dim=-1))[..., None]
         x.addcmul_(alpha, p)
         r.addcmul_(alpha, Ap, value=-1)
         rel_resid = r.norm(dim=-1) / b_norm_safe
@@ -207,7 +215,7 @@ def pcg(
             return x, n_iter
         z = apply_M(r)
         rz_new = (r * z).sum(dim=-1)
-        p.mul_((rz_new / rz_old)[..., None]).add_(z)
+        p.mul_(safe_div(rz_new, rz_old)[..., None]).add_(z)
         rz_old = rz_new
 
     raise CGConvergenceError(rel_resid, n_iter, rtol)
