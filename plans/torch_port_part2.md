@@ -1,6 +1,7 @@
 # Plan: PyTorch port, part 2 -- porting the optimization loop
 
-> **Status (2026-08-27): not started.** This plan replaces Phase 3 of
+> **Status (2026-08-27): not started; the user's open questions are answered** (see the
+> final section). This plan replaces Phase 3 of
 > `plans/archive/torch_port.md`, whose Phases 0a/0/1/2 are complete and whose GPU gate
 > passed at 4.36x. Read that plan's *Results* sections for the measurements this one
 > builds on; do not re-derive them.
@@ -64,6 +65,13 @@ tensor it holds is already on that device in that dtype. Nothing inside `step` s
 call `.to(...)` -- if it needs to, a tensor was built in the wrong place.
 
 **2. The NumPy production path is retired at the end, not kept as a backend.**
+*Confirmed by the user (2026-08-27).* A machine without a GPU is not a reason to keep the
+NumPy path: torch's own CPU device is the fallback, and Decision 1's explicit
+`device`/`dtype` on `Problem` is what makes `device="cpu"` a first-class configuration
+rather than a degraded mode. Nothing in this plan may assume CUDA is present -- the CPU
+device must stay a working path for the whole loop, and it is what the non-GPU tests run
+on. What is retired is the *second implementation*, not CPU support.
+
 Keeping two full implementations doubles the maintenance surface and, worse, invites the
 two to drift while both look tested. The correctness argument for deleting is that the
 *oracle does not live in `sttopt/`*: `tests/matlab_reference.py` and
@@ -203,6 +211,15 @@ job -- log it in `plans/code_quality_review.md`.
   must come from an otherwise idle box, and say so.
 - **Small, self-contained commits.** Each numbered phase below is one or a few commits, not
   one "port" commit. Undrafted PRs.
+- **The slow test runs exactly twice** (user, 2026-08-27): `pytest -m slow`
+  (`tests/test_e2e_slow.py`, the 800-iteration thesis 4.4 reproduction) once **before the
+  first port commit**, to capture the pre-port baseline, and once **at the end of Phase
+  3.7**, to confirm no regression. Record both runs' assertion quantities *and* wall clock
+  in Phase 3.7's results. Do not run it at phase boundaries or to debug: it is minutes to
+  hours, it is deselected by default for that reason, and the per-phase check is the
+  ordinary suite plus the fixture oracles. The baseline run is the one thing in this plan
+  that must happen before Phase 3.1, so do it first and record the numbers even though
+  nothing has changed yet -- after the port there is no way to go back and take it.
 
 ---
 
@@ -579,10 +596,19 @@ measured 4.36x on FEM and assuming a conservative 5x on MMA and hotspot:
 | everything else | ~53 | ~50 |
 | **total** | **3060** | **~410** |
 
-So **>=5x end to end (<= 610 ms/step) is the bar**, with ~7x the honest expectation. A
-result below 5x is not a failure to report quietly -- it means one of the three big items
-did not port as well as projected, and the profile will say which. Record it here either
-way.
+So **~7x is the honest expectation and >=5x (<= 610 ms/step) is the target**. A result
+below 5x is not a failure to report quietly -- it means one of the three big items did not
+port as well as projected, and the profile will say which. Record it here either way.
+
+**The acceptance floor is 4x (<= 765 ms/step), set by the user (2026-08-27), and it is a
+floor rather than a gate on the port's merit:** the user's position is that even ~4x --
+which would be a slight regression against the projection -- is acceptable, because the
+simplicity autodiff buys makes up for it and Phase 3.6-style optimization can happen
+later. So do not hold the port back, revert to hand-derived sensitivities, or open a
+performance investigation on a number in the 4-5x band; record it, note which row missed,
+and move on. Below 4x, stop and report rather than deleting the hand-derived code in the
+final commit -- at that point the profile has found something the projection did not
+anticipate and the user should see it before the fallback disappears.
 
 Note what the hotspot row assumes: **5x is the projection for the whole constraint
 including its sensitivity, so it presumes autograd roughly matches the hand-derived
@@ -593,6 +619,9 @@ shortcut in Phase 3.3 holds -- without it that row roughly doubles.
 **Correctness, at three scales:**
 
 1. **Unit and fixture suites.** Everything under `tests/` except the slow marker, passing.
+   Plus the second and final `pytest -m slow` run, against the baseline taken before Phase
+   3.1 (see Execution notes): same assertions, and the wall-clock difference between the
+   two runs is a second, independent end-to-end timing datapoint alongside the profile.
 2. **Short E2E.** `test_e2e.py`'s `nloop=3` trajectory against the existing fixture, at
    `e2e` tier. This should just work; `e2e_rtol` was built for this.
 3. **Long E2E, by aggregate rather than by trajectory.** Re-run the 90x30 / `nloop=800`
@@ -625,14 +654,22 @@ follow-up items (`plans/code_quality_review.md`) rather than absorbing them.
 
 ---
 
-## Open questions for the user
+## Answers from the user (2026-08-27)
 
-None blocking -- the decisions above are all defensible defaults and are recorded so they
-can be overridden cheaply. The two most likely to be worth overriding:
+All three questions are settled; the bodies above have been updated, and this section is
+the record of *why*, not a second source of truth.
 
-- **Retiring the NumPy path** (Decision 2). If you want a CPU-only path to survive for
-  machines without a GPU, say so before Phase 3.4, because the answer changes what gets
-  written, not just what gets deleted.
-- **The >=5x end-to-end bar** (Phase 3.7). It is a target, not a gate -- unlike part 1's
-  4.36x, nothing here is conditional on hitting it, since the autodiff motivation stands
-  on its own. Say so if you want it treated as a gate instead.
+- **Retiring the NumPy path: confirmed** (Decision 2). The premise that a GPU-less machine
+  needs the NumPy path was wrong -- torch's CPU device is the fallback. So the deletion
+  goes ahead, and the obligation it creates is that `device="cpu"` stays a genuinely
+  working configuration rather than a nominal one.
+- **The end-to-end bar: 4x is acceptable, and it is a floor, not a gate** (Phase 3.7). The
+  user's reasoning: ~4x is a slight regression against the projection and still worth it,
+  because the simplicity autodiff buys is the point of the port and further optimization
+  can happen later. >=5x remains the target to aim at; 4x is where the port stops being
+  reportable-and-move-on and starts needing the user's eyes before the hand-derived code
+  is deleted.
+- **Slow-test cadence: twice only** -- once before Phase 3.1, once at the end of Phase 3.7.
+  See Execution notes.
+
+No open questions remain.
