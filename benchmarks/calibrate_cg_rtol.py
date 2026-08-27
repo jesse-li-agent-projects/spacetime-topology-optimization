@@ -74,6 +74,7 @@ import sttopt.fem as fem
 import sttopt.gravity as gravity
 import sttopt.torch_fem as torch_fem
 import sttopt.torch_mg as torch_mg
+import sttopt.torch_util as torch_util
 
 FIXTURES = (
     Path(__file__).resolve().parent.parent
@@ -122,6 +123,7 @@ def mesh_setup(nelx: int, nely: int, device="cpu", dtype=torch.float64) -> dict:
 
     KE = fem.plane_stress_KE(NU)
     edofMat = fem.element_dof_map(nelx, nely)
+    C = gravity.gravity_load_matrix(nelx, nely)
     return {
         "nelx": nelx,
         "nely": nely,
@@ -130,9 +132,15 @@ def mesh_setup(nelx: int, nely: int, device="cpu", dtype=torch.float64) -> dict:
         "freedofs": freedofs,
         "KE": KE,
         "edofMat": edofMat,
-        "C": gravity.gravity_load_matrix(nelx, nely),
+        "C": C,
+        # torch counterparts -- sttopt.compliance is torch-native (Phase 3.2,
+        # plans/torch_port_part2.md), so these (not the plain-NumPy fields above) are
+        # what this module's own calls into it use.
         "KE_t": torch.tensor(KE, dtype=dtype, device=device),
         "edofMat_t": torch.tensor(edofMat, dtype=torch.int64, device=device),
+        "freedofs_t": torch.tensor(freedofs, dtype=torch.int64, device=device),
+        "F_t": torch.tensor(F, dtype=dtype, device=device),
+        "C_t": torch_util.csr_to_tensor(C, device, dtype),
         "mask": torch_fem.free_mask(
             ndof, torch.tensor(freedofs, dtype=torch.int64, device=device), device
         ),
@@ -213,36 +221,43 @@ def sensitivities(setup: dict, x: np.ndarray, t: np.ndarray, nstage: int) -> dic
     :return: dict with `c` (whole), `dcx` (whole), and stacked per-stage `cg`, `dcx_g`,
         `dct_g`.
     """
+    # sttopt.compliance is torch-native (Phase 3.2, plans/torch_port_part2.md); this
+    # module stays NumPy throughout (mgcg_backend's monkeypatched fem.assemble_stiffness/
+    # fem.solve_fe are the actual thing under test), so convert at just this boundary.
+    device, dtype = setup["device"], setup["dtype"]
+    x_t = torch.tensor(x, dtype=dtype, device=device)
+    t_t = torch.tensor(t, dtype=dtype, device=device)
     c, dcx = compliance.whole_compliance(
-        x,
-        setup["KE"],
-        setup["edofMat"],
+        x_t,
+        setup["KE_t"],
+        setup["edofMat_t"],
         EMIN,
         EMAX,
         PENAL,
-        setup["freedofs"],
-        setup["F"],
+        setup["freedofs_t"],
+        setup["F_t"],
         setup["ndof"],
     )
+    dcx = dcx.cpu().numpy()
     cg, dcx_g, dct_g = [], [], []
     for ti in np.linspace(0, 1, nstage + 1)[1:]:
         c_s, dcx_s, dct_s = compliance.gravity_compliance(
-            x,
-            t,
-            setup["KE"],
-            setup["edofMat"],
+            x_t,
+            t_t,
+            setup["KE_t"],
+            setup["edofMat_t"],
             EMIN,
             EMAX,
             PENAL,
             float(ti),
-            setup["C"],
+            setup["C_t"],
             BETA_T,
-            setup["freedofs"],
+            setup["freedofs_t"],
             setup["ndof"],
         )
         cg.append(c_s)
-        dcx_g.append(dcx_s)
-        dct_g.append(dct_s)
+        dcx_g.append(dcx_s.cpu().numpy())
+        dct_g.append(dct_s.cpu().numpy())
     return {
         "c": c,
         "dcx": dcx.flatten(),
@@ -285,18 +300,20 @@ def finite_difference_check(
         measurably degrade the check.
     :return: max over `elements` of the relative error.
     """
+    device, dtype = setup["device"], setup["dtype"]
     with mgcg_backend(setup, rtol=rtol):
         _, dcx = compliance.whole_compliance(
-            x,
-            setup["KE"],
-            setup["edofMat"],
+            torch.tensor(x, dtype=dtype, device=device),
+            setup["KE_t"],
+            setup["edofMat_t"],
             EMIN,
             EMAX,
             PENAL,
-            setup["freedofs"],
-            setup["F"],
+            setup["freedofs_t"],
+            setup["F_t"],
             setup["ndof"],
         )
+        dcx = dcx.cpu().numpy()
         worst = 0.0
         for e in elements:
             cs = []
@@ -304,14 +321,14 @@ def finite_difference_check(
                 xp = x.copy()
                 xp.flat[e] += sign * h
                 c_p, _ = compliance.whole_compliance(
-                    xp,
-                    setup["KE"],
-                    setup["edofMat"],
+                    torch.tensor(xp, dtype=dtype, device=device),
+                    setup["KE_t"],
+                    setup["edofMat_t"],
                     EMIN,
                     EMAX,
                     PENAL,
-                    setup["freedofs"],
-                    setup["F"],
+                    setup["freedofs_t"],
+                    setup["F_t"],
                     setup["ndof"],
                 )
                 cs.append(c_p)

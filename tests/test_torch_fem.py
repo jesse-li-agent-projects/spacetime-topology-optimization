@@ -10,7 +10,7 @@ import sttopt.compliance as compliance
 import sttopt.fem as fem
 import sttopt.optimize as optimize
 import test_e2e as e2e_mod
-from conftest import assert_close, load_fixture_npz, point_load_problem
+from conftest import assert_close, load_fixture_npz, point_load_problem, tt, tti
 
 # torch is an optional dependency (see pyproject.toml), so skip rather than fail
 # collection where it isn't installed.
@@ -643,10 +643,11 @@ def test_whole_compliance_fixture_regression_through_mgcg():
     F, freedofs, ndof = point_load_problem(nelx, nely)
     KE = fem.plane_stress_KE(nu=0.3)
     edofMat = fem.element_dof_map(nelx, nely)
+    KE, edofMat, freedofs, F = tt(KE), tti(edofMat), tti(freedofs), tt(F)
 
     with calib.mgcg_backend(setup, rtol=calib.RECOMMENDED_RTOL):
         for k in range(nloop):
-            xPhys = e2e["xPhys_traj"][:, :, k]
+            xPhys = tt(e2e["xPhys_traj"][:, :, k])
             c, dcx = compliance.whole_compliance(
                 xPhys, KE, edofMat, EMIN, EMAX, PENAL, freedofs, F, ndof
             )
