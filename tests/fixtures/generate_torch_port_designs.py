@@ -78,6 +78,38 @@ MESHES = [
 SNAPSHOT_LOOPS = [25, 100, 200, 400, 600, 800]
 
 
+#: Meshes present in the archive natively; anything else is derived by `load_design`.
+NATIVE_MESHES = tuple(f"{nelx}x{nely}" for nelx, nely, *_ in MESHES)
+
+#: Meshes obtained by block-repeating a native one, as `derived -> (source, factor)`.
+DERIVED_MESHES = {"360x120": ("180x60", 2)}
+
+
+def load_design(
+    mesh: str, iteration: int, path: Path | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """Load one `(xPhys, tPhys)` snapshot, upscaling if the mesh was not run natively.
+
+    :param mesh: `"NELXxNELY"`, either a native mesh or a key of `DERIVED_MESHES`.
+    :param iteration: snapshot loop index, one of `SNAPSHOT_LOOPS`.
+    :param path: archive to read, defaulting to the one beside this script.
+    :return: `(xPhys, tPhys)`, each shape `(nely, nelx)`.
+    """
+    path = path or Path(__file__).parent / "torch_port_designs.npz"
+    source, factor = DERIVED_MESHES.get(mesh, (mesh, 1))
+    if source not in NATIVE_MESHES:
+        known = ", ".join((*NATIVE_MESHES, *DERIVED_MESHES))
+        raise ValueError(f"unknown mesh {mesh!r}; expected one of: {known}")
+    with np.load(path) as data:
+        x = data[f"x_{source}_it{iteration:04d}"]
+        t = data[f"t_{source}_it{iteration:04d}"]
+    if factor == 1:
+        return x, t
+    # Nearest-neighbour block repeat, not interpolation -- see the module docstring.
+    block = np.ones((factor, factor))
+    return np.kron(x, block), np.kron(t, block)
+
+
 def binariness(x: np.ndarray) -> float:
     """Fraction of elements within 0.01 of 0 or 1 -- a one-number summary of how far the
     Heaviside projection has driven a density field toward a hard 0/1 contrast.
