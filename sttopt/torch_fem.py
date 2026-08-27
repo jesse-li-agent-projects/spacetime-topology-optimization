@@ -145,7 +145,6 @@ def pcg(
     rtol: float = 1e-8,
     max_iter: int = 10000,
     x0: Float[Tensor, "*batch ndof"] | None = None,
-    check_every: int = 1,
 ) -> tuple[Float[Tensor, "*batch ndof"], int]:
     """Preconditioned CG on the batched system `apply_A(x) = b`.
 
@@ -167,10 +166,6 @@ def pcg(
     :param rtol: relative residual tolerance `||r|| / ||b||`.
     :param max_iter: maximum CG iterations before raising.
     :param x0: optional warm-start initial guess, defaults to zero.
-    :param check_every: iterations between convergence checks. Each check reads the
-        residual on the host and so stalls a GPU pipeline; on a problem this small that
-        stall can rival an iteration's own cost. Above 1, the solver may run a few
-        iterations past the tolerance, which is wasted work but never an accuracy loss.
     :return: `(x, n_iter)` -- the solution and the number of iterations actually run.
     """
     b_norm = b.norm(dim=-1)
@@ -197,19 +192,13 @@ def pcg(
         x.addcmul_(alpha, p)
         r.addcmul_(alpha, Ap, value=-1)
         rel_resid = r.norm(dim=-1) / b_norm_safe
-        # Reading `rel_resid` on the host stalls the pipeline, so the check is periodic.
-        # Overshooting the tolerance by up to `check_every - 1` iterations costs a little
-        # arithmetic and never costs correctness: CG's error decreases monotonically in
-        # the A-norm, so the extra iterations only make `x` more accurate.
-        if it % check_every == 0 and torch.all(rel_resid <= rtol):
+        if torch.all(rel_resid <= rtol):
             return x, n_iter
         z = apply_M(r)
         rz_new = (r * z).sum(dim=-1)
         p.mul_((rz_new / rz_old)[..., None]).add_(z)
         rz_old = rz_new
 
-    if torch.all(rel_resid <= rtol):
-        return x, n_iter
     raise CGConvergenceError(rel_resid, n_iter, rtol)
 
 
@@ -226,7 +215,6 @@ def solve(
     rtol: float = 1e-8,
     max_iter: int = 10000,
     x0: Float[Tensor, "*batch ndof"] | None = None,
-    check_every: int = 1,
 ) -> tuple[Float[Tensor, "*batch ndof"], int]:
     """Convenience wrapper: SIMP density from `xPhys`, then Jacobi-PCG for `K @ U = F`.
 
@@ -250,6 +238,5 @@ def solve(
         rtol=rtol,
         max_iter=max_iter,
         x0=x0,
-        check_every=check_every,
     )
     return project(U, mask), n_iter

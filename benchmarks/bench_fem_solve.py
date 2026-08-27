@@ -73,7 +73,6 @@ import numpy as np
 import torch
 
 import sttopt.fem as fem
-import sttopt.optimize as optimize
 import sttopt.torch_fem as torch_fem
 import sttopt.torch_mg as torch_mg
 from benchmarks.calibrate_cg_rtol import (
@@ -84,73 +83,32 @@ from benchmarks.calibrate_cg_rtol import (
     SENSITIVITY_TOL,
     mesh_setup,
 )
-from benchmarks.profile_step import build_realistic_state
-from tests.fixtures.generate_torch_port_designs import (
-    DERIVED_MESHES,
-    MESHES,
-    TCR,
-    THETA,
-    TFIELD,
-    VOLFRAC,
-    load_design,
-)
-
-
-def advance_one_step(
-    mesh: str, x: np.ndarray, t: np.ndarray, nstage: int
-) -> tuple[np.ndarray, np.ndarray]:
-    """Run one real `optimize.step` from `(x, t)` and return the design it produces.
-
-    A *real* MMA step, not a synthetic perturbation. An earlier version of this benchmark
-    moved every element by the full `move = 0.01` limit with a random sign; that looked
-    conservative but was not, because half the exactly-zero void elements became 0.01 and
-    the resulting element-scale speckle in the coefficient field is precisely what a
-    geometric multigrid cannot represent -- it inflated the iteration count roughly
-    fivefold and would have understated the solver on a design the optimizer never visits.
-    Taking the optimizer's own step avoids inventing the conditioning being measured.
-
-    :param mesh: `"NELXxNELY"`, which must be a natively-generated mesh.
-    :param x: `xPhys` at the snapshot.
-    :param t: `tPhys` at the snapshot.
-    :param nstage: number of deposition stages.
-    :return: `(xPhys, tPhys)` one iteration later.
-    """
-    nelx, nely, rmin, lrmin, rmin_cond = next(
-        m for m in MESHES if f"{m[0]}x{m[1]}" == mesh
-    )
-    problem = optimize.build_problem(
-        nelx, nely, nstage, VOLFRAC, THETA, TCR, TFIELD, rmin, lrmin, rmin_cond
-    )
-    state = build_realistic_state(problem, x, t)
-    nxt, _ = optimize.step(problem, state)
-    return nxt.xPhys, nxt.tPhys
+from tests.fixtures.generate_torch_port_designs import VOLFRAC, load_design
 
 
 def design_pair(
-    mesh: str, x: np.ndarray, t: np.ndarray, nstage: int
+    mesh: str, iteration: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """The `(previous, current)` `xPhys` pair one optimizer iteration apart.
+    """The `(previous, current)` design one real optimizer iteration apart.
 
-    The benchmark always times the *current* design; the previous one exists only to
-    supply the warm start, so cold and warm cells solve the identical system and differ
-    in nothing but the initial guess.
+    Both halves come straight from the snapshot archive, which stores loops 799 and 800
+    for exactly this purpose. Nothing here reconstructs or perturbs a design: whether the
+    previous solution is a good initial guess is the question being measured, so
+    manufacturing the pair would be assuming the answer. An earlier version did
+    manufacture it -- one `optimize.step` from a profiling-only reconstructed `State` --
+    and produced a step that moved `xPhys` by up to 0.996 with an initial residual 37-100x
+    *worse* than a cold start. The real step moves it by 0.0067.
 
-    A derived mesh takes its step at the source resolution and block-repeats both halves
-    of the pair, matching how `load_design` derives the design itself. Stepping at the
-    derived resolution is not an option: `rmin_cond` scales with the mesh, so the hotspot
-    constraint's neighbour window at 360x120 spans ~1.9e8 pairs.
+    The benchmark always times the *current* design; the previous one only supplies the
+    warm start, so the cold and warm cells solve an identical system.
 
-    :return: `(x_prev, t_prev, x_cur, t_cur)`, each at the requested mesh.
+    :param mesh: `"NELXxNELY"`; a derived mesh upscales both halves alike.
+    :param iteration: the *current* loop; its predecessor is `iteration - 1`.
+    :return: `(x_prev, t_prev, x_cur, t_cur)`.
     """
-    source, factor = DERIVED_MESHES.get(mesh, (mesh, 1))
-    if factor > 1:
-        # Undo the upscale, step at the source resolution, then re-upscale everything.
-        x, t = x[::factor, ::factor], t[::factor, ::factor]
-    x_cur, t_cur = advance_one_step(source, x, t, nstage)
-    if factor == 1:
-        return x, t, x_cur, t_cur
-    block = np.ones((factor, factor))
-    return tuple(np.kron(a, block) for a in (x, t, x_cur, t_cur))
+    x_prev, t_prev = load_design(mesh, iteration - 1)
+    x_cur, t_cur = load_design(mesh, iteration)
+    return x_prev, t_prev, x_cur, t_cur
 
 
 def stage_systems(
@@ -298,22 +256,21 @@ class Table:
 def benchmark_mesh(mesh: str, table: Table, rtol: float, opts) -> None:
     """Run every configuration for one mesh and add its rows to `table`."""
     nelx, nely = (int(v) for v in mesh.split("x"))
-    x_bin, t_bin = load_design(mesh, opts.iteration)
-    fields = {
-        "uniform": (np.full((nely, nelx), VOLFRAC), t_bin),
-        "near-binary": (x_bin, t_bin),
-    }
+    x_prev, t_prev, x_bin, t_bin = design_pair(mesh, opts.iteration)
+    # Uniform density is a conditioning control only, so it gets no warm-start row: the
+    # optimizer holds `x = volfrac` at iteration zero alone, and there is no previous
+    # iteration for it to have left a solution behind.
+    fields = [
+        ("uniform", np.full((nely, nelx), VOLFRAC), t_bin, ("cold",)),
+        ("near-binary", x_bin, t_bin, ("cold", "warm")),
+    ]
 
     devices = [("cuda", "MGCG-GPU")] if torch.cuda.is_available() else []
     if not opts.skip_cpu_cg:
         devices.append(("cpu", "MGCG-CPU"))
 
     cpu_setup = mesh_setup(nelx, nely)
-    for field_name, (x0_field, t0_field) in fields.items():
-        x_prev, t_prev, x_cur, t_cur = design_pair(
-            mesh, x0_field, t0_field, opts.nstage
-        )
-
+    for field_name, x_cur, t_cur, starts in fields:
         # The warm start: what the previous iteration left behind. Not timed -- it is an
         # input to the warm cells, and the previous iteration already paid for it.
         d_prev, f_prev = stage_systems(cpu_setup, x_prev, t_prev, opts.nstage)
@@ -333,7 +290,7 @@ def benchmark_mesh(mesh: str, table: Table, rtol: float, opts) -> None:
             / opts.nstage
         )
         # `spsolve` cannot exploit a warm start at all, so one number covers both starts.
-        for start in ("cold", "warm"):
+        for start in starts:
             table.add(
                 mesh=mesh,
                 field=field_name,
@@ -352,7 +309,7 @@ def benchmark_mesh(mesh: str, table: Table, rtol: float, opts) -> None:
             F_t = torch.tensor(loads, dtype=torch.float64, device=device)
             U_prev_t = torch.tensor(U_prev, dtype=torch.float64, device=device)
 
-            for start in ("cold", "warm"):
+            for start in starts:
                 x0_all = U_prev_t if start == "warm" else None
                 for batch in ("sequential", "batched"):
                     if batch == "batched":

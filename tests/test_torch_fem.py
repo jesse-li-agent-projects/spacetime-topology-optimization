@@ -738,19 +738,3 @@ def test_gpu_solve_is_reproducible_within_tolerance_but_not_bitwise():
     assert_close(U2.cpu().numpy(), U1.cpu().numpy(), tier="solved")
     drift = (U2 - U1).norm() / U1.norm()
     assert drift < 1e-9, f"drift {drift:.2e} is larger than the recorded ~1e-12"
-
-
-@pytest.mark.parametrize("check_every", [1, 4, 8])
-def test_periodic_convergence_check_does_not_change_the_answer(check_every):
-    """Checking the residual less often may overshoot the tolerance but must never
-    undershoot it, so the answer can only get more accurate, never less.
-    """
-    nelx, nely = 40, 20
-    rng = np.random.default_rng(4)
-    x = rng.uniform(0.0, 1.0, nely * nelx)
-    U_ref, n_ref = _mg_solve(nelx, nely, x, rtol=1e-8, check_every=1)
-    U, n = _mg_solve(nelx, nely, x, rtol=1e-8, check_every=check_every)
-
-    assert n >= n_ref and n % check_every == 0
-    assert n - n_ref < check_every
-    assert_close(U.numpy(), U_ref.numpy(), tier="solved")
