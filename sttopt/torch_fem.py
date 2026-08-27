@@ -158,6 +158,15 @@ def pcg(
     state-dependent or nonsymmetric (an inner CG, an unequal-sweep multigrid cycle)
     silently invalidates the short recurrence this algorithm relies on.
 
+    **Known issue, not yet fixed:** if one batch member's residual hits exact zero
+    before the others converge (e.g. a batch member with an all-zero `b`), its `alpha`
+    becomes a `0/0` nan on the next iteration and poisons that member's `x` for good.
+    CG still raises (the nan keeps that member from ever satisfying `rtol`), but
+    `CGConvergenceError`'s "worst relative residual" and "failed batch indices" come
+    out wrong -- `nan` and `[]` respectively -- because nan comparisons are always
+    `False`. Repro: `pcg(apply_A, torch.stack([torch.zeros(n), b_normal]), apply_M)`
+    for any SPD `apply_A` and nonzero `b_normal`.
+
     :param apply_A: callable, `Tensor -> Tensor`, the (implicitly batched) operator.
     :param b: right-hand side.
     :param apply_M: callable, `Tensor -> Tensor`, the preconditioner approximating `A^-1`
@@ -188,6 +197,8 @@ def pcg(
     for it in range(1, max_iter + 1):
         n_iter = it
         Ap = apply_A(p)
+        # 0/0 nan for an already-converged batch member -- see the docstring's
+        # "Known issue" note.
         alpha = (rz_old / (p * Ap).sum(dim=-1))[..., None]
         x.addcmul_(alpha, p)
         r.addcmul_(alpha, Ap, value=-1)
