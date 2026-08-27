@@ -661,6 +661,26 @@ their current tiers. `subsolv` is an interior-point method with a line search, s
 tolerance needs loosening, loosen it with a measurement and a sentence saying why -- an
 unexplained tolerance bump here would hide a real translation error.
 
+### Results: bordered-solve CPU-vs-GPU measurement (2026-08-28, machine idle, RTX PRO
+1000 Blackwell Laptop GPU, 8 GB)
+
+`torch.linalg.solve` on a random well-conditioned SPD-plus-border 80x80 float64 system
+(the production `(m+1, m+1)` size), 3000 iterations after 20 discarded warm-up calls,
+`torch.cuda.synchronize()` bracketing every timed region:
+
+```
+n=80  cpu-only solve:                 27.33 us
+n=80  cuda-only solve:               172.82 us
+n=80  cuda tensors, cpu solve+xfer:    63.27 us
+```
+
+**Decision: solve on the CPU, with the round trip.** At this size, kernel-launch
+overhead dominates the GPU solve (172.82 us) -- more than 6x the CPU-only solve
+(27.33 us) -- and even paying to move the ~51 KB `AA`/`bb` off the GPU and the ~640 B
+result back (63.27 us total) is still under half the pure-GPU cost. `sttopt/mma.py`'s
+`subsolv` therefore does `torch.linalg.solve(AA.cpu(), bb.cpu())` for both the `m < n`
+and `m >= n` branches, per the plan's carve-out for a solve this small.
+
 ## Phase 3.6: Performance pass
 
 Only after the loop is correct end to end. Part 1 left a ranked list of solver
