@@ -17,8 +17,9 @@ the (nontrivial, hand-derived) sensitivity algebra.
 from typing import NamedTuple
 
 import numpy as np
-import scipy.sparse as sp
+import torch
 from jaxtyping import Float, Int
+from torch import Tensor
 
 
 def neighbor_weights(
@@ -51,11 +52,11 @@ def neighbor_weights(
 
 
 def _pairwise_sigmoid_terms(
-    t: Float[np.ndarray, " nel"],
-    a: Int[np.ndarray, " npairs"],
-    b: Int[np.ndarray, " npairs"],
+    t: Float[Tensor, " nel"],
+    a: Int[Tensor, " npairs"],
+    b: Int[Tensor, " npairs"],
     rouf: float,
-) -> tuple[Float[np.ndarray, " npairs"], Float[np.ndarray, " npairs"]]:
+) -> tuple[Float[Tensor, " npairs"], Float[Tensor, " npairs"]]:
     """
     `FT_el{a}[b]`/`DFT_el{a}[b]`: a neighbor-sigmoid weight and its t-derivative, for a
     COO pair array.
@@ -73,36 +74,36 @@ def _pairwise_sigmoid_terms(
     """
     ta, tb = t[a], t[b]
     z = rouf * (tb - ta)
-    ez = np.exp(-np.abs(z))
-    FT = np.where(z >= 0, ez / (1.0 + ez), 1.0 / (1.0 + ez))
+    ez = torch.exp(-torch.abs(z))
+    FT = torch.where(z >= 0, ez / (1.0 + ez), 1.0 / (1.0 + ez))
     # d/d(t[a]) of FT, which is even in z: exp(z)/(1+exp(z))^2 == exp(-|z|)/(1+exp(-|z|))^2.
-    DFT = np.where(a == b, 0.0, rouf * ez / (1.0 + ez) ** 2)
+    DFT = torch.where(a == b, torch.zeros_like(ez), rouf * ez / (1.0 + ez) ** 2)
     return FT, DFT
 
 
 class _ConductivityCore(NamedTuple):
-    K_est: Float[np.ndarray, " nel"]
-    Nsum3: Float[np.ndarray, " nel"]
-    FT_ab: Float[np.ndarray, " npairs"]
-    DFT_ab: Float[np.ndarray, " npairs"]
-    xb_q: Float[np.ndarray, " npairs"]
+    K_est: Float[Tensor, " nel"]
+    Nsum3: Float[Tensor, " nel"]
+    FT_ab: Float[Tensor, " npairs"]
+    DFT_ab: Float[Tensor, " npairs"]
+    xb_q: Float[Tensor, " npairs"]
 
 
 class _ConductivityTerms(NamedTuple):
-    K_est: Float[np.ndarray, " nel"]
-    Nsum3: Float[np.ndarray, " nel"]
-    FT_ba: Float[np.ndarray, " npairs"]
-    DFT_ba: Float[np.ndarray, " npairs"]
-    S1: Float[np.ndarray, " nel"]
-    S2: Float[np.ndarray, " nel"]
+    K_est: Float[Tensor, " nel"]
+    Nsum3: Float[Tensor, " nel"]
+    FT_ba: Float[Tensor, " npairs"]
+    DFT_ba: Float[Tensor, " npairs"]
+    S1: Float[Tensor, " nel"]
+    S2: Float[Tensor, " nel"]
 
 
 def _conductivity_core(
-    x: Float[np.ndarray, " nel"],
-    t: Float[np.ndarray, " nel"],
-    e1: Int[np.ndarray, " npairs"],
-    e2: Int[np.ndarray, " npairs"],
-    w: Float[np.ndarray, " npairs"],
+    x: Float[Tensor, " nel"],
+    t: Float[Tensor, " nel"],
+    e1: Int[Tensor, " npairs"],
+    e2: Int[Tensor, " npairs"],
+    w: Float[Tensor, " npairs"],
     q: float,
     rouf: float,
 ) -> _ConductivityCore:
@@ -113,20 +114,20 @@ def _conductivity_core(
     nel = x.shape[0]
     FT_ab, DFT_ab = _pairwise_sigmoid_terms(t, e1, e2, rouf)
     xb_q = x[e2] ** q
-    Nsum3 = np.zeros(nel)
-    np.add.at(Nsum3, e1, w * FT_ab)
-    num = np.zeros(nel)
-    np.add.at(num, e1, xb_q * w * FT_ab)
+    Nsum3 = torch.zeros(nel, dtype=x.dtype, device=x.device)
+    Nsum3.index_add_(0, e1, w * FT_ab)
+    num = torch.zeros(nel, dtype=x.dtype, device=x.device)
+    num.index_add_(0, e1, xb_q * w * FT_ab)
     K_est = num / Nsum3
     return _ConductivityCore(K_est, Nsum3, FT_ab, DFT_ab, xb_q)
 
 
 def _conductivity_terms(
-    x: Float[np.ndarray, " nel"],
-    t: Float[np.ndarray, " nel"],
-    e1: Int[np.ndarray, " npairs"],
-    e2: Int[np.ndarray, " npairs"],
-    w: Float[np.ndarray, " npairs"],
+    x: Float[Tensor, " nel"],
+    t: Float[Tensor, " nel"],
+    e1: Int[Tensor, " npairs"],
+    e2: Int[Tensor, " npairs"],
+    w: Float[Tensor, " npairs"],
     q: float,
     rouf: float,
 ) -> _ConductivityTerms:
@@ -142,23 +143,23 @@ def _conductivity_terms(
     core = _conductivity_core(x, t, e1, e2, w, q, rouf)
     FT_ba, DFT_ba = _pairwise_sigmoid_terms(t, e2, e1, rouf)
 
-    S1 = np.zeros(nel)
-    np.add.at(S1, e1, w * core.DFT_ab)
-    S2 = np.zeros(nel)
-    np.add.at(S2, e1, core.xb_q * w * core.DFT_ab)
+    S1 = torch.zeros(nel, dtype=x.dtype, device=x.device)
+    S1.index_add_(0, e1, w * core.DFT_ab)
+    S2 = torch.zeros(nel, dtype=x.dtype, device=x.device)
+    S2.index_add_(0, e1, core.xb_q * w * core.DFT_ab)
 
     return _ConductivityTerms(core.K_est, core.Nsum3, FT_ba, DFT_ba, S1, S2)
 
 
 def estimated_conductivity(
-    xPhys: Float[np.ndarray, "nely nelx"],
-    tPhys: Float[np.ndarray, "nely nelx"],
-    e1: Int[np.ndarray, " npairs"],
-    e2: Int[np.ndarray, " npairs"],
-    w: Float[np.ndarray, " npairs"],
+    xPhys: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+    e1: Int[Tensor, " npairs"],
+    e2: Int[Tensor, " npairs"],
+    w: Float[Tensor, " npairs"],
     q: float,
     rouf: float,
-) -> Float[np.ndarray, " nely*nelx"]:
+) -> Float[Tensor, " nely*nelx"]:
     """Local estimated conductivity: a density/print-time-weighted average of how
     strongly each element's neighborhood has already solidified (cooler, earlier
     `tPhys`) around it, used as an overheating proxy by `hotspot_constraint`.
@@ -170,23 +171,23 @@ def estimated_conductivity(
 
 class HotspotConstraintResult(NamedTuple):
     fval: float
-    df1: Float[np.ndarray, " nely*nelx"]
-    dt1: Float[np.ndarray, " nely*nelx"]
+    df1: Float[Tensor, " nely*nelx"]
+    dt1: Float[Tensor, " nely*nelx"]
     # factor-independent
     numer: float
     # factor-independent
-    K_est: Float[np.ndarray, " nely*nelx"]
+    K_est: Float[Tensor, " nely*nelx"]
 
 
 def hotspot_constraint(
-    xPhys: Float[np.ndarray, "nely nelx"],
-    tPhys: Float[np.ndarray, "nely nelx"],
-    e1: Int[np.ndarray, " npairs"],
-    e2: Int[np.ndarray, " npairs"],
-    w: Float[np.ndarray, " npairs"],
-    dx: Float[np.ndarray, "nely nelx"],
-    H: sp.spmatrix | sp.sparray,
-    Hs: Float[np.ndarray, " nely*nelx"],
+    xPhys: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+    e1: Int[Tensor, " npairs"],
+    e2: Int[Tensor, " npairs"],
+    w: Float[Tensor, " npairs"],
+    dx: Float[Tensor, "nely nelx"],
+    H: Tensor,
+    Hs: Float[Tensor, " nely*nelx"],
     factor: float,
     Tcr: float,
     p: float,
@@ -214,7 +215,7 @@ def hotspot_constraint(
     T_val = 1 - K_est
 
     cond_p = (T_val * x**r) ** p
-    sum_cond = np.sum(cond_p)
+    sum_cond = torch.sum(cond_p)
     numer = (sum_cond / nel) ** (1 / p)
     fval = float(factor * numer / Tcr - 1)
 
@@ -228,17 +229,17 @@ def hotspot_constraint(
     # FT_ba/w reduce to their diagonal identities 0.5/1 -- no separate diagonal
     # constant needed) and finite everywhere, since it has no negative powers of x.
     N_sub2 = -(xb**r) * q * xa ** (q - 1) * terms.FT_ba * w / Nb
-    N_sub1 = np.where(
+    N_sub1 = torch.where(
         diag,
         -(xa**r) * (S2a / Na - Ka * S1a / Na),
         -(w / Nb) * (Kb - xa**q) * xb**r * terms.DFT_ba,
     )
 
     Tsub_pow = (T_val[e2] * xb**r) ** (p - 1)
-    cond_arr1 = np.zeros(nel)
-    cond_arr2 = np.zeros(nel)
-    np.add.at(cond_arr1, e1, Tsub_pow * N_sub1)
-    np.add.at(cond_arr2, e1, Tsub_pow * N_sub2)
+    cond_arr1 = torch.zeros(nel, dtype=x.dtype, device=x.device)
+    cond_arr2 = torch.zeros(nel, dtype=x.dtype, device=x.device)
+    cond_arr1.index_add_(0, e1, Tsub_pow * N_sub1)
+    cond_arr2.index_add_(0, e1, Tsub_pow * N_sub2)
 
     # Diagonal self-heating correction to cond_arr2, kept out of the Tsub_pow * N_sub2
     # product above: on the diagonal that product is exactly r * T_val**p * x**(r*p-1),
@@ -246,17 +247,19 @@ def hotspot_constraint(
     # vanishes -- whose inf * 0 is nan at x == 0, which the Heaviside projection reaches
     # routinely once beta_d saturates. Every element is its own neighbour exactly once,
     # so this is a per-element term needing no pair expansion.
-    if r * p < 1 and np.any(x == 0):
+    if r * p < 1 and bool(torch.any(x == 0)):
         raise ValueError(
             f"hotspot_constraint: the self-heating term scales as x**(r*p - 1) with r*p - 1 = {r * p - 1} < 0, so it diverges at the exactly-zero element densities present here."
         )
-    cond_arr2 += r * T_val**p * x ** (r * p - 1)
+    cond_arr2 = cond_arr2 + r * T_val**p * x ** (r * p - 1)
 
     # sum_cond == 0 (e.g. a fully solid part, T_val == 0 everywhere) makes the exponent
     # 1/p - 1 < 0 diverge; cond_arr1/cond_arr2 vanish exactly in that case too (every term
     # carries the same T_val**(p-1) factor), so the true limit of scale*cond_arr is 0.
     scale = (
-        0.0 if sum_cond == 0 else factor * (sum_cond / nel) ** (1 / p - 1) / (nel * Tcr)
+        0.0
+        if float(sum_cond) == 0
+        else factor * (sum_cond / nel) ** (1 / p - 1) / (nel * Tcr)
     )
     df1 = H @ ((scale * cond_arr2) * dx.flatten() / Hs)
     dt1 = H @ ((scale * cond_arr1) / Hs)
