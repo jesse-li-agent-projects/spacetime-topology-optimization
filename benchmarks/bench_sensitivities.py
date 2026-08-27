@@ -18,6 +18,45 @@ activations are the other thing that can bite, particularly at 360x120).
 Standard hygiene from part 1: `torch.cuda.synchronize()` around every timed region,
 warm-up discarded, median of `--repeats` timings, and the machine must be idle for the
 numbers to be trustworthy (this script cannot verify that; say so when reporting).
+
+**Fairness: both sides must report the cost of the same quantity.** The four
+constraints (`constraints.py`) and `hotspot_constraint` bake the density-filter/
+Heaviside-projection chain rule (`H`, `Hs`, `dx`) directly into their returned
+sensitivity -- they hand back a finished `dfdx` row in raw `x`/`t` space, not
+`d(.)/d(xPhys)` (see `constraints.py`'s module docstring). Their `*_value` autograd
+counterparts deliberately do not -- Decision 4 makes the filter/projection an ordinary
+forward op for the *caller* to differentiate through -- so a naive `backward()` on a
+`*_value` output stops one step short, at `d(.)/d(xPhys)` or `d(.)/d(tPhys)`. Timing
+that against the hand-derived function's *finished* row is not apples to apples: it
+omits exactly the sparse `H @ (... / Hs)` matmul(s) the hand side spends time on.
+
+This benchmark closes that gap by finishing the chain explicitly after every autograd
+backward call, timed as part of the same forward+backward region (`_finish_density_chain`/
+`_finish_time_chain` below) -- matching what `optimize.step` actually computes for
+these rows (`_grad_row`/`_grad_rows_batched` both differentiate all the way from the
+raw `x`/`t` leaves, whether autograd reaches the filter itself or a `H @ (.../Hs)` is
+applied by hand afterward to route around a vmap gap). So both sides here report the
+cost of one thing: a `dfdx` row in raw `x`/`t` space.
+
+`whole_compliance`/`gravity_compliance` are the deliberate exception: `compliance.py`'s
+hand-derived `dcx`/`dct` are *not* finished rows either -- they stop at `d(.)/d(xPhys)`
+by design (same docstring) -- so both sides of those two cells already stop at the same
+place with no fix needed; adding a chain-finish there would make *that* comparison
+unfair in the other direction.
+
+**360x120's `npairs` is 16x 180x60's, not 4x.** `conductivity.neighbor_weights` scales
+both element count and the conductivity filter radius `rmin_cond` by 2x between these
+two meshes, so `npairs` (elements times a neighbourhood-area term) scales by ~4x*4x,
+not the Risks section's assumed 4x: measured `68744592` vs `4204240`, i.e. **16.35x**.
+Each `npairs`-sized float64 intermediate is therefore ~550 MB, not ~34 MB, and
+`hotspot_constraint`'s forward alone (hand-derived *or* naive autograd -- this is not
+an autograd-vs-hand difference) needs several of them live at once, which does not fit
+this benchmark's 8 GB card regardless of implementation. `bench_hotspot` below adds a
+third `"compiled"` mode (`torch.compile` on `hotspot_value`, Phase 3.4's escape hatch
+1) precisely because it is what resolves this -- fusion means the elementwise pair
+algebra never materializes most of those intermediates at all, cutting hotspot's own
+peak memory at 360x120 from OOM to ~100 MB over baseline in ad hoc testing. Any cell
+that still runs out of memory prints `OOM` in its row instead of aborting the run.
 """
 
 import argparse
@@ -47,6 +86,7 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
+import gc
 import time
 
 import numpy as np
@@ -72,6 +112,22 @@ VOLFRAC = 0.5
 def _sync(device):
     if torch.device(device).type == "cuda":
         torch.cuda.synchronize()
+
+
+def _cleanup(device):
+    """Drop autograd graphs and reclaim CUDA memory between cells. Autograd graphs
+    hold Python reference cycles (a `Function`'s saved tensors can reach back to the
+    graph that produced them), so a bare `del` of a closure's locals is not enough to
+    free them promptly -- `gc.collect()` first, then `torch.cuda.empty_cache()` to
+    return the freed blocks to the driver rather than leaving them idle in the caching
+    allocator. Without this, per-cell peak-memory numbers would still be correct (they
+    reset per repeat) but the *cumulative* footprint across cells/meshes in one process
+    creeps up, which is what starved the 360x120 hand-derived hotspot cell of the ~500
+    MiB it needed on an 8 GB card in the pre-fix run.
+    """
+    gc.collect()
+    if torch.device(device).type == "cuda":
+        torch.cuda.empty_cache()
 
 
 def _time_and_peak(fn, device, repeats, warmup):
@@ -157,18 +213,51 @@ def _leaf(t):
     return t.clone().detach().requires_grad_(True)
 
 
+def _finish_density_chain(d_xPhys, dx, H, Hs):
+    """`H @ (d_xPhys * dx / Hs)` -- the density-filter/Heaviside-projection backward
+    the hand-derived constraints/hotspot bake into their own returned row (see this
+    module's docstring's "Fairness" note). Applied to an autograd `d(.)/d(xPhys)` to
+    make it a finished `dfdx` row, comparable to the hand side's.
+    """
+    return H @ (d_xPhys.flatten() * dx.flatten() / Hs)
+
+
+def _finish_time_chain(d_tPhys, H, Hs):
+    """`H @ (d_tPhys / Hs)` -- same as `_finish_density_chain` but for the time field,
+    which is only density-filtered, never Heaviside-projected (no `dx` factor).
+    """
+    return H @ (d_tPhys.flatten() / Hs)
+
+
 class Cell:
     """One (site, mode) timing: forward-only and forward+backward, plus peak memory."""
 
     def __init__(self, site, mode):
         self.site, self.mode = site, mode
         self.fwd_ms = self.fwdbwd_ms = self.peak_mb = 0.0
+        self.oom = False
 
     def row(self):
+        if self.oom:
+            return f"{self.site:<22}{self.mode:<12}{'OOM':>10}{'':>12}{'':>10}"
         return (
             f"{self.site:<22}{self.mode:<12}{self.fwd_ms:>10.2f}"
             f"{self.fwdbwd_ms:>12.2f}{self.peak_mb:>10.1f}"
         )
+
+
+def _time_and_peak_or_oom(fn, device, repeats, warmup):
+    """`_time_and_peak`, but a `torch.OutOfMemoryError` is caught and reported as an
+    OOM rather than aborting the whole benchmark run -- some (site, mode, mesh)
+    combinations are expected to genuinely not fit (see this module's docstring's
+    memory note for 360x120's hotspot cells). Returns `(ms, peak_bytes, oom)`.
+    """
+    try:
+        ms, peak = _time_and_peak(fn, device, repeats, warmup)
+        return ms, peak, False
+    except torch.OutOfMemoryError:
+        _cleanup(device)
+        return 0.0, 0, True
 
 
 def bench_whole_compliance(s, device, repeats, warmup, rows):
@@ -237,6 +326,7 @@ def bench_whole_compliance(s, device, repeats, warmup, rows):
         cell.fwdbwd_ms *= 1e3
         cell.peak_mb = peak / 2**20
         rows.append(cell)
+        _cleanup(device)
 
 
 def bench_gravity_compliance(s, device, repeats, warmup, rows):
@@ -321,6 +411,7 @@ def bench_gravity_compliance(s, device, repeats, warmup, rows):
         cell.fwdbwd_ms *= 1e3
         cell.peak_mb = peak / 2**20
         rows.append(cell)
+        _cleanup(device)
 
 
 def bench_constraints(s, device, repeats, warmup, rows):
@@ -397,7 +488,9 @@ def bench_constraints(s, device, repeats, warmup, rows):
                         xl = s["xPhys"].detach().requires_grad_(True)
                         tl = s["tPhys"].detach().requires_grad_(True)
                         out = autograd_fn(xl, tl)
-                        torch.autograd.grad(out, (xl, tl))
+                        d_xPhys, d_tPhys = torch.autograd.grad(out, (xl, tl))
+                        _finish_density_chain(d_xPhys, s["dx"], s["H"], s["Hs"])
+                        _finish_time_chain(d_tPhys, s["H"], s["Hs"])
                 else:
                     field = s[field_for(name)]
                     if mode == "hand":
@@ -405,22 +498,37 @@ def bench_constraints(s, device, repeats, warmup, rows):
                     else:
                         leaf = field.detach().requires_grad_(True)
                         out = autograd_fn(leaf)
-                        torch.autograd.grad(
+                        (d_field,) = torch.autograd.grad(
                             out, (leaf,), grad_outputs=torch.ones_like(out)
                         )
+                        if field_for(name) == "xPhys":
+                            _finish_density_chain(d_field, s["dx"], s["H"], s["Hs"])
+                        else:
+                            _finish_time_chain(d_field, s["H"], s["Hs"])
 
             cell.fwdbwd_ms, peak = _time_and_peak(fwdbwd, device, repeats, warmup)
             cell.fwd_ms *= 1e3
             cell.fwdbwd_ms *= 1e3
             cell.peak_mb = peak / 2**20
             rows.append(cell)
+            _cleanup(device)
 
 
 def bench_hotspot(s, device, repeats, warmup, rows):
-    for mode in ("hand", "autograd"):
+    # "compiled" is escape hatch 1 from plans/torch_port_part2.md Phase 3.4
+    # ("torch.compile the forward... try this before writing anything by hand"),
+    # included here (not just "hand"/"autograd") because it is the thing that
+    # actually resolves the 360x120 OOM below -- see this module's docstring.
+    compiled_hotspot_value = torch.compile(conductivity.hotspot_value)
+    for mode in ("hand", "autograd", "compiled"):
         cell = Cell("hotspot_constraint", mode)
+        hotspot_fn = (
+            compiled_hotspot_value
+            if mode == "compiled"
+            else (conductivity.hotspot_value)
+        )
 
-        def fwd(mode=mode):
+        def fwd(mode=mode, hotspot_fn=hotspot_fn):
             xPhys, tPhys = s["xPhys"].detach(), s["tPhys"].detach()
             if mode == "hand":
                 conductivity.hotspot_constraint(
@@ -440,7 +548,7 @@ def bench_hotspot(s, device, repeats, warmup, rows):
                     ROUF,
                 )
             else:
-                conductivity.hotspot_value(
+                hotspot_fn(
                     xPhys.requires_grad_(True),
                     tPhys.requires_grad_(True),
                     s["e1"],
@@ -452,9 +560,9 @@ def bench_hotspot(s, device, repeats, warmup, rows):
                     ROUF,
                 )
 
-        cell.fwd_ms, _ = _time_and_peak(fwd, device, repeats, warmup)
+        cell.fwd_ms, _, cell.oom = _time_and_peak_or_oom(fwd, device, repeats, warmup)
 
-        def fwdbwd(mode=mode):
+        def fwdbwd(mode=mode, hotspot_fn=hotspot_fn):
             xPhys, tPhys = s["xPhys"].detach(), s["tPhys"].detach()
             if mode == "hand":
                 conductivity.hotspot_constraint(
@@ -475,17 +583,23 @@ def bench_hotspot(s, device, repeats, warmup, rows):
                 )
             else:
                 xl, tl = xPhys.requires_grad_(True), tPhys.requires_grad_(True)
-                numer, _K_est = conductivity.hotspot_value(
+                numer, _K_est = hotspot_fn(
                     xl, tl, s["e1"], s["e2"], s["w"], P, Q, R, ROUF
                 )
                 fval = 1.0 * numer / 0.8 - 1
-                fval.backward()
+                d_xPhys, d_tPhys = torch.autograd.grad(fval, (xl, tl))
+                _finish_density_chain(d_xPhys, s["dx"], s["H"], s["Hs"])
+                _finish_time_chain(d_tPhys, s["H"], s["Hs"])
 
-        cell.fwdbwd_ms, peak = _time_and_peak(fwdbwd, device, repeats, warmup)
+        if not cell.oom:
+            cell.fwdbwd_ms, peak, cell.oom = _time_and_peak_or_oom(
+                fwdbwd, device, repeats, warmup
+            )
+            cell.peak_mb = peak / 2**20
         cell.fwd_ms *= 1e3
         cell.fwdbwd_ms *= 1e3
-        cell.peak_mb = peak / 2**20
         rows.append(cell)
+        _cleanup(device)
 
 
 def main():
