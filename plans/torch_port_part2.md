@@ -513,6 +513,130 @@ pins.
   `tests/fixtures/torch_port_designs.npz`'s late snapshots.
 - `test_reference_sweep.py` still passes.
 
+### Results: `bench_sensitivities.py` (2026-08-28, machine idle, RTX PRO 1000 Blackwell
+Laptop GPU, 8 GB)
+
+An earlier run of this benchmark (recorded only in `plans/phase3.4_handoff.md`, since
+superseded and deleted) had a fairness bug: the four constraints' and
+`hotspot_constraint`'s hand-derived functions bake the density-filter/Heaviside chain
+rule (`H`/`Hs`/`dx`) into their returned sensitivity, while their `*_value` autograd
+counterparts deliberately stop at `d(.)/d(xPhys)` (Decision 4 makes the filter an
+ordinary forward op for the *caller*, i.e. `optimize.step`, to differentiate through).
+Timing the hand side's finished row against the autograd side's unfinished one made
+autograd look better than it is. Fixed in `benchmarks/bench_sensitivities.py` by
+finishing the same chain (`H @ (... * dx / Hs)` for density, `H @ (.../Hs)` for time)
+after every autograd backward, timed in the same region -- matching what
+`optimize.step`'s `_grad_row`/`_grad_rows_batched` actually compute for these rows.
+`whole_compliance`/`gravity_compliance` needed no fix: `compliance.py`'s hand-derived
+`dcx`/`dct` were never finished rows either, so both sides already stopped at the same
+place. See the benchmark script's own docstring for the full reasoning.
+
+While re-running, `hotspot_constraint`'s hand-derived *and* naive-autograd forward both
+turned out to **OOM at 360x120 on this 8 GB card**, independent of hand vs. autograd:
+`conductivity.neighbor_weights`'s `npairs` scales ~16.35x from 180x60 to 360x120
+(`4204240` -> `68744592`), not the Risks section's assumed 4x, because both element
+count and the conductivity filter radius double between those meshes. Each
+`npairs`-sized float64 intermediate is therefore ~550 MB, and several are live at once
+in the pairwise-sigmoid algebra regardless of which implementation is used -- not a
+benchmark-script memory leak (a `_cleanup` between cells, with `gc.collect()` +
+`torch.cuda.empty_cache()`, was added and ruled this out; memory is fully released
+between meshes) and not fixed by `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
+(tried, made no difference -- the failure is a genuine peak-memory shortfall, not
+fragmentation). Escape hatch 1 (`torch.compile` on `hotspot_value`'s forward) resolves
+it completely -- inductor's fusion means the elementwise pair algebra never
+materializes most of those intermediates -- so `bench_sensitivities.py` gained a third
+`"compiled"` mode for the hotspot cell, and any cell that still OOMs prints `OOM`
+instead of aborting the run.
+
+```
+=== 90x30 ===
+site                  mode           fwd(ms) fwd+bwd(ms)  peak(MB)
+------------------------------------------------------------------
+whole_compliance      hand             47.43       47.47      91.8
+whole_compliance      autograd         47.05       48.16     123.8
+gravity_compliance    hand             27.50       27.98     123.9
+gravity_compliance    autograd         27.04       28.93     123.9
+global_volume_fraction hand             0.07        0.06      71.4
+global_volume_fraction autograd         0.02        0.45      71.4
+time_field_continuity hand              0.26        0.25      72.9
+time_field_continuity autograd          0.05        0.79      72.9
+start_point           hand              0.14        0.13      73.8
+start_point           autograd          0.02        0.47      71.4
+stage_volume_bounds   hand              0.17        0.16      71.5
+stage_volume_bounds   autograd          0.06        0.59      71.4
+hotspot_constraint    hand              2.34        2.33     101.7
+hotspot_constraint    autograd          0.34        1.68     100.0
+hotspot_constraint    compiled          0.26        0.84      71.8
+
+=== 180x60 (production mesh) ===
+site                  mode           fwd(ms) fwd+bwd(ms)  peak(MB)
+------------------------------------------------------------------
+whole_compliance      hand             51.78       50.54     225.4
+whole_compliance      autograd         50.38       51.28     225.4
+gravity_compliance    hand             46.66       45.82     225.8
+gravity_compliance    autograd         45.71       46.70     225.9
+global_volume_fraction hand             0.09        0.09     171.6
+global_volume_fraction autograd         0.02        0.29     171.6
+time_field_continuity hand              0.30        0.30     177.5
+time_field_continuity autograd          0.05        0.79     177.5
+start_point           hand              1.76        1.75     191.3
+start_point           autograd          0.02        0.52     171.6
+stage_volume_bounds   hand              0.21        0.21     171.9
+stage_volume_bounds   autograd          0.06        0.66     171.7
+hotspot_constraint    hand             44.24       44.18     657.0
+hotspot_constraint    autograd          7.39       32.90     629.1
+hotspot_constraint    compiled          2.26        7.00     176.1
+
+=== 360x120 ===
+site                  mode           fwd(ms) fwd+bwd(ms)  peak(MB)
+------------------------------------------------------------------
+whole_compliance      hand             96.28       96.34    1836.7
+whole_compliance      autograd         96.28       97.83    1836.7
+gravity_compliance    hand             87.12       87.43    1838.0
+gravity_compliance    autograd         87.03       89.08    1838.6
+global_volume_fraction hand             0.61        0.61    1777.1
+global_volume_fraction autograd         0.03        1.04    1776.8
+time_field_continuity hand              1.12        1.12    1800.7
+time_field_continuity autograd          0.07        1.39    1800.7
+start_point           hand             31.72       31.74    1936.8
+start_point           autograd          0.02        1.04    1777.1
+stage_volume_bounds   hand              1.25        1.35    1778.1
+stage_volume_bounds   autograd          0.06        1.66    1777.4
+hotspot_constraint    hand               OOM
+hotspot_constraint    autograd           OOM
+hotspot_constraint    compiled          29.41      106.62    1844.3
+```
+
+**Decision (2026-08-28): `optimize.step` keeps its plain `hotspot_value` autograd
+call, no code change.** At the production mesh, 180x60, plain autograd already beats
+the hand-derived function on every column that matters: forward 7.39 ms vs. 44.24 ms,
+forward+backward 32.90 ms vs. 44.18 ms (~1.34x faster, reversing the Risks section's
+"assume autograd is ~400x worse" prediction -- apparently the lost diagonal-term
+cancellation is swamped by reverse-mode's automatic reuse and by the hand-derived path
+materializing several pair-sized arrays autograd's graph does not), and peak memory is
+comparable (629 MB vs. 657 MB). This is "good enough" per the standing instruction, so
+no escape hatch is needed for the mesh the plan's Done criteria actually target, and
+`sttopt/optimize.py::step` is left as-is (it already calls `hotspot_value`, wired in
+commit `2b0a318`).
+
+360x120 is a different story: neither hand-derived nor plain autograd runs there at
+all on this 8 GB card (both OOM, as above), and `torch.compile` (escape hatch 1) is
+what fixes it -- 29.41 ms / 106.62 ms fwd/fwdbwd at 1844 MB peak, no NaN. 360x120 is
+not one of this plan's stated production settings (Phase 3.7's target is 180x60), so
+this phase does not wire `torch.compile` into `optimize.step` -- doing so is a
+one-line change (`torch.compile(conductivity.hotspot_value)`) with no downside
+observed at 180x60 either (2.26 ms / 7.00 ms fwd/fwdbwd there, faster and lower-memory
+than plain autograd), but it needs its own test pass (compiled numerics are not
+guaranteed bit-identical, so the existing exact/near-exact comparisons against the
+hand-derived predecessor and the FD checks would need re-running against the compiled
+path) which is out of this phase's scope. Recorded here as a ready-made option for
+whoever next needs 360x120 to run, or for Phase 3.6's performance pass, which already
+lists `torch.compile`/fusing hotspot's pairwise algebra as an action item.
+
+This did **not** trigger the "stop and report" condition: plain autograd is good
+enough at the production mesh without any escape hatch, and 360x120's fix (`torch.compile`)
+is escape hatch 1, which the standing instruction pre-approves.
+
 ## Phase 3.5: MMA to torch
 
 `mma.py` is a verbatim port of Svanberg's code and stays verbatim -- translate array
