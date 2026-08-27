@@ -1,0 +1,482 @@
+# Plan: PyTorch port, part 2 -- porting the optimization loop
+
+> **Status (2026-08-27): not started.** This plan replaces Phase 3 of
+> `plans/archive/torch_port.md`, whose Phases 0a/0/1/2 are complete and whose GPU gate
+> passed at 4.36x. Read that plan's *Results* sections for the measurements this one
+> builds on; do not re-derive them.
+
+## What part 1 established
+
+- **The GPU solve wins.** `sttopt/torch_mg.py`'s MGCG beats `scipy.spsolve` by **4.36x**
+  at 180x60 on a late near-binary design, warm-started, at matched accuracy (max
+  element-wise `ce` error 1.1e-8 against `spsolve`). 12.85x at 360x120; a 0.72x *loss* at
+  90x30.
+- **Where the time goes**, per `optimize.step` at 180x60 / `nStage=8` on the `it0800`
+  snapshot (3060 ms/step total): `spsolve` 41.1%, `mma.mmasub` 36.3%,
+  `conductivity.hotspot_constraint` 17.6%, `fem.assemble_stiffness` 3.3%, everything else
+  ~1.7%. So **MMA is nearly as expensive as the FEM solve** and hotspot is a real third.
+- **Warm starting is worth ~25% of CG iterations**; batching the stage solves is worth
+  1.3-1.4x at 90x30 and 180x60 and a small loss at 360x120.
+- **Determinism was decided**: keep `index_add_`'s nondeterministic atomics (drift 1.4e-12
+  on a full solve, far under the `solved` tier's 1e-6) and treat
+  `torch.use_deterministic_algorithms(True)` as an opt-in debugging switch.
+
+Existing torch code: `sttopt/torch_fem.py` (matrix-free operator, Jacobi-PCG, `pcg`),
+`sttopt/torch_mg.py` (multigrid hierarchy, `VCycle`, `solve`), `tests/test_torch_fem.py`,
+`benchmarks/{profile_step,bench_fem_solve,calibrate_cg_rtol}.py`. None of it is wired
+into a production call site.
+
+## Goal
+
+Make `optimize.step` run end to end on the GPU in float64, with sensitivities from
+autograd rather than hand-derived algebra, and with no NumPy round trip inside the loop.
+
+**Done means:** `sttopt.cli` runs the production configuration (180x60, `nStage=8`,
+`nloop=800`) entirely on the GPU; every existing test still passes (with the tolerance
+changes this plan justifies below); the hand-derived sensitivity code is gone from
+`sttopt/` and the independent oracles in `tests/` are what pin correctness.
+
+### Non-goals
+
+- **Any change to the physics or the algorithm.** This is a port. If the port surfaces a
+  correctness question, log it in `plans/code_quality_review.md` and keep going -- do not
+  fix it in a port commit (Phase 0a's NaN bug is the precedent: found here, fixed
+  separately, documented separately).
+- **A NumPy/torch dual backend in production.** See "Decisions taken up front".
+- **Multi-GPU, float32, or mixed precision.** float64 throughout; the conditioning
+  argument in part 1 has not changed.
+- **Making 90x30 fast.** GPU MGCG loses there and that is accepted. The production mesh is
+  180x60.
+
+---
+
+## Decisions taken up front
+
+These are the choices that shape every commit below. Each is reversible, but flip-flopping
+mid-port is not; settle them by reading the rationale rather than by re-litigating.
+
+**1. Explicit `device`/`dtype` on `Problem`, not `torch.set_default_dtype`.**
+Part 1's sketch proposed the global default. Reject it: a global dtype switch is a
+side effect on the whole process, it fights this repo's CLI convention of deferring heavy
+imports, and it makes a test that wants float32 or CPU impossible to write locally.
+Instead `Problem` gains `device: torch.device` and `dtype: torch.dtype` fields, and every
+tensor it holds is already on that device in that dtype. Nothing inside `step` should ever
+call `.to(...)` -- if it needs to, a tensor was built in the wrong place.
+
+**2. The NumPy production path is retired at the end, not kept as a backend.**
+Keeping two full implementations doubles the maintenance surface and, worse, invites the
+two to drift while both look tested. The correctness argument for deleting is that the
+*oracle does not live in `sttopt/`*: `tests/matlab_reference.py` and
+`tests/matlab_reference_loop.py` are an independent from-scratch transliteration of the
+MATLAB source in its native 1-indexed F-order convention, and `tests/fixtures/*.npz` are
+golden snapshots. Both survive the deletion untouched. So the sequence is: port, validate
+against the oracle, then delete the hand-derived sensitivities in a *separate, later*
+commit.
+
+Two NumPy things stay on purpose:
+- `sttopt/fem.py`'s `assemble_stiffness` / `solve_fe`. Small, and it is the solver oracle
+  `tests/test_torch_fem.py` compares MGCG against. Deleting it would remove the only check
+  that the matrix-free operator is the same operator.
+- `sttopt/viz.py` and the fixture I/O. These are boundary code; they take arrays and should
+  keep taking arrays.
+
+**3. The FEM solve is a `torch.autograd.Function` with a hand-written adjoint, not
+autograd through CG.** Differentiating through the CG iteration would be both wrong in
+spirit (the iteration count is data-dependent) and ruinous in memory. The adjoint is
+standard and is derived in Phase 3.3.
+
+**4. `x` and `t` -- the raw MMA variables -- are the autograd leaves.** Today every
+constraint function bakes the density-filter and Heaviside chain rules into its own
+returned sensitivity (`H @ (... * dx / Hs)`, repeated in six places). Making the raw
+variables the leaves deletes all six copies: the filter and the projection become ordinary
+forward operations and autograd threads the chain rule. This is the single largest
+simplification the port buys, and it is why `dx =
+filters.heaviside_projection_derivative(...)` disappears entirely.
+
+**5. Torch becomes a required dependency.** Move `torch` from
+`[project.optional-dependencies]` to `dependencies` in `pyproject.toml` when Phase 3.2
+lands, and delete the comment there explaining why it was optional.
+
+---
+
+## Risks
+
+**Autograd reintroduces the Phase 0a NaN (high, and confirmed).** `hotspot_constraint`'s
+forward computes `cond_p = (T_val * x**r) ** p` with `r = 0.05`. `d(x**r)/dx` is `inf` at
+`x == 0`, and densities do reach exactly zero once `beta_d` saturates. The hand-derived
+code sidesteps this by using the analytically cancelled diagonal form; **autograd will
+not, and silently produces `nan` gradients on exactly the designs the optimizer spends its
+late iterations on.** Measured on the naive transcription:
+
+```
+grad naive : [nan, 1.0415739507921168e-10, 1.4073748835532822e-10]
+grad reform: [0.0, 1.0415739507921164e-10, 1.407374883553282e-10]
+analytic   : [0.0, 1.0415739507921162e-10, 1.407374883553282e-10]
+```
+
+The fix is to write the forward in the already-cancelled form `T_val**p * x**(r*p)`, which
+is identical in value (`1.3758776550327337e-10` vs `...34e-10`) and whose gradient is
+finite because `r*p = 1.25 > 1`. `T_val = 1 - K_est` is in `[0, 1]` (`K_est` is a weighted
+average of `x**q`), so the negative-base concern does not arise. The same rewrite applies
+to `Tsub_pow`'s `(T_val[e2] * xb**r) ** (p - 1)`.
+
+Generalize the lesson: **every `x**k` with `k < 1` in a forward pass is a NaN gradient
+waiting for an exact zero.** Phase 3.4 must grep for them before trusting any autograd
+output, and the guard already in `conductivity.py` (`if r * p < 1 and np.any(x == 0)`)
+must survive the port, keyed to the quantity that is actually inconsistent.
+
+**Full-Jacobian extraction (high).** MMA needs a dense `dfdx` of shape `(m, n)` = `(79,
+21600)` at production settings -- 79 rows of reverse-mode. The saving grace is that the
+expensive graph nodes appear in exactly one row each (the FEM solves only in `f0val`, the
+4.2M-pair hotspot algebra only in the hotspot row), and reverse mode only traverses the
+subgraph reachable from the output being differentiated. So the *structure* is fine; the
+question is constant factors. Plan for `torch.autograd.grad(..., is_grads_batched=True)`
+per constraint group (one call covering the 60 start-point rows, one covering the 8
+distinct stage-bound rows) rather than 79 separate calls, and **measure before
+committing**: if autograd's hotspot backward costs more than the 539 ms the hand-derived
+version costs today, that row keeps its hand-derived gradient and the plan says so out
+loud rather than pretending.
+
+**MMA's scalar control flow synchronizes the GPU (medium).** `subsolv` has a `while epsi >
+epsimin` outer loop, a `while residumax > 0.9*epsi and ittt < 200` Newton loop, and an
+inner backtracking line search whose condition is `resinew > residunorm` -- all reading
+scalars that will live on the device. Each read is a sync. Expect on the order of a few
+hundred syncs per `mmasub` call. At the ~20 us per sync these problem sizes suggest, that
+is single-digit milliseconds and acceptable, but it is a floor that no amount of kernel
+optimization removes. Do not try to make the loop conditions device-resident; the
+resulting code would be unreadable for a few ms.
+
+**Memory in the hotspot backward (medium).** `npairs = 4204240` at 180x60, so each saved
+float64 pair-sized intermediate is 34 MB. The forward has roughly ten of them. ~340 MB of
+saved activations against an 8 GB card is fine at 180x60, but 360x120 has 4x the pairs
+(~1.4 GB) and is worth checking rather than assuming. `torch.utils.checkpoint` on the pair
+block is the escape hatch if it bites.
+
+**E2E trajectories will not reproduce bitwise (accepted, but must be handled
+deliberately).** CG at `rtol = 1e-8` is not `spsolve`, atomics are nondeterministic at
+1e-12, and autograd's summation orders differ from the hand-derived expressions'. The
+existing `conftest.e2e_rtol` (one decade looser per iteration, capped at 1e-2) was written
+for exactly this amplification and should absorb a 3-iteration E2E comparison. An 800-loop
+comparison is a different question and is answered in Phase 3.7 by comparing *aggregate
+behaviour*, not trajectories.
+
+**The `[project.scripts]` entry point is already broken** (`sttopt = "sttopt.cli:main"`,
+but `main` requires an `args` argument). Not caused by this port and not this port's
+job -- log it in `plans/code_quality_review.md`.
+
+---
+
+## Execution notes
+
+- **The GPU is not reachable from the normal sandbox.** Run anything CUDA through the
+  `gpu-exec` MCP server, which executes as the `claude` user. Confirmed working from a
+  worktree: `torch 2.12.1+cu132`, `NVIDIA RTX PRO 1000 Blackwell Generation Laptop GPU`.
+- **One compute-heavy job at a time** (repo rule), and part 1 learned the hard way that a
+  contended machine inflates a baseline. Any timing number in this plan's results sections
+  must come from an otherwise idle box, and say so.
+- **Small, self-contained commits.** Each numbered phase below is one or a few commits, not
+  one "port" commit. Undrafted PRs.
+
+---
+
+## Phase 3.1: Device/dtype plumbing and the tensor boundary
+
+The scaffolding every later phase needs, with no behaviour change to the optimizer.
+
+- Add `device` and `dtype` to `Problem`. `build_problem` gains keyword-only `device="cpu"`,
+  `dtype=torch.float64` so the default is CPU-and-float64 and every existing caller keeps
+  working.
+- Convert `Problem`'s array fields to tensors on that device: `KE`, `edofMat`, `freedofs`,
+  `F`, `Hs`, `e1`, `e2`, `w`, `Nei`. `H`, `L`, `C` become sparse CSR tensors
+  (`torch.sparse_csr_tensor`); note that torch's sparse CSR matmul supports the
+  `sparse @ dense` and `sparse.T @ dense` forms this code uses, but check `H @ (nel, k)`
+  for the start-point constraint specifically rather than assuming.
+- Add `free_mask` (from `torch_fem.free_mask`) to `Problem` alongside `freedofs` -- the
+  matrix-free path wants the mask, `fem.solve_fe` wants the index array, and both exist
+  during the transition.
+- `State`'s fields become tensors.
+- Small conversion helpers for the boundary: fixtures load as arrays, `viz` and the CLI's
+  printing take arrays. Put them somewhere obvious (`sttopt/torch_util.py`), not scattered.
+
+**Tests.** No new physics tests. Assert that `build_problem` puts everything on the
+requested device with the requested dtype, and that a `Problem` built on CUDA has no
+lingering CPU tensor (walk the dataclass fields).
+
+## Phase 3.2: Port the leaf math to torch, keeping the hand-derived sensitivities
+
+This is the bulk of the mechanical work and the safest part of the port, because the
+existing fixtures are an exact oracle: every function here is the same formula in a
+different array library, so **`algebraic`-tier agreement (rtol 1e-10) is the bar**, not
+`solved`.
+
+Port, in roughly this order (each its own commit):
+
+1. `filters.py` -- `heaviside_projection`, `heaviside_projection_derivative`. The filter
+   *builders* (`density_filter`, `continuity_filter`) stay NumPy/SciPy and gain a
+   conversion at the end; they run once, in `build_problem`, and SciPy's COO assembly is
+   clearer than torch's.
+2. `timefield.py`, `gravity.py` -- same treatment: builders stay NumPy, outputs convert.
+3. `compliance.py`'s `time_mask` / `time_mask_derivative` / `_element_strain_energy`.
+4. `constraints.py` -- all four constraints, sensitivities still hand-derived.
+5. `conductivity.py` -- `_pairwise_sigmoid_terms`, `_conductivity_core`,
+   `_conductivity_terms`, `estimated_conductivity`, `hotspot_constraint`. `np.add.at`
+   becomes `Tensor.index_add_`. Keep the overflow-safe `exp(-|z|)` forms; keep the
+   cancelled diagonal term.
+6. `optimize.step`'s wiring.
+
+`mma.py` and the FEM solve are deliberately *not* in this list -- they are Phases 3.5 and
+3.3.
+
+**A note on `np.add.at` -> `index_add_`.** Part 1 measured `np.add.at` at under 1% of step
+time, so this is not a performance change; it is a portability one. But `index_add_`'s
+atomics are the nondeterminism source part 1 characterized, so this is the commit that
+introduces run-to-run drift into the constraint sensitivities. Expect it, and check the
+drift is at the 1e-12 level rather than something larger.
+
+**Tests.** Every existing test in `test_filters.py`, `test_compliance.py`,
+`test_constraints.py`, `test_conductivity.py`, `test_gravity.py`, `test_timefield.py`
+must pass with tensors flowing through, at their current tiers. The cheapest way to get
+there is to make `conftest.assert_close` accept tensors (`np.asarray` already almost does;
+a `.detach().cpu().numpy()` for tensor inputs finishes it) rather than converting at every
+call site. `test_reference_sweep.py` -- the independent MATLAB oracle -- is the one that
+matters most here; it must pass unchanged.
+
+**Deliverable.** The loop runs on the GPU except for the FEM solve and MMA. Do not
+benchmark this intermediate state and do not report a number from it: part 1's
+round-trip argument says a hybrid loop is the worst of both worlds, and a timing from here
+would be misleading.
+
+## Phase 3.3: The FEM solve as an autograd Function
+
+**The adjoint.** For `K U = F` with `K = sum_e d_e KE` symmetric positive definite on the
+free dofs, and a downstream scalar `L(U)` with `g = dL/dU`:
+
+```
+lambda = K^-1 g                        (same operator, so the same MGCG hierarchy)
+dL/dF   = lambda
+dL/dd_e = -(lambda_e @ KE) . U_e       (elementwise contraction over the 8 element dofs)
+```
+
+Two consequences worth stating because they are free tests:
+
+- For the whole-compliance case `L = F . U` with `F` fixed, `g = F`, so `lambda == U`
+  exactly and `dL/dd_e == -ce`. **Assert this**: it checks the adjoint machinery against a
+  quantity the existing fixtures already pin.
+- `gravity_compliance`'s "extra adjoint term" and its factor of 2 -- currently hand-derived
+  as `dcx2`/`dct2` and explained in a paragraph of docstring -- fall out of `dL/dF` with no
+  special-casing, because the gravity load is just another differentiable function of the
+  density. That paragraph gets deleted, not ported.
+
+**Implementation.**
+
+- `class FemSolve(torch.autograd.Function)` in a new `sttopt/torch_solve.py` (not in
+  `torch_fem.py`, which is the operator layer and should stay free of autograd).
+  `forward(density, F, ...)` -> `U`; `backward` runs one MGCG solve against the same
+  operator, warm-started from the saved `U`. Save `U` and `density` for backward; rebuild
+  or cache the hierarchy (see below).
+- **Batch all nine solves in one call** at 180x60: `F` of shape `(9, ndof)` and `density`
+  of shape `(9, nel)` -- `whole_compliance`'s row plus `nStage` gravity rows. `torch_fem`'s
+  broadcasting contract already supports this. Part 1 measured batching as a 1.3-1.4x win
+  at 180x60 and a small loss at 360x120, so make it a `Problem` field
+  (`batch_fem_solves: bool`) defaulting to on at or below 180x60, rather than
+  unconditional.
+- **Warm start** from the previous iteration's `U`, carried on `State`. Part 1 measured
+  ~25% of the iterations. The adjoint solve warm-starts from the forward `U`.
+- **Hierarchy reuse.** The hierarchy build is 7.2 ms of a 30.4 ms solve (~24%). The forward
+  and backward of one solve share the same `K`, so the backward must reuse the forward's
+  hierarchy rather than rebuilding it -- that alone recovers ~24% of the adjoint cost.
+  Across solves it cannot be reused (nine different densities), as part 1 established.
+- **`CGConvergenceError` must propagate.** No silent fallback to `spsolve`, no returning an
+  unconverged `U`. If the backward solve fails, that is a real signal.
+
+**Tests.**
+
+1. `torch.autograd.gradcheck` on `FemSolve` at a small mesh in float64 -- the direct check
+   that the adjoint is right.
+2. Gradients from `FemSolve` against the hand-derived `dcx` from the *current*
+   `compliance.whole_compliance` and `gravity_compliance`, element-wise on max relative
+   error (not a norm -- part 1's Phase 1 made this point and it still holds; MMA reads
+   every element). `solved` tier.
+3. `lambda == U` for the whole-compliance case, to `algebraic` tier.
+4. The batched `(9, ndof)` path against nine sequential single solves.
+5. Warm-started vs cold-started results agree to `solved` tier, and the warm one uses
+   fewer iterations on a real consecutive snapshot pair (the fixture stores loop 799 next
+   to loop 800 for exactly this).
+6. A non-convergent case still raises through the autograd boundary.
+
+## Phase 3.4: Autograd replaces the hand-derived sensitivities
+
+Now that the leaves are `x`/`t` and the solve is differentiable, delete derivative code.
+One commit per module, each keeping the hand-derived version alive until the following
+commit removes it.
+
+**Before writing anything: apply the NaN-safe rewrite from the Risks section.** Grep the
+forward passes for fractional powers. Known instances: `x**r` and `(T*x**r)**p` and
+`(T[e2]*xb**r)**(p-1)` in `conductivity.py`. `simp_density`'s `x**penal` (penal 3) and
+`xtJoint**(penal-1)` (power 2) are safe. Check `heaviside_projection` and the sigmoids for
+saturation-induced zero gradients while you are there -- those are not NaN, but a silently
+zero gradient at `beta_d = 128` is its own failure mode and is worth a test.
+
+Order:
+
+1. **Compliance** (`whole_compliance`, `gravity_compliance`). Smallest, and Phase 3.3 has
+   already validated the hard part.
+2. **The four constraints.** All four lose their `dx`/`H`/`Hs` arguments; `global_volume_fraction`
+   and `stage_volume_bounds` lose their `dx` chain rule; `start_point` loses its one-hot
+   `ss` matrix construction entirely (it becomes `tPhys[Nei]`). Note that
+   `stage_volume_bounds`' lower row is exactly the negation of the upper -- keep that as an
+   explicit negation rather than differentiating it twice.
+3. **The hotspot constraint.** The big one, and the one with the measured go/no-go: if its
+   autograd backward costs more than today's 539 ms hand-derived version, keep the
+   hand-derived gradient for this row and record the measurement here. Do not port it on
+   principle.
+
+**Jacobian assembly.** `optimize.step` needs `dfdx` as a dense `(m, n)`. Write one helper
+that takes a group of constraint outputs and the `(x, t)` leaves and returns the
+corresponding rows, using `torch.autograd.grad(..., is_grads_batched=True)` with a batch of
+one-hot seeds so the 60 start-point rows and the 8 stage rows are one call each rather than
+68. `f0val` and the hotspot row are single `grad` calls. Assemble in the reference loop's
+exact row order, which `optimize.step` already documents and `test_optimize.py` already
+pins.
+
+**Tests.**
+
+- Every autograd sensitivity against its hand-derived predecessor, element-wise max
+  relative error, `solved` tier for anything downstream of the solve and `algebraic` for
+  anything not. This is the whole point of not deleting them in the same commit.
+- Finite-difference checks at a small mesh for the hotspot row specifically, since its
+  algebra is the least trivial and the FD check is independent of both implementations.
+- **A near-binary regression test with exact zeros in `xPhys`**, asserting no `nan` in any
+  returned gradient. This is the test that would have caught Phase 0a's bug, and it is the
+  test that catches its autograd resurrection. Take the field from
+  `tests/fixtures/torch_port_designs.npz`'s late snapshots.
+- `test_reference_sweep.py` still passes.
+
+## Phase 3.5: MMA to torch
+
+`mma.py` is a verbatim port of Svanberg's code and stays verbatim -- translate array
+library, change nothing else. It is 36.3% of step time and pure dense algebra, so this is
+the second-largest win available.
+
+- `np.linalg.solve` -> `torch.linalg.solve` on the `(m+1, m+1)` bordered system (80x80 at
+  production -- small enough that it may be *faster* on the CPU; measure, and if so, that
+  one solve is a defensible exception to the no-round-trips rule since it moves 51 KB).
+- `np.diag(diaglamyi) + (GG * (1/diagx)) @ GG.T` is the dominant flop: `(79, 21600) @
+  (21600, 79)`. Trivially GPU-friendly.
+- Keep both the `m < n` and `m >= n` elimination branches. The `m >= n` branch is
+  documented as smoke-tested only; do not "clean it up" while porting it.
+- The `warnings.warn` on hitting the Newton cap stays.
+
+**Scalar reads.** `residumax`, `residunorm`, `resinew`, `steg` and the `.max()` calls in
+the fraction-to-the-boundary step all become device scalars read by Python control flow.
+Let them sync; see the Risks section.
+
+**Tests.** `test_mma.py` (MATLAB fixture) and `test_mma_toy_problems.py` unchanged, at
+their current tiers. `subsolv` is an interior-point method with a line search, so if a
+tolerance needs loosening, loosen it with a measurement and a sentence saying why -- an
+unexplained tolerance bump here would hide a real translation error.
+
+## Phase 3.6: Performance pass
+
+Only after the loop is correct end to end. Part 1 left a ranked list of solver
+optimizations; re-rank it against a fresh profile of the *torch* `step`, because the
+proportions will have moved. Carried forward, in part 1's order of expected return:
+
+1. **CUDA graphs / `torch.compile(mode="reduce-overhead")` on the CG iteration body.** At
+   180x60 a V-cycle over 3 levels launches ~40-60 kernels per iteration on a problem whose
+   arithmetic is microseconds, so launch overhead plausibly still sets the time. `pcg`'s
+   in-place updates are already a precondition for capture. The data-dependent iteration
+   count means capturing one iteration and replaying it, not the whole solve.
+2. **Let converged batch members drop out.** `pcg` runs every member to the slowest
+   member's count -- 22 iterations for stages that individually need 13 at 180x60, and 11
+   to 35 at 90x30. This also fixes the "batching is a loss at 360x120" result properly,
+   rather than by the per-mesh switch Phase 3.3 puts in.
+3. **Re-tune multigrid against real designs.** `MAX_COARSE_ELEMENTS = 700`, `omega = 0.6`,
+   `n_smooth = 2` were chosen against a *synthetic* hard 0/1 field at 90x30, and the real
+   near-binary designs behave differently (90x30 is harder than 180x60, which the synthetic
+   proxy did not predict). Sweep `(max_coarse_elements, n_smooth, omega, gamma)` against
+   the `it0800` snapshots, timing as well as counting iterations -- the two disagree:
+   `max_coarse_elements = 700` bottoms out at 45x15 and costs 6.9 ms/solve of hierarchy
+   build against 0.4 ms at 200, but a coarser bottom cost 119 iterations against 31 in part
+   1's measurement.
+4. **A cheaper coarse solve.** The coarsest level is a dense Cholesky on a 1472-dof
+   operator, per solve, per batch member. If the sweep wants to keep a large coarse grid,
+   replacing it with a few CG iterations or a sparse factorization cuts most of the
+   hierarchy build's 24% share.
+5. **Fuse the pair-sized elementwise algebra in `hotspot_constraint`.** Part 1 found the
+   cost is `_pairwise_sigmoid_terms` plus the surrounding `npairs`-sized elementwise work
+   -- not the `np.add.at` reductions, contrary to the prior. That is exactly the shape
+   `torch.compile` fuses well.
+
+Also re-open the **CG tolerance** here. `rtol = 1e-8` was calibrated in part 1 against
+sensitivity accuracy with the hand-derived formulas. The adjoint solve is a second solve
+whose error compounds with the forward's, so re-run `benchmarks/calibrate_cg_rtol.py`'s
+method against the autograd gradients before assuming 1e-8 still holds. It may need to be
+tighter; it may (less likely) be loosenable, which would be a straight speed win.
+
+## Phase 3.7: Validation, the end-to-end number, and the deletion
+
+**Profile again.** Re-run `benchmarks/profile_step.py` against the torch `step` at 180x60 /
+`nStage=8` on the `it0800` snapshot, machine idle. Report the same table as part 1's Phase
+0 so the two are directly comparable.
+
+**Target.** The NumPy baseline is **3060 ms/step**. Part 2's arithmetic, using part 1's
+measured 4.36x on FEM and assuming a conservative 5x on MMA and hotspot:
+
+| item | NumPy (ms) | projected (ms) |
+|---|---|---|
+| FEM solves | 1257 | ~30 |
+| `mma.mmasub` | 1109 | ~220 |
+| `hotspot_constraint` | 539 | ~110 |
+| assembly | 102 | 0 (matrix-free) |
+| everything else | ~53 | ~50 |
+| **total** | **3060** | **~410** |
+
+So **>=5x end to end (<= 610 ms/step) is the bar**, with ~7x the honest expectation. A
+result below 5x is not a failure to report quietly -- it means one of the three big items
+did not port as well as projected, and the profile will say which. Record it here either
+way.
+
+**Correctness, at three scales:**
+
+1. **Unit and fixture suites.** Everything under `tests/` except the slow marker, passing.
+2. **Short E2E.** `test_e2e.py`'s `nloop=3` trajectory against the existing fixture, at
+   `e2e` tier. This should just work; `e2e_rtol` was built for this.
+3. **Long E2E, by aggregate rather than by trajectory.** Re-run the 90x30 / `nloop=800`
+   configuration that `tests/fixtures/generate_torch_port_designs.py` already knows how to
+   run, and compare against the NumPy run's recorded history on quantities that are
+   *stable* rather than pointwise: final volume fraction, the compliance history's shape,
+   final `tru_max`, the fraction of elements that are within 1e-3 of 0 or 1, and a
+   structural-similarity-style comparison of the final density field. Bitwise agreement is
+   not expected and is not the test; a design that converges somewhere qualitatively
+   different is a real failure. **State the accepted divergence explicitly in the results
+   section** so a future reader does not over-read the agreement.
+   This run is also the natural end-to-end timing datapoint: part 1 recorded 35 minutes for
+   a native 180x60 run of the same shape.
+
+**Then delete.** In a final, separate commit: remove the hand-derived sensitivity code from
+`sttopt/compliance.py`, `sttopt/constraints.py`, `sttopt/conductivity.py`, and the
+now-unused `filters.heaviside_projection_derivative`. Keep `sttopt/fem.py` and the
+`tests/matlab_reference*.py` oracles. Any test that existed only to compare autograd
+against the hand-derived version goes with it -- the oracle tests are what remain.
+
+Sanity check on the diff: this port should make `sttopt/` *shorter*. If it has grown,
+something has gone wrong (repo rule), most likely a compatibility shim that should have
+been a deletion.
+
+**Finally:** update `plans/CLAUDE.md`, move this plan to `plans/archive/`, and open the
+follow-up items (`plans/code_quality_review.md`) rather than absorbing them.
+
+---
+
+## Open questions for the user
+
+None blocking -- the decisions above are all defensible defaults and are recorded so they
+can be overridden cheaply. The two most likely to be worth overriding:
+
+- **Retiring the NumPy path** (Decision 2). If you want a CPU-only path to survive for
+  machines without a GPU, say so before Phase 3.4, because the answer changes what gets
+  written, not just what gets deleted.
+- **The >=5x end-to-end bar** (Phase 3.7). It is a target, not a gate -- unlike part 1's
+  4.36x, nothing here is conditional on hitting it, since the autodiff motivation stands
+  on its own. Say so if you want it treated as a gate instead.

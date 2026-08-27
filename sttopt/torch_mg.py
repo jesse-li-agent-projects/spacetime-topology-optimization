@@ -3,7 +3,7 @@
 Jacobi-preconditioned CG on this problem costs O(sqrt(cond)) iterations, and `cond`
 carries both the O(h^-2) mesh factor and the SIMP stiffness contrast (`Emax/Emin`,
 ~1e9 at a near-binary design). Multigrid removes the mesh factor and -- with a Galerkin
-coarse operator -- most of the contrast factor too. See `plans/torch_port.md` Phase 1.
+coarse operator -- most of the contrast factor too. See `plans/archive/torch_port.md` Phase 1.
 
 Three choices make this work and are worth stating up front:
 

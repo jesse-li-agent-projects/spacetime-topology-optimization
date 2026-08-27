@@ -17,7 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest"]
 # The PyTorch FEM solver (sttopt.torch_fem, sttopt.torch_mg) is an in-progress
-# investigation gated on plans/torch_port.md's benchmark, not yet on any production
+# investigation gated on plans/archive/torch_port.md's benchmark, not yet on any production
 # code path -- so torch stays optional and the core install keeps working without it.
 torch = ["torch"]
 

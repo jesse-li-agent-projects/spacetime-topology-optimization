@@ -9,10 +9,11 @@ This directory contains plans for agents.
 - code_quality_review.md
     - Living list of code-quality/design cleanup items (not correctness bugs) surfaced
       during manual correctness review of the ported Python code.
-- torch_port.md
-    - Phased plan to port sttopt to PyTorch (float64) for autodiff sensitivities and GPU.
-      Gated: profile the current loop, then build and benchmark a GPU CG solver against
-      scipy.spsolve, and only port the rest if the GPU solve actually wins.
+- torch_port_part2.md
+    - Ports the rest of the optimization loop to PyTorch, now that part 1's GPU gate has
+      passed (MGCG beats scipy.spsolve by 4.36x at 180x60). Covers device/dtype plumbing,
+      the FEM solve as an autograd Function with a hand-written adjoint, autograd replacing
+      the hand-derived sensitivities, MMA, and the deletion of the NumPy path.
 
 Completed plans live in `plans/archive/` and are not summarized here to keep this
 index short. Only open one if you specifically need the history behind a past

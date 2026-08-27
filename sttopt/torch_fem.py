@@ -1,7 +1,7 @@
 """Matrix-free element-by-element FEM stiffness operator and Jacobi-PCG solver.
 
 Alongside `sttopt.fem`'s assemble-then-`spsolve` path (unchanged, still the code the
-optimizer runs today -- see `plans/torch_port.md`). Nothing here is wired into any
+optimizer runs today -- see `plans/archive/torch_port.md`). Nothing here is wired into any
 production call site yet; this module is the correctness scaffold Phase 1 of that plan
 asks for. Every element shares the same reference stiffness matrix `KE`
 (`fem.plane_stress_KE`), so the global matvec is done without ever assembling a global
@@ -29,7 +29,7 @@ class CGConvergenceError(RuntimeError):
 
     Carries the achieved relative residual(s) and iteration count so a caller can log
     or debug the failure; there is no "return the unconverged answer" path in this
-    module; see `plans/torch_port.md`'s Phase 1 design.
+    module; see `plans/archive/torch_port.md`'s Phase 1 design.
     """
 
     def __init__(

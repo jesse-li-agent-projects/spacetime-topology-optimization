@@ -1,6 +1,6 @@
 """Tests for sttopt.torch_fem: the matrix-free matvec/diagonal against sttopt.fem's
 assembled-matrix path, and the Jacobi-PCG solver against sttopt.fem.solve_fe. All on
-CPU and in float64 -- see plans/torch_port.md's Phase 1.
+CPU and in float64 -- see plans/archive/torch_port.md's Phase 1.
 """
 
 import numpy as np
