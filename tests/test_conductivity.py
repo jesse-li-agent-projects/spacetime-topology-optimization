@@ -929,3 +929,85 @@ def test_hotspot_constraint_fd_time_at_ties():
         f"max|dt1|={np.abs(dt1).max():.3e} max|dt1-fd|={np.abs(dt1 - fd_t).max():.3e}"
     )
     np.testing.assert_allclose(dt1, fd_t, rtol=1e-4, atol=1e-7 * factor)
+
+
+def test_hotspot_constraint_finite_at_exact_zero_density():
+    """df1/dt1 must stay finite when `xPhys` contains exact zeros, at the production
+    `r=0.05, p=25` where `r*p - 1 = 0.25 > 0`.
+
+    `xPhys` reaches exact 0 in normal operation: the Heaviside projection saturates
+    `tanh` to +-1 in float64 for arguments beyond ~19, so its numerator cancels to
+    exactly 0 for any `xTilde` below the threshold once `beta_d` is large -- not a rare
+    edge case, since `beta_d` grows to a 128 cap over a production run's continuation.
+
+    Before the fix, `cond_arr2`'s diagonal self-heating term multiplied `xa**(r-1)`
+    (== +inf at xa == 0) by `Tsub_pow` (== 0 there), giving `nan` in df1. `dt1` never
+    depended on that term, so it's checked here too only to confirm it stays clean.
+    """
+    nelx, nely = 12, 8
+    RMIN = 2
+    Tcr = 0.8
+    H, Hs, e1, e2, w = _hotspot_setup(nelx, nely, RMIN_COND, RMIN)
+
+    rng = np.random.default_rng(30)
+    xPhys = (rng.uniform(size=(nely, nelx)) > 0.5).astype(float)
+    assert np.any(xPhys == 0.0)  # premise: exact zeros are actually present
+    tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
+    dx = np.ones((nely, nelx))
+
+    res = conductivity.hotspot_constraint(
+        xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF
+    )
+    assert np.all(np.isfinite(res.df1))
+    assert np.all(np.isfinite(res.dt1))
+
+
+def test_hotspot_constraint_fd_density_near_binary():
+    """df1 vs. central-difference at a near-binary-but-strictly-positive density field
+    (0/1 hard field with the 0s replaced by a small epsilon), on a small mesh -- pins
+    the combined `r*p-1` power as the correct derivative in the same near-singular
+    regime as `test_hotspot_constraint_finite_at_exact_zero_density`, rather than merely
+    "some finite number".
+
+    Identity density filter and `dx=1` (as in `test_hotspot_constraint_fd_time_at_ties`
+    for `tPhys`), so `xPhys` is the variable perturbed directly rather than routed
+    through a real filter/Heaviside chain -- the FD step stays symmetric and the epsilon
+    keeps every perturbed value strictly positive, so `x**(r*p-1)` (non-integer
+    exponent) is never evaluated at a negative x.
+    """
+    nelx, nely = 8, 6
+    nel = nelx * nely
+    Tcr = 0.8
+    h = 1e-7
+    eps = 1e-3
+    H, Hs = sp.eye(nel, format="csr"), np.ones(nel)
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+
+    rng = np.random.default_rng(31)
+    xPhys = np.where(rng.uniform(size=(nely, nelx)) > 0.5, 1.0 - eps, eps)
+    tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
+    dx = np.ones((nely, nelx))
+
+    df1 = conductivity.hotspot_constraint(
+        xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF
+    ).df1
+    assert np.all(np.isfinite(df1))
+    assert np.abs(df1).max() > 1e-3  # guard well above the atol below
+
+    def fval_of(xPhys):
+        return conductivity.hotspot_constraint(
+            xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF
+        ).fval
+
+    fd_x = np.zeros(nel)
+    for e in range(nel):
+        j, i = e // nelx, e % nelx
+        xp, xm = xPhys.copy(), xPhys.copy()
+        xp[j, i] += h
+        xm[j, i] -= h
+        fd_x[e] = (fval_of(xp) - fval_of(xm)) / (2 * h)
+
+    print(
+        f"max|df1|={np.abs(df1).max():.3e} max|df1-fd|={np.abs(df1 - fd_x).max():.3e}"
+    )
+    np.testing.assert_allclose(df1, fd_x, rtol=1e-3, atol=1e-4)

@@ -1,8 +1,8 @@
 # Plan: PyTorch port, gated on a GPU CG solver benchmark
 
-> **Status (2026-08-26): open, not started. Do not begin any phase without the
-> repository owner's explicit go-ahead.** Phases 0a-2 are investigation and produce a
-> go/no-go decision. Phase 3 is the actual port and must not begin until Phase 2 says go.
+> **Status (2026-08-27): Phases 0a, 0, 1 and 2 are complete. Phase 2's verdict is GO
+> (4.36x at the gate; see its results section). Phase 3 has not been started** and is to
+> be expanded into its own plan before any of it is written.
 
 ## Goal
 
@@ -154,6 +154,38 @@ trade here. Worth a sentence in the Phase 2 write-up so the numbers are not over
 stored where both the tests and the benchmark can load them, plus the script that
 regenerates them.
 
+### Results (2026-08-27)
+
+`tests/fixtures/generate_torch_port_designs.py` -> `tests/fixtures/torch_port_designs.npz`
+(1.2 MB), loaded via that module's `load_design`. Snapshots at loops 25/100/200/400/600/800.
+
+**Deviation from the plan above, deliberately.** 180x60 is generated **natively** (a 35
+minute run) rather than upscaled from 90x30. The plan accepted an upscaled design as
+"a coarser-featured design at fine resolution", but 180x60 is the mesh the go/no-go
+actually turns on, so it was worth paying for the real thing there. Only 360x120 is
+derived, by a 2x nearest-neighbour block repeat of the native 180x60 (not of 90x30), so
+the accepted limitation now applies to one mesh instead of two -- and to the mesh whose
+result is informational rather than decisive.
+
+`lrmin` does not scale to 90x30: production `lrmin = 2.0` already resolves to the minimum
+3x3 stencil (`filters._neighbor_offsets` uses `ceil(r) - 1`), so halving it to 1.0 leaves
+an empty stencil and raises. 90x30 keeps `lrmin = 2.0`; `rmin` and `rmin_cond` halve as
+planned.
+
+**A correctness bug was found here, outside this plan's scope, and fixed.**
+`conductivity.hotspot_constraint`'s diagonal self-heating term computed
+`(1 - Ka) * r * xa**(r - 1)` and multiplied it by `(T * xb**r)**(p - 1)`. At `r = 0.05`
+and exactly-zero density that is `inf * 0 = nan`. Densities do reach *exactly* zero once
+`beta_d` saturates -- `tanh(128 * (xTilde - 0.5))` returns exactly `-1.0` in float64 for
+`xTilde <~ 0.352`, so the Heaviside numerator cancels to `0.0`. The 90x30 run hit it: 236
+elements went to zero by iteration 400, 94 of 96 elements of `df1` came back NaN on a
+reduced reproduction, MMA stopped moving the design, and iterations 400/600/800 were
+**bitwise identical**. On the diagonal the product is exactly `r * T**p * x**(r*p - 1)`,
+which is one power of `x` rather than a divergence times a zero; that form is now used
+directly, and it also drops a 4.2M-entry pair expansion that existed to use 10800 of its
+entries. 180x60 never reached an exactly-zero density and its snapshots all differ, so it
+was not regenerated.
+
 ---
 
 ## Phase 0: Profile the current code
@@ -194,6 +226,66 @@ today.
 **Note:** if `np.add.at` or the `np.ix_` reindex turn out to be significant, those are
 worth fixing on their own merits, independent of this plan's outcome. Log them in
 `plans/code_quality_review.md` rather than absorbing them here.
+
+### Results (2026-08-27)
+
+Script: `benchmarks/profile_step.py`. Profiled `optimize.step` at 180x60/`nStage=8`
+around the `it0800` snapshot in `tests/fixtures/torch_port_designs.npz`
+(`beta_d=128`, `beta_t=50` -- both continuation schedules saturated by loop 800, per
+`optimize.step`'s own schedule simulated out to loop 800). `State` fields not stored
+by the fixture (`xTilde`, raw `x`/`t`, MMA history) are reconstructed as documented in
+`build_realistic_state`'s docstring; the approximations there don't affect any of the
+costs measured (all suspects are shape/algorithm-driven, not value-driven). 1 warm-up
+`step()` call discarded, then 5 timed calls (45 FEM solves), all consistent across
+iterations. `cProfile` plus wall-clock timers installed by monkeypatching the five
+suspect call sites (no `sttopt/` file modified).
+
+Per-`step` totals (`ndof=22082`, `npairs=4204240`; mean over 5 iterations,
+per-step wall time 3060 ms):
+
+| suspect | calls/step | total/step (ms) | per-call (ms) | % of step |
+|---|---|---|---|---|
+| `spsolve` | 9 | 1257 | 139.7 | 41.1% |
+| `mma.mmasub` | 1 | 1109 | 1109.5 | 36.3% |
+| `conductivity.hotspot_constraint` | 1 | 539 | 539.3 | 17.6% |
+| `fem.assemble_stiffness` | 9 | 102 | 11.4 | 3.3% |
+| `K[np.ix_(freedofs, freedofs)]` reindex | 9 | 12 | 1.3 | 0.4% |
+| everything else (filter/gravity matvecs, elementwise compliance algebra) | -- | ~41 | -- | ~1.3% |
+
+**The `spsolve` number Phase 2 must beat: 139.7 ms/call (0.1397 s/call), at 180x60 on
+the near-binary `it0800` design.** `fem.solve_fe` as a whole (`spsolve` + reindex) is
+141.0 ms/call, so `spsolve` itself is 99.1% of `solve_fe` -- **the `np.ix_` reindex is
+not a meaningful artefact** (0.4% of step time, 0.9% of `solve_fe`). Phase 2's baseline
+can be timed against `solve_fe` as it stands today without correcting for it.
+
+Other findings:
+
+- **`mma.mmasub` rivals the FEM solve** (36.3% of step time vs. 41.1%), which the plan
+  did not predict ("Probably not dominant, but measure rather than assume" -- measured:
+  it's the second-largest single item). Almost all of it is `subsolv`'s primal-dual
+  Newton loop (`mma.py:129`), specifically ~35 `residual` evaluations per `mmasub` call
+  doing dense dot products over `n=21600`-ish vectors and an `m=79` linear system each
+  sweep. This is ordinary dense array algebra with no `scipy.sparse` dependency --
+  ports to torch directly and is GPU-friendly, so it's a real target for Phase 3, not
+  just FEM.
+- **`hotspot_constraint` is real but not dominant** (17.6%), and its cost is *not* where
+  the plan's prior expected it. `np.add.at` totals only ~29 ms/step across all 6 calls
+  (~4.8 ms/call, ~5% of `hotspot_constraint`'s own cost, <1% of step time) -- far from
+  "rival[ing] or exceed[ing] the FEM solve." The dominant cost inside
+  `hotspot_constraint` is `_pairwise_sigmoid_terms` (two calls/call, ~177 ms/call
+  combined, ~33%) plus the surrounding elementwise `npairs`-sized algebra (`cond_p`,
+  `N_sub1`/`N_sub2`, `Tsub_pow`, etc.) -- ordinary vectorized NumPy work over 4.2M-length
+  arrays, not the `np.add.at` reductions specifically.
+- **`assemble_stiffness` is cheap** (3.3%), consistent with the plan's "probably not
+  dominant" framing for pure COO-to-CSR assembly.
+- Neither `np.add.at` (<1% of step time) nor the `np.ix_` reindex (0.4% of step time)
+  crosses any reasonable bar for "significant" here, so per the plan's own note, no
+  entries were added to `plans/code_quality_review.md` for either.
+
+Environment note: `spsolve`'s wall time (SuperLU) showed high `user` vs. `real` time in
+a raw `time` invocation, i.e. BLAS/SuperLU used multiple threads; the CPU was otherwise
+idle during this run (no other heavy process), so the reported per-call number should
+be a clean single-machine measurement, not a symptom of contention.
 
 ---
 
@@ -287,6 +379,49 @@ tolerance policy, and the existing fixtures are the strongest available oracle.
    solver.
 10. **CPU/GPU parity.** The same CG on CPU and on GPU agree to `solved` tier.
 
+### Phase 1 results (MGCG)
+
+Implemented in `sttopt/torch_mg.py`. Iteration counts at `rtol = 1e-8`, RTX PRO 1000,
+float64, cold start, single right-hand side:
+
+| mesh | ndof | field | Jacobi-PCG it | MGCG it | MGCG ms |
+|---|---|---|---|---|---|
+| 90x30 | 5642 | uniform | 527 | 9 | 19 |
+| 90x30 | 5642 | hard 0/1 | 1433 | 31 | 39 |
+| 180x60 | 22082 | uniform | 1048 | 10 | 25 |
+| 180x60 | 22082 | hard 0/1 | 2825 | 44 | 81 |
+| 360x120 | 87362 | uniform | 2086 | 10 | 43 |
+| 360x120 | 87362 | hard 0/1 | 5649 | 47 | 162 |
+
+Mesh-independent on uniform density, as multigrid should be. On hard 0/1 designs it
+lands at 31-47 rather than the hoped-for 5-30 -- the ~1e9 contrast costs roughly a
+factor of four, and the count drifts up slowly with refinement. Still a 46-120x
+reduction in iterations over Jacobi and 3-14x in wall clock.
+
+Two findings worth carrying into Phase 2:
+
+- **Do not coarsen as far as the grid allows.** A coarse grid helps only while it still
+  resolves the design's bars. At 90x30 on a hard 0/1 field, descending
+  90x30 -> 45x15 -> 15x5 -> 5x5 costs 119 iterations against 31 for stopping at 45x15.
+  A W-cycle recovers part of the loss (119 -> 80) but costs more wall clock than it
+  saves. `MAX_COARSE_ELEMENTS` encodes the early stop.
+- **The GPU is latency-bound at these sizes, as predicted.** At 180x60 a hard-field
+  solve is 81 ms for 44 iterations, ~1.8 ms per iteration on a 22082-dof problem whose
+  arithmetic is microseconds. Phase 2 should expect kernel-launch overhead, not
+  bandwidth, to set the time, and should test CUDA graphs and stage batching before
+  concluding anything about the device.
+
+**Determinism.** `index_add_`'s atomics make the default nondeterministic: 2.1e-16
+relative drift on a matvec, 1.4e-12 on a full solve -- far below the `solved` tier's
+1e-6, but not bitwise. Both fixes work and neither is free:
+`torch.use_deterministic_algorithms(True)` costs 1.69x at 180x60 and 2.30x at 360x120
+end to end; 4-colouring the elements (no two elements in a colour share a dof, so the
+atomics never collide) is bitwise-reproducible at 1.61x on the matvec alone, so
+perhaps 1.3-1.4x end to end. Recommendation: keep the nondeterministic default and
+treat `use_deterministic_algorithms(True)` as an opt-in debugging switch. Paying 30-130%
+of the solve for reproducibility below the tolerance the tests already use is a bad
+trade; the E2E trajectory comparisons should absorb 1e-12 via `e2e_rtol` instead.
+
 ---
 
 ## Phase 2: Benchmark
@@ -365,6 +500,88 @@ fallback to slide into.
 Also worth capturing either way: the 360x120 result. If GPU CG wins only at the larger
 mesh, that is useful information about where this approach becomes viable.
 
+### Results (2026-08-27): GO
+
+Script: `benchmarks/bench_fem_solve.py`, RTX PRO 1000 Blackwell (8 GB), float64,
+`rtol = 1e-8` (calibrated -- see Phase 1's "Accuracy calibration" results), `nStage = 8`,
+median of 5 timed repeats after 2 discarded, machine otherwise idle. `ms/solve` is per
+single-stage solve, so a batched cell's total divided by `nStage` and every row is
+directly comparable. `ce_err` is the max element-wise relative error of
+`ce = Ue^T KE Ue` against `spsolve`; **every timed row asserts it below 1e-6**, so no
+timing here is at unmatched accuracy. Worst observed across all rows: 1.1e-8.
+
+| mesh | field | start | cell | batch | ms/solve | iters | speedup |
+|---|---|---|---|---|---|---|---|
+| 90x30 | near-binary | warm | spsolve-CPU | seq | 20.8 | -- | 1.00x |
+| 90x30 | near-binary | warm | **MGCG-GPU** | batched | 28.8 | 35 | **0.72x** |
+| 90x30 | near-binary | warm | MGCG-CPU | batched | 162.5 | 35 | 0.13x |
+| 180x60 | near-binary | warm | spsolve-CPU | seq | 132.4 | -- | 1.00x |
+| 180x60 | near-binary | cold | MGCG-GPU | batched | 38.9 | 30 | 3.40x |
+| 180x60 | near-binary | warm | **MGCG-GPU** | batched | **30.4** | 22 | **4.36x** |
+| 180x60 | near-binary | warm | MGCG-CPU | batched | 99.2 | 22 | 1.33x |
+| 360x120 | near-binary | warm | spsolve-CPU | seq | 896.1 | -- | 1.00x |
+| 360x120 | near-binary | warm | **MGCG-GPU** | seq | **69.8** | 14-24 | **12.85x** |
+| 360x120 | near-binary | warm | MGCG-GPU | batched | 77.9 | 24 | 11.51x |
+| 360x120 | near-binary | warm | MGCG-CPU | batched | 299.4 | 24 | 2.99x |
+
+Uniform-density rows (the easy control) are in the script's full output; they run 11-13
+iterations at every mesh, confirming the hierarchy is mesh-independent where the design
+is not adversarial. Uniform gets no warm-start row on purpose: the optimizer holds
+`x = volfrac` at iteration zero alone, so there is no previous iteration to have left a
+solution behind.
+
+**Verdict: GO.** The gate was "at 180x60, late near-binary, warm-started, at matched
+accuracy, GPU CG must beat `spsolve` by >= 2x". Measured: **4.36x**.
+
+The plan's honest prior was right in shape and slightly pessimistic in degree: GPU CG
+does lose at 90x30 (0.72x), and it wins from 180x60 upward, growing to 12.9x at 360x120.
+Since 180x60 is the production mesh, the port's GPU motivation survives on the mesh that
+matters and improves on any larger one.
+
+Reading the diagnostic control, which is more interesting than a pass/fail:
+
+- **Part of the win is algorithmic, not the device.** MGCG on *CPU* also beats `spsolve`
+  at 180x60 warm (1.33x) and at 360x120 (2.99x). Sparse direct factorization loses to
+  multigrid as the mesh grows, exactly as asymptotics predict; the GPU then multiplies
+  that by a further 3-4x. So a no-go here would have been a device verdict, not an
+  algorithmic one -- and the device is not the limiting factor.
+- **Warm starting works, and is worth about 25% of the iterations** (30 -> 22 at 180x60,
+  33 -> 24 at 360x120). The plan's "design moves slowly" premise holds against real
+  consecutive snapshots: one optimizer step at loop 800 moves `xPhys` by at most 0.0067,
+  mean 8e-5, with no element moving more than 0.5, and leaves a relative residual of
+  0.03-0.12 where a cold start has 1.0.
+- **Batching helps only while the problem is latency-bound.** It is worth 1.3-1.4x at
+  90x30 and 180x60, and is a small *loss* at 360x120 (11.51x batched against 12.85x
+  sequential). The reason is in `pcg`'s contract: a batch runs every member to the
+  slowest member's iteration count, so at 180x60 the batch pays 22 iterations for stages
+  that individually need 13. While kernel-launch latency dominates that is still a win;
+  once there is enough real work per kernel it stops being one. **Phase 3 should pick
+  batching per mesh rather than adopting it unconditionally.**
+- **The hierarchy build is 7.2 ms of the 30.4 ms** at 180x60, i.e. ~24% of the solve. It
+  cannot be cached across solves (each of the nine solves in an iteration has a different
+  density) but its geometry now is.
+
+Two methodological traps were hit and are worth recording so they are not repeated:
+
+- **A manufactured warm start is worse than none.** The first version of this benchmark
+  built the "previous" design by running one `optimize.step` from
+  `profile_step.build_realistic_state` -- a reconstruction whose own docstring says it is
+  for profiling only. The step it produced moved `xPhys` by up to 0.996 and gave the warm
+  start an initial residual 37-100x *worse* than a cold start, which made the whole cell
+  measure nothing and reported 1.76x instead of 4.36x. The fixture now stores loop 799
+  next to loop 800 so the pair is real. An earlier version was worse still: perturbing
+  every element by the full `move = 0.01` with a random sign turned half the exactly-zero
+  voids into 0.01, and that element-scale speckle -- which multigrid cannot represent --
+  inflated the iteration count roughly fivefold on a design the optimizer never visits.
+- **Do not benchmark on a contended machine.** An early run overlapped a test suite and
+  inflated the `spsolve` baseline; all numbers above are from an otherwise idle box.
+
+Measured and rejected: making the CG convergence check periodic. Reading the residual on
+the host does synchronize the GPU every iteration, but at these sizes that stall costs
+less than the extra iterations an overshoot runs -- `check_every = 1` beat 2, 4, 8 and 16
+on the real 180x60 systems. CUDA graphs were not needed to clear the gate and were not
+implemented; see the plan's Phase 3 notes for what is left on the table.
+
 ---
 
 ## Phase 3: Port the rest to PyTorch
@@ -386,3 +603,45 @@ numbers are in and the solver's real shape is known.
 - jaxtyping annotations from `Float[np.ndarray, ...]` to `Float[Tensor, ...]`.
 - Per this repo's commit convention, sequence this as many small self-contained commits,
   not one port commit.
+
+### Solver optimizations left on the table
+
+None of these were needed to clear the gate, so none were implemented. They are recorded
+here with their expected value so a future agent can judge them rather than rediscover
+them. Roughly in decreasing order of expected return:
+
+1. **CUDA graphs for the CG iteration.** The plan asked for these to be tested before
+   concluding anything negative about the device; the conclusion was positive, so they
+   were not built. At 180x60 warm the solve is 22 iterations in 30.4 ms, and a V-cycle
+   over 3 levels launches on the order of 40-60 kernels per iteration on a problem whose
+   arithmetic is microseconds -- so launch overhead plausibly still sets the time. The
+   in-place vector updates already in `pcg` are a precondition for capture. Try
+   `torch.compile(mode="reduce-overhead")` on the iteration body before hand-rolling
+   `torch.cuda.CUDAGraph`, since the data-dependent iteration count means capturing one
+   iteration and replaying it, not capturing the whole solve.
+2. **Choose batching per mesh.** Batching is 1.3-1.4x at 90x30 and 180x60 and a small
+   loss at 360x120, because `pcg` runs every batch member to the slowest member's
+   iteration count. Either pick it by mesh size or, better, let converged members drop
+   out of the batch -- the latter also fixes the 90x30 case where stage counts spread
+   from 11 to 35.
+3. **Re-tune the multigrid parameters against real designs.** `MAX_COARSE_ELEMENTS = 700`,
+   `omega = 0.6` and `n_smooth = 2` were all chosen in Phase 1 against a *synthetic* hard
+   0/1 field at 90x30. The real near-binary designs behave differently enough (90x30 is
+   harder than 180x60, which the synthetic proxy did not predict) that the optimum may
+   have moved. Sweep `(max_coarse_elements, n_smooth, omega, gamma)` against the
+   `it0800` snapshots, timing as well as counting iterations, since the two disagree:
+   note the tension the sweep must weigh, that `max_coarse_elements = 700` bottoms out
+   at 45x15 and costs 6.9 ms/solve of hierarchy build, against 0.4 ms at 200 -- but a
+   coarser bottom cost 119 iterations against 31 in Phase 1's measurement.
+4. **A cheaper coarse solve.** The coarsest level is factorized by dense Cholesky on a
+   1472-dof operator, per solve, per batch member. If the parameter sweep wants to keep a
+   large coarse grid, replacing that with a few CG iterations or a sparse factorization
+   would cut most of the hierarchy build's 24% share.
+5. **Warm-start the adjoint solve from the forward solution.** Noted in the sketch above
+   and worth restating as a performance item: the adjoint system uses the same `K`, so it
+   should start from the forward `U`, not from zero. Warm starting is worth ~25% of the
+   iterations here.
+6. **`mma.mmasub` is the second-largest cost in the loop** (36.3% of step time against
+   the FEM solve's 41.1%) and is ordinary dense algebra with no `scipy.sparse`
+   dependency. It ports to torch directly. Phase 0 flagged this as unpredicted; it is the
+   largest easy GPU win outside FEM.

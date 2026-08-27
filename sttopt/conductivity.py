@@ -224,11 +224,10 @@ def hotspot_constraint(
     S1a, S2a = terms.S1[e1], terms.S2[e1]
     diag = e1 == e2
 
-    # N_sub2's cross term is shared by both branches (at a == b, xb/Nb reduce to
-    # xa/Na, and FT_ba/w reduce to their diagonal identities 0.5/1 -- no separate
-    # diagonal constant needed); only the self-heating correction is diagonal-only.
+    # Cross term: shared by both branches (at a == b, xb/Nb reduce to xa/Na, and
+    # FT_ba/w reduce to their diagonal identities 0.5/1 -- no separate diagonal
+    # constant needed) and finite everywhere, since it has no negative powers of x.
     N_sub2 = -(xb**r) * q * xa ** (q - 1) * terms.FT_ba * w / Nb
-    N_sub2 = N_sub2 + np.where(diag, (1 - Ka) * r * xa ** (r - 1), 0.0)
     N_sub1 = np.where(
         diag,
         -(xa**r) * (S2a / Na - Ka * S1a / Na),
@@ -240,6 +239,18 @@ def hotspot_constraint(
     cond_arr2 = np.zeros(nel)
     np.add.at(cond_arr1, e1, Tsub_pow * N_sub1)
     np.add.at(cond_arr2, e1, Tsub_pow * N_sub2)
+
+    # Diagonal self-heating correction to cond_arr2, kept out of the Tsub_pow * N_sub2
+    # product above: on the diagonal that product is exactly r * T_val**p * x**(r*p-1),
+    # one power of x rather than an x**(r-1) that diverges times a (x**r)**(p-1) that
+    # vanishes -- whose inf * 0 is nan at x == 0, which the Heaviside projection reaches
+    # routinely once beta_d saturates. Every element is its own neighbour exactly once,
+    # so this is a per-element term needing no pair expansion.
+    if r * p < 1 and np.any(x == 0):
+        raise ValueError(
+            f"hotspot_constraint: the self-heating term scales as x**(r*p - 1) with r*p - 1 = {r * p - 1} < 0, so it diverges at the exactly-zero element densities present here."
+        )
+    cond_arr2 += r * T_val**p * x ** (r * p - 1)
 
     # sum_cond == 0 (e.g. a fully solid part, T_val == 0 everywhere) makes the exponent
     # 1/p - 1 < 0 diverge; cond_arr1/cond_arr2 vanish exactly in that case too (every term
