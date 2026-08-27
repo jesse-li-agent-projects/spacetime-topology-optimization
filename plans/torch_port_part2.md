@@ -342,20 +342,65 @@ a future non-self-adjoint objective shows up as a performance change rather than
 
 **Tests.**
 
-1. `torch.autograd.gradcheck` on `FemSolve` at a small mesh in float64 -- the direct check
-   that the adjoint is right.
+1. **`torch.autograd.gradcheck` on `FemSolve`** at a small mesh in float64 -- torch's
+   built-in finite-difference check, and the direct test that the adjoint is right. It
+   works, but only inside a narrow envelope; the four constraints below were each measured
+   at 4x3 on the GPU rather than guessed, and a future agent that hits one of them should
+   adjust the test rather than conclude gradcheck is unusable here.
+
+   - **Passes at a moderate density field** with stock settings (`eps=1e-6`, `atol=1e-5`,
+     `rtol=1e-3`) and the solver at its production `rtol = 1e-8`. No special tuning needed.
+   - **Cannot validate a near-binary design, and this is a property of finite differences,
+     not of the adjoint.** At the `Emin = 1e-9` contrast, even a 4x3 mesh gives
+     `cond(K) = 1.4e10` and `|U|max = 2.3e9`, so the central-difference roundoff floor is
+     `eps_machine * |U| / eps_step ~ 5e-1` absolute -- five orders above gradcheck's
+     `atol`. Measured error is ~2e-1, on *solid* elements as much as void ones. Tightening
+     the solver `rtol` does not help, because the solver is not the inaccurate side. So
+     **gradcheck runs on a well-scaled field only**, and near-binary correctness is pinned
+     by test 2 instead -- which is why test 2 is not redundant with this one and must not
+     be dropped in favour of it.
+   - **Run it with warm starting disabled.** gradcheck calls the forward many times and a
+     warm start carried in external state makes it path-dependent; a configuration that
+     passes cold fails warm.
+   - **Leave `check_batched_grad` at its default `False`.** Opting in fails with
+     `Batching rule not implemented for aten::is_nonzero`, because `pcg`'s
+     `if torch.all(rel_resid <= rtol)` is Python control flow that vmap cannot trace. The
+     same limit means Phase 3.4's `is_grads_batched=True` Jacobian extraction must not span
+     a `FemSolve` backward -- it does not, as planned, since the batched groups
+     (start-point and stage-bound rows) have no FEM dependence, but do not "optimize" the
+     objective row into that path later.
+
 2. Gradients from `FemSolve` against the hand-derived `dcx` from the *current*
    `compliance.whole_compliance` and `gravity_compliance`, element-wise on max relative
    error (not a norm -- part 1's Phase 1 made this point and it still holds; MMA reads
-   every element). `solved` tier.
+   every element). `solved` tier. **Run this one at the near-binary snapshots**, per test
+   1's second bullet: it is the only check that covers the designs the optimizer actually
+   spends its late iterations on.
 3. `lambda == 2 U` for both compliance cases, to `algebraic` tier, **and the adjoint solve
    reports zero CG iterations** -- the check that the self-adjoint shortcut is actually
    being taken and not merely available.
-4. The batched `(9, ndof)` path against nine sequential single solves.
+4. The batched `(9, ndof)` path against nine sequential single solves. **Blocked on a
+   prerequisite -- see below.**
 5. Warm-started vs cold-started results agree to `solved` tier, and the warm one uses
    fewer iterations on a real consecutive snapshot pair (the fixture stores loop 799 next
    to loop 800 for exactly this).
 6. A non-convergent case still raises through the autograd boundary.
+
+**Prerequisite: fix `pcg`'s zero-`b` NaN first.** `torch_fem.pcg`'s docstring records a
+"Known issue, not yet fixed": a batch member whose residual hits exact zero before the
+others -- an all-zero `b` being the given example -- turns `alpha` into a `0/0` NaN that
+poisons that member, and `CGConvergenceError` then misreports the failure as `nan` / `[]`
+because NaN comparisons are always `False`. That reads like a corner case. It is not: it
+**fires deterministically on any gradcheck of a batched `FemSolve`**, because gradcheck
+seeds the backward with one-hot `grad_output`, which leaves *every other batch member*
+with an all-zero right-hand side. Confirmed directly at 4x3 -- a two-member batch with
+member 0's `b` zeroed raises with `worst relative residual nan` at every tolerance tried.
+
+So test 4 cannot pass until the issue is fixed, and the fix is small: freeze a converged
+member (zero its `alpha`) rather than dividing, or mask converged members out of the
+update. Do it as its own commit before the batched work, not folded into it. Worth noting
+this is also a latent production hazard, not only a test one -- an early gravity stage
+whose time mask leaves nothing active has a near-zero load vector.
 
 ## Phase 3.4: Autograd replaces the hand-derived sensitivities
 
@@ -489,7 +534,10 @@ proportions will have moved. Carried forward, in part 1's order of expected retu
 2. **Let converged batch members drop out.** `pcg` runs every member to the slowest
    member's count -- 22 iterations for stages that individually need 13 at 180x60, and 11
    to 35 at 90x30. This also fixes the "batching is a loss at 360x120" result properly,
-   rather than by the per-mesh switch Phase 3.3 puts in.
+   rather than by the per-mesh switch Phase 3.3 puts in. Note this is the same machinery
+   as Phase 3.3's zero-`b` NaN prerequisite, approached from the performance side: freezing
+   a converged member is what both need, so build it once there and extend it here rather
+   than writing two variants.
 3. **Re-tune multigrid against real designs.** `MAX_COARSE_ELEMENTS = 700`, `omega = 0.6`,
    `n_smooth = 2` were chosen against a *synthetic* hard 0/1 field at 90x30, and the real
    near-binary designs behave differently (90x30 is harder than 180x60, which the synthetic
