@@ -14,39 +14,39 @@ one of which may be identically zero) rather than a concatenated `dfdx` row -- c
 (the main optimization loop) assemble the final MMA-input matrix.
 """
 
-import numpy as np
-import scipy.sparse as sp
+import torch
 from jaxtyping import Float, Int
+from torch import Tensor
 
 import sttopt.compliance as compliance
 
 
 def global_volume_fraction(
-    xPhys: Float[np.ndarray, "nely nelx"],
-    dx: Float[np.ndarray, "nely nelx"],
-    H: sp.spmatrix | sp.sparray,
-    Hs: Float[np.ndarray, " nely*nelx"],
+    xPhys: Float[Tensor, "nely nelx"],
+    dx: Float[Tensor, "nely nelx"],
+    H: Tensor,
+    Hs: Float[Tensor, " nely*nelx"],
     volfrac: float,
-) -> tuple[float, Float[np.ndarray, " nely*nelx"], Float[np.ndarray, " nely*nelx"]]:
+) -> tuple[float, Float[Tensor, " nely*nelx"], Float[Tensor, " nely*nelx"]]:
     """Global printable-volume-fraction constraint: total deposited material vs. `volfrac`.
 
     `dft` is identically zero -- this constraint has no time-field dependence.
     """
     nely, nelx = xPhys.shape
     scale = nelx * nely * volfrac
-    fval = float(np.sum(xPhys) / scale - 1)
-    dv = np.ones((nely, nelx))
+    fval = float(torch.sum(xPhys) / scale - 1)
+    dv = torch.ones((nely, nelx), dtype=xPhys.dtype, device=xPhys.device)
     dfx = H @ (dv.flatten() * dx.flatten() / Hs) / scale
-    dft = np.zeros(nelx * nely)
+    dft = torch.zeros(nelx * nely, dtype=xPhys.dtype, device=xPhys.device)
     return fval, dfx, dft
 
 
 def time_field_continuity(
-    tPhys: Float[np.ndarray, "nely nelx"],
-    L: sp.spmatrix | sp.sparray,
-    H: sp.spmatrix | sp.sparray,
-    Hs: Float[np.ndarray, " nely*nelx"],
-) -> tuple[float, Float[np.ndarray, " nely*nelx"], Float[np.ndarray, " nely*nelx"]]:
+    tPhys: Float[Tensor, "nely nelx"],
+    L: Tensor,
+    H: Tensor,
+    Hs: Float[Tensor, " nely*nelx"],
+) -> tuple[float, Float[Tensor, " nely*nelx"], Float[Tensor, " nely*nelx"]]:
     """Time-field smoothness constraint: keeps each element's print time close to its local
     neighborhood average (`filters.continuity_filter`'s `L`), so the deposition sequence
     sweeps coherently across the mesh instead of jumping between distant elements.
@@ -62,21 +62,21 @@ def time_field_continuity(
     # d(deviation**2)/dt = 2*deviation * d(deviation)/dt.
     smoothness_weight = 2 * nel
     deviation = L @ tPhys.flatten()
-    fval = float(smoothness_weight * (np.sum(deviation**2 / nel) - 1.0e-6))
-    dft = H @ ((smoothness_weight * 2 * (L.T @ deviation)) / Hs) / nel
-    dfx = np.zeros(nel)
+    fval = float(smoothness_weight * (torch.sum(deviation**2 / nel) - 1.0e-6))
+    dft = H @ ((smoothness_weight * 2 * (L.t() @ deviation)) / Hs) / nel
+    dfx = torch.zeros(nel, dtype=tPhys.dtype, device=tPhys.device)
     return fval, dfx, dft
 
 
 def start_point(
-    tPhys: Float[np.ndarray, "nely nelx"],
-    Nei: Int[np.ndarray, " k"],
-    H: sp.spmatrix | sp.sparray,
-    Hs: Float[np.ndarray, " nely*nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+    Nei: Int[Tensor, " k"],
+    H: Tensor,
+    Hs: Float[Tensor, " nely*nelx"],
 ) -> tuple[
-    Float[np.ndarray, " k"],
-    Float[np.ndarray, "k nely*nelx"],
-    Float[np.ndarray, "k nely*nelx"],
+    Float[Tensor, " k"],
+    Float[Tensor, "k nely*nelx"],
+    Float[Tensor, "k nely*nelx"],
 ]:
     """Print-start constraint(s): the deposition-origin element(s) `Nei` (0-indexed element
     numbers, per `conventions.md`) must start printing at t=0 (up to machine precision).
@@ -88,25 +88,23 @@ def start_point(
     nel = nely * nelx
     k = len(Nei)
     fval = tPhys.flatten()[Nei] - 1.0e-9
-    ss = np.zeros((nel, k))  # ss: one-hot selector, column j picks out element Nei[j]
-    ss[Nei, np.arange(k)] = 1.0
-    dft = (H @ (ss / Hs[:, None])).T
-    dfx = np.zeros((k, nel))
+    ss = torch.zeros((nel, k), dtype=tPhys.dtype, device=tPhys.device)
+    ss[Nei, torch.arange(k, device=tPhys.device)] = 1.0  # one-hot selector
+    dft = (H @ (ss / Hs[:, None])).t()
+    dfx = torch.zeros((k, nel), dtype=tPhys.dtype, device=tPhys.device)
     return fval, dfx, dft
 
 
 def stage_volume_bounds(
-    xPhys: Float[np.ndarray, "nely nelx"],
-    tPhys: Float[np.ndarray, "nely nelx"],
-    dx: Float[np.ndarray, "nely nelx"],
-    H: sp.spmatrix | sp.sparray,
-    Hs: Float[np.ndarray, " nely*nelx"],
+    xPhys: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+    dx: Float[Tensor, "nely nelx"],
+    H: Tensor,
+    Hs: Float[Tensor, " nely*nelx"],
     t_stage: float,
     volfrac: float,
     beta_t: float,
-) -> tuple[
-    float, float, Float[np.ndarray, " nely*nelx"], Float[np.ndarray, " nely*nelx"]
-]:
+) -> tuple[float, float, Float[Tensor, " nely*nelx"], Float[Tensor, " nely*nelx"]]:
     """Per-stage material deposition budget: at stage boundary `t_stage` (a fraction of the
     build, in (0, 1]), the volume fraction deposited so far must stay within a small slack
     of `t_stage` itself -- an even deposition schedule spends the build's material at the
@@ -124,7 +122,7 @@ def stage_volume_bounds(
     dfdt = compliance.time_mask_derivative(tPhys, t_stage, beta_t)
     xtJoint = xPhys * t_mask
 
-    deposited = np.sum(xtJoint) / scale
+    deposited = torch.sum(xtJoint) / scale
     fval_upper = float(deposited - t_stage)
     fval_lower = float(-deposited + t_stage - 1.0e-5)
 
