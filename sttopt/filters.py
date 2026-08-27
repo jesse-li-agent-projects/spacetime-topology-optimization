@@ -8,9 +8,13 @@ field toward 0/1 while keeping it differentiable. See `conventions.md` for array
 and tolerance conventions.
 """
 
+import math
+
 import numpy as np
 import scipy.sparse as sp
+import torch
 from jaxtyping import Float
+from torch import Tensor
 
 
 def _neighbor_offsets(radius: float) -> list[tuple[int, int]]:
@@ -85,23 +89,19 @@ def continuity_filter(nelx: int, nely: int, lrmin: float) -> sp.csr_matrix:
 
 
 def heaviside_projection(
-    xTilde: Float[np.ndarray, "*dims"], beta: float, eta: float
-) -> Float[np.ndarray, "*dims"]:
+    xTilde: Float[Tensor, "*dims"], beta: float, eta: float
+) -> Float[Tensor, "*dims"]:
     """Project a filtered density field toward 0/1 via a smoothed threshold at `eta`.
 
     `beta` controls sharpness (linear as `beta -> 0`, a step function as `beta -> inf`).
     """
-    return (np.tanh(beta * eta) + np.tanh(beta * (xTilde - eta))) / (
-        np.tanh(beta * eta) + np.tanh(beta * (1 - eta))
-    )
+    denom = math.tanh(beta * eta) + math.tanh(beta * (1 - eta))
+    return (math.tanh(beta * eta) + torch.tanh(beta * (xTilde - eta))) / denom
 
 
 def heaviside_projection_derivative(
-    xTilde: Float[np.ndarray, "*dims"], beta: float, eta: float
-) -> Float[np.ndarray, "*dims"]:
+    xTilde: Float[Tensor, "*dims"], beta: float, eta: float
+) -> Float[Tensor, "*dims"]:
     """Derivative of `heaviside_projection` w.r.t. `xTilde`, for the chain rule through sensitivities."""
-    return (
-        beta
-        * (1 - np.tanh(beta * (xTilde - eta)) ** 2)
-        / (np.tanh(beta * eta) + np.tanh(beta * (1 - eta)))
-    )
+    denom = math.tanh(beta * eta) + math.tanh(beta * (1 - eta))
+    return beta * (1 - torch.tanh(beta * (xTilde - eta)) ** 2) / denom
