@@ -33,6 +33,7 @@ prolongation and hence keeps the whole V-cycle a symmetric positive-definite
 preconditioner -- a requirement of CG's convergence theory, not a nicety.
 """
 
+import functools
 from dataclasses import dataclass
 from typing import Callable
 
@@ -108,6 +109,20 @@ def _on_node_grid(
     return g.reshape(*v.shape[:-1], -1)
 
 
+@functools.lru_cache(maxsize=None)
+def element_dof_map_tensor(nelx: int, nely: int, device) -> Int[Tensor, "nel 8"]:
+    """`fem.element_dof_map` as a device tensor, memoized.
+
+    Every level's dof map is a pure function of that level's grid shape, so the 7200
+    solves of a production run would otherwise rebuild the same maps -- and pay the same
+    host-to-device copies -- 7200 times over.
+    """
+    return torch.tensor(
+        fem.element_dof_map(nelx, nely), dtype=torch.int64, device=device
+    )
+
+
+@functools.lru_cache(maxsize=None)
 def _child_elements(
     nelx: int, nely: int, kx: int, ky: int, device
 ) -> Int[Tensor, "nel_coarse kx*ky"]:
@@ -117,6 +132,7 @@ def _child_elements(
     return blocks.permute(0, 2, 1, 3).reshape(-1, ky * kx)
 
 
+@functools.lru_cache(maxsize=None)
 def child_interpolation_matrices(
     kx: int, ky: int, device=None, dtype=torch.float64
 ) -> Float[Tensor, "kx*ky 8 8"]:
@@ -267,9 +283,7 @@ def build_hierarchy(
 
         top.kx, top.ky = kx, ky
         cnelx, cnely = top.nelx // kx, top.nely // ky
-        cedof = torch.tensor(
-            fem.element_dof_map(cnelx, cnely), dtype=torch.int64, device=device
-        )
+        cedof = element_dof_map_tensor(cnelx, cnely, device)
         cndof = 2 * (cnelx + 1) * (cnely + 1)
         cmask = top.mask.reshape(top.nely + 1, top.nelx + 1, 2)[::ky, ::kx].reshape(-1)
         cdiag = _scatter(torch.diagonal(keff, dim1=-2, dim2=-1), cedof, cndof)
@@ -295,11 +309,7 @@ def build_hierarchy(
         keff = density[..., :, None, None] * KE
         cedof = edofMat
     else:
-        cedof = torch.tensor(
-            fem.element_dof_map(coarsest.nelx, coarsest.nely),
-            dtype=torch.int64,
-            device=device,
-        )
+        cedof = element_dof_map_tensor(coarsest.nelx, coarsest.nely, device)
     coarsest.chol = _dense_cholesky(keff, cedof, coarsest.ndof, coarsest.mask)
     return levels
 
