@@ -21,6 +21,61 @@ from torch import Tensor
 import sttopt.compliance as compliance
 
 
+def global_volume_fraction_value(
+    xPhys: Float[Tensor, "nely nelx"], volfrac: float
+) -> Float[Tensor, ""]:
+    """`global_volume_fraction`'s value alone, differentiable end to end w.r.t. `xPhys`
+    (autograd sensitivity path, `plans/torch_port_part2.md` Phase 3.4 -- no `dx`/`H`/
+    `Hs` arguments, since the caller's filter/Heaviside chain is now ordinary forward
+    code autograd differentiates through).
+    """
+    nely, nelx = xPhys.shape
+    scale = nelx * nely * volfrac
+    return torch.sum(xPhys) / scale - 1
+
+
+def time_field_continuity_value(
+    tPhys: Float[Tensor, "nely nelx"], L: Tensor
+) -> Float[Tensor, ""]:
+    """`time_field_continuity`'s value alone -- see `global_volume_fraction_value`."""
+    nely, nelx = tPhys.shape
+    nel = nely * nelx
+    smoothness_weight = 2 * nel
+    deviation = L @ tPhys.flatten()
+    return smoothness_weight * (torch.sum(deviation**2 / nel) - 1.0e-6)
+
+
+def start_point_value(
+    tPhys: Float[Tensor, "nely nelx"], Nei: Int[Tensor, " k"]
+) -> Float[Tensor, " k"]:
+    """`start_point`'s value alone -- see `global_volume_fraction_value`. Loses the
+    one-hot `ss` selector matrix entirely: `tPhys.flatten()[Nei]` already is the
+    autograd leaf's own row selection, so the matmul it fed (`H @ (ss / Hs[:, None])`)
+    has no work left to do.
+    """
+    return tPhys.flatten()[Nei] - 1.0e-9
+
+
+def stage_volume_bounds_value(
+    xPhys: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+    t_stage: float,
+    volfrac: float,
+    beta_t: float,
+) -> Float[Tensor, ""]:
+    """`stage_volume_bounds`'s *upper*-bound value alone -- see
+    `global_volume_fraction_value`. The lower bound's value and sensitivity are both
+    an explicit negation of the upper's (`stage_volume_bounds`'s docstring), so callers
+    build `fval_lower = -fval_upper - 1.0e-5` and `dfdx_lower = -dfdx_upper` themselves
+    rather than differentiating a second expression.
+    """
+    nely, nelx = xPhys.shape
+    scale = nelx * nely * volfrac
+    t_mask = compliance.time_mask(tPhys, t_stage, beta_t)
+    xtJoint = xPhys * t_mask
+    return torch.sum(xtJoint) / scale - t_stage
+
+
 def global_volume_fraction(
     xPhys: Float[Tensor, "nely nelx"],
     dx: Float[Tensor, "nely nelx"],

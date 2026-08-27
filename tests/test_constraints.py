@@ -479,3 +479,109 @@ def test_stage_volume_bounds_lower_has_slack_margin():
         xPhys, tPhys, dx, H, Hs, t_stage, volfrac, ROU
     )
     assert fl < -fu - 1e-8
+
+
+# --- Phase 3.4 (plans/torch_port_part2.md): autograd sensitivities against hand-derived --
+#
+# Each `..._value` function takes only `xPhys`/`tPhys`; these tests rebuild the same
+# filter(+Heaviside, for density) chain `optimize.step` threads from raw `x`/`t`
+# leaves, so `torch.autograd.grad` reproduces exactly the `H @ (... * dx / Hs)` rows
+# the hand-derived functions return -- `algebraic` tier throughout (no FE solve).
+
+
+def _filtered_leaves(nelx, nely, H, Hs, rng):
+    """Fresh `x`/`t` leaves and their filtered (density: + Heaviside) fields, matching
+    `optimize.step`'s construction."""
+    x = tt(rng.uniform(0.1, 0.9, size=(nely, nelx))).requires_grad_(True)
+    t = tt(rng.uniform(0.05, 0.95, size=(nely, nelx))).requires_grad_(True)
+    xTilde = ((H @ x.flatten()) / Hs).reshape(nely, nelx)
+    xPhys = filters.heaviside_projection(xTilde, BETA, ETA)
+    tPhys = ((H @ t.flatten()) / Hs).reshape(nely, nelx)
+    return x, t, xPhys, tPhys
+
+
+def test_global_volume_fraction_value_matches_hand_derived():
+    nelx, nely, volfrac = 6, 4, 0.4
+    H, Hs = _tensor_filter(nelx, nely, RMIN)
+    rng = np.random.default_rng(50)
+    x, t, xPhys, tPhys = _filtered_leaves(nelx, nely, H, Hs, rng)
+    dx = filters.heaviside_projection_derivative(
+        ((H @ x.detach().flatten()) / Hs).reshape(nely, nelx), BETA, ETA
+    )
+
+    fv_ref, dfx_ref, dft_ref = constraints.global_volume_fraction(
+        xPhys.detach(), dx, H, Hs, volfrac
+    )
+    fv = constraints.global_volume_fraction_value(xPhys, volfrac)
+    dfx, dft = torch.autograd.grad(fv, (x, t), allow_unused=True)
+
+    assert_close(fv.detach(), fv_ref, tier="algebraic")
+    assert_close(dfx.flatten(), dfx_ref, tier="algebraic")
+    assert dft is None  # no time-field dependence, matching dft_ref's all-zero row
+    assert torch.all(dft_ref == 0.0)
+
+
+def test_time_field_continuity_value_matches_hand_derived():
+    nelx, nely = 6, 4
+    L = torch_util.csr_to_tensor(
+        filters.continuity_filter(nelx, nely, LRMIN), "cpu", torch.float64
+    )
+    H, Hs = _tensor_filter(nelx, nely, RMIN)
+    rng = np.random.default_rng(51)
+    x, t, xPhys, tPhys = _filtered_leaves(nelx, nely, H, Hs, rng)
+
+    fv_ref, dfx_ref, dft_ref = constraints.time_field_continuity(
+        tPhys.detach(), L, H, Hs
+    )
+    fv = constraints.time_field_continuity_value(tPhys, L)
+    dfx, dft = torch.autograd.grad(fv, (x, t), allow_unused=True)
+
+    assert_close(fv.detach(), fv_ref, tier="algebraic")
+    assert dfx is None  # no density dependence, matching dfx_ref's all-zero row
+    assert torch.all(dfx_ref == 0.0)
+    assert_close(dft.flatten(), dft_ref, tier="algebraic")
+
+
+def test_start_point_value_matches_hand_derived():
+    nelx, nely = 6, 4
+    Nei = torch.arange(nely) * nelx
+    H, Hs = _tensor_filter(nelx, nely, RMIN)
+    rng = np.random.default_rng(52)
+    x, t, xPhys, tPhys = _filtered_leaves(nelx, nely, H, Hs, rng)
+
+    fv_ref, dfx_ref, dft_ref = constraints.start_point(tPhys.detach(), Nei, H, Hs)
+    fv = constraints.start_point_value(tPhys, Nei)
+    for k in range(len(Nei)):
+        dfx, dft = torch.autograd.grad(
+            fv[k], (x, t), retain_graph=True, allow_unused=True
+        )
+        assert_close(fv[k].detach(), fv_ref[k], tier="algebraic")
+        assert dfx is None  # no density dependence, matching dfx_ref's all-zero row
+        assert torch.all(dfx_ref[k] == 0.0)
+        assert_close(dft.flatten(), dft_ref[k], tier="algebraic")
+
+
+def test_stage_volume_bounds_value_matches_hand_derived():
+    nelx, nely, volfrac, t_stage = 6, 4, 0.4, 0.5
+    H, Hs = _tensor_filter(nelx, nely, RMIN)
+    rng = np.random.default_rng(53)
+    x, t, xPhys, tPhys = _filtered_leaves(nelx, nely, H, Hs, rng)
+    dx = filters.heaviside_projection_derivative(
+        ((H @ x.detach().flatten()) / Hs).reshape(nely, nelx), BETA, ETA
+    )
+
+    fu_ref, fl_ref, dfx_ref, dft_ref = constraints.stage_volume_bounds(
+        xPhys.detach(), tPhys.detach(), dx, H, Hs, t_stage, volfrac, ROU
+    )
+    fu = constraints.stage_volume_bounds_value(xPhys, tPhys, t_stage, volfrac, ROU)
+    dfx, dft = torch.autograd.grad(fu, (x, t))
+    fl = -fu - 1.0e-5
+
+    assert_close(fu.detach(), fu_ref, tier="algebraic")
+    assert_close(fl.detach(), fl_ref, tier="algebraic")
+    assert_close(dfx.flatten(), dfx_ref, tier="algebraic")
+    assert_close(dft.flatten(), dft_ref, tier="algebraic")
+    # The lower row's sensitivity is the upper's explicit negation, not a second
+    # autograd call (plans/torch_port_part2.md Phase 3.4).
+    assert_close(-dfx.flatten(), -dfx_ref, tier="algebraic")
+    assert_close(-dft.flatten(), -dft_ref, tier="algebraic")
