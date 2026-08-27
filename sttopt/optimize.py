@@ -94,6 +94,13 @@ class Problem:
     m: int  # number of MMA constraint rows: vol + continuity + start-point(s) + 2*nStage + hotspot
     n: int  # number of MMA design variables: 2*nelx*nely (density half + time half)
 
+    # Batch whole_compliance's solve with every gravity stage's into one FemSolve call
+    # (plans/torch_port_part2.md Phase 3.3) rather than 1 + nStage separate calls. Part
+    # 1 measured this as a 1.3-1.4x win at 90x30/180x60 and a small loss at 360x120, so
+    # it is a per-Problem setting (build_problem defaults it from mesh size), not
+    # unconditional.
+    batch_fem_solves: bool
+
 
 @dataclass(frozen=True)
 class State:
@@ -112,6 +119,13 @@ class State:
     beta_t: float  # gravity/stage-mask sigmoid sharpness
     beta_d: float  # Heaviside projection sharpness
     factor: float  # hotspot-constraint rescaling constant, periodically refreshed
+
+    # Batched FEM solution from this iteration's whole_compliance + gravity_compliance
+    # solves, `(1 + nStage, ndof)`, row 0 the whole-structure solve and row `1 + i`
+    # stage `i` -- carried forward to warm-start the next iteration's solves (part 1
+    # measured ~25% fewer CG iterations). `None` when `Problem.batch_fem_solves` is off
+    # (the sequential path doesn't produce a stacked `U` to save -- see optimize.step).
+    U: Float[Tensor, "n_stage_plus_1 ndof"] | None
 
 
 @dataclass(frozen=True)
@@ -168,6 +182,7 @@ def build_problem(
     tmove: float = 0.01,
     device: torch.device | str = "cpu",
     dtype: torch.dtype = torch.float64,
+    batch_fem_solves: bool | None = None,
 ) -> Problem:
     """Build the fixed FEM/filter/geometry setup once, before the loop starts.
 
@@ -179,8 +194,15 @@ def build_problem(
     :param device: device every tensor field of the returned `Problem` lives on.
     :param dtype: floating dtype every real-valued tensor field is cast to; integer
         (index/mask) fields keep their own integer/bool dtype regardless.
+    :param batch_fem_solves: batch whole_compliance's and every gravity stage's solve
+        into one `FemSolve` call (`plans/torch_port_part2.md` Phase 3.3). Defaults to
+        on at or below the production 180x60 mesh -- part 1 measured a 1.3-1.4x win
+        there and a small loss at 360x120 -- but is a plain `bool` so a caller can
+        override the default in either direction.
     """
     device = torch.device(device)
+    if batch_fem_solves is None:
+        batch_fem_solves = nelx * nely <= 180 * 60
     # A 1x1 mesh has neither extent nor neighbours, so two of the pieces built below
     # degenerate: the CORNER/OPPOSITE_CORNER time fields normalize by a zero max
     # distance, and the continuity filter divides by a zero neighbour count. This is the
@@ -265,6 +287,7 @@ def build_problem(
         tmove=tmove,
         m=m,
         n=n,
+        batch_fem_solves=batch_fem_solves,
     )
 
 
@@ -314,6 +337,7 @@ def init_state(problem: Problem, beta_d: float) -> State:
         beta_t=10.0,
         beta_d=beta_d,
         factor=1.0,
+        U=None,
     )
 
 
@@ -349,24 +373,13 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     dx = filters.heaviside_projection_derivative(state.xTilde, beta_d, problem.eta)
 
     # -- Objective: whole-structure compliance + Theta-weighted per-stage gravity compliance --
-    c, dcx = compliance.whole_compliance(
-        xPhys,
-        problem.KE,
-        problem.edofMat,
-        problem.Emin,
-        problem.Emax,
-        problem.penal,
-        problem.freedofs,
-        problem.F,
-        problem.ndof,
-    )
-    obj_final_only = c  # compliance of final structure only, saved for logging
-    obj = c
-    dc = problem.H @ (dcx.flatten() * dx.flatten() / problem.Hs)
-    dt = torch.zeros(nel, device=device, dtype=dtype)
-
-    for ti in np.linspace(0, 1, nStage + 1)[1:]:
-        cg, dcx_g, dct_g = compliance.gravity_compliance(
+    # `Problem.batch_fem_solves` (Phase 3.3, plans/torch_port_part2.md) puts
+    # whole_compliance's solve and every gravity stage's solve into one FemSolve call;
+    # off, they run sequentially as before. Either way the value/sensitivity algebra is
+    # the same hand-derived formulas -- only the solve batching differs.
+    stage_times = [float(ti) for ti in np.linspace(0, 1, nStage + 1)[1:]]
+    if problem.batch_fem_solves:
+        c, dcx, stage_results, U_new = compliance.batched_whole_and_gravity_compliance(
             xPhys,
             tPhys,
             problem.KE,
@@ -374,12 +387,51 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             problem.Emin,
             problem.Emax,
             problem.penal,
-            float(ti),
+            problem.freedofs,
+            problem.F,
+            problem.ndof,
             problem.C,
             beta_t,
+            stage_times,
+            x0=state.U,
+        )
+    else:
+        c, dcx = compliance.whole_compliance(
+            xPhys,
+            problem.KE,
+            problem.edofMat,
+            problem.Emin,
+            problem.Emax,
+            problem.penal,
             problem.freedofs,
+            problem.F,
             problem.ndof,
         )
+        stage_results = [
+            compliance.gravity_compliance(
+                xPhys,
+                tPhys,
+                problem.KE,
+                problem.edofMat,
+                problem.Emin,
+                problem.Emax,
+                problem.penal,
+                ti,
+                problem.C,
+                beta_t,
+                problem.freedofs,
+                problem.ndof,
+            )
+            for ti in stage_times
+        ]
+        U_new = None
+
+    obj_final_only = c  # compliance of final structure only, saved for logging
+    obj = c
+    dc = problem.H @ (dcx.flatten() * dx.flatten() / problem.Hs)
+    dt = torch.zeros(nel, device=device, dtype=dtype)
+
+    for cg, dcx_g, dct_g in stage_results:
         obj += problem.Theta * cg
         dc = dc + problem.Theta * (problem.H @ (dcx_g * dx.flatten() / problem.Hs))
         dt = dt + problem.Theta * (problem.H @ (dct_g / problem.Hs))
@@ -512,6 +564,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         beta_t=beta_t,
         beta_d=beta_d,
         factor=factor,
+        U=U_new,
     )
     record = IterationRecord(
         obj=obj_final_only,

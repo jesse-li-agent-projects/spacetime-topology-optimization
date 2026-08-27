@@ -163,12 +163,15 @@ def mgcg_backend(setup: dict, *, rtol: float, max_iter: int = 2000):
     :param setup: `mesh_setup` output.
     :param rtol: CG relative-residual tolerance.
     :param max_iter: CG iteration cap; exceeding it raises `CGConvergenceError`.
-    :yield: a list that receives one iteration count per solve performed.
+    :yield: a list that receives one iteration count per solve performed (one entry per
+        batch member for a batched `optimize.step` call -- see `_solve_fe_batched`
+        below -- since `pcg` runs every batch member for the same iteration count).
     """
     orig_solve_fe = compliance._solve_fe
+    orig_solve_fe_batched = compliance._solve_fe_batched
     iters: list[int] = []
 
-    def solve_fe(KE, xPhys, Emin, Emax, penal, edofMat, freedofs, F, ndof):
+    def solve_fe(KE, xPhys, Emin, Emax, penal, edofMat, freedofs, F, ndof, *, x0=None):
         nely, nelx = xPhys.shape
         density = torch_fem.simp_density(xPhys, Emin, Emax, penal)
         mask = torch_fem.free_mask(ndof, freedofs, device=xPhys.device)
@@ -183,16 +186,39 @@ def mgcg_backend(setup: dict, *, rtol: float, max_iter: int = 2000):
             nely,
             rtol=rtol,
             max_iter=max_iter,
+            x0=x0,
             info=info,
         )
         iters.append(info["forward_n_iter"])
         return U
 
+    def solve_fe_batched(KE, density, edofMat, mask, nelx, nely, F, *, x0=None):
+        info: dict = {}
+        U = torch_solve.femsolve(
+            density,
+            F,
+            edofMat,
+            KE,
+            mask,
+            nelx,
+            nely,
+            rtol=rtol,
+            max_iter=max_iter,
+            x0=x0,
+            info=info,
+        )
+        # One batched FemSolve call runs every row for the same iteration count
+        # (pcg's batching contract), recorded once per row for parity with solve_fe.
+        iters.extend([info["forward_n_iter"]] * density.shape[0])
+        return U
+
     compliance._solve_fe = solve_fe
+    compliance._solve_fe_batched = solve_fe_batched
     try:
         yield iters
     finally:
         compliance._solve_fe = orig_solve_fe
+        compliance._solve_fe_batched = orig_solve_fe_batched
 
 
 @contextlib.contextmanager
@@ -208,7 +234,9 @@ def spsolve_backend():
     """
     orig_solve_fe = compliance._solve_fe
 
-    def solve_fe(KE, xPhys, Emin, Emax, penal, edofMat, freedofs, F, ndof):
+    def solve_fe(KE, xPhys, Emin, Emax, penal, edofMat, freedofs, F, ndof, *, x0=None):
+        # spsolve is a direct solve with no notion of a warm start; x0 is accepted
+        # (for signature parity with compliance._solve_fe) and ignored.
         K = fem.assemble_stiffness(
             torch_util.to_numpy(KE),
             torch_util.to_numpy(xPhys),

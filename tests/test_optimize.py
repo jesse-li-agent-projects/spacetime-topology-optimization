@@ -294,6 +294,7 @@ def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, factor=1.0, beta_t=
         beta_t=beta_t,
         beta_d=beta_d,
         factor=factor,
+        U=None,
     )
 
 
@@ -475,3 +476,74 @@ def test_step_objective_is_theta_weighted_sum_of_stage_compliances():
     stage_sum = f0_1 - f0_0
     assert stage_sum > 1e-3  # non-vacuous: the stage terms actually contribute
     np.testing.assert_allclose(f0_3, f0_0 + 3.0 * stage_sum, rtol=1e-9)
+
+
+# --- Phase 3.3 (plans/torch_port_part2.md): batched FEM solves inside step() ----------
+
+
+def test_step_batched_matches_sequential_fem_solves():
+    """`Problem.batch_fem_solves` must not change what `step` computes -- only how many
+    `FemSolve` calls produce it: one call covering `whole_compliance`'s solve plus every
+    gravity stage's (batched) against `1 + nStage` separate calls (sequential). Compares
+    `step`'s own outputs directly, at the `solved` tier (a batched and a sequential MGCG
+    solve need not converge to bit-identical `U` at the same `rtol`).
+    """
+    problem_batched = _problem(nelx=6, nely=4, nStage=3)
+    assert problem_batched.batch_fem_solves  # small mesh: on by the plan's default
+    problem_sequential = dataclasses.replace(problem_batched, batch_fem_solves=False)
+
+    state = optimize.init_state(problem_batched, BETA_D)
+    state_batched, record_batched = optimize.step(problem_batched, state)
+    state_sequential, record_sequential = optimize.step(problem_sequential, state)
+
+    solved_tol = dict(rtol=1e-6, atol=1e-9)
+    np.testing.assert_allclose(record_batched.f0val, record_sequential.f0val, rtol=1e-6)
+    np.testing.assert_allclose(
+        record_batched.df0dx, record_sequential.df0dx, **solved_tol
+    )
+    np.testing.assert_allclose(
+        record_batched.fval, record_sequential.fval, **solved_tol
+    )
+    np.testing.assert_allclose(
+        record_batched.dfdx, record_sequential.dfdx, **solved_tol
+    )
+    np.testing.assert_allclose(
+        state_batched.xPhys.numpy(), state_sequential.xPhys.numpy(), **solved_tol
+    )
+
+    # Only the batched path carries a stacked U forward, for the next call's warm start.
+    assert state_batched.U is not None
+    assert state_batched.U.shape == (1 + problem_batched.nStage, problem_batched.ndof)
+    assert state_sequential.U is None
+
+
+def test_step_batched_warm_starts_from_previous_iteration():
+    """The batched path's second call uses fewer CG iterations than the first, warm-
+    started from the `U` the first call left on `State` -- part 1's ~25% saving,
+    exercised through `step` rather than through `FemSolve` directly.
+    """
+    import sttopt.torch_mg as torch_mg
+
+    problem = _problem(nelx=10, nely=8, nStage=3)
+    assert problem.batch_fem_solves
+    state = optimize.init_state(problem, BETA_D)
+
+    counts = []
+    orig_pcg = torch_mg.torch_fem.pcg
+
+    def counting_pcg(*args, **kwargs):
+        U, n_iter = orig_pcg(*args, **kwargs)
+        counts.append(n_iter)
+        return U, n_iter
+
+    torch_mg.torch_fem.pcg = counting_pcg
+    try:
+        state1, _ = optimize.step(problem, state)
+        cold_iters = counts[-1]
+        state2, _ = optimize.step(problem, state1)
+        warm_iters = counts[-1]
+    finally:
+        torch_mg.torch_fem.pcg = orig_pcg
+
+    assert state1.U is not None
+    assert warm_iters <= cold_iters

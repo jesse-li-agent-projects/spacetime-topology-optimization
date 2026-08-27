@@ -129,6 +129,7 @@ def build_realistic_state(
         beta_t=BETA_T,
         beta_d=BETA_D,
         factor=1.0,
+        U=None,
     )
 
 
