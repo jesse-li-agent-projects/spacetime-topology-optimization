@@ -442,3 +442,56 @@ def test_backward_nonconvergence_raises():
     g = torch.tensor(rng.standard_normal(ndof), dtype=torch.float64)  # not ~ F
     with pytest.raises(torch_fem.CGConvergenceError):
         U.backward(g)
+
+
+# --- Device: CPU and GPU agree on both the forward and the adjoint ---------------
+
+requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="no CUDA device available"
+)
+
+
+@requires_cuda
+def test_cpu_and_gpu_agree_on_forward_and_backward():
+    nelx, nely = 18, 12
+    device_cpu, device_gpu = "cpu", "cuda"
+    results = {}
+    for device in (device_cpu, device_gpu):
+        F_np, freedofs_np, ndof = point_load_problem(nelx, nely)
+        t = lambda a, dt: torch.tensor(a, dtype=dt, device=device)  # noqa: E731
+        KE = t(fem.plane_stress_KE(NU), torch.float64)
+        edofMat = t(fem.element_dof_map(nelx, nely), torch.int64)
+        mask = torch_fem.free_mask(ndof, t(freedofs_np, torch.int64), device)
+        F = t(F_np, torch.float64)
+        density = t(_binary_design(nelx, nely), torch.float64)
+        density = torch_fem.simp_density(density, EMIN, EMAX, PENAL)
+        density.requires_grad_(True)
+
+        info: dict = {}
+        U = torch_solve.femsolve(
+            density,
+            F,
+            edofMat,
+            KE,
+            mask,
+            nelx,
+            nely,
+            rtol=1e-10,
+            max_coarse_elements=24,
+            info=info,
+        )
+        L = torch.sum(U**2)
+        L.backward()
+        results[device] = (
+            U.detach().cpu().numpy(),
+            density.grad.cpu().numpy(),
+            info["forward_n_iter"],
+            info["backward_n_iter"],
+        )
+
+    U_cpu, grad_cpu, nf_cpu, nb_cpu = results[device_cpu]
+    U_gpu, grad_gpu, nf_gpu, nb_gpu = results[device_gpu]
+    assert nf_cpu == nf_gpu
+    assert nb_cpu == nb_gpu
+    assert_close(U_gpu, U_cpu, tier="solved", atol=1e-6 * np.abs(U_cpu).max())
+    assert_close(grad_gpu, grad_cpu, tier="solved", atol=1e-6 * np.abs(grad_cpu).max())
