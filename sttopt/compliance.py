@@ -6,10 +6,12 @@ stage: only elements already "active" by stage time `ti` (per `time_mask`) carry
 load, so the gravity load itself depends on both density and time, giving both a
 `dcx` and `dct` sensitivity plus an extra adjoint term (see `gravity_compliance`).
 
-Both assemble/solve via `fem.assemble_stiffness`/`fem.solve_fe` -- NumPy/SciPy, not yet
-ported (`plans/torch_port_part2.md` Phase 3.3) -- so both bridge to NumPy narrowly
-around just those two calls; everything else here is torch. Array-order and mesh
-conventions (element order, dof layout) follow `conventions.md` and `fem.py`.
+Both solve via `torch_solve.FemSolve` (`plans/torch_port_part2.md` Phase 3.3), the
+multigrid-CG solve as an autograd `Function` -- no NumPy round trip. The sensitivities
+below stay the hand-derived formulas Phase 3.2 ported (Phase 3.4 replaces them with
+autograd); `FemSolve`'s adjoint isn't exercised by this module, only its forward.
+Array-order and mesh conventions (element order, dof layout) follow `conventions.md`
+and `fem.py`.
 """
 
 import math
@@ -18,8 +20,8 @@ import torch
 from jaxtyping import Float, Int
 from torch import Tensor
 
-import sttopt.fem as fem
-import sttopt.torch_util as torch_util
+import sttopt.torch_fem as torch_fem
+import sttopt.torch_solve as torch_solve
 
 
 def time_mask(
@@ -58,9 +60,9 @@ def _element_strain_energy(
     return ce.reshape(nely, nelx)
 
 
-def _solve_fe_bridged(
+def _solve_fe(
     KE: Float[Tensor, "8 8"],
-    density: Float[Tensor, "nely nelx"],
+    xPhys: Float[Tensor, "nely nelx"],
     Emin: float,
     Emax: float,
     penal: float,
@@ -69,20 +71,15 @@ def _solve_fe_bridged(
     F: Float[Tensor, " ndof"],
     ndof: int,
 ) -> Float[Tensor, " ndof"]:
-    """Assemble and solve the FEM system, bridging to NumPy for just
-    `fem.assemble_stiffness`/`fem.solve_fe` (not yet ported -- Phase 3.3), then back.
+    """Solve `K @ U = F` via `torch_solve.FemSolve`'s multigrid-CG, `K` implicit from
+    `xPhys`'s SIMP-scaled stiffness. `xPhys`'s own gradient reaches `FemSolve`'s
+    `density` input through `torch_fem.simp_density`'s ordinary (non-`Function`) power
+    law, so the caller's autograd graph sees one differentiable chain end to end.
     """
-    K = fem.assemble_stiffness(
-        torch_util.to_numpy(KE),
-        torch_util.to_numpy(density),
-        Emin,
-        Emax,
-        penal,
-        torch_util.to_numpy(edofMat),
-        ndof,
-    )
-    U = fem.solve_fe(K, torch_util.to_numpy(F), torch_util.to_numpy(freedofs))
-    return torch_util.to_tensor(U, density.device, density.dtype)
+    nely, nelx = xPhys.shape
+    density = torch_fem.simp_density(xPhys, Emin, Emax, penal)
+    mask = torch_fem.free_mask(ndof, freedofs, device=xPhys.device)
+    return torch_solve.femsolve(density.flatten(), F, edofMat, KE, mask, nelx, nely)
 
 
 def whole_compliance(
@@ -98,7 +95,7 @@ def whole_compliance(
 ) -> tuple[float, Float[Tensor, "nely nelx"]]:
     """SIMP compliance and its density sensitivity under a fixed external load `F`."""
     nely, nelx = xPhys.shape
-    U = _solve_fe_bridged(KE, xPhys, Emin, Emax, penal, edofMat, freedofs, F, ndof)
+    U = _solve_fe(KE, xPhys, Emin, Emax, penal, edofMat, freedofs, F, ndof)
     ce = _element_strain_energy(U, edofMat, KE, nely, nelx)
 
     simp = Emin + xPhys**penal * (Emax - Emin)
@@ -143,7 +140,7 @@ def gravity_compliance(
     F = torch.zeros(ndof, dtype=xPhys.dtype, device=xPhys.device)
     F[1::2] = f  # y-dof of each node; x-dof stays 0 (gravity acts in -y)
 
-    U = _solve_fe_bridged(KE, xtJoint, Emin, Emax, penal, edofMat, freedofs, F, ndof)
+    U = _solve_fe(KE, xtJoint, Emin, Emax, penal, edofMat, freedofs, F, ndof)
     ce = _element_strain_energy(U, edofMat, KE, nely, nelx)
 
     simp = Emin + xtJoint**penal * (Emax - Emin)

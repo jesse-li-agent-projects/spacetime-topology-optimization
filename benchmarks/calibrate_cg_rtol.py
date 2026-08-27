@@ -74,6 +74,7 @@ import sttopt.fem as fem
 import sttopt.gravity as gravity
 import sttopt.torch_fem as torch_fem
 import sttopt.torch_mg as torch_mg
+import sttopt.torch_solve as torch_solve
 import sttopt.torch_util as torch_util
 
 FIXTURES = (
@@ -151,63 +152,80 @@ def mesh_setup(nelx: int, nely: int, device="cpu", dtype=torch.float64) -> dict:
 
 @contextlib.contextmanager
 def mgcg_backend(setup: dict, *, rtol: float, max_iter: int = 2000):
-    """Run `sttopt.compliance` with MGCG substituted for assemble-plus-`spsolve`.
+    """Run `sttopt.compliance` with MGCG at a chosen `rtol`, in place of its own default.
 
-    `fem.assemble_stiffness` is replaced by a recorder that captures the density field
-    the caller assembled from and returns `None` (nothing but `fem.solve_fe` consumes
-    its result, and the matrix-free operator does not want it); `fem.solve_fe` is
-    replaced by `torch_mg.solve` over that recorded field. Recording is what makes this
-    work for `gravity_compliance`, whose operative density is the internal `xtJoint`
-    rather than any argument.
+    Monkeypatches `compliance._solve_fe` (Phase 3.3, `plans/torch_port_part2.md`:
+    `compliance.py` talks to `torch_solve.FemSolve` directly now, so there is no
+    `fem.assemble_stiffness`/`fem.solve_fe` call left to intercept) rather than
+    reimplementing its sensitivity algebra -- any reimplementation could drift from the
+    production formulas and would then be calibrating the wrong thing.
 
     :param setup: `mesh_setup` output.
     :param rtol: CG relative-residual tolerance.
     :param max_iter: CG iteration cap; exceeding it raises `CGConvergenceError`.
     :yield: a list that receives one iteration count per solve performed.
     """
-    orig_assemble, orig_solve = fem.assemble_stiffness, fem.solve_fe
-    recorded: dict = {}
+    orig_solve_fe = compliance._solve_fe
     iters: list[int] = []
 
-    def assemble(KE_, xPhys, Emin, Emax, penal, edofMat_, ndof_):
-        recorded["xPhys"] = xPhys
-        return None
-
-    def solve_fe(K, F, freedofs):
-        # The mask comes from the caller's own `freedofs`, not from `setup`, so this
-        # backend honours whatever boundary conditions the substituted-into code uses
-        # rather than assuming `mesh_setup`'s cantilever.
-        mask = torch_fem.free_mask(
-            F.shape[-1],
-            torch.tensor(freedofs, dtype=torch.int64, device=setup["device"]),
-            setup["device"],
-        )
-        U, n_iter = torch_mg.solve(
-            torch.tensor(F, dtype=setup["dtype"], device=setup["device"]),
-            torch.tensor(
-                recorded["xPhys"].flatten(),
-                dtype=setup["dtype"],
-                device=setup["device"],
-            ),
-            setup["edofMat_t"],
-            setup["KE_t"],
-            EMIN,
-            EMAX,
-            PENAL,
+    def solve_fe(KE, xPhys, Emin, Emax, penal, edofMat, freedofs, F, ndof):
+        nely, nelx = xPhys.shape
+        density = torch_fem.simp_density(xPhys, Emin, Emax, penal)
+        mask = torch_fem.free_mask(ndof, freedofs, device=xPhys.device)
+        info: dict = {}
+        U = torch_solve.femsolve(
+            density.flatten(),
+            F,
+            edofMat,
+            KE,
             mask,
-            setup["nelx"],
-            setup["nely"],
+            nelx,
+            nely,
             rtol=rtol,
             max_iter=max_iter,
+            info=info,
         )
-        iters.append(n_iter)
-        return U.cpu().numpy()
+        iters.append(info["forward_n_iter"])
+        return U
 
-    fem.assemble_stiffness, fem.solve_fe = assemble, solve_fe
+    compliance._solve_fe = solve_fe
     try:
         yield iters
     finally:
-        fem.assemble_stiffness, fem.solve_fe = orig_assemble, orig_solve
+        compliance._solve_fe = orig_solve_fe
+
+
+@contextlib.contextmanager
+def spsolve_backend():
+    """Run `sttopt.compliance` over assemble-plus-`spsolve`, the reference this module
+    calibrates MGCG's `rtol` against.
+
+    Phase 3.3 (`plans/torch_port_part2.md`) moved `compliance._solve_fe`'s default
+    backend from `fem.assemble_stiffness`/`fem.solve_fe` to `torch_solve.FemSolve`'s
+    MGCG, so this monkeypatches `_solve_fe` back to the NumPy/SciPy path rather than
+    assuming it is still the default -- symmetric with `mgcg_backend` above, and for
+    the same reason: swap the solver underneath, never reimplement the algebra.
+    """
+    orig_solve_fe = compliance._solve_fe
+
+    def solve_fe(KE, xPhys, Emin, Emax, penal, edofMat, freedofs, F, ndof):
+        K = fem.assemble_stiffness(
+            torch_util.to_numpy(KE),
+            torch_util.to_numpy(xPhys),
+            Emin,
+            Emax,
+            penal,
+            torch_util.to_numpy(edofMat),
+            ndof,
+        )
+        U = fem.solve_fe(K, torch_util.to_numpy(F), torch_util.to_numpy(freedofs))
+        return torch_util.to_tensor(U, xPhys.device, xPhys.dtype)
+
+    compliance._solve_fe = solve_fe
+    try:
+        yield
+    finally:
+        compliance._solve_fe = orig_solve_fe
 
 
 def sensitivities(setup: dict, x: np.ndarray, t: np.ndarray, nstage: int) -> dict:
@@ -346,7 +364,8 @@ def calibrate(mesh: str, iteration: str, rtols, device: str, nstage: int) -> Non
         x = data[f"x_{mesh}_it{iteration}"]
         t = data[f"t_{mesh}_it{iteration}"]
     setup = mesh_setup(nelx, nely, device=device)
-    ref = sensitivities(setup, x, t, nstage)
+    with spsolve_backend():
+        ref = sensitivities(setup, x, t, nstage)
 
     print(
         f"\n=== {mesh} (ndof={setup['ndof']}), snapshot it{iteration}, "

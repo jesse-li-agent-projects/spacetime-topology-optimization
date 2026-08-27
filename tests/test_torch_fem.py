@@ -578,7 +578,8 @@ def test_sensitivities_from_mgcg_match_spsolve_elementwise():
     """
     setup, x, t = _calibration_case()
     n_stage = 2
-    ref = calib.sensitivities(setup, x, t, n_stage)
+    with calib.spsolve_backend():
+        ref = calib.sensitivities(setup, x, t, n_stage)
     with calib.mgcg_backend(setup, rtol=calib.RECOMMENDED_RTOL) as iters:
         got = calib.sensitivities(setup, x, t, n_stage)
     assert len(iters) == 1 + n_stage and min(iters) > 0
@@ -601,7 +602,8 @@ def test_compliance_is_far_more_forgiving_than_its_sensitivities():
     MMA's search direction.
     """
     setup, x, t = _calibration_case()
-    ref = calib.sensitivities(setup, x, t, 1)
+    with calib.spsolve_backend():
+        ref = calib.sensitivities(setup, x, t, 1)
     with calib.mgcg_backend(setup, rtol=1e-4):
         got = calib.sensitivities(setup, x, t, 1)
 
