@@ -753,7 +753,12 @@ def test_batched_whole_and_gravity_compliance_value_matches_sequential():
             ]
         f0val = c + sum(stage_cs)
         dcx, dct = torch.autograd.grad(f0val, (xPhys, tPhys))
-        return float(c), [float(cg) for cg in stage_cs], dcx.numpy(), dct.numpy()
+        return (
+            float(c.detach()),
+            [float(cg.detach()) for cg in stage_cs],
+            dcx.numpy(),
+            dct.numpy(),
+        )
 
     c_b, cg_b, dcx_b, dct_b = run(True)
     c_s, cg_s, dcx_s, dct_s = run(False)
