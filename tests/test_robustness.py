@@ -17,11 +17,13 @@ import io
 
 import numpy as np
 import scipy.sparse as sp
-from conftest import e2e_rtol, load_fixture_npz
+import torch
+from conftest import e2e_rtol, load_fixture_npz, tt, tti
 
 import sttopt.conductivity as conductivity
 import sttopt.mma as mma
 import sttopt.optimize as optimize
+import sttopt.torch_util as torch_util
 import sttopt.viz as viz
 
 NELX, NELY, NSTAGE, NLOOP = 7, 5, 3, 3
@@ -231,21 +233,36 @@ def test_hotspot_gradients_finite_for_large_rouf():
     xPhys = rng.uniform(0.3, 0.95, (nely, nelx))
     tPhys = rng.uniform(0.0, 1.0, (nely, nelx))
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, 3.0)
-    H = sp.eye(nelx * nely, format="csr")
-    Hs = np.ones(nelx * nely)
-    dx = np.ones((nely, nelx))
+    H = torch_util.csr_to_tensor(
+        sp.eye(nelx * nely, format="csr"), "cpu", torch.float64
+    )
+    Hs = torch.ones(nelx * nely, dtype=torch.float64)
+    dx = torch.ones(nely, nelx, dtype=torch.float64)
 
     for rouf in [100.0, 800.0, 2000.0, 1e6]:
         result = conductivity.hotspot_constraint(
-            xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, 0.8, 25.0, 3.0, 0.05, rouf
+            tt(xPhys),
+            tt(tPhys),
+            tti(e1),
+            tti(e2),
+            tt(w),
+            dx,
+            H,
+            Hs,
+            1.0,
+            0.8,
+            25.0,
+            3.0,
+            0.05,
+            rouf,
         )
         assert np.isfinite(result.fval)
-        assert np.all(
-            np.isfinite(result.df1)
-        ), f"rouf={rouf}: {np.isnan(result.df1).sum()} NaNs in df1"
-        assert np.all(
-            np.isfinite(result.dt1)
-        ), f"rouf={rouf}: {np.isnan(result.dt1).sum()} NaNs in dt1"
+        assert torch.all(
+            torch.isfinite(result.df1)
+        ), f"rouf={rouf}: {torch.isnan(result.df1).sum()} NaNs in df1"
+        assert torch.all(
+            torch.isfinite(result.dt1)
+        ), f"rouf={rouf}: {torch.isnan(result.dt1).sum()} NaNs in dt1"
 
 
 def test_stable_sigmoid_matches_the_matlab_expression():
@@ -280,7 +297,8 @@ def test_stable_sigmoid_matches_the_matlab_expression():
     t = np.concatenate([np.zeros(z.size), z / rouf])  # so t[b] - t[a] == z / rouf
     a = np.arange(z.size)
     b = a + z.size
-    FT, DFT = conductivity._pairwise_sigmoid_terms(t, a, b, rouf)
+    FT, DFT = conductivity._pairwise_sigmoid_terms(tt(t), tti(a), tti(b), rouf)
+    FT, DFT = FT.numpy(), DFT.numpy()
 
     with np.errstate(over="ignore", invalid="ignore"):
         FT_matlab = 1.0 / (1.0 + np.exp(z))
@@ -327,14 +345,16 @@ def test_dft_zero_only_at_self_pairs():
     # of t_a, so its true derivative is 0) -- pinned alongside DFT so the self-pair
     # branch is self-justifying, not just asserted.
     idx = np.arange(n)
-    FT_self, DFT_self = conductivity._pairwise_sigmoid_terms(t, idx, idx, rouf)
-    assert np.all(FT_self == 0.5)
-    assert np.all(DFT_self == 0.0)
+    FT_self, DFT_self = conductivity._pairwise_sigmoid_terms(
+        tt(t), tti(idx), tti(idx), rouf
+    )
+    assert torch.all(FT_self == 0.5)
+    assert torch.all(DFT_self == 0.0)
 
     # Distinct-element ties: two disjoint index ranges sharing the same t values, so
     # t[a[i]] == t[b[i]] for every i while a[i] != b[i] (b[i] = a[i] + n).
     t_dup = np.concatenate([t, t])
     a = np.arange(n)
     b = a + n
-    _, DFT_tied = conductivity._pairwise_sigmoid_terms(t_dup, a, b, rouf)
+    _, DFT_tied = conductivity._pairwise_sigmoid_terms(tt(t_dup), tti(a), tti(b), rouf)
     np.testing.assert_allclose(DFT_tied, rouf / 4.0, rtol=1e-14, atol=0)

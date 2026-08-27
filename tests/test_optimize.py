@@ -44,14 +44,12 @@ requires_cuda = pytest.mark.skipif(
 def _filter_field(problem, raw):
     """`H @ raw / Hs`, on the (nely, nelx) grid -- the density filter's action.
 
-    `raw` may be a plain array (an FD test's perturbed design point) or a `State`
-    tensor field; `problem.H`/`.Hs` are always tensors (Phase 3.1). Bridge both via
-    `torch_util` -- see `sttopt/optimize.py`'s module docstring -- rather than relying
-    on a SciPy sparse matrix and a tensor mixing implicitly.
+    `raw` may be a plain NumPy array (an FD test's perturbed design point) or a
+    `State` tensor field; `problem.H`/`.Hs` are always tensors. Returns a tensor,
+    matching what `optimize.step`/`init_state` themselves compute.
     """
-    H = torch_util.csr_to_scipy(problem.H)
-    Hs = torch_util.to_numpy(problem.Hs)
-    flat = H @ torch_util.to_numpy(raw).flatten() / Hs
+    device, dtype = problem.device, problem.dtype
+    flat = (problem.H @ torch_util.to_tensor(raw, device, dtype).flatten()) / problem.Hs
     return flat.reshape((problem.nely, problem.nelx))
 
 
@@ -79,9 +77,7 @@ def _assert_state_fields_are_consistent(problem, state, beta_d):
     )
     np.testing.assert_allclose(
         state.xPhys,
-        filters.heaviside_projection(
-            torch_util.to_numpy(state.xTilde), beta_d, problem.eta
-        ),
+        filters.heaviside_projection(state.xTilde, beta_d, problem.eta),
         rtol=1e-12,
         atol=1e-14,
     )
@@ -225,9 +221,7 @@ def test_init_state_density_half_is_derived_from_its_seed(tfield):
     np.testing.assert_allclose(state.xTilde, VOLFRAC, rtol=1e-14)
     np.testing.assert_allclose(
         state.xPhys,
-        filters.heaviside_projection(
-            torch_util.to_numpy(state.xTilde), BETA_D, problem.eta
-        ),
+        filters.heaviside_projection(state.xTilde, BETA_D, problem.eta),
         rtol=1e-12,
         atol=1e-14,
     )
@@ -284,17 +278,18 @@ def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, factor=1.0, beta_t=
     account for that -- a different question from the one this test asks.)
     """
     nely, nelx = problem.nely, problem.nelx
+    device, dtype = problem.device, problem.dtype
     xTilde = _filter_field(problem, x_raw)
     return optimize.State(
-        x=x_raw,
+        x=torch_util.to_tensor(x_raw, device, dtype),
         xTilde=xTilde,
         xPhys=filters.heaviside_projection(xTilde, beta_d, problem.eta),
-        t=t_raw,
+        t=torch_util.to_tensor(t_raw, device, dtype),
         tPhys=_filter_field(problem, t_raw),
-        xold1=np.zeros(problem.n),
-        xold2=np.zeros(problem.n),
-        low=np.zeros(problem.n),
-        upp=np.zeros(problem.n),
+        xold1=torch.zeros(problem.n, device=device, dtype=dtype),
+        xold2=torch.zeros(problem.n, device=device, dtype=dtype),
+        low=torch.zeros(problem.n, device=device, dtype=dtype),
+        upp=torch.zeros(problem.n, device=device, dtype=dtype),
         loop=0,
         beta_t=beta_t,
         beta_d=beta_d,
@@ -333,7 +328,9 @@ def _well_conditioned(problem, state, beta_t):
     for i in range(1, p.nStage + 1):
         fields.append(state.xPhys * compliance.time_mask(state.tPhys, tP[i], beta_t))
     for field in fields:
-        K = fem.assemble_stiffness(KE, field, p.Emin, p.Emax, p.penal, edofMat, p.ndof)
+        K = fem.assemble_stiffness(
+            KE, torch_util.to_numpy(field), p.Emin, p.Emax, p.penal, edofMat, p.ndof
+        )
         Kfree = K[np.ix_(freedofs, freedofs)].toarray()
         if np.linalg.cond(Kfree) >= MAX_COND:
             return False

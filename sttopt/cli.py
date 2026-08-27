@@ -120,23 +120,24 @@ def main(args: argparse.Namespace) -> None:
             f"Vol.: {state.xPhys.mean():6.3f} Tm.: {record.tru_max:7.3f}"
         )
 
-    # Tensor boundary: `viz` and `conductivity.estimated_conductivity` (unported as of
-    # Phase 3.1) take plain arrays -- see sttopt/torch_util.py.
-    xPhys = torch_util.to_numpy(prev_state.xPhys)
-    tPhys = torch_util.to_numpy(prev_state.tPhys)
     K_est = conductivity.estimated_conductivity(
-        xPhys,
-        tPhys,
-        torch_util.to_numpy(problem.e1),
-        torch_util.to_numpy(problem.e2),
-        torch_util.to_numpy(problem.w),
+        prev_state.xPhys,
+        prev_state.tPhys,
+        problem.e1,
+        problem.e2,
+        problem.w,
         problem.q,
         problem.rouf,
     ).reshape(problem.nely, problem.nelx)
-    XPhys = (xPhys > 0.5).astype(float)
+    XPhys = (prev_state.xPhys > 0.5).to(problem.dtype)
     # Same quantity as hotspot_constraint's internal T_val (conductivity.py), density-masked
     # for display -- not a print time, despite feeding combination_plot's "timing" slot.
     hotspot_severity = (1 - K_est) * XPhys
+
+    # Tensor boundary: `viz` takes plain arrays -- see sttopt/torch_util.py.
+    XPhys = torch_util.to_numpy(XPhys)
+    hotspot_severity = torch_util.to_numpy(hotspot_severity)
+    tPhys = torch_util.to_numpy(prev_state.tPhys)
 
     ax = viz.combination_plot(XPhys, hotspot_severity, eps=1.0e-1)
     viz.stage_boundary_plot(tPhys, args.nStage, ax=ax, combination_coords=True)
