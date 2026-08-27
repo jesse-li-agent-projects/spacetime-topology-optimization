@@ -16,6 +16,11 @@ torch = pytest.importorskip("torch")
 import sttopt.torch_fem as torch_fem  # noqa: E402
 import sttopt.torch_mg as torch_mg  # noqa: E402
 
+# The tolerance study whose conclusions the sensitivity tests below lock in; imported
+# rather than copied so the test and the study can never disagree about how the error
+# is measured.
+from benchmarks import calibrate_cg_rtol as calib  # noqa: E402
+
 EMIN, EMAX, PENAL = 1e-9, 1.0, 3
 NU = 0.3
 MESH_SIZES = [(4, 3), (12, 8), (30, 10)]
@@ -533,3 +538,71 @@ def test_mgcg_dtype_float64_end_to_end():
     for level in levels:
         assert level.diag.dtype == torch.float64
     assert levels[-1].chol.dtype == torch.float64
+
+
+# --- Sensitivity accuracy: what pins the CG tolerance (the plan's test 6) ---------
+
+CALIB_MESH = "90x30"  # the fixture's smaller near-binary design, for test runtime
+
+
+def _calibration_case():
+    nelx, nely = (int(v) for v in CALIB_MESH.split("x"))
+    with np.load(calib.FIXTURES) as data:
+        x = data[f"x_{CALIB_MESH}_it0800"]
+        t = data[f"t_{CALIB_MESH}_it0800"]
+    return calib.mesh_setup(nelx, nely), x, t
+
+
+def test_sensitivities_from_mgcg_match_spsolve_elementwise():
+    """Element-wise, not by norm: MMA reads every element of `dcx`/`dct`, so a single
+    bad element is a real defect that an L2 norm would hide.
+    """
+    setup, x, t = _calibration_case()
+    n_stage = 2
+    ref = calib.sensitivities(setup, x, t, n_stage)
+    with calib.mgcg_backend(setup, rtol=calib.RECOMMENDED_RTOL) as iters:
+        got = calib.sensitivities(setup, x, t, n_stage)
+    assert len(iters) == 1 + n_stage and min(iters) > 0
+
+    for key in ("dcx", "dcx_g", "dct_g"):
+        rel_active, abs_over_peak = calib.elementwise_errors(
+            got[key].ravel(), ref[key].ravel()
+        )
+        assert rel_active < calib.SENSITIVITY_TOL, key
+        assert abs_over_peak < calib.SENSITIVITY_TOL, key
+
+
+def test_compliance_is_far_more_forgiving_than_its_sensitivities():
+    """The asymmetry the tolerance policy rests on, asserted rather than assumed.
+
+    `c` is stationary at the solution so its error is second order in the error of `U`;
+    per-element `ce = Ue^T KE Ue` is not. At a tolerance loose enough to wreck `dcx`,
+    `c` is still correct to more digits than the optimizer could ever need -- which is
+    exactly why calibrating against `c` would pick a tolerance that quietly degrades
+    MMA's search direction.
+    """
+    setup, x, t = _calibration_case()
+    ref = calib.sensitivities(setup, x, t, 1)
+    with calib.mgcg_backend(setup, rtol=1e-4):
+        got = calib.sensitivities(setup, x, t, 1)
+
+    c_err = abs(got["c"] - ref["c"]) / abs(ref["c"])
+    dcx_err, _ = calib.elementwise_errors(got["dcx"], ref["dcx"])
+    assert c_err < 1e-6
+    assert dcx_err > 1e-3
+    assert dcx_err / c_err > 1e4
+
+
+def test_mgcg_sensitivity_matches_finite_difference():
+    """Oracle-free check of the whole chain through the CG solve: operator, V-cycle, CG
+    and the sensitivity algebra against the definition of a derivative.
+    """
+    nelx, nely = 12, 8
+    rng = np.random.default_rng(6)
+    # Mid-range densities: a near-binary field sits at the bounds of [0, 1], where a
+    # central difference is not defined.
+    x = rng.uniform(0.3, 0.7, (nely, nelx))
+    setup = calib.mesh_setup(nelx, nely)
+    elements = rng.choice(nelx * nely, 4, replace=False)
+    err = calib.finite_difference_check(setup, x, calib.RECOMMENDED_RTOL, elements)
+    assert err < 1e-5
