@@ -112,24 +112,27 @@ def test_subsolv_m_ge_n_solves_the_subproblem():
     epsimin = 1e-9
     for n, m in [(2, 3), (3, 5), (4, 4), (5, 8), (6, 2), (8, 3)]:
         k = build(n, m, n * 10 + m)
-        x, y, z, lam, xsi, eta, mu, zet, s = mma.subsolv(
+        solution = mma.subsolv(
             m,
             n,
             epsimin,
-            k["low"],
-            k["upp"],
-            k["alfa"],
-            k["beta"],
-            k["p0"],
-            k["q0"],
-            k["P"],
-            k["Q"],
+            tt(k["low"]),
+            tt(k["upp"]),
+            tt(k["alfa"]),
+            tt(k["beta"]),
+            tt(k["p0"]),
+            tt(k["q0"]),
+            tt(k["P"]),
+            tt(k["Q"]),
             k["a0"],
-            k["a"],
-            k["b"],
-            k["c"],
-            k["d"],
+            tt(k["a"]),
+            tt(k["b"]),
+            tt(k["c"]),
+            tt(k["d"]),
         )
+        # The residual/complementarity checks below are pure NumPy, independent of
+        # subsolv's implementation.
+        x, y, z, lam, xsi, eta, mu, zet, s = (np.asarray(v) for v in solution)
         ux1, xl1 = k["upp"] - x, x - k["low"]
         plam = k["p0"] + k["P"].T @ lam
         qlam = k["q0"] + k["Q"].T @ lam
