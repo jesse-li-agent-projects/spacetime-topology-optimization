@@ -61,14 +61,10 @@ What's actually done: the three periodic updates (`beta_t`, `beta_d`, hotspot
 starting the next iteration -- exactly per the Decision at the top of the plan's
 Phase 3. Fast suite (412 passed, 4 skipped) is green.
 
-**Still needed before this phase can be considered closed:**
-`test_e2e_slow.py::test_thesis_4_4_reproduction` (`nloop=800`) was kicked off in the
-background (job `b7veiv6j0`) to check the two boundaries this reordering actually
-touches (`loop % 30`, `loop % 50`) -- **check its result before merging.** If it
-fails, the bump-to-tail reordering itself (not just the dropped item 2) needs
-re-examination. Its band assertions are loose (`185.0 < f0val < ceiling`,
-`tru_max` within 1% of 0.8), so a genuine ordering bug and normal drift may look
-similar -- read the actual numbers, don't just check pass/fail.
+**Confirmed:** `test_e2e_slow.py::test_thesis_4_4_reproduction` (`nloop=800`) passed
+(2375.78s, `1 passed`) -- the two boundaries this reordering actually touches
+(`loop % 30`, `loop % 50`) hold under the new ordering. Phase 3 is done as scoped
+(items 1+3; item 2 abandoned, see above).
 
 The plan also flagged `tests/fixtures/torch_port_designs.npz` as expected to drift
 slightly from this phase and said not to regenerate unless a benchmark looks wrong --
@@ -85,16 +81,13 @@ started: `femsolve()` now asserts `x0 is None or not x0.requires_grad`; `optimiz
 
 ## Next steps
 
-1. Check job `b7veiv6j0`'s result (`tests/test_e2e_slow.py::test_thesis_4_4_reproduction`).
-   If green, Phase 3 is done as scoped (items 1+3; item 2 abandoned). If not, debug
-   the tail-bump reordering before moving on.
-2. Phase 4 -- move hand-derived formulas out of `sttopt/` into `tests/reference/`.
+1. Phase 4 -- move hand-derived formulas out of `sttopt/` into `tests/reference/`.
    Mechanical per the plan; the plan's own verification notes (fixtures need no
    regen, `matlab_reference.py` is untouched) still hold.
-3. Phase 5 -- one `Problem`/`State` conversion helper in `torch_util.py`, tests go
+2. Phase 5 -- one `Problem`/`State` conversion helper in `torch_util.py`, tests go
    torch-native.
-4. Phase 6 -- reply to and resolve the four review threads that need no code change
+3. Phase 6 -- reply to and resolve the four review threads that need no code change
    (text already drafted in the plan).
-5. Once all phases are done, move `plans/torch_port_review_followup.md` (and this
+4. Once all phases are done, move `plans/torch_port_review_followup.md` (and this
    handoff file) to `plans/archive/` and update `plans/CLAUDE.md`'s index, per that
    directory's own convention.
