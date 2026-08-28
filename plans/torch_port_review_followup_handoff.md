@@ -3,7 +3,8 @@
 Self-handoff for continuing `plans/torch_port_review_followup.md` (PR #53). Phases 1-2
 are committed and done. Phase 3 is committed with a narrower scope than the plan
 wrote down -- read "Phase 3: what changed" below before touching `step()` again.
-Phases 4-6 are untouched.
+Phase 4 is done, with one scope narrowing -- read "Phase 4: what changed" below
+before touching `benchmarks/calibrate_cg_rtol.py`. Phases 5-6 are untouched.
 
 ## Status
 
@@ -12,15 +13,15 @@ Phases 4-6 are untouched.
 | 1 -- Docstring and boundary fixes | Done, committed (amended once mid-flight) |
 | 2 -- Delete no-op detaches, mark gradient region | Done, committed |
 | 3 -- Move beta updates to the tail | Done for items 1+3; item 2 (filter-pass removal) **dropped**, not deferred -- see below |
-| 4 -- Move hand-derived formulas to `tests/reference/` | Not started |
+| 4 -- Move hand-derived formulas to `tests/reference/` | Done for items 1-4; item 5 (delete `calibrate_cg_rtol.py`) **not done, needs a decision** -- see below |
 | 5 -- One tensor-boundary conversion helper | Not started |
 | 6 -- Reply to review comments | Not started |
 
-Commits so far on this branch (`worktree-torch-port-review-followup`, based on
-`plan/torch-port-review-followup` @ 3632a81):
+Commits so far on this branch (`torch-port-review-followup-impl`, PR #54):
 1. Phase 1 (amended once -- see below)
 2. Phase 2
 3. Phase 3 (items 1+3 only)
+4. Phase 4 (items 1-4; item 5 pending a decision)
 
 ## Phase 3: what changed from the plan, and why
 
@@ -70,6 +71,52 @@ The plan also flagged `tests/fixtures/torch_port_designs.npz` as expected to dri
 slightly from this phase and said not to regenerate unless a benchmark looks wrong --
 that guidance still stands, unchanged by the item-2 revert.
 
+## Phase 4: what changed from the plan, and why
+
+Items 1-4 are done as scoped: `tests/reference/{compliance,constraints,conductivity,fem}.py`
+now hold the hand-derived predecessors (`whole_compliance`, `gravity_compliance`,
+`batched_whole_and_gravity_compliance`, `time_mask_derivative`,
+`global_volume_fraction`, `time_field_continuity`, `start_point`,
+`stage_volume_bounds`, `hotspot_constraint` + its private `_conductivity_terms`/
+`_ConductivityTerms`/`HotspotConstraintResult`, `assemble_stiffness`, `solve_fe`).
+`sttopt/{compliance,constraints}.py`'s `*_value` functions were renamed to the plain
+names their hand-derived predecessors vacated (`conductivity.hotspot_value` was
+**not** renamed -- its signature/return shape never matched `hotspot_constraint`'s,
+so there's no plain name for it to inherit). `test_fem.py`'s five
+`assemble_stiffness`/`solve_fe`-dependent tests moved to the new
+`tests/reference/test_fem.py`, alongside the functions. Every caller across
+`tests/`/`benchmarks/` (11 files, plus 3 more not in the plan's list that turned out
+to depend on the moved names: `test_e2e.py`, `test_robustness.py`,
+`calibrate_cg_rtol_autograd.py`) was repointed. Fast suite: 412 passed, 4 skipped --
+same count as Phase 3's baseline (pure reorg, no tests added or dropped).
+
+**Item 5 (delete `benchmarks/calibrate_cg_rtol.py`) is not done -- needs a decision,
+don't do it without confirming.** The plan's premise was that
+`calibrate_cg_rtol_autograd.py` supersedes it. In fact three test files
+(`test_torch_fem.py`, `test_compliance.py`, `test_torch_solve.py`) import `calib =
+calibrate_cg_rtol` and lean on API `calibrate_cg_rtol_autograd.py` doesn't have at
+all: `spsolve_backend`, `sensitivities`, `mesh_setup`, `FIXTURES`, `EMIN`/`EMAX`/
+`PENAL`/`BETA_T`, `SENSITIVITY_TOL`, `elementwise_errors`, `finite_difference_check`.
+`calibrate_cg_rtol_autograd.py` compares MGCG-at-a-candidate-`rtol` against
+MGCG-at-`1e-12`, not against `spsolve` -- it's a different comparison, not a
+drop-in replacement for the spsolve-vs-MGCG one these three files run. Deleting the
+file as written would delete real fast-suite test coverage (four tests, all
+currently green: `test_sensitivities_from_mgcg_match_spsolve_elementwise`,
+`test_compliance_is_far_more_forgiving_than_its_sensitivities`,
+`test_mgcg_sensitivity_matches_finite_difference`,
+`test_whole_compliance_fixture_regression_through_mgcg`, plus the two
+`test_adjoint_matches_hand_derived_*_near_binary` tests in `test_torch_solve.py`) --
+not a safe mechanical step. What I did instead: kept the file, and repointed its own
+internal `fem.assemble_stiffness`/`fem.solve_fe`/`compliance.whole_compliance`/
+`gravity_compliance` calls at `tests/reference/`'s versions (the same rename Phase 4
+did everywhere else), since Phase 4's renames would otherwise have silently changed
+what `sensitivities()` computes (autograd `dcx=U` instead of hand-derived `dcx`).
+Before deleting this file, either confirm with the user that the coverage
+`calibrate_cg_rtol.py`-only tests provide is fine to drop, or migrate those tests to
+compare against `calibrate_cg_rtol_autograd.py`'s MGCG-vs-tight-MGCG reference
+instead (a real design decision about what those tests should assert once `spsolve`
+is out of the picture, not mechanical).
+
 ## Phase 1 amendment (context for `git log`)
 
 The first Phase 1 commit used a defensive `x0.detach()` inside `femsolve()`
@@ -81,9 +128,9 @@ started: `femsolve()` now asserts `x0 is None or not x0.requires_grad`; `optimiz
 
 ## Next steps
 
-1. Phase 4 -- move hand-derived formulas out of `sttopt/` into `tests/reference/`.
-   Mechanical per the plan; the plan's own verification notes (fixtures need no
-   regen, `matlab_reference.py` is untouched) still hold.
+1. Phase 4 item 5 -- decide `calibrate_cg_rtol.py`'s fate (see above), then act on
+   the decision. Not mechanical; needs the user or a fresh look at the three
+   dependent test files.
 2. Phase 5 -- one `Problem`/`State` conversion helper in `torch_util.py`, tests go
    torch-native.
 3. Phase 6 -- reply to and resolve the four review threads that need no code change
