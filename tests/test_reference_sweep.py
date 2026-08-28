@@ -21,10 +21,13 @@ reaches cond ~1e10 and the dense-vs-sparse solvers legitimately part company aro
 import matlab_reference as ref
 import numpy as np
 import pytest
+import torch
 from conftest import (
     matlab_reference_dof_perm,
     point_load_problem,
     reindex_matlab_reference_nodes,
+    tt,
+    tti,
 )
 from matlab_reference_loop import run_reference_loop
 
@@ -35,6 +38,9 @@ import sttopt.filters as filters
 import sttopt.gravity as gravity
 import sttopt.optimize as optimize
 import sttopt.timefield as timefield
+import sttopt.torch_util as torch_util
+import tests.reference.compliance as compliance_ref
+import tests.reference.conductivity as conductivity_ref
 
 TIGHT = 1e-11  # purely algebraic quantities
 SOLVED = 1e-8  # downstream of a linear solve
@@ -163,8 +169,16 @@ def test_whole_compliance_matches_reference(nelx, nely):
     c_ref, dcx_ref = ref.ref_whole_compliance(
         nelx, nely, KE, xP, 1e-9, 1.0, 3, freedofs1_ref, F
     )
-    c, dcx = compliance.whole_compliance(
-        xP, KE, fem.element_dof_map(nelx, nely), 1e-9, 1.0, 3, freedofs, F, ndof
+    c, dcx = compliance_ref.whole_compliance(
+        tt(xP),
+        tt(KE),
+        tti(fem.element_dof_map(nelx, nely)),
+        1e-9,
+        1.0,
+        3,
+        tti(freedofs),
+        tt(F),
+        ndof,
     )
     assert abs(c - c_ref) / abs(c_ref) < SOLVED
     assert rel(dcx, dcx_ref) < SOLVED
@@ -199,21 +213,23 @@ def test_gravity_compliance_matches_reference(nelx, nely, ti):
     c_ref, dcx_ref, dct_ref = ref.ref_gravity_compliance(
         nelx, nely, KE, xP, tP, 1e-9, 1.0, 3, ti, C_ref, 10.0, freedofs1_ref
     )
-    c, dcx, dct = compliance.gravity_compliance(
-        xP,
-        tP,
-        KE,
-        fem.element_dof_map(nelx, nely),
+    c, dcx, dct = compliance_ref.gravity_compliance(
+        tt(xP),
+        tt(tP),
+        tt(KE),
+        tti(fem.element_dof_map(nelx, nely)),
         1e-9,
         1.0,
         3,
         ti,
-        gravity.gravity_load_matrix(nelx, nely),
+        torch_util.csr_to_tensor(
+            gravity.gravity_load_matrix(nelx, nely), "cpu", torch.float64
+        ),
         10.0,
-        freedofs,
+        tti(freedofs),
         ndof,
     )
-    ft = compliance.time_mask(tP, ti, 10.0)
+    ft = compliance.time_mask(tt(tP), ti, 10.0).numpy()
     dens = 1e-9 + (xP * ft).flatten() ** 3 * (1.0 - 1e-9)
     # Conditioning only -- cond is invariant under the node relabelling, so it does not
     # matter that this is assembled in the reference's numbering.
@@ -252,10 +268,25 @@ def test_hotspot_matches_reference(nelx, nely, rmin_cond, factor):
 
     H, Hs = filters.density_filter(nelx, nely, 2.0)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
-    result = conductivity.hotspot_constraint(
-        xP, tP, e1, e2, w, dx, H, Hs, factor, 0.8, 25.0, 3.0, 0.05, 100.0
+    H_t = torch_util.csr_to_tensor(H, "cpu", torch.float64)
+    e1_t, e2_t, w_t = tti(e1), tti(e2), tt(w)
+    result = conductivity_ref.hotspot_constraint(
+        tt(xP),
+        tt(tP),
+        e1_t,
+        e2_t,
+        w_t,
+        tt(dx),
+        H_t,
+        tt(Hs),
+        factor,
+        0.8,
+        25.0,
+        3.0,
+        0.05,
+        100.0,
     )
-    K = conductivity.estimated_conductivity(xP, tP, e1, e2, w, 3.0, 100.0)
+    K = conductivity.estimated_conductivity(tt(xP), tt(tP), e1_t, e2_t, w_t, 3.0, 100.0)
 
     assert rel(K, K_ref) < TIGHT
     assert abs(result.fval - fv_ref) / abs(fv_ref) < TIGHT
@@ -299,8 +330,21 @@ def test_hotspot_non_default_constants(p, q, r, rouf):
     )
     H, Hs = filters.density_filter(nelx, nely, 2.0)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, 3.0)
-    result = conductivity.hotspot_constraint(
-        xP, tP, e1, e2, w, dx, H, Hs, 1.0, 0.8, float(p), float(q), r, rouf
+    result = conductivity_ref.hotspot_constraint(
+        tt(xP),
+        tt(tP),
+        tti(e1),
+        tti(e2),
+        tt(w),
+        tt(dx),
+        torch_util.csr_to_tensor(H, "cpu", torch.float64),
+        tt(Hs),
+        1.0,
+        0.8,
+        float(p),
+        float(q),
+        r,
+        rouf,
     )
     assert abs(result.fval - fv_ref) / abs(fv_ref) < TIGHT
     assert rel(result.df1, df_ref) < TIGHT

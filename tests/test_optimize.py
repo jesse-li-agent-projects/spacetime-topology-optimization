@@ -17,14 +17,19 @@ this unchanged.
 whatever the current code happens to produce.
 """
 
+import dataclasses
+
 import numpy as np
 import pytest
+import torch
 
 import sttopt.compliance as compliance
-import sttopt.fem as fem
 import sttopt.filters as filters
 import sttopt.optimize as optimize
 import sttopt.timefield as timefield
+import sttopt.torch_util as torch_util
+import tests.reference.fem as fem_ref
+from conftest import FIXTURES_DIR
 
 VOLFRAC = 0.4
 TCR = 0.8
@@ -32,10 +37,20 @@ RMIN = LRMIN = 2
 RMIN_COND = 3
 BETA_D = 1.0
 
+requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="no CUDA device available"
+)
+
 
 def _filter_field(problem, raw):
-    """`H @ raw / Hs`, on the (nely, nelx) grid -- the density filter's action."""
-    flat = problem.H @ raw.flatten() / problem.Hs
+    """`H @ raw / Hs`, on the (nely, nelx) grid -- the density filter's action.
+
+    `raw` may be a plain NumPy array (an FD test's perturbed design point) or a
+    `State` tensor field; `problem.H`/`.Hs` are always tensors. Returns a tensor,
+    matching what `optimize.step`/`init_state` themselves compute.
+    """
+    device, dtype = problem.device, problem.dtype
+    flat = (problem.H @ torch_util.to_tensor(raw, device, dtype).flatten()) / problem.Hs
     return flat.reshape((problem.nely, problem.nelx))
 
 
@@ -76,6 +91,78 @@ def _problem(nelx=7, nely=5, nStage=3, tfield=3, Theta=1.0):
     return optimize.build_problem(
         nelx, nely, nStage, VOLFRAC, Theta, TCR, tfield, RMIN, LRMIN, RMIN_COND
     )
+
+
+# --- Phase 3.1 (plans/torch_port_part2.md): the tensor boundary -----------------------
+
+
+def _tensor_fields(obj) -> list[tuple[str, torch.Tensor]]:
+    """Every tensor-valued field of a `Problem`/`State`, as `(name, value)` pairs."""
+    return [
+        (f.name, getattr(obj, f.name))
+        for f in dataclasses.fields(obj)
+        if isinstance(getattr(obj, f.name), torch.Tensor)
+    ]
+
+
+def test_build_problem_default_device_and_dtype():
+    """`build_problem`'s default (`device="cpu"`, `dtype=torch.float64`) must cost every
+    pre-Phase-3.1 caller nothing: every real-valued tensor field lands on CPU/float64,
+    matching what those fields were (as NumPy arrays) before this phase."""
+    problem = _problem()
+    assert problem.device == torch.device("cpu")
+    assert problem.dtype == torch.float64
+    for name, t in _tensor_fields(problem):
+        assert t.device == torch.device("cpu"), name
+        if t.dtype.is_floating_point:
+            assert t.dtype == torch.float64, name
+
+
+def test_build_problem_honors_requested_dtype():
+    """A non-default floating `dtype` reaches every real-valued tensor field; index
+    (`edofMat`/`freedofs`/`e1`/`e2`/`Nei`) and mask (`free_mask`) fields keep their own
+    int64/bool dtype regardless -- `dtype` governs the problem's real-valued fields, not
+    every tensor it happens to hold."""
+    problem = optimize.build_problem(
+        7, 5, 3, VOLFRAC, 1.0, TCR, 3, RMIN, LRMIN, RMIN_COND, dtype=torch.float32
+    )
+    assert problem.dtype == torch.float32
+    for name, t in _tensor_fields(problem):
+        if t.dtype.is_floating_point:
+            assert t.dtype == torch.float32, name
+        else:
+            assert t.dtype in (torch.int64, torch.bool), name
+
+
+def test_init_state_and_step_output_are_tensors_on_problem_device_and_dtype():
+    """`State`'s fields are tensors (Phase 3.1), on `problem`'s own device/dtype, both
+    fresh out of `init_state` and after a `step` call -- the tensor boundary inside
+    `step` must land back on `problem.device`/`.dtype`, not wherever the (still-NumPy)
+    leaf math happened to leave its output."""
+    problem = _problem()
+    state = optimize.init_state(problem, BETA_D)
+    for name, t in _tensor_fields(state):
+        assert t.device == problem.device, name
+        assert t.dtype == problem.dtype, name
+
+    state, _ = optimize.step(problem, state)
+    for name, t in _tensor_fields(state):
+        assert t.device == problem.device, name
+        assert t.dtype == problem.dtype, name
+
+
+@requires_cuda
+def test_build_problem_on_cuda_has_no_lingering_cpu_tensor():
+    """The plan's Phase 3.1 test: every tensor field of a CUDA `Problem` is actually on
+    CUDA. A field left on a stray default device would pass every CPU-only test and
+    only surface as silently wrong, or a device-mismatch crash, once later phases run
+    the loop on the GPU."""
+    problem = optimize.build_problem(
+        7, 5, 3, VOLFRAC, 1.0, TCR, 3, RMIN, LRMIN, RMIN_COND, device="cuda"
+    )
+    assert problem.device.type == "cuda"
+    for name, t in _tensor_fields(problem):
+        assert t.device.type == "cuda", name
 
 
 @pytest.mark.parametrize("tfield", [1, 2, 3])
@@ -192,21 +279,23 @@ def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, factor=1.0, beta_t=
     account for that -- a different question from the one this test asks.)
     """
     nely, nelx = problem.nely, problem.nelx
+    device, dtype = problem.device, problem.dtype
     xTilde = _filter_field(problem, x_raw)
     return optimize.State(
-        x=x_raw,
+        x=torch_util.to_tensor(x_raw, device, dtype),
         xTilde=xTilde,
         xPhys=filters.heaviside_projection(xTilde, beta_d, problem.eta),
-        t=t_raw,
+        t=torch_util.to_tensor(t_raw, device, dtype),
         tPhys=_filter_field(problem, t_raw),
-        xold1=np.zeros(problem.n),
-        xold2=np.zeros(problem.n),
-        low=np.zeros(problem.n),
-        upp=np.zeros(problem.n),
+        xold1=torch.zeros(problem.n, device=device, dtype=dtype),
+        xold2=torch.zeros(problem.n, device=device, dtype=dtype),
+        low=torch.zeros(problem.n, device=device, dtype=dtype),
+        upp=torch.zeros(problem.n, device=device, dtype=dtype),
         loop=0,
         beta_t=beta_t,
         beta_d=beta_d,
         factor=factor,
+        U=None,
     )
 
 
@@ -228,16 +317,24 @@ MAX_COND = 1e10
 
 
 def _well_conditioned(problem, state, beta_t):
+    # tests/reference/fem.py's assemble_stiffness -- the NumPy oracle, unrelated to
+    # optimize.step's own torch/MGCG solve -- is the cheapest way to get a dense
+    # `K_free` to condition-number-check, so `problem`'s tensor fields get bridged to
+    # NumPy just for this.
     p = problem
+    KE = torch_util.to_numpy(p.KE)
+    edofMat = torch_util.to_numpy(p.edofMat)
+    freedofs = torch_util.to_numpy(p.freedofs)
+
     fields = [state.xPhys]
     tP = np.linspace(0, 1, p.nStage + 1)
     for i in range(1, p.nStage + 1):
         fields.append(state.xPhys * compliance.time_mask(state.tPhys, tP[i], beta_t))
     for field in fields:
-        K = fem.assemble_stiffness(
-            p.KE, field, p.Emin, p.Emax, p.penal, p.edofMat, p.ndof
+        K = fem_ref.assemble_stiffness(
+            KE, torch_util.to_numpy(field), p.Emin, p.Emax, p.penal, edofMat, p.ndof
         )
-        Kfree = K[np.ix_(p.freedofs, p.freedofs)].toarray()
+        Kfree = K[np.ix_(freedofs, freedofs)].toarray()
         if np.linalg.cond(Kfree) >= MAX_COND:
             return False
     return True
@@ -381,3 +478,178 @@ def test_step_objective_is_theta_weighted_sum_of_stage_compliances():
     stage_sum = f0_1 - f0_0
     assert stage_sum > 1e-3  # non-vacuous: the stage terms actually contribute
     np.testing.assert_allclose(f0_3, f0_0 + 3.0 * stage_sum, rtol=1e-9)
+
+
+# --- Phase 3.3 (plans/torch_port_part2.md): batched FEM solves inside step() ----------
+
+
+def test_step_batched_matches_sequential_fem_solves():
+    """`Problem.batch_fem_solves` must not change what `step` computes -- only how many
+    `FemSolve` calls produce it: one call covering `whole_compliance`'s solve plus every
+    gravity stage's (batched) against `1 + nStage` separate calls (sequential). Compares
+    `step`'s own outputs directly, at the `solved` tier (a batched and a sequential MGCG
+    solve need not converge to bit-identical `U` at the same `rtol`).
+    """
+    problem_batched = _problem(nelx=6, nely=4, nStage=3)
+    assert problem_batched.batch_fem_solves  # small mesh: on by the plan's default
+    problem_sequential = dataclasses.replace(problem_batched, batch_fem_solves=False)
+
+    state = optimize.init_state(problem_batched, BETA_D)
+    state_batched, record_batched = optimize.step(problem_batched, state)
+    state_sequential, record_sequential = optimize.step(problem_sequential, state)
+
+    solved_tol = dict(rtol=1e-6, atol=1e-9)
+    np.testing.assert_allclose(record_batched.f0val, record_sequential.f0val, rtol=1e-6)
+    np.testing.assert_allclose(
+        record_batched.df0dx, record_sequential.df0dx, **solved_tol
+    )
+    np.testing.assert_allclose(
+        record_batched.fval, record_sequential.fval, **solved_tol
+    )
+    np.testing.assert_allclose(
+        record_batched.dfdx, record_sequential.dfdx, **solved_tol
+    )
+    np.testing.assert_allclose(
+        state_batched.xPhys.numpy(), state_sequential.xPhys.numpy(), **solved_tol
+    )
+
+    # Only the batched path carries a stacked U forward, for the next call's warm start.
+    assert state_batched.U is not None
+    assert state_batched.U.shape == (1 + problem_batched.nStage, problem_batched.ndof)
+    assert state_sequential.U is None
+
+
+def test_step_state_U_does_not_carry_grad_across_iterations():
+    """`State.U` is a warm-start seed for the *next* iteration's solve, not a value that
+    should carry gradient across iterations -- storing it undetached lets `FemSolve`'s
+    `x0` argument wire one iteration's whole multigrid hierarchy into the next
+    iteration's autograd graph, and the next iteration's `U` does the same to the one
+    after that. Confirmed by direct measurement (see `optimize.step`'s comment on `U=`):
+    left undetached, this chains every iteration's hierarchy into one never-freed graph,
+    growing GPU memory ~180 MB/step at 180x60 and OOMing an 8 GB card by iteration ~40;
+    detached, memory is flat. Runs a few iterations rather than reproducing the OOM
+    directly -- `requires_grad`/`grad_fn` are the property that actually matters, and
+    checking it doesn't need a GPU or hundreds of iterations to be a real regression
+    guard.
+    """
+    problem = _problem(nelx=6, nely=4, nStage=3)
+    assert problem.batch_fem_solves
+    state = optimize.init_state(problem, BETA_D)
+
+    for _ in range(3):
+        state, _ = optimize.step(problem, state)
+        assert state.U is not None
+        assert not state.U.requires_grad
+        assert state.U.grad_fn is None
+
+
+def test_step_batched_warm_starts_from_previous_iteration():
+    """The batched path's second call uses fewer CG iterations than the first, warm-
+    started from the `U` the first call left on `State` -- part 1's ~25% saving,
+    exercised through `step` rather than through `FemSolve` directly.
+    """
+    import sttopt.torch_mg as torch_mg
+
+    problem = _problem(nelx=10, nely=8, nStage=3)
+    assert problem.batch_fem_solves
+    state = optimize.init_state(problem, BETA_D)
+
+    counts = []
+    orig_pcg = torch_mg.torch_fem.pcg
+
+    def counting_pcg(*args, **kwargs):
+        U, n_iter = orig_pcg(*args, **kwargs)
+        counts.append(n_iter)
+        return U, n_iter
+
+    torch_mg.torch_fem.pcg = counting_pcg
+    try:
+        state1, _ = optimize.step(problem, state)
+        cold_iters = counts[-1]
+        state2, _ = optimize.step(problem, state1)
+        warm_iters = counts[-1]
+    finally:
+        torch_mg.torch_fem.pcg = orig_pcg
+
+    assert state1.U is not None
+    assert warm_iters <= cold_iters
+
+
+# --- Phase 3.4 (plans/torch_port_part2.md): the near-binary NaN regression ------------
+#
+# The test Phase 0a's original bug (and its autograd resurrection) would have caught:
+# a late, near-binary snapshot with exact zeros in xPhys, run through the real
+# optimize.step wiring end to end.
+
+
+def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
+    """`optimize.step`'s assembled `df0dx`/`dfdx` must stay finite on a real late-run
+    snapshot with exact zeros in `xPhys` (`x_90x30_it0800`, from
+    `tests/fixtures/torch_port_designs.npz` -- generated by
+    `generate_torch_port_designs.py` at the production filter radii/schedules, not
+    manufactured). This is the test that would have caught Phase 0a's original NaN bug
+    (`hotspot_constraint`'s un-cancelled `x**(r-1)` diagonal term) and would catch its
+    resurrection under autograd (`hotspot_value`'s NaN-safe rewrite, Phase 3.4) -- see
+    `test_step_would_have_produced_nan_without_the_nan_safe_rewrite` for direct proof
+    the rewrite, not mere luck on this snapshot, is what keeps it clean.
+    """
+    nelx, nely = 90, 30
+    with np.load(FIXTURES_DIR / "torch_port_designs.npz") as data:
+        x = data["x_90x30_it0800"]
+        t = data["t_90x30_it0800"]
+    assert np.any(x == 0.0)  # premise: exact zeros are actually present
+
+    problem = optimize.build_problem(nelx, nely, 8, 0.5, 0.1, TCR, 3, 2.0, 2.0, 6.0)
+    xPhys = torch_util.to_tensor(x, problem.device, problem.dtype)
+    tPhys = torch_util.to_tensor(t, problem.device, problem.dtype)
+    xval = torch.cat([xPhys.flatten(), tPhys.flatten()])
+    state = optimize.State(
+        x=xPhys,
+        xTilde=xPhys,
+        xPhys=xPhys,
+        t=tPhys,
+        tPhys=tPhys,
+        xold1=xval,
+        xold2=xval.clone(),
+        low=xval - 0.1,
+        upp=xval + 0.1,
+        loop=800,
+        beta_t=50.0,
+        beta_d=128.0,
+        factor=1.0,
+        U=None,
+    )
+
+    _, record = optimize.step(problem, state)
+    assert np.all(np.isfinite(record.df0dx))
+    assert np.all(np.isfinite(record.dfdx))
+    assert np.all(np.isfinite(record.fval))
+    assert np.isfinite(record.f0val)
+
+
+def test_step_would_have_produced_nan_without_the_nan_safe_rewrite():
+    """Proof the test above is meaningful, not merely lucky: `conductivity.hotspot_value`
+    called on the *same* snapshot but through the naive, algebraically equivalent
+    `(T_val * x**r) ** p` form (what a mechanical port would have written) produces a
+    `nan` gradient, at exactly the exact-zero elements the safe rewrite fixes.
+    """
+    import sttopt.conductivity as conductivity
+
+    nelx, nely = 90, 30
+    with np.load(FIXTURES_DIR / "torch_port_designs.npz") as data:
+        x = data["x_90x30_it0800"]
+        t = data["t_90x30_it0800"]
+
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, 6.0)
+    e1_t = torch_util.to_tensor(e1, "cpu", torch.int64)
+    e2_t = torch_util.to_tensor(e2, "cpu", torch.int64)
+    w_t = torch_util.to_tensor(w, "cpu", torch.float64)
+    x_t = torch_util.to_tensor(x, "cpu", torch.float64).flatten().requires_grad_(True)
+    t_t = torch_util.to_tensor(t, "cpu", torch.float64).flatten()
+
+    core = conductivity._conductivity_core(x_t, t_t, e1_t, e2_t, w_t, 3.0, 100.0)
+    T_val = 1 - core.K_est
+    cond_p = (T_val * x_t**0.05) ** 25.0  # naive, pre-rewrite form
+    numer = (torch.sum(cond_p) / x_t.numel()) ** (1 / 25.0)
+    (d_x,) = torch.autograd.grad(numer, (x_t,))
+    assert torch.any(torch.isnan(d_x))

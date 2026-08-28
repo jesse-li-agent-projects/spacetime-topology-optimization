@@ -16,10 +16,12 @@ Split into three layers, ordered from most to least diagnostic on failure:
 """
 
 import numpy as np
+import torch
 
 import sttopt.conductivity as conductivity
 import sttopt.filters as filters
 import sttopt.optimize as optimize
+import tests.reference.conductivity as conductivity_ref
 from conftest import assert_close, load_fixture_npz
 
 NELX, NELY = 7, 5
@@ -146,14 +148,17 @@ def test_hotspot_factor_refresh_at_loop_25():
     new_state, record = optimize.step(problem, state)
     assert new_state.loop == 25
 
+    xPhys = state.xPhys
+    tPhys = state.tPhys
+
     # Independent recomputation of the refresh formula (factor = max_g / numer), using
     # the pre-update xPhys/tPhys/dx the refresh actually saw.
     dx = filters.heaviside_projection_derivative(
         state.xTilde, state.beta_d, problem.eta
     )
-    old = conductivity.hotspot_constraint(
-        state.xPhys,
-        state.tPhys,
+    old = conductivity_ref.hotspot_constraint(
+        xPhys,
+        tPhys,
         problem.e1,
         problem.e2,
         problem.w,
@@ -169,15 +174,15 @@ def test_hotspot_factor_refresh_at_loop_25():
     )
     numer = (old.fval + 1) * problem.Tcr / state.factor
     K_est = conductivity.estimated_conductivity(
-        state.xPhys,
-        state.tPhys,
+        xPhys,
+        tPhys,
         problem.e1,
         problem.e2,
         problem.w,
         problem.q,
         problem.rouf,
     )
-    max_g = np.max((1 - K_est) * state.xPhys.flatten() ** problem.r)
+    max_g = float(torch.max((1 - K_est) * xPhys.flatten() ** problem.r))
     expected_factor = max_g / numer
 
     assert not np.isclose(expected_factor, state.factor), "refresh must be non-vacuous"

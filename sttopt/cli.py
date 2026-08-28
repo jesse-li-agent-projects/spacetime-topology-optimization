@@ -90,6 +90,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(args: argparse.Namespace) -> None:
     import sttopt.conductivity as conductivity
     import sttopt.optimize as optimize
+    import sttopt.torch_util as torch_util
     import sttopt.viz as viz
 
     # Fail fast on an unwritable output dir, before spending nloop iterations of compute.
@@ -128,15 +129,18 @@ def main(args: argparse.Namespace) -> None:
         problem.q,
         problem.rouf,
     ).reshape(problem.nely, problem.nelx)
-    XPhys = (prev_state.xPhys > 0.5).astype(float)
+    XPhys = (prev_state.xPhys > 0.5).to(problem.dtype)
     # Same quantity as hotspot_constraint's internal T_val (conductivity.py), density-masked
     # for display -- not a print time, despite feeding combination_plot's "timing" slot.
     hotspot_severity = (1 - K_est) * XPhys
 
+    # Tensor boundary: `viz` takes plain arrays -- see sttopt/torch_util.py.
+    XPhys = torch_util.to_numpy(XPhys)
+    hotspot_severity = torch_util.to_numpy(hotspot_severity)
+    tPhys = torch_util.to_numpy(prev_state.tPhys)
+
     ax = viz.combination_plot(XPhys, hotspot_severity, eps=1.0e-1)
-    viz.stage_boundary_plot(
-        prev_state.tPhys, args.nStage, ax=ax, combination_coords=True
-    )
+    viz.stage_boundary_plot(tPhys, args.nStage, ax=ax, combination_coords=True)
 
     out_path = args.output_dir / "final_structure.png"
     ax.figure.savefig(out_path, dpi=150)

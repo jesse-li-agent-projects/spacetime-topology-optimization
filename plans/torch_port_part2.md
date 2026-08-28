@@ -221,6 +221,30 @@ job -- log it in `plans/code_quality_review.md`.
   that must happen before Phase 3.1, so do it first and record the numbers even though
   nothing has changed yet -- after the port there is no way to go back and take it.
 
+### Results: pre-port slow-test baseline (captured retroactively, 2026-08-28, commit 97ef372)
+
+The baseline capture above was missed: Phases 3.1 through 3.6 were merged (through PR #50)
+without it ever having been run. This section records it anyway, captured late rather than
+lost, since git kept the exact pre-port code. `97ef372` (the merge just before Phase 3.1's
+first commit, `26d89f9`) is byte-identical pre-port code, checked out detached in an isolated
+worktree (no phase-3.x branches touched) on an otherwise idle machine (load average ~0.6 on a
+16-core box; this pre-port code is NumPy/SciPy only and runs on CPU, so no GPU check applied).
+
+`pytest -m slow -v tests/test_e2e_slow.py` at `97ef372`:
+
+- **Result:** 1 passed.
+- **Wall clock:** 1895.33s (0:31:35).
+- The test only asserts bounds, not the values themselves, so a second, instrumented run
+  (same parameters, same commit, calling `optimize.run` directly and printing
+  `record.f0val` / `record.tru_max`) was made immediately after to get concrete numbers:
+  - **Wall clock:** 1747.22s (0:29:07).
+  - **f0val:** 192.84432887244273 (assertion window was 185 < f0val < 195).
+  - **tru_max:** 0.8005839213907026 (assertion window was |tru_max - 0.8| <= 0.008).
+
+Phase 3.7's end-of-port run should diff against `f0val ~ 192.84` and `tru_max ~ 0.8006`, not
+just re-check the same pass/fail bounds -- those bounds are loose enough to hide a regression
+this baseline's concrete numbers would catch.
+
 ---
 
 ## Phase 3.1: Device/dtype plumbing and the tensor boundary
@@ -513,6 +537,130 @@ pins.
   `tests/fixtures/torch_port_designs.npz`'s late snapshots.
 - `test_reference_sweep.py` still passes.
 
+### Results: `bench_sensitivities.py` (2026-08-28, machine idle, RTX PRO 1000 Blackwell
+Laptop GPU, 8 GB)
+
+An earlier run of this benchmark (recorded only in `plans/phase3.4_handoff.md`, since
+superseded and deleted) had a fairness bug: the four constraints' and
+`hotspot_constraint`'s hand-derived functions bake the density-filter/Heaviside chain
+rule (`H`/`Hs`/`dx`) into their returned sensitivity, while their `*_value` autograd
+counterparts deliberately stop at `d(.)/d(xPhys)` (Decision 4 makes the filter an
+ordinary forward op for the *caller*, i.e. `optimize.step`, to differentiate through).
+Timing the hand side's finished row against the autograd side's unfinished one made
+autograd look better than it is. Fixed in `benchmarks/bench_sensitivities.py` by
+finishing the same chain (`H @ (... * dx / Hs)` for density, `H @ (.../Hs)` for time)
+after every autograd backward, timed in the same region -- matching what
+`optimize.step`'s `_grad_row`/`_grad_rows_batched` actually compute for these rows.
+`whole_compliance`/`gravity_compliance` needed no fix: `compliance.py`'s hand-derived
+`dcx`/`dct` were never finished rows either, so both sides already stopped at the same
+place. See the benchmark script's own docstring for the full reasoning.
+
+While re-running, `hotspot_constraint`'s hand-derived *and* naive-autograd forward both
+turned out to **OOM at 360x120 on this 8 GB card**, independent of hand vs. autograd:
+`conductivity.neighbor_weights`'s `npairs` scales ~16.35x from 180x60 to 360x120
+(`4204240` -> `68744592`), not the Risks section's assumed 4x, because both element
+count and the conductivity filter radius double between those meshes. Each
+`npairs`-sized float64 intermediate is therefore ~550 MB, and several are live at once
+in the pairwise-sigmoid algebra regardless of which implementation is used -- not a
+benchmark-script memory leak (a `_cleanup` between cells, with `gc.collect()` +
+`torch.cuda.empty_cache()`, was added and ruled this out; memory is fully released
+between meshes) and not fixed by `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
+(tried, made no difference -- the failure is a genuine peak-memory shortfall, not
+fragmentation). Escape hatch 1 (`torch.compile` on `hotspot_value`'s forward) resolves
+it completely -- inductor's fusion means the elementwise pair algebra never
+materializes most of those intermediates -- so `bench_sensitivities.py` gained a third
+`"compiled"` mode for the hotspot cell, and any cell that still OOMs prints `OOM`
+instead of aborting the run.
+
+```
+=== 90x30 ===
+site                  mode           fwd(ms) fwd+bwd(ms)  peak(MB)
+------------------------------------------------------------------
+whole_compliance      hand             47.43       47.47      91.8
+whole_compliance      autograd         47.05       48.16     123.8
+gravity_compliance    hand             27.50       27.98     123.9
+gravity_compliance    autograd         27.04       28.93     123.9
+global_volume_fraction hand             0.07        0.06      71.4
+global_volume_fraction autograd         0.02        0.45      71.4
+time_field_continuity hand              0.26        0.25      72.9
+time_field_continuity autograd          0.05        0.79      72.9
+start_point           hand              0.14        0.13      73.8
+start_point           autograd          0.02        0.47      71.4
+stage_volume_bounds   hand              0.17        0.16      71.5
+stage_volume_bounds   autograd          0.06        0.59      71.4
+hotspot_constraint    hand              2.34        2.33     101.7
+hotspot_constraint    autograd          0.34        1.68     100.0
+hotspot_constraint    compiled          0.26        0.84      71.8
+
+=== 180x60 (production mesh) ===
+site                  mode           fwd(ms) fwd+bwd(ms)  peak(MB)
+------------------------------------------------------------------
+whole_compliance      hand             51.78       50.54     225.4
+whole_compliance      autograd         50.38       51.28     225.4
+gravity_compliance    hand             46.66       45.82     225.8
+gravity_compliance    autograd         45.71       46.70     225.9
+global_volume_fraction hand             0.09        0.09     171.6
+global_volume_fraction autograd         0.02        0.29     171.6
+time_field_continuity hand              0.30        0.30     177.5
+time_field_continuity autograd          0.05        0.79     177.5
+start_point           hand              1.76        1.75     191.3
+start_point           autograd          0.02        0.52     171.6
+stage_volume_bounds   hand              0.21        0.21     171.9
+stage_volume_bounds   autograd          0.06        0.66     171.7
+hotspot_constraint    hand             44.24       44.18     657.0
+hotspot_constraint    autograd          7.39       32.90     629.1
+hotspot_constraint    compiled          2.26        7.00     176.1
+
+=== 360x120 ===
+site                  mode           fwd(ms) fwd+bwd(ms)  peak(MB)
+------------------------------------------------------------------
+whole_compliance      hand             96.28       96.34    1836.7
+whole_compliance      autograd         96.28       97.83    1836.7
+gravity_compliance    hand             87.12       87.43    1838.0
+gravity_compliance    autograd         87.03       89.08    1838.6
+global_volume_fraction hand             0.61        0.61    1777.1
+global_volume_fraction autograd         0.03        1.04    1776.8
+time_field_continuity hand              1.12        1.12    1800.7
+time_field_continuity autograd          0.07        1.39    1800.7
+start_point           hand             31.72       31.74    1936.8
+start_point           autograd          0.02        1.04    1777.1
+stage_volume_bounds   hand              1.25        1.35    1778.1
+stage_volume_bounds   autograd          0.06        1.66    1777.4
+hotspot_constraint    hand               OOM
+hotspot_constraint    autograd           OOM
+hotspot_constraint    compiled          29.41      106.62    1844.3
+```
+
+**Decision (2026-08-28): `optimize.step` keeps its plain `hotspot_value` autograd
+call, no code change.** At the production mesh, 180x60, plain autograd already beats
+the hand-derived function on every column that matters: forward 7.39 ms vs. 44.24 ms,
+forward+backward 32.90 ms vs. 44.18 ms (~1.34x faster, reversing the Risks section's
+"assume autograd is ~400x worse" prediction -- apparently the lost diagonal-term
+cancellation is swamped by reverse-mode's automatic reuse and by the hand-derived path
+materializing several pair-sized arrays autograd's graph does not), and peak memory is
+comparable (629 MB vs. 657 MB). This is "good enough" per the standing instruction, so
+no escape hatch is needed for the mesh the plan's Done criteria actually target, and
+`sttopt/optimize.py::step` is left as-is (it already calls `hotspot_value`, wired in
+commit `2b0a318`).
+
+360x120 is a different story: neither hand-derived nor plain autograd runs there at
+all on this 8 GB card (both OOM, as above), and `torch.compile` (escape hatch 1) is
+what fixes it -- 29.41 ms / 106.62 ms fwd/fwdbwd at 1844 MB peak, no NaN. 360x120 is
+not one of this plan's stated production settings (Phase 3.7's target is 180x60), so
+this phase does not wire `torch.compile` into `optimize.step` -- doing so is a
+one-line change (`torch.compile(conductivity.hotspot_value)`) with no downside
+observed at 180x60 either (2.26 ms / 7.00 ms fwd/fwdbwd there, faster and lower-memory
+than plain autograd), but it needs its own test pass (compiled numerics are not
+guaranteed bit-identical, so the existing exact/near-exact comparisons against the
+hand-derived predecessor and the FD checks would need re-running against the compiled
+path) which is out of this phase's scope. Recorded here as a ready-made option for
+whoever next needs 360x120 to run, or for Phase 3.6's performance pass, which already
+lists `torch.compile`/fusing hotspot's pairwise algebra as an action item.
+
+This did **not** trigger the "stop and report" condition: plain autograd is good
+enough at the production mesh without any escape hatch, and 360x120's fix (`torch.compile`)
+is escape hatch 1, which the standing instruction pre-approves.
+
 ## Phase 3.5: MMA to torch
 
 `mma.py` is a verbatim port of Svanberg's code and stays verbatim -- translate array
@@ -536,6 +684,26 @@ Let them sync; see the Risks section.
 their current tiers. `subsolv` is an interior-point method with a line search, so if a
 tolerance needs loosening, loosen it with a measurement and a sentence saying why -- an
 unexplained tolerance bump here would hide a real translation error.
+
+### Results: bordered-solve CPU-vs-GPU measurement (2026-08-28, machine idle, RTX PRO
+1000 Blackwell Laptop GPU, 8 GB)
+
+`torch.linalg.solve` on a random well-conditioned SPD-plus-border 80x80 float64 system
+(the production `(m+1, m+1)` size), 3000 iterations after 20 discarded warm-up calls,
+`torch.cuda.synchronize()` bracketing every timed region:
+
+```
+n=80  cpu-only solve:                 27.33 us
+n=80  cuda-only solve:               172.82 us
+n=80  cuda tensors, cpu solve+xfer:    63.27 us
+```
+
+**Decision: solve on the CPU, with the round trip.** At this size, kernel-launch
+overhead dominates the GPU solve (172.82 us) -- more than 6x the CPU-only solve
+(27.33 us) -- and even paying to move the ~51 KB `AA`/`bb` off the GPU and the ~640 B
+result back (63.27 us total) is still under half the pure-GPU cost. `sttopt/mma.py`'s
+`subsolv` therefore does `torch.linalg.solve(AA.cpu(), bb.cpu())` for both the `m < n`
+and `m >= n` branches, per the plan's carve-out for a solve this small.
 
 ## Phase 3.6: Performance pass
 
@@ -578,7 +746,99 @@ whose error compounds with the forward's, so re-run `benchmarks/calibrate_cg_rto
 method against the autograd gradients before assuming 1e-8 still holds. It may need to be
 tighter; it may (less likely) be loosenable, which would be a straight speed win.
 
+**Status (2026-08-28): only the CG-tolerance re-evaluation below is done, per explicit
+user direction to skip the performance pass for now.** Items 1-5 above (CUDA graphs,
+dropping converged batch members, multigrid re-tuning, a cheaper coarse solve, hotspot
+fusion) are all still open and unstarted; nothing in this phase's performance-pass list
+has been touched. Phase 3.6 is **not** complete.
+
+### Results: CG rtol re-calibration for autograd (2026-08-28, machine idle, RTX PRO 1000
+Blackwell Laptop GPU, 8 GB)
+
+`benchmarks/calibrate_cg_rtol.py`'s table only ever exercised the forward solve --
+it reads the hand-derived `dcx`/`dct` off an already-solved `U`. `benchmarks/
+calibrate_cg_rtol_autograd.py` re-runs the same method through
+`compliance.whole_compliance_value`/`gravity_compliance_value` and
+`torch.autograd.grad`, so both `FemSolve`'s forward *and* its adjoint `backward` run at
+the candidate `rtol`. `spsolve` (the original's reference) detaches the autograd graph
+and can't stand in as a gradient reference here, so the reference is MGCG at
+`rtol=1e-12` instead (see the new script's docstring), cross-checked by a
+solver-independent finite-difference test on `whole_compliance_value` itself.
+
+Production mesh, `it0800` snapshot, `nStage=8`:
+
+```
+=== 90x30 (ndof=5642) ===
+    rtol   fwd(min-max)   bwd(min-max)   dcx rel@act  dcxg rel@act  dctg rel@act
+   1e-06     13-39           0-0            2.32e-06      3.98e-06      1.32e-05
+   1e-07     16-41           0-0            1.85e-07      7.92e-07      7.92e-07
+   1e-08     17-43           0-0            4.96e-08      2.04e-07      2.04e-07
+   1e-09     19-44           0-0            1.93e-09      2.15e-08      1.81e-08
+
+=== 180x60 (ndof=22082, production mesh) ===
+    rtol   fwd(min-max)   bwd(min-max)   dcx rel@act  dcxg rel@act  dctg rel@act
+   1e-06     15-26           0-0            1.18e-04      4.56e-05      5.20e-06
+   1e-07     17-29           0-0            7.92e-06      5.81e-06      3.86e-07
+   1e-08     18-31           0-0            1.50e-07      9.37e-08      9.04e-08
+   1e-09     21-33           0-0            2.70e-08      5.53e-08      1.34e-08
+
+FD check 24x16 (solver-independent, whole_compliance_value differenced directly):
+  rtol=1e-06: max rel error 1.270e-07
+  rtol=1e-08: max rel error 2.685e-07
+  rtol=1e-10: max rel error 7.694e-08
+```
+
+(`rel@act` is the max-over-active-elements relative error against the `rtol=1e-12`
+reference, `elementwise_errors`' first return value; the `abs/peak` column is omitted
+above for brevity and tracked the same pattern.)
+
+**The predicted compounding did not materialize: `bwd(min-max)` is `0-0` at every
+`rtol`, on both objectives.** `FemSolve.backward`'s self-adjoint warm start (Phase 3.3)
+lands on the exact answer at iteration zero whenever `dL/dU` is parallel to `F` --
+true for `whole_compliance` by construction, and it turns out to hold for
+`gravity_compliance` too, because `dL/dU = 2*K*U = 2*F` regardless of how `F` itself
+depends on density (the extra `dcx2`/`dct2` adjoint term is downstream of `FemSolve`'s
+own backward, in the differentiable `_gravity_load` graph, not a second CG solve). So
+in this codebase the adjoint costs nothing extra, and every error row above comes from
+the *forward* solve alone -- the same quantity part 1 already calibrated, just now read
+through autograd's chain instead of the hand-derived formulas.
+
+**Decision: `rtol=1e-8` is unchanged.** At the production mesh, `dcx`/`dcxg`/`dctg` sit
+at `1.50e-07`/`9.37e-08`/`9.04e-08` -- 6.7x-11x inside `SENSITIVITY_TOL = 1e-6`
+(`calibrate_cg_rtol.py`'s "solved"-tier bar), consistent with the margin the original
+hand-derived calibration found. **Loosening is not tempting, let alone something to act
+on unilaterally: `rtol=1e-7` already breaches the bar at 180x60** (`dcx rel@act =
+7.92e-06 > 1e-6`), one order looser than the current default, so the one-decade-per-
+step increments this table checks leave no room to loosen even if the user wanted to
+consider it. No code change made in `sttopt/torch_solve.py` or `sttopt/torch_mg.py`
+(both default `rtol=1e-8`, `torch_solve.femsolve`'s default is the one the production
+call path actually uses). Nothing here needs the user's approval since neither
+direction -- tightening or loosening -- is warranted by the numbers.
+
+**Not done in this pass:** the five performance-pass items above the tolerance
+paragraph remain untouched and open for a future pass, per explicit user direction to
+skip them this time (correctness-only scope). `benchmarks/calibrate_cg_rtol_autograd.py`
+was added as a new script rather than folded into `calibrate_cg_rtol.py`, since the two
+differ in what they patch (`_solve_fe`/`_solve_fe_batched`'s *value*-returning autograd
+counterparts vs. the hand-derived ones) and in their reference backend (`rtol=1e-12`
+MGCG vs. `spsolve`) -- see the new script's module docstring for why `spsolve` can't
+serve as an autograd reference.
+
+**Superseded (PR #54, `torch_port_review_followup.md` Phase 4 item 5):** the split above
+rested on the adjoint being a second error-contributing solve. It isn't -- it returns at
+CG iteration zero for any compliance scalar, so `lambda` is a closed-form multiple of the
+forward `U`. The only real obstacle was that `spsolve_backend` detached the graph; making
+it an autograd `Function` (`SpsolveFE`) removed it, and
+`calibrate_cg_rtol_autograd.py` was folded back into `calibrate_cg_rtol.py` and deleted.
+
 ## Phase 3.7: Validation, the end-to-end number, and the deletion
+
+**Status (2026-08-28): profiling and correctness validation done; the deletion below is
+NOT done and is left for a follow-up task.** The measured end-to-end number came in below
+the 4x acceptance floor (2.74x -- see the Results subsection below), which per this
+phase's own "below 4x, stop and report rather than deleting the hand-derived code"
+instruction means the deletion should wait for the user to see the finding first, not
+proceed automatically in the same task that measured it.
 
 **Profile again.** Re-run `benchmarks/profile_step.py` against the torch `step` at 180x60 /
 `nStage=8` on the `it0800` snapshot, machine idle. Report the same table as part 1's Phase
@@ -616,6 +876,86 @@ algebra there.** Phase 3.4's `bench_sensitivities.py` is what tests that presump
 its table is where to look first if this row misses. The FEM row assumes the self-adjoint
 shortcut in Phase 3.3 holds -- without it that row roughly doubles.
 
+### Results: profile again (2026-08-28, machine idle -- `nvidia-smi` 0% util, load
+average 1.78 before the timed run -- RTX PRO 1000 Blackwell Laptop GPU, 8 GB)
+
+`benchmarks/profile_step.py` had to be ported, not just re-run: it still patched the
+NumPy/SciPy suspects (`fem.assemble_stiffness`, `scipy.sparse.linalg.spsolve`,
+`conductivity.hotspot_constraint`, `mma.mmasub`) that `optimize.step` no longer calls at
+all post-port. Rewritten to patch the torch equivalents instead
+(`compliance._solve_fe`/`_solve_fe_batched`, `conductivity.hotspot_value`, the now-torch
+`mma.mmasub`), with `torch.cuda.synchronize()` bracketing every timed region. Assembly is
+reported as exactly 0: the solve is matrix-free (part 1), so there is no assembly step
+left to time.
+
+10 timed `step()` calls after 2 discarded warm-up, 180x60, `nStage=8`, `it0800` snapshot,
+`device="cuda"`, `dtype=torch.float64`:
+
+```
+suspect                  calls  calls/step    total(s)  per-call(ms)   %/step
+-----------------------------------------------------------------------------
+fem_solve                   10         1.0      8.2788       827.884     74.2
+mmasub                      10         1.0      2.3466       234.659     21.0
+hotspot                     10         1.0      0.0689         6.894      0.6
+assembly (matrix-free)      --          --      0.0000            --      0.0
+everything else             --          --      0.4655            --      4.2
+
+Total: 1116.0 ms/step
+```
+
+**3060 / 1116 = 2.74x -- below the 4x floor.** Per the acceptance-floor paragraph above,
+this triggers "stop and report rather than deleting the hand-derived code": the deletion
+step is deliberately **not** done by this same task: it is left for a follow-up task to
+do once the finding below has been seen.
+
+`mmasub` (235 ms) and `hotspot` (6.9 ms) landed close to or better than projected (~220 ms,
+~110 ms) -- consistent with Phase 3.4's own finding that plain autograd already beats the
+hand-derived hotspot algebra at this mesh, and Phase 3.5's MMA-to-torch port. **`fem_solve`
+(828 ms) is >27x the ~30 ms projection and is the entire reason the target was missed.**
+Root-caused by instrumenting `torch_mg.build_hierarchy`/`torch_fem.pcg` directly inside
+the profiled `step()` calls: the forward solve needs **~70-74 CG iterations** on this
+harness's synthetic trajectory, not the ~13-22 part 1 measured on a real consecutive
+`it799`/`it800` pair (backward is confirmed 0 iterations every call -- the Phase 3.6
+self-adjoint finding holds, so the adjoint is not the cost). Hierarchy build is a
+consistent 61 ms/step (9-row batch), matching part 1's ~24%-of-solve estimate; the other
+~767 ms/step is CG iteration cost.
+
+**This is very likely a profiling-harness artifact, not a genuine ~30x regression in the
+production solve.** `build_realistic_state` (this script, inherited from part 1's NumPy
+version) approximates raw `x`/`t` with the already-Heaviside-projected `xPhys`/`tPhys` --
+harmless for the suspects the NumPy script timed (`spsolve`'s cost is shape-driven, not
+value-driven), but not for CG, whose iteration count *is* value-driven. Feeding
+`xPhys`/`tPhys` back in as if they were raw `x`/`t` applies the density filter and
+Heaviside projection a second time on the very first synthetic `step()` call, jumping
+binariness from 0.77 to 0.98 in one iteration (confirmed by instrumentation) -- a much
+larger design change than the `move`/`tmove = 0.01` limits ever produce in a real run,
+and one a real near-`beta_d`-saturated trajectory never visits. Direct evidence this is
+the driver: a single cold solve built directly from the `it0800` snapshot's own genuine
+`xPhys`/`tPhys` (no synthetic re-projection) converges in 31 iterations, matching part 1's
+cold number; it is only the chained synthetic re-stepping that climbs to ~70+ and holds
+there. **Not fixed here** -- reworking `build_realistic_state` to seed a self-consistent
+raw `x`/`t` (rather than approximating it with `xPhys`/`tPhys`) is follow-up work for
+whoever next touches this script or Phase 3.6's performance pass, and is exactly the kind
+of thing a fresh profile after that fix should re-check before trusting either number.
+
+**A second, unrelated bug found and fixed while instrumenting this measurement (not a
+Phase 3.6 performance question, not a physics/algorithm question -- a plain autograd
+hygiene bug with an unambiguous fix, so fixed directly rather than only logged):**
+`optimize.step` stored `state.U` (the batched FEM solution, threaded forward purely as a
+warm-start seed for the *next* iteration's solve) without detaching it. Undetached, every
+`FemSolve.apply` call wires its `x0` argument into the returned tensor's `grad_fn` graph
+regardless of what `backward` returns for it, so each iteration's whole multigrid
+hierarchy got chained into the next iteration's autograd graph via `state.U`, forming one
+never-freed graph across the entire run. Measured directly: **~180 MB/step of GPU memory
+growth at 180x60, undetached -- OOMs an 8 GB card by iteration ~40 -- flat (0 growth) once
+`state.U` is detached before being stored.** This is not a hypothetical: it would have
+made the plan's own "sttopt.cli runs the production configuration (180x60, nloop=800)
+entirely on the GPU" Done criterion, and this very task's slow-test/long-E2E runs,
+unreachable regardless of throughput. Fixed in `sttopt/optimize.py` (one line, `U=U_new
+.detach() if U_new is not None else None`), with a regression test
+(`test_step_state_U_does_not_carry_grad_across_iterations`) asserting `state.U.requires_grad
+is False` after a few real `step()` calls, and its own dedicated commit.
+
 **Correctness, at three scales:**
 
 1. **Unit and fixture suites.** Everything under `tests/` except the slow marker, passing.
@@ -635,6 +975,96 @@ shortcut in Phase 3.3 holds -- without it that row roughly doubles.
    section** so a future reader does not over-read the agreement.
    This run is also the natural end-to-end timing datapoint: part 1 recorded 35 minutes for
    a native 180x60 run of the same shape.
+
+### Results: correctness at three scales (2026-08-28)
+
+**1. Unit and fixture suites.** `pytest tests/ -q -m "not slow"`: **412 passed, 4 skipped,
+1 deselected** (58.94s) -- the +1 over the previously-recorded 411 is the new
+`state.U`-detach regression test above; no other change. Green.
+
+**Second and final `pytest -m slow` run**, against the pre-port baseline recorded above
+(`f0val = 192.84432887244273`, `tru_max = 0.8005839213907026`, wall clock 1895.33s /
+1747.22s at commit `97ef372`). Per the Execution notes, the slow test runs exactly twice
+total (once pre-port, once here); rather than a `pytest -m slow` invocation *and* a
+separate instrumented `optimize.run` call to get concrete numbers (what the pre-port
+baseline needed, since it was a retroactive capture against a detached historical commit),
+this run calls `optimize.run` directly with `test_e2e_slow.py`'s exact parameters and
+checks its exact two assertions inline -- one execution instead of two, still exercising
+the identical code path `pytest -m slow` would.
+
+- **Result:** PASS (both assertions hold).
+- **Wall clock:** 1072.87s (17.88 min) -- vs. baseline 1895.33s / 1747.22s (~29-32 min).
+  **Faster than the pre-port NumPy code, on CPU** (`device="cpu"`, this test's default):
+  ~1.6-1.8x. Consistent with part 1's own finding that MGCG-CPU already beats
+  `spsolve`-CPU at 180x60 warm (99.2 ms vs. 132.4 ms/solve), compounded by torch's dense
+  `mmasub` and `hotspot_value` also beating their NumPy predecessors on CPU.
+- **f0val:** 193.66146222067775 (baseline 192.84432887244273; window 185 < f0val < 195 --
+  holds, and the two are within 0.4% of each other).
+- **tru_max:** 0.8003829571099897 (baseline 0.8005839213907026; window
+  `|tru_max - 0.8| <= 0.008` -- holds, agreement to 4 significant figures).
+
+**2. Short E2E.** `test_e2e.py`'s `nloop=3` trajectory: included in and passing as part of
+the fast suite above (`test_iteration1_assembly_matches_fixture`,
+`test_mma_state_threading_matches_fixture`, `test_e2e_trajectory_matches_fixture`) --
+`e2e_rtol` absorbed the trajectory drift as expected, no separate run needed.
+
+**3. Long E2E, aggregate comparison, 90x30 / `nloop=800`.** No fixture of the pre-port
+run's full history exists (`tests/fixtures/torch_port_designs.npz` only holds the
+`SNAPSHOT_LOOPS` density/time snapshots, not a per-iteration objective/`tru_max` history),
+so both sides were re-run fresh, same parameters
+(`rmin=2.0, lrmin=2.0, rmin_cond=6.0`, matching `generate_torch_port_designs.py`'s 90x30
+entry): the pre-port side via `git archive 97ef372 -- sttopt` extracted to a scratch
+directory and run under that `PYTHONPATH` (never mixed with this worktree's current
+package); the post-port side is this worktree's current `optimize.run`, i.e. the same call
+`generate_torch_port_designs.py` makes for its 90x30 mesh. **Sanity check passed before
+trusting the comparison:** the freshly re-run pre-port `xPhys_final` is bit-identical
+(`max abs diff = 0.0`) to the already-checked-in `x_90x30_it0800` in
+`torch_port_designs.npz`, confirming the archived extraction faithfully reproduces the
+original Phase 0a run rather than some subtly different historical state.
+
+```
+                          old (NumPy, 97ef372)   new (torch, this branch)
+final volume fraction    0.500002                0.500001
+final obj (compliance)   190.9616                191.2091   (0.13% apart)
+final tru_max            0.802316                0.760727   (4.16e-2 abs, ~5.2% rel apart)
+binariness (|x|<1e-3 or >1-1e-3)  0.8322          0.8348
+wall clock (this re-run) 254.8 s (4.25 min)       580.9 s (9.68 min)
+```
+
+Compliance history shape: both start at the identical uniform-field value (990.2622 --
+deterministic init, same on both sides) and are monotonically decreasing at 99.9%/100.0%
+of sampled steps (50-iteration trailing window); final magnitudes agree to 0.13%. Final
+density field: mean abs diff 0.0219, max abs diff 0.9947 (at least one element is
+essentially inverted between the two runs), pixel-wise correlation and single-window
+global SSIM both 0.9637.
+
+**Divergence found, stated plainly: `tru_max` differs by ~5.2% at 90x30 -- clearly larger
+than the <0.03% seen in the 180x60 slow-test comparison above.** Read alongside everything
+else, this is not the "qualitatively different design" failure mode the task asks to watch
+for: volume fraction matches to 6 decimal places, the compliance trajectory has the same
+shape and its final value agrees to 0.13%, binariness is nearly identical, and the final
+density fields correlate at 0.96 -- all pointing at *the same converged structure*, not
+two different local optima. What ties out with the `tru_max` gap instead is
+`test_e2e_slow.py`'s own documented caveat about this exact quantity: "its argmax element
+can still jump between competing hot spots this late in the run, making a tight bound on
+it fragile" -- `tru_max` is a single debiased-max statistic, so it is far more sensitive
+to *which* element the two runs happen to consider hottest than any of the aggregate
+quantities above are, and 90x30's coarser mesh (fewer, larger elements competing for that
+argmax) plausibly amplifies exactly that sensitivity relative to 180x60. The 0.99-max-abs-
+diff element in the density comparison is consistent with this: a small number of elements
+did settle into a different local state between the two runs, in a way that moves which
+element wins the hotspot argmax without moving the overall structure. **Accepted
+divergence, stated explicitly per the task's instruction so it is not over-read:** treat
+`tru_max` from a 90x30 run as informative but not tightly comparable across NumPy/torch;
+the production 180x60 comparison above (agreement to 4 significant figures) is the one
+that should carry weight for this quantity.
+
+**Wall clock: torch is ~2.28x *slower* than NumPy at 90x30 on CPU** (580.9 s vs. 254.8 s),
+the opposite of the 180x60 result. Expected and already accepted by the plan's own
+Non-goals ("Making 90x30 fast... GPU MGCG loses there and that is accepted") and part 1's
+measurement that MGCG-CPU loses badly to `spsolve`-CPU at this mesh (162.5 ms vs. 20.8
+ms/solve, warm, batched) -- not a new finding, just confirmation that it holds end-to-end
+through `optimize.step` too, not only in the isolated solver benchmark.
 
 **Then delete.** In a final, separate commit: remove the hand-derived sensitivity code from
 `sttopt/compliance.py`, `sttopt/constraints.py`, `sttopt/conductivity.py`, and the

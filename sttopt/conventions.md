@@ -27,7 +27,7 @@ writing the linear-index formula out — a boundary condition keyed to a linear 
 silently clamps a different part of the mesh if the numbering ever changes again, while
 leaving the problem well-posed and the tests green.
 
-`fem.assemble_stiffness`'s `KE.flatten(order='F')` flattens the local 8x8 element
+`tests/reference/fem.py`'s `assemble_stiffness`'s `KE.flatten(order='F')` flattens the local 8x8 element
 stiffness matrix, not a grid array, and is an unrelated internal-consistency choice
 paired with that function's own `iK`/`jK` construction — not a grid-order violation.
 

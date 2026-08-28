@@ -22,6 +22,9 @@ import sttopt.filters as filters
 import sttopt.gravity as gravity
 import sttopt.optimize as optimize
 import sttopt.timefield as timefield
+import tests.reference.compliance as compliance_ref
+import tests.reference.conductivity as conductivity_ref
+import tests.reference.fem as fem_ref
 
 OUT = __import__("pathlib").Path(__file__).parent
 
@@ -54,7 +57,7 @@ def main():
     xPhys0 = filters.heaviside_projection(
         np.full((NELY, NELX), VOLFRAC), BETA_D_INIT, problem.eta
     )
-    c0, dcx0 = compliance.whole_compliance(
+    c0, dcx0 = compliance_ref.whole_compliance(
         xPhys0,
         KE,
         edofMat,
@@ -65,8 +68,10 @@ def main():
         problem.F,
         problem.ndof,
     )
-    K0 = fem.assemble_stiffness(KE, xPhys0, EMIN, EMAX, PENAL, edofMat, problem.ndof)
-    U0 = fem.solve_fe(K0, problem.F, problem.freedofs)
+    K0 = fem_ref.assemble_stiffness(
+        KE, xPhys0, EMIN, EMAX, PENAL, edofMat, problem.ndof
+    )
+    U0 = fem_ref.solve_fe(K0, problem.F, problem.freedofs)
     np.savez(
         OUT / "fem_solve.npz",
         xPhys0=xPhys0,
@@ -178,7 +183,7 @@ def main():
         )
         dx_all[:, :, k] = dx
 
-        c_whole, dcx_whole = compliance.whole_compliance(
+        c_whole, dcx_whole = compliance_ref.whole_compliance(
             state.xPhys,
             KE,
             edofMat,
@@ -193,7 +198,7 @@ def main():
         dcx_whole_all[:, :, k] = dcx_whole
 
         for i, ti in enumerate(np.linspace(0, 1, NSTAGE + 1)[1:]):
-            c_grav, dcx_grav, dct_grav = compliance.gravity_compliance(
+            c_grav, dcx_grav, dct_grav = compliance_ref.gravity_compliance(
                 state.xPhys,
                 state.tPhys,
                 KE,
@@ -214,7 +219,7 @@ def main():
         K_est = conductivity.estimated_conductivity(
             state.xPhys, state.tPhys, e1, e2, w, problem.q, problem.rouf
         )
-        hotspot = conductivity.hotspot_constraint(
+        hotspot = conductivity_ref.hotspot_constraint(
             state.xPhys,
             state.tPhys,
             e1,

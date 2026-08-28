@@ -7,11 +7,15 @@ See conftest.py/conventions.md for fixture format and tolerance policy.
 import numpy as np
 import pytest
 import scipy.sparse as sp
+import torch
 
 import sttopt.compliance as compliance
 import sttopt.fem as fem
 import sttopt.gravity as gravity
-from conftest import assert_close, load_fixture_npz, point_load_problem
+import sttopt.torch_util as torch_util
+import tests.reference.compliance as compliance_ref
+import tests.reference.fem as fem_ref
+from conftest import assert_close, load_fixture_npz, point_load_problem, tt, tti
 
 
 def test_whole_compliance_matches_fixture():
@@ -20,13 +24,14 @@ def test_whole_compliance_matches_fixture():
     nelx, nely, nloop = int(fx["nelx"]), int(fx["nely"]), e2e["xPhys_traj"].shape[2] - 1
     Emin, Emax, penal = 1e-9, 1.0, 3
 
-    KE = fem.plane_stress_KE(nu=0.3)
-    edofMat = fem.element_dof_map(nelx, nely)
+    KE = tt(fem.plane_stress_KE(nu=0.3))
+    edofMat = tti(fem.element_dof_map(nelx, nely))
     F, freedofs, ndof = point_load_problem(nelx, nely)
+    F, freedofs = tt(F), tti(freedofs)
 
     for k in range(nloop):
-        xPhys = e2e["xPhys_traj"][:, :, k]
-        c, dcx = compliance.whole_compliance(
+        xPhys = tt(e2e["xPhys_traj"][:, :, k])
+        c, dcx = compliance_ref.whole_compliance(
             xPhys, KE, edofMat, Emin, Emax, penal, freedofs, F, ndof
         )
         assert_close(c, fx["c_whole_all"][k], tier="solved")
@@ -42,19 +47,20 @@ def test_gravity_compliance_matches_fixture():
     Emin, Emax, penal = 1e-9, 1.0, 3
     beta_t = 10.0  # beta_t=10 fixed for loop=1..3: loop%30==0 never triggers (see generate_fixtures.py)
 
-    KE = fem.plane_stress_KE(nu=0.3)
-    edofMat = fem.element_dof_map(nelx, nely)
+    KE = tt(fem.plane_stress_KE(nu=0.3))
+    edofMat = tti(fem.element_dof_map(nelx, nely))
     _, freedofs, ndof = point_load_problem(nelx, nely)
-    C = sp.csr_matrix(grav["C"])
+    freedofs = tti(freedofs)
+    C = torch_util.csr_to_tensor(sp.csr_matrix(grav["C"]), "cpu", torch.float64)
 
     tP = np.linspace(0, 1, nStage + 1)
 
     for k in range(nloop):
-        xPhys = e2e["xPhys_traj"][:, :, k]
-        tPhys = e2e["tPhys_traj"][:, :, k]
+        xPhys = tt(e2e["xPhys_traj"][:, :, k])
+        tPhys = tt(e2e["tPhys_traj"][:, :, k])
         for i in range(nStage):
             ti = tP[i + 1]
-            c, dcx, dct = compliance.gravity_compliance(
+            c, dcx, dct = compliance_ref.gravity_compliance(
                 xPhys,
                 tPhys,
                 KE,
@@ -131,8 +137,8 @@ def test_whole_compliance_axial_bar_patch(t, Emax):
     F = np.zeros(ndof)
     _add_edge_traction(F, nodes[:, -1], (t, 0.0))
 
-    c, dcx = compliance.whole_compliance(
-        xPhys, KE, edofMat, Emin, Emax, penal, freedofs, F, ndof
+    c, dcx = compliance_ref.whole_compliance(
+        tt(xPhys), tt(KE), tti(edofMat), Emin, Emax, penal, tti(freedofs), tt(F), ndof
     )
 
     # Unit elements/thickness: length L = nelx, cross-section area A = nely * 1.
@@ -178,8 +184,8 @@ def _cantilever_beam_compliance(
     F = np.zeros(ndof)
     _add_edge_traction(F, nodes[:, -1], (0.0, -P / nely))
 
-    c, dcx = compliance.whole_compliance(
-        xPhys, KE, edofMat, Emin, Emax, penal, freedofs, F, ndof
+    c, dcx = compliance_ref.whole_compliance(
+        tt(xPhys), tt(KE), tti(edofMat), Emin, Emax, penal, tti(freedofs), tt(F), ndof
     )
 
     L, H = nelx, nely
@@ -248,13 +254,14 @@ def test_whole_compliance_scales_as_load_squared_and_inverse_modulus():
     """
     nelx, nely = 6, 4
     penal = 3
-    KE = fem.plane_stress_KE(nu=0.3)
-    edofMat = fem.element_dof_map(nelx, nely)
+    KE = tt(fem.plane_stress_KE(nu=0.3))
+    edofMat = tti(fem.element_dof_map(nelx, nely))
     F, freedofs, ndof = point_load_problem(nelx, nely)
-    xPhys = _random_field(np.random.default_rng(3), nely, nelx)
+    F, freedofs = tt(F), tti(freedofs)
+    xPhys = tt(_random_field(np.random.default_rng(3), nely, nelx))
 
     def c_of(alpha, Emax):
-        c, _ = compliance.whole_compliance(
+        c, _ = compliance_ref.whole_compliance(
             xPhys, KE, edofMat, 1e-9 * Emax, Emax, penal, freedofs, alpha * F, ndof
         )
         return c
@@ -296,8 +303,19 @@ def _gravity_cantilever_compliance(
     freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)
     C = gravity.gravity_load_matrix(nelx, nely) * w_scale
 
-    c, _, _ = compliance.gravity_compliance(
-        xPhys, tPhys, KE, edofMat, Emin, Emax, penal, ti, C, beta_t, freedofs, ndof
+    c, _, _ = compliance_ref.gravity_compliance(
+        tt(xPhys),
+        tt(tPhys),
+        tt(KE),
+        tti(edofMat),
+        Emin,
+        Emax,
+        penal,
+        ti,
+        torch_util.csr_to_tensor(C, "cpu", torch.float64),
+        beta_t,
+        tti(freedofs),
+        ndof,
     )
     return c
 
@@ -393,16 +411,17 @@ def _random_field(rng, nely, nelx):
 def test_whole_compliance_fd_dcx():
     nelx, nely = 6, 4
     Emin, Emax, penal = 1e-9, 1.0, 3
-    KE = fem.plane_stress_KE(nu=0.3)
-    edofMat = fem.element_dof_map(nelx, nely)
+    KE = tt(fem.plane_stress_KE(nu=0.3))
+    edofMat = tti(fem.element_dof_map(nelx, nely))
     F, freedofs, ndof = point_load_problem(nelx, nely)
+    F, freedofs = tt(F), tti(freedofs)
     h = 1e-6
 
     rng = np.random.default_rng(0)
     for seed in range(5):
         xPhys = _random_field(rng, nely, nelx)
-        _, dcx = compliance.whole_compliance(
-            xPhys, KE, edofMat, Emin, Emax, penal, freedofs, F, ndof
+        _, dcx = compliance_ref.whole_compliance(
+            tt(xPhys), KE, edofMat, Emin, Emax, penal, freedofs, F, ndof
         )
         fd = np.zeros_like(xPhys)
         for j in range(nely):
@@ -411,11 +430,11 @@ def test_whole_compliance_fd_dcx():
                 xp[j, i] += h
                 xm = xPhys.copy()
                 xm[j, i] -= h
-                cp, _ = compliance.whole_compliance(
-                    xp, KE, edofMat, Emin, Emax, penal, freedofs, F, ndof
+                cp, _ = compliance_ref.whole_compliance(
+                    tt(xp), KE, edofMat, Emin, Emax, penal, freedofs, F, ndof
                 )
-                cm, _ = compliance.whole_compliance(
-                    xm, KE, edofMat, Emin, Emax, penal, freedofs, F, ndof
+                cm, _ = compliance_ref.whole_compliance(
+                    tt(xm), KE, edofMat, Emin, Emax, penal, freedofs, F, ndof
                 )
                 fd[j, i] = (cp - cm) / (2 * h)
         np.testing.assert_allclose(dcx, fd, rtol=1e-4, atol=1e-6)
@@ -426,11 +445,14 @@ def test_gravity_compliance_fd_dcx_and_dct():
     Emin, Emax, penal = 1e-9, 1.0, 3
     beta_t = 10.0
     ti = 0.5
-    KE = fem.plane_stress_KE(nu=0.3)
-    edofMat = fem.element_dof_map(nelx, nely)
-    _, freedofs, ndof = point_load_problem(nelx, nely)
+    KE_np = fem.plane_stress_KE(nu=0.3)
+    edofMat_np = fem.element_dof_map(nelx, nely)
+    KE, edofMat = tt(KE_np), tti(edofMat_np)
+    _, freedofs_np, ndof = point_load_problem(nelx, nely)
+    freedofs = tti(freedofs_np)
 
-    C = gravity.gravity_load_matrix(nelx, nely)
+    C_np = gravity.gravity_load_matrix(nelx, nely)
+    C = torch_util.csr_to_tensor(C_np, "cpu", torch.float64)
     h = 1e-4
 
     # Self-weight-only loading (no external point load) on a small random mesh can
@@ -440,9 +462,11 @@ def test_gravity_compliance_fd_dcx_and_dct():
     # loosen tolerances to paper over them: this is a numerical-conditioning artifact
     # of the FD probe, not evidence about the analytic formula.
     def well_conditioned(xPhys, tPhys):
-        ft = compliance.time_mask(tPhys, ti, beta_t)
-        K = fem.assemble_stiffness(KE, xPhys * ft, Emin, Emax, penal, edofMat, ndof)
-        Kfree = K[np.ix_(freedofs, freedofs)].toarray()
+        ft = compliance.time_mask(tt(tPhys), ti, beta_t).numpy()
+        K = fem_ref.assemble_stiffness(
+            KE_np, xPhys * ft, Emin, Emax, penal, edofMat_np, ndof
+        )
+        Kfree = K[np.ix_(freedofs_np, freedofs_np)].toarray()
         return np.linalg.cond(Kfree) < 1e5
 
     rng = np.random.default_rng(1)
@@ -460,8 +484,19 @@ def test_gravity_compliance_fd_dcx_and_dct():
             continue
         accepted += 1
 
-        _, dcx, dct = compliance.gravity_compliance(
-            xPhys, tPhys, KE, edofMat, Emin, Emax, penal, ti, C, beta_t, freedofs, ndof
+        _, dcx, dct = compliance_ref.gravity_compliance(
+            tt(xPhys),
+            tt(tPhys),
+            KE,
+            edofMat,
+            Emin,
+            Emax,
+            penal,
+            ti,
+            C,
+            beta_t,
+            freedofs,
+            ndof,
         )
 
         fd_x = np.zeros(nely * nelx)
@@ -474,11 +509,33 @@ def test_gravity_compliance_fd_dcx_and_dct():
             xp[j, i] += h
             xm = xPhys.copy()
             xm[j, i] -= h
-            cp, _, _ = compliance.gravity_compliance(
-                xp, tPhys, KE, edofMat, Emin, Emax, penal, ti, C, beta_t, freedofs, ndof
+            cp, _, _ = compliance_ref.gravity_compliance(
+                tt(xp),
+                tt(tPhys),
+                KE,
+                edofMat,
+                Emin,
+                Emax,
+                penal,
+                ti,
+                C,
+                beta_t,
+                freedofs,
+                ndof,
             )
-            cm, _, _ = compliance.gravity_compliance(
-                xm, tPhys, KE, edofMat, Emin, Emax, penal, ti, C, beta_t, freedofs, ndof
+            cm, _, _ = compliance_ref.gravity_compliance(
+                tt(xm),
+                tt(tPhys),
+                KE,
+                edofMat,
+                Emin,
+                Emax,
+                penal,
+                ti,
+                C,
+                beta_t,
+                freedofs,
+                ndof,
             )
             fd_x[e] = (cp - cm) / (2 * h)
 
@@ -486,11 +543,33 @@ def test_gravity_compliance_fd_dcx_and_dct():
             tp[j, i] += h
             tm = tPhys.copy()
             tm[j, i] -= h
-            cp, _, _ = compliance.gravity_compliance(
-                xPhys, tp, KE, edofMat, Emin, Emax, penal, ti, C, beta_t, freedofs, ndof
+            cp, _, _ = compliance_ref.gravity_compliance(
+                tt(xPhys),
+                tt(tp),
+                KE,
+                edofMat,
+                Emin,
+                Emax,
+                penal,
+                ti,
+                C,
+                beta_t,
+                freedofs,
+                ndof,
             )
-            cm, _, _ = compliance.gravity_compliance(
-                xPhys, tm, KE, edofMat, Emin, Emax, penal, ti, C, beta_t, freedofs, ndof
+            cm, _, _ = compliance_ref.gravity_compliance(
+                tt(xPhys),
+                tt(tm),
+                KE,
+                edofMat,
+                Emin,
+                Emax,
+                penal,
+                ti,
+                C,
+                beta_t,
+                freedofs,
+                ndof,
             )
             fd_t[e] = (cp - cm) / (2 * h)
 
@@ -500,12 +579,198 @@ def test_gravity_compliance_fd_dcx_and_dct():
 
 def test_time_mask_derivative_matches_fd():
     rng = np.random.default_rng(2)
-    tPhys = rng.uniform(0.05, 0.95, size=(4, 6))
+    tPhys = tt(rng.uniform(0.05, 0.95, size=(4, 6)))
     ti, beta_t = 0.4, 10.0
     h = 1e-6
-    analytic = compliance.time_mask_derivative(tPhys, ti, beta_t)
+    analytic = compliance_ref.time_mask_derivative(tPhys, ti, beta_t)
     fd = (
         compliance.time_mask(tPhys + h, ti, beta_t)
         - compliance.time_mask(tPhys - h, ti, beta_t)
     ) / (2 * h)
     np.testing.assert_allclose(analytic, fd, rtol=1e-6, atol=1e-8)
+
+
+# --- Phase 3.4 (plans/torch_port_part2.md): autograd sensitivities against hand-derived --
+
+from benchmarks import calibrate_cg_rtol as calib  # noqa: E402
+
+
+def _near_binary_snapshot(mesh="90x30"):
+    nelx, nely = (int(v) for v in mesh.split("x"))
+    with np.load(calib.FIXTURES) as data:
+        x = data[f"x_{mesh}_it0800"]
+        t = data[f"t_{mesh}_it0800"]
+    return calib.mesh_setup(nelx, nely), x, t
+
+
+def test_whole_compliance_value_matches_hand_derived_near_binary():
+    """`whole_compliance_value`'s autograd sensitivity against `whole_compliance`'s
+    hand-derived `dcx`, at a near-binary snapshot -- `solved` tier (downstream of the
+    FEM solve). The value-only function is the one `optimize.step` calls for the
+    production sensitivity (Phase 3.4); this is `bench_sensitivities.py`'s correctness
+    counterpart.
+    """
+    setup, x, t = _near_binary_snapshot()
+    xPhys = torch.tensor(x, dtype=torch.float64, requires_grad=True)
+
+    c_ref, dcx_ref = compliance_ref.whole_compliance(
+        xPhys.detach(),
+        setup["KE_t"],
+        setup["edofMat_t"],
+        calib.EMIN,
+        calib.EMAX,
+        calib.PENAL,
+        setup["freedofs_t"],
+        setup["F_t"],
+        setup["ndof"],
+    )
+    c, _U = compliance.whole_compliance(
+        xPhys,
+        setup["KE_t"],
+        setup["edofMat_t"],
+        calib.EMIN,
+        calib.EMAX,
+        calib.PENAL,
+        setup["freedofs_t"],
+        setup["F_t"],
+        setup["ndof"],
+    )
+    (dcx,) = torch.autograd.grad(c, (xPhys,))
+
+    assert_close(c.detach().numpy(), c_ref, tier="solved")
+    rel_active, abs_over_peak = calib.elementwise_errors(
+        dcx.numpy().ravel(), dcx_ref.numpy().ravel()
+    )
+    assert rel_active < calib.SENSITIVITY_TOL
+    assert abs_over_peak < calib.SENSITIVITY_TOL
+
+
+def test_gravity_compliance_value_matches_hand_derived_near_binary():
+    """`gravity_compliance_value`'s autograd sensitivities against `gravity_compliance`'s
+    hand-derived `dcx`/`dct`, at a near-binary snapshot -- `solved` tier. In particular
+    this pins the "extra adjoint term" (`gravity_compliance`'s docstring) falling out of
+    autograd for free, with no special-casing.
+    """
+    setup, x, t = _near_binary_snapshot()
+    xPhys = torch.tensor(x, dtype=torch.float64, requires_grad=True)
+    tPhys = torch.tensor(t, dtype=torch.float64, requires_grad=True)
+    ti, beta_t = 0.5, calib.BETA_T
+
+    c_ref, dcx_ref, dct_ref = compliance_ref.gravity_compliance(
+        xPhys.detach(),
+        tPhys.detach(),
+        setup["KE_t"],
+        setup["edofMat_t"],
+        calib.EMIN,
+        calib.EMAX,
+        calib.PENAL,
+        ti,
+        setup["C_t"],
+        beta_t,
+        setup["freedofs_t"],
+        setup["ndof"],
+    )
+    cg, _U = compliance.gravity_compliance(
+        xPhys,
+        tPhys,
+        setup["KE_t"],
+        setup["edofMat_t"],
+        calib.EMIN,
+        calib.EMAX,
+        calib.PENAL,
+        ti,
+        setup["C_t"],
+        beta_t,
+        setup["freedofs_t"],
+        setup["ndof"],
+    )
+    dcx, dct = torch.autograd.grad(cg, (xPhys, tPhys))
+
+    assert_close(cg.detach().numpy(), c_ref, tier="solved")
+    for grad, ref, name in ((dcx, dcx_ref, "dcx"), (dct, dct_ref, "dct")):
+        rel_active, abs_over_peak = calib.elementwise_errors(
+            grad.numpy().ravel(), ref.numpy().ravel()
+        )
+        assert rel_active < calib.SENSITIVITY_TOL, name
+        assert abs_over_peak < calib.SENSITIVITY_TOL, name
+
+
+def test_batched_whole_and_gravity_compliance_value_matches_sequential():
+    """`batched_whole_and_gravity_compliance_value`'s values and autograd sensitivities
+    against calling `whole_compliance_value`/`gravity_compliance_value` sequentially,
+    one `FemSolve` call each -- the batched path must agree with the unbatched one it
+    replaces in `optimize.step` when `Problem.batch_fem_solves` is on.
+    """
+    setup, x, t = _near_binary_snapshot()
+    nstage = 3
+    stage_times = [0.3, 0.6, 1.0]
+
+    def run(batched):
+        xPhys = torch.tensor(x, dtype=torch.float64, requires_grad=True)
+        tPhys = torch.tensor(t, dtype=torch.float64, requires_grad=True)
+        if batched:
+            c, stage_cs, _U = compliance.batched_whole_and_gravity_compliance(
+                xPhys,
+                tPhys,
+                setup["KE_t"],
+                setup["edofMat_t"],
+                calib.EMIN,
+                calib.EMAX,
+                calib.PENAL,
+                setup["freedofs_t"],
+                setup["F_t"],
+                setup["ndof"],
+                setup["C_t"],
+                calib.BETA_T,
+                stage_times,
+            )
+        else:
+            c, _U = compliance.whole_compliance(
+                xPhys,
+                setup["KE_t"],
+                setup["edofMat_t"],
+                calib.EMIN,
+                calib.EMAX,
+                calib.PENAL,
+                setup["freedofs_t"],
+                setup["F_t"],
+                setup["ndof"],
+            )
+            stage_cs = [
+                compliance.gravity_compliance(
+                    xPhys,
+                    tPhys,
+                    setup["KE_t"],
+                    setup["edofMat_t"],
+                    calib.EMIN,
+                    calib.EMAX,
+                    calib.PENAL,
+                    ti,
+                    setup["C_t"],
+                    calib.BETA_T,
+                    setup["freedofs_t"],
+                    setup["ndof"],
+                )[0]
+                for ti in stage_times
+            ]
+        f0val = c + sum(stage_cs)
+        dcx, dct = torch.autograd.grad(f0val, (xPhys, tPhys))
+        return (
+            float(c.detach()),
+            [float(cg.detach()) for cg in stage_cs],
+            dcx.numpy(),
+            dct.numpy(),
+        )
+
+    c_b, cg_b, dcx_b, dct_b = run(True)
+    c_s, cg_s, dcx_s, dct_s = run(False)
+
+    assert_close(c_b, c_s, tier="solved")
+    for a, b in zip(cg_b, cg_s):
+        assert_close(a, b, tier="solved")
+    rel_active, abs_over_peak = calib.elementwise_errors(dcx_b.ravel(), dcx_s.ravel())
+    assert rel_active < calib.SENSITIVITY_TOL
+    assert abs_over_peak < calib.SENSITIVITY_TOL
+    rel_active, abs_over_peak = calib.elementwise_errors(dct_b.ravel(), dct_s.ravel())
+    assert rel_active < calib.SENSITIVITY_TOL
+    assert abs_over_peak < calib.SENSITIVITY_TOL

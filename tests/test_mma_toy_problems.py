@@ -9,6 +9,7 @@ import warnings
 import numpy as np
 
 import sttopt.mma as mma
+from conftest import tt
 
 
 def _run_mmasub(n, m, xmin, xmax, x0, a0, a, c, d, objective, constraint, n_iterations):
@@ -16,13 +17,17 @@ def _run_mmasub(n, m, xmin, xmax, x0, a0, a, c, d, objective, constraint, n_iter
     starting from `x0`, given per-iteration `objective(x) -> (f0val, df0dx)` and
     `constraint(x) -> (fval, dfdx)` callbacks. Returns the final x.
 
+    `objective`/`constraint` are plain-NumPy callbacks (independent test-problem
+    formulas); `x` round-trips to NumPy between `mmasub` calls so they stay unchanged.
+
     Runs with warnings promoted to errors, since subsolv's inner-Newton-cap warning
     (CLAUDE.local.md: don't ignore test warnings) usually means the problem's bounds
     or starting point put it in a regime the port wasn't meant to handle.
     """
     x = np.asarray(x0, dtype=float)
     xold1, xold2 = x.copy(), x.copy()
-    low, upp = np.zeros(n), np.zeros(n)
+    low, upp = tt(np.zeros(n)), tt(np.zeros(n))
+    xmin_t, xmax_t, a_t, c_t, d_t = tt(xmin), tt(xmax), tt(a), tt(c), tt(d)
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
@@ -33,24 +38,24 @@ def _run_mmasub(n, m, xmin, xmax, x0, a0, a, c, d, objective, constraint, n_iter
                 m,
                 n,
                 iteration,
-                x,
-                xmin,
-                xmax,
-                xold1,
-                xold2,
-                f0val,
-                df0dx,
-                fval,
-                dfdx,
+                tt(x),
+                xmin_t,
+                xmax_t,
+                tt(xold1),
+                tt(xold2),
+                float(f0val),
+                tt(df0dx),
+                tt(fval),
+                tt(dfdx),
                 low,
                 upp,
                 a0,
-                a,
-                c,
-                d,
+                a_t,
+                c_t,
+                d_t,
             )
             xold2, xold1 = xold1, x
-            x = xmma
+            x = xmma.numpy()
     return x
 
 

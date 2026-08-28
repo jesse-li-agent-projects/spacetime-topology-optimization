@@ -6,16 +6,62 @@ tolerance policy.
 import numpy as np
 import pytest
 import scipy.sparse as sp
+import torch
 
 import sttopt.conductivity as conductivity
 import sttopt.filters as filters
-from conftest import assert_close, load_fixture_npz
+import sttopt.torch_util as torch_util
+import tests.reference.conductivity as conductivity_ref
+from conftest import assert_close, load_fixture_npz, tt, tti
 
 NELX, NELY = 7, 5
 RMIN_COND = 3
 BETA, ETA = 1.0, 0.5
 P, Q, R, ROUF = 25, 3, 0.05, 100
 TCR = 0.8
+
+
+def _K_est(xPhys, tPhys, e1, e2, w, q, rouf):
+    """`conductivity.estimated_conductivity`, wrapped to accept this file's plain-NumPy
+    test inputs and hand back a NumPy array -- `conductivity.py` itself is torch now
+    (Phase 3.2, plans/torch_port_part2.md), but the bulk of this file's assertions
+    predate that and are cheaper to keep NumPy-side than to convert individually.
+    """
+    return (
+        conductivity.estimated_conductivity(
+            tt(xPhys), tt(tPhys), tti(e1), tti(e2), tt(w), q, rouf
+        )
+        .detach()
+        .numpy()
+    )
+
+
+def _hotspot(xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, p, q, r, rouf):
+    """`conductivity.hotspot_constraint`, wrapped the same way as `_K_est` above."""
+    H_t = H if torch.is_tensor(H) else torch_util.csr_to_tensor(H, "cpu", torch.float64)
+    res = conductivity_ref.hotspot_constraint(
+        tt(xPhys),
+        tt(tPhys),
+        tti(e1),
+        tti(e2),
+        tt(w),
+        tt(dx),
+        H_t,
+        tt(Hs),
+        factor,
+        Tcr,
+        p,
+        q,
+        r,
+        rouf,
+    )
+    return conductivity_ref.HotspotConstraintResult(
+        res.fval,
+        res.df1.detach().numpy(),
+        res.dt1.detach().numpy(),
+        res.numer,
+        res.K_est.detach().numpy(),
+    )
 
 
 def test_neighbor_weights_match_fixture():
@@ -43,7 +89,7 @@ def test_K_est_matches_fixture():
     for k in range(nloop):
         xPhys = e2e["xPhys_traj"][:, :, k]
         tPhys = e2e["tPhys_traj"][:, :, k]
-        K_est = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, Q, ROUF)
+        K_est = _K_est(xPhys, tPhys, e1, e2, w, Q, ROUF)
         assert_close(K_est, fx["K_est_all"][:, k], tier="algebraic")
 
 
@@ -80,7 +126,7 @@ def test_hotspot_constraint_matches_fixture():
         dx = e2e["dx_all"][:, :, k]
         factor = float(factor_all[k])
 
-        result = conductivity.hotspot_constraint(
+        result = _hotspot(
             xPhys,
             tPhys,
             e1,
@@ -121,7 +167,7 @@ def test_K_est_matches_golden_scenes():
         xPhys = fx[f"{name}_xPhys"]
         tPhys = fx[f"{name}_tPhys"]
         rouf = float(fx[f"{name}_rouf"])
-        K_est = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, rouf)
+        K_est = _K_est(xPhys, tPhys, e1, e2, w, q, rouf)
         assert_close(K_est, fx[f"{name}_K_est"], tier="algebraic")
 
 
@@ -194,7 +240,7 @@ def test_K_est_matches_dense_reference():
     for _ in range(3):
         xPhys = rng.uniform(0.05, 1.0, size=(nely, nelx))
         tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
-        K_est = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, rouf)
+        K_est = _K_est(xPhys, tPhys, e1, e2, w, q, rouf)
         np.testing.assert_allclose(
             K_est, _reference_K_est(xPhys, tPhys, W, q, rouf), rtol=1e-12, atol=1e-14
         )
@@ -224,7 +270,7 @@ def test_K_est_three_element_hard_gated_closed_form():
     xPhys = np.array([[x0, x1, x2]])
     tPhys = np.array([[0.1, 0.5, 0.9]])
 
-    K_est = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, rouf)
+    K_est = _K_est(xPhys, tPhys, e1, e2, w, q, rouf)
     expected = np.array(
         [x0**q, (x0**q + x1**q) / 2, (x1**q + x2**q) / 2],
     )
@@ -258,7 +304,7 @@ def test_K_est_three_element_soft_gated_closed_form():
         0.5 * gate(2, 1) + 1.0 * gate(2, 2)
     )
 
-    K_est = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, rouf)
+    K_est = _K_est(xPhys, tPhys, e1, e2, w, q, rouf)
     np.testing.assert_allclose(K_est, [K0, K1, K2], rtol=1e-12, atol=1e-14)
     # All three gates genuinely partial: a saturated field would make this a repeat of
     # the hard-gated test above.
@@ -277,7 +323,7 @@ def test_K_est_uniform_density_is_exactly_c_to_the_q(c):
     xPhys = np.full((nely, nelx), c)
     for rouf in (0.0, 1.0, 100.0, 1e4):
         tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
-        K_est = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, rouf)
+        K_est = _K_est(xPhys, tPhys, e1, e2, w, q, rouf)
         np.testing.assert_allclose(K_est, c**q, rtol=1e-13, atol=1e-15)
 
 
@@ -295,7 +341,7 @@ def test_K_est_is_a_convex_combination_of_neighbour_densities():
     for _ in range(5):
         xPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
         tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
-        K_est = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, rouf)
+        K_est = _K_est(xPhys, tPhys, e1, e2, w, q, rouf)
         xq = xPhys.flatten() ** q
         for a in range(nelx * nely):
             neigh = xq[in_range[a]]
@@ -314,11 +360,9 @@ def test_K_est_invariant_to_global_time_shift():
     rng = np.random.default_rng(14)
     xPhys = rng.uniform(0.1, 1.0, size=(nely, nelx))
     tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
-    base = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, rouf)
+    base = _K_est(xPhys, tPhys, e1, e2, w, q, rouf)
     for shift in (-5.0, -0.3, 0.75, 12.0):
-        shifted = conductivity.estimated_conductivity(
-            xPhys, tPhys + shift, e1, e2, w, q, rouf
-        )
+        shifted = _K_est(xPhys, tPhys + shift, e1, e2, w, q, rouf)
         np.testing.assert_allclose(shifted, base, rtol=1e-11, atol=1e-13)
 
 
@@ -337,17 +381,14 @@ def test_K_est_rouf_zero_limit_ignores_build_order():
     order_free = (W @ xPhys.flatten() ** q) / W.sum(axis=1)
 
     np.testing.assert_allclose(
-        conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, 0.0),
+        _K_est(xPhys, tPhys, e1, e2, w, q, 0.0),
         order_free,
         rtol=1e-13,
         atol=1e-15,
     )
     # ... and it approaches that limit continuously from a nonzero rouf.
     err = [
-        np.abs(
-            conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, rouf)
-            - order_free
-        ).max()
+        np.abs(_K_est(xPhys, tPhys, e1, e2, w, q, rouf) - order_free).max()
         for rouf in (1.0, 0.1, 0.01)
     ]
     assert err[0] > err[1] > err[2] > 0
@@ -373,10 +414,7 @@ def test_K_est_rouf_infinite_limit_is_the_hard_build_order():
     limit = (gated @ xPhys.flatten() ** q) / gated.sum(axis=1)
 
     errs = [
-        np.abs(
-            conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, rouf)
-            - limit
-        ).max()
+        np.abs(_K_est(xPhys, tPhys, e1, e2, w, q, rouf) - limit).max()
         for rouf in (50.0, 500.0, 5000.0)
     ]
     assert errs[0] > errs[1] > errs[2]
@@ -408,11 +446,7 @@ def test_K_est_increases_when_an_element_is_printed_later():
     for own_t in (0.0, 0.25, 0.5, 0.75, 1.0):
         field = tPhys.copy()
         field[2, 2] = own_t
-        K_of.append(
-            conductivity.estimated_conductivity(xPhys, field, e1, e2, w, q, rouf)[
-                centre
-            ]
-        )
+        K_of.append(_K_est(xPhys, field, e1, e2, w, q, rouf)[centre])
 
     assert all(a < b for a, b in zip(K_of, K_of[1:]))
     # Printed first, it is supported by nothing but itself; printed last, by everything.
@@ -437,8 +471,8 @@ def test_K_est_ranks_an_overhang_below_a_supported_element():
     overhang = np.ones((nely, nelx))
     overhang[4:, 5:] = 0.01  # material at rows 0-3, col 5+ juts out over empty space
 
-    K_solid = conductivity.estimated_conductivity(solid, tPhys, e1, e2, w, q, rouf)
-    K_over = conductivity.estimated_conductivity(overhang, tPhys, e1, e2, w, q, rouf)
+    K_solid = _K_est(solid, tPhys, e1, e2, w, q, rouf)
+    K_over = _K_est(overhang, tPhys, e1, e2, w, q, rouf)
     probe = 3 * nelx + 6  # (row 3, col 6): supported in `solid`, overhanging otherwise
 
     assert K_over[probe] < K_solid[probe] - 0.1
@@ -495,9 +529,7 @@ def test_hotspot_constraint_uniform_density_closed_form(c, factor):
 
     expected_numer = (1 - c**Q) * c**R
     for p in (2.0, 25.0, 60.0):
-        res = conductivity.hotspot_constraint(
-            xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, p, Q, R, ROUF
-        )
+        res = _hotspot(xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, p, Q, R, ROUF)
         np.testing.assert_allclose(res.numer, expected_numer, rtol=1e-12)
         np.testing.assert_allclose(
             res.fval, factor * expected_numer / Tcr - 1, rtol=1e-12
@@ -521,9 +553,7 @@ def test_hotspot_constraint_solid_part_is_maximally_satisfied():
     dx = np.ones((nely, nelx))
     for _ in range(3):
         tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
-        res = conductivity.hotspot_constraint(
-            xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF
-        )
+        res = _hotspot(xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF)
         np.testing.assert_allclose(res.numer, 0.0, atol=1e-12)
         np.testing.assert_allclose(res.fval, -1.0, atol=1e-12)
 
@@ -545,16 +575,14 @@ def test_hotspot_constraint_gradient_is_finite_for_a_solid_part():
     tPhys = np.random.default_rng(27).uniform(0.0, 1.0, size=(nely, nelx))
     dx = np.ones((nely, nelx))
 
-    res = conductivity.hotspot_constraint(
-        xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF
-    )
+    res = _hotspot(xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF)
     assert np.all(np.isfinite(res.df1))
     assert np.all(np.isfinite(res.dt1))
 
 
 def _severity(xPhys, tPhys, e1, e2, w, q, r, rouf):
     """Per-element severity g[e] = (1 - K_est[e]) * x[e]**r, from the definition."""
-    K = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, rouf)
+    K = _K_est(xPhys, tPhys, e1, e2, w, q, rouf)
     return (1 - K) * xPhys.flatten() ** r
 
 
@@ -579,9 +607,7 @@ def test_hotspot_constraint_numer_is_a_power_mean_bracketed_by_the_true_max():
         max_g = _severity(xPhys, tPhys, e1, e2, w, Q, R, ROUF).max()
 
         for p in (2.0, 8.0, 25.0):
-            res = conductivity.hotspot_constraint(
-                xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, p, Q, R, ROUF
-            )
+            res = _hotspot(xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, p, Q, R, ROUF)
             assert max_g * nel ** (-1 / p) - 1e-12 <= res.numer <= max_g + 1e-12
         # Non-vacuous: at p=2 the bracket is genuinely wide, so the upper bound alone
         # isn't doing all the work.
@@ -604,9 +630,7 @@ def test_hotspot_constraint_numer_rises_to_the_true_max_with_p():
 
     ps = [1.0, 2.0, 5.0, 15.0, 50.0, 200.0, 1000.0]
     numers = [
-        conductivity.hotspot_constraint(
-            xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, p, Q, R, ROUF
-        ).numer
+        _hotspot(xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, p, Q, R, ROUF).numer
         for p in ps
     ]
     assert all(a < b for a, b in zip(numers, numers[1:]))
@@ -637,22 +661,18 @@ def test_hotspot_constraint_factor_refresh_recovers_the_true_max():
     tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
     dx = np.ones((nely, nelx))
 
-    first = conductivity.hotspot_constraint(
-        xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF
-    )
+    first = _hotspot(xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF)
     # The refresh reads K_est back off the result rather than recomputing it.
     np.testing.assert_allclose(
         first.K_est,
-        conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, Q, ROUF),
+        _K_est(xPhys, tPhys, e1, e2, w, Q, ROUF),
         rtol=1e-13,
     )
     max_g = float(np.max((1 - first.K_est) * xPhys.flatten() ** R))
     assert max_g > first.numer  # the p-mean really is an under-report
 
     factor = max_g / first.numer
-    refreshed = conductivity.hotspot_constraint(
-        xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF
-    )
+    refreshed = _hotspot(xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF)
     # numer is factor-independent, so the refreshed call's tru_max is the true maximum.
     np.testing.assert_allclose(refreshed.numer, first.numer, rtol=1e-13)
     np.testing.assert_allclose(factor * refreshed.numer, max_g, rtol=1e-12)
@@ -673,13 +693,11 @@ def test_hotspot_constraint_is_affine_in_factor_and_crosses_zero_at_Tcr():
     dx = np.ones((nely, nelx))
 
     def fval_at(factor):
-        return conductivity.hotspot_constraint(
+        return _hotspot(
             xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF
         ).fval
 
-    numer = conductivity.hotspot_constraint(
-        xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF
-    ).numer
+    numer = _hotspot(xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF).numer
     boundary = Tcr / numer
     assert fval_at(boundary) == pytest.approx(0.0, abs=1e-12)
     assert fval_at(0.5 * boundary) == pytest.approx(-0.5, abs=1e-12)
@@ -719,7 +737,7 @@ def test_hotspot_constraint_orders_build_directions_on_a_non_uniform_design():
     overhang[4:, 5:] = 0.01  # void notch: rows 0-3 of cols 5+ jut out over nothing
 
     def numer_of(xPhys, tPhys):
-        return conductivity.hotspot_constraint(
+        return _hotspot(
             xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF
         ).numer
 
@@ -736,7 +754,8 @@ def test_hotspot_constraint_orders_build_directions_on_a_non_uniform_design():
 
 def _xPhys_of(x_raw, H, Hs, nely, nelx, beta, eta):
     xTilde = (H @ x_raw.flatten() / Hs).reshape((nely, nelx))
-    return filters.heaviside_projection(xTilde, beta, eta), xTilde
+    xPhys = filters.heaviside_projection(tt(xTilde), beta, eta).numpy()
+    return xPhys, xTilde
 
 
 def _tPhys_of(t_raw, H, Hs, nely, nelx):
@@ -764,9 +783,9 @@ def test_hotspot_constraint_fd_density(factor):
 
         xPhys, xTilde = _xPhys_of(x_raw, H, Hs, nely, nelx, BETA, ETA)
         tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
-        dx = filters.heaviside_projection_derivative(xTilde, BETA, ETA)
+        dx = filters.heaviside_projection_derivative(tt(xTilde), BETA, ETA)
 
-        df1 = conductivity.hotspot_constraint(
+        df1 = _hotspot(
             xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF
         ).df1
         # Guard well above the assert_allclose atol below, so this can't pass vacuously.
@@ -775,8 +794,8 @@ def test_hotspot_constraint_fd_density(factor):
         def fval_of(x_raw, t_raw):
             xPhys, xTilde = _xPhys_of(x_raw, H, Hs, nely, nelx, BETA, ETA)
             tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
-            dx = filters.heaviside_projection_derivative(xTilde, BETA, ETA)
-            return conductivity.hotspot_constraint(
+            dx = filters.heaviside_projection_derivative(tt(xTilde), BETA, ETA)
+            return _hotspot(
                 xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF
             ).fval
 
@@ -822,21 +841,19 @@ def test_hotspot_constraint_fd_time_generic(factor):
 
     xPhys, xTilde = _xPhys_of(x_raw, H, Hs, nely, nelx, BETA, ETA)
     tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
-    dx = filters.heaviside_projection_derivative(xTilde, BETA, ETA)
+    dx = filters.heaviside_projection_derivative(tt(xTilde), BETA, ETA)
 
     # Confirm the premise: no off-diagonal (distinct-element) exact ties in this field.
     tflat = tPhys.flatten()
     off_diag = e1 != e2
     assert np.sum(tflat[e1[off_diag]] == tflat[e2[off_diag]]) == 0
 
-    dt1 = conductivity.hotspot_constraint(
-        xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF
-    ).dt1
+    dt1 = _hotspot(xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF).dt1
     assert np.abs(dt1).max() > 1e-3  # guard well above the atol below
 
     def fval_of(t_raw):
         tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
-        return conductivity.hotspot_constraint(
+        return _hotspot(
             xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF
         ).fval
 
@@ -905,14 +922,12 @@ def test_hotspot_constraint_fd_time_at_ties():
     off_diag = e1 != e2
     assert np.sum(tflat[e1[off_diag]] == tflat[e2[off_diag]]) == off_diag.sum()
 
-    dt1 = conductivity.hotspot_constraint(
-        xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF
-    ).dt1
+    dt1 = _hotspot(xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF).dt1
     # Guard well above the atol below: with the fix, ties no longer force dt1 to 0.
     assert np.abs(dt1).max() > 1e-3
 
     def fval_of(tPhys):
-        return conductivity.hotspot_constraint(
+        return _hotspot(
             xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, P, Q, R, ROUF
         ).fval
 
@@ -955,9 +970,7 @@ def test_hotspot_constraint_finite_at_exact_zero_density():
     tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
     dx = np.ones((nely, nelx))
 
-    res = conductivity.hotspot_constraint(
-        xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF
-    )
+    res = _hotspot(xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF)
     assert np.all(np.isfinite(res.df1))
     assert np.all(np.isfinite(res.dt1))
 
@@ -988,14 +1001,12 @@ def test_hotspot_constraint_fd_density_near_binary():
     tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
     dx = np.ones((nely, nelx))
 
-    df1 = conductivity.hotspot_constraint(
-        xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF
-    ).df1
+    df1 = _hotspot(xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF).df1
     assert np.all(np.isfinite(df1))
     assert np.abs(df1).max() > 1e-3  # guard well above the atol below
 
     def fval_of(xPhys):
-        return conductivity.hotspot_constraint(
+        return _hotspot(
             xPhys, tPhys, e1, e2, w, dx, H, Hs, 1.0, Tcr, P, Q, R, ROUF
         ).fval
 
@@ -1011,3 +1022,170 @@ def test_hotspot_constraint_fd_density_near_binary():
         f"max|df1|={np.abs(df1).max():.3e} max|df1-fd|={np.abs(df1 - fd_x).max():.3e}"
     )
     np.testing.assert_allclose(df1, fd_x, rtol=1e-3, atol=1e-4)
+
+
+# --- Phase 3.4 (plans/torch_port_part2.md): hotspot_value, autograd sensitivities ----
+#
+# hotspot_constraint's df1/dt1 are hand-derived; hotspot_value returns only (numer,
+# K_est), differentiable end to end w.r.t. xPhys/tPhys, and its sensitivity is meant to
+# come from autograd instead. These tests build the same H/Hs/dx chain by hand (the
+# density filter's own adjoint, plus the Heaviside chain rule optimize.step's autograd
+# path threads automatically) so the comparison lines up with hotspot_constraint's
+# already-chained df1/dt1.
+
+
+def test_hotspot_value_matches_hand_derived_sensitivities_on_fixture():
+    """Autograd sensitivity of `hotspot_value`'s `numer` (`d(numer)/d(xPhys)`,
+    `d(numer)/d(tPhys)`) against the hand-derived `df1`/`dt1`, at the fixture's 3
+    snapshots -- `algebraic` tier (no FE solve involved). Reuses the fixture's own
+    `dx` (the Heaviside-derivative field, `heaviside_projection_derivative`'s output
+    for that snapshot) to finish the same `H @ (... * dx / Hs)` chain
+    `hotspot_constraint`'s `df1` already is, rather than re-deriving `xPhys` from a raw
+    `xTilde` the fixture doesn't store.
+    """
+    fx = load_fixture_npz("conductivity")
+    e2e = load_fixture_npz("e2e")
+    nelx, nely = int(e2e["nelx"]), int(e2e["nely"])
+    nloop = e2e["xPhys_traj"].shape[2] - 1
+    factor_all = fx["factor_all"]
+
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    H, Hs = filters.density_filter(nelx, nely, 2)
+    H_t = torch_util.csr_to_tensor(H, "cpu", torch.float64)
+    Hs_t = tt(Hs)
+    e1_t, e2_t, w_t = tti(e1), tti(e2), tt(w)
+
+    for k in range(nloop):
+        xPhys = tt(e2e["xPhys_traj"][:, :, k]).requires_grad_(True)
+        tPhys = tt(e2e["tPhys_traj"][:, :, k]).requires_grad_(True)
+        dx = tt(e2e["dx_all"][:, :, k]).flatten()
+        factor = float(factor_all[k])
+
+        numer, _ = conductivity.hotspot_value(
+            xPhys, tPhys, e1_t, e2_t, w_t, P, Q, R, ROUF
+        )
+        fval = factor * numer / TCR - 1
+        d_xPhys, d_tPhys = torch.autograd.grad(fval, (xPhys, tPhys))
+
+        df1 = (H_t @ (d_xPhys.flatten() * dx / Hs_t)).detach().numpy()
+        dt1 = (H_t @ (d_tPhys.flatten() / Hs_t)).detach().numpy()
+
+        assert_close(df1, fx["df1_all"][:, k], tier="algebraic")
+        assert_close(dt1, fx["dt1_all"][:, k], tier="algebraic")
+
+
+def test_hotspot_value_fd_density_and_time():
+    """`hotspot_value`'s autograd sensitivity against central differences, at a small
+    mesh -- an oracle-free check independent of both `hotspot_value` and
+    `hotspot_constraint`.
+    """
+    nelx, nely = 8, 6
+    nel = nelx * nely
+    h = 1e-6
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+
+    rng = np.random.default_rng(40)
+    xPhys0 = rng.uniform(0.2, 0.9, size=(nely, nelx))
+    tPhys0 = rng.uniform(0.0, 1.0, size=(nely, nelx))
+
+    def numer_of(xPhys, tPhys):
+        n, _ = conductivity.hotspot_value(
+            tt(xPhys), tt(tPhys), e1, e2, w, P, Q, R, ROUF
+        )
+        return float(n)
+
+    xPhys_t = tt(xPhys0).requires_grad_(True)
+    tPhys_t = tt(tPhys0).requires_grad_(True)
+    numer, _ = conductivity.hotspot_value(xPhys_t, tPhys_t, e1, e2, w, P, Q, R, ROUF)
+    d_x, d_t = torch.autograd.grad(numer, (xPhys_t, tPhys_t))
+    d_x, d_t = d_x.numpy().flatten(), d_t.numpy().flatten()
+
+    fd_x = np.zeros(nel)
+    fd_t = np.zeros(nel)
+    for e in range(nel):
+        j, i = e // nelx, e % nelx
+        xp, xm = xPhys0.copy(), xPhys0.copy()
+        xp[j, i] += h
+        xm[j, i] -= h
+        fd_x[e] = (numer_of(xp, tPhys0) - numer_of(xm, tPhys0)) / (2 * h)
+
+        tp, tm = tPhys0.copy(), tPhys0.copy()
+        tp[j, i] += h
+        tm[j, i] -= h
+        fd_t[e] = (numer_of(xPhys0, tp) - numer_of(xPhys0, tm)) / (2 * h)
+
+    np.testing.assert_allclose(d_x, fd_x, rtol=1e-4, atol=1e-7)
+    np.testing.assert_allclose(d_t, fd_t, rtol=1e-4, atol=1e-7)
+
+
+def test_hotspot_value_finite_at_exact_zero_density():
+    """`hotspot_value`'s autograd gradient must stay finite at exact-zero `xPhys`
+    (reached routinely once `beta_d` saturates), the autograd counterpart of
+    `test_hotspot_constraint_finite_at_exact_zero_density`. Before the NaN-safe
+    rewrite (`cond_p = T_val**p * x**(r*p)` instead of `(T_val * x**r)**p`), this
+    reproduces Phase 0a's bug under autograd: `d(x**r)/dx` is `inf` at `x == 0`.
+    """
+    nelx, nely = 12, 8
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+
+    rng = np.random.default_rng(41)
+    xPhys = (rng.uniform(size=(nely, nelx)) > 0.5).astype(float)
+    assert np.any(xPhys == 0.0)
+    tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
+
+    xPhys_t = tt(xPhys).requires_grad_(True)
+    tPhys_t = tt(tPhys).requires_grad_(True)
+    numer, _ = conductivity.hotspot_value(xPhys_t, tPhys_t, e1, e2, w, P, Q, R, ROUF)
+    d_x, d_t = torch.autograd.grad(numer, (xPhys_t, tPhys_t))
+    assert torch.all(torch.isfinite(d_x))
+    assert torch.all(torch.isfinite(d_t))
+
+
+def test_hotspot_value_naive_form_would_have_produced_nan():
+    """Demonstrates the NaN-safe rewrite is load-bearing: the naive, algebraically
+    equivalent `(T_val * x**r) ** p` form (the transliteration a mechanical port would
+    produce) gives a `nan` gradient at the same exact-zero density where
+    `hotspot_value`'s rewritten form stays finite -- proof the regression test above
+    would actually have caught Phase 0a's bug resurrected under autograd, not merely
+    that finite gradients happen to occur here.
+    """
+    nelx, nely = 12, 8
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+
+    rng = np.random.default_rng(41)
+    xPhys = (rng.uniform(size=(nely, nelx)) > 0.5).astype(float)
+    assert np.any(xPhys == 0.0)
+    tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
+
+    x = tt(xPhys).flatten().requires_grad_(True)
+    t = tt(tPhys).flatten()
+    core = conductivity._conductivity_core(x, t, e1, e2, w, Q, ROUF)
+    T_val = 1 - core.K_est
+    cond_p = (T_val * x**R) ** P  # naive, pre-Phase-0a-fix form
+    numer = (torch.sum(cond_p) / x.numel()) ** (1 / P)
+    (d_x,) = torch.autograd.grad(numer, (x,))
+    assert torch.any(torch.isnan(d_x))
+
+
+def test_hotspot_value_fully_solid_part_gradient_is_finite():
+    """`sum_cond == 0` (every element `T_val == 0`, i.e. a fully solid, maximally
+    "cool" part) makes the naive `u**(1/p)` gradient diverge (`1/p - 1 < 0`);
+    `_safe_pmean` gives it, and hence `hotspot_value`, a `0` gradient there instead --
+    the analytic limit `hotspot_constraint`'s own `scale = 0.0 if sum_cond == 0` comment
+    already derives for the hand-derived path.
+    """
+    nelx, nely = 6, 4
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+    xPhys = torch.ones(nely, nelx, dtype=torch.float64, requires_grad=True)
+    tPhys = torch.rand(nely, nelx, dtype=torch.float64)
+
+    numer, K_est = conductivity.hotspot_value(xPhys, tPhys, e1, e2, w, P, Q, R, ROUF)
+    assert float(numer.detach()) == 0.0
+    assert torch.all(K_est == 1.0)
+    (d_x,) = torch.autograd.grad(numer, (xPhys,))
+    assert torch.all(torch.isfinite(d_x))
+    assert torch.all(d_x == 0.0)

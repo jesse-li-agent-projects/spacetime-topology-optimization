@@ -4,7 +4,7 @@ conventions.md)."""
 import numpy as np
 
 import sttopt.mma as mma
-from conftest import assert_close, load_fixture_npz
+from conftest import assert_close, load_fixture_npz, tt
 
 # a0 = 1; a = zeros(m,1); c_ = ones(m,1)*2500; d = zeros(m,1) -- from
 # generate_fixtures.py, not saved to the fixture.
@@ -23,23 +23,23 @@ def test_mmasub_iteration1():
         m,
         n,
         1,
-        fx["xval_1"],
-        fx["xmin_1"],
-        fx["xmax_1"],
-        fx["xold1_1"],
-        fx["xold2_1"],
+        tt(fx["xval_1"]),
+        tt(fx["xmin_1"]),
+        tt(fx["xmax_1"]),
+        tt(fx["xold1_1"]),
+        tt(fx["xold2_1"]),
         float(fx["f0val_1"]),
-        fx["df0dx_1"],
-        fx["fval_1"],
-        fx["dfdx_1"],
+        tt(fx["df0dx_1"]),
+        tt(fx["fval_1"]),
+        tt(fx["dfdx_1"]),
         # low_1/upp_1 are unused at iteration 1 (see mma.mmasub: `iteration < 2.5`
         # recomputes them from scratch) -- the fixture stores them as zeros.
-        np.zeros(n),
-        np.zeros(n),
+        tt(np.zeros(n)),
+        tt(np.zeros(n)),
         A0,
-        a,
-        c,
-        d,
+        tt(a),
+        tt(c),
+        tt(d),
     )
 
     assert xmma.shape == fx["xmma_all"][:, 0].shape
@@ -85,21 +85,21 @@ def test_mmasub_asymptote_update_branch():
         m,
         n,
         3,
-        xval,
-        xmin,
-        xmax,
-        xold1,
-        xold2,
+        tt(xval),
+        tt(xmin),
+        tt(xmax),
+        tt(xold1),
+        tt(xold2),
         0.0,
-        np.zeros(n),
-        np.zeros(m),
-        np.zeros((m, n)),
-        low,
-        upp,
+        tt(np.zeros(n)),
+        tt(np.zeros(m)),
+        tt(np.zeros((m, n))),
+        tt(low),
+        tt(upp),
         A0,
-        np.zeros(m),
-        np.ones(m) * C_VAL,
-        np.zeros(m),
+        tt(np.zeros(m)),
+        tt(np.ones(m) * C_VAL),
+        tt(np.zeros(m)),
     )
     assert_close(low_out, expected_low, tier="algebraic")
     assert_close(upp_out, expected_upp, tier="algebraic")
@@ -118,7 +118,11 @@ def _assert_subsolv_kkt(
     checks the returned point against those conditions from the MMA subproblem's own
     definition (Svanberg's dual/primal-dual formulation), independent of any fixture.
     """
-    xmma, ymma, zmma, lamma, xsimma, etamma, mumma, zetmma, smma = solution
+    # subsolv returns tensors; the KKT check below is pure NumPy, independent of the
+    # implementation under test.
+    xmma, ymma, zmma, lamma, xsimma, etamma, mumma, zetmma, smma = (
+        np.asarray(v) for v in solution
+    )
 
     for arr in (xmma, ymma, zmma, lamma, xsimma, etamma, mumma, zetmma, smma):
         assert np.all(np.isfinite(arr))
@@ -186,7 +190,22 @@ def test_subsolv_m_lt_n_kkt():
     epsimin = 1e-7
 
     solution = mma.subsolv(
-        m, n, epsimin, low, upp, alfa, beta, p0, q0, P, Q, a0, a, b, c, d
+        m,
+        n,
+        epsimin,
+        tt(low),
+        tt(upp),
+        tt(alfa),
+        tt(beta),
+        tt(p0),
+        tt(q0),
+        tt(P),
+        tt(Q),
+        a0,
+        tt(a),
+        tt(b),
+        tt(c),
+        tt(d),
     )
     _assert_subsolv_kkt(
         solution,
@@ -207,8 +226,8 @@ def test_subsolv_m_lt_n_kkt():
     )
     # Non-vacuity: a solve that parked every dual at zero, or left every primal at the
     # midpoint, would satisfy the residuals above without exercising the branch.
-    xmma, ymma = solution[0], solution[1]
-    lamma = solution[3]
+    xmma, ymma = np.asarray(solution[0]), np.asarray(solution[1])
+    lamma = np.asarray(solution[3])
     assert np.max(lamma) > 1e-3
     assert np.max(np.abs(xmma - 0.5 * (alfa + beta))) > 1e-3
     assert np.all(np.isfinite(ymma))
@@ -242,7 +261,22 @@ def test_subsolv_m_gt_n_smoke():
     epsimin = 1e-7
 
     solution = mma.subsolv(
-        m, n, epsimin, low, upp, alfa, beta, p0, q0, P, Q, a0, a, b, c, d
+        m,
+        n,
+        epsimin,
+        tt(low),
+        tt(upp),
+        tt(alfa),
+        tt(beta),
+        tt(p0),
+        tt(q0),
+        tt(P),
+        tt(Q),
+        a0,
+        tt(a),
+        tt(b),
+        tt(c),
+        tt(d),
     )
     _assert_subsolv_kkt(
         solution,

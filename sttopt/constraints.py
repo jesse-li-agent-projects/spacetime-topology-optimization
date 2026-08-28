@@ -2,132 +2,80 @@
 material budgets, print-start timing, and time-field smoothness.
 
 The MATLAB source computes these as inline blocks in the main optimization loop, not as
-a separate function, and each block bakes the density-filter chain rule (`H`, `Hs` from
-`filters.density_filter`, and the Heaviside-projection derivative `dx` from
-`filters.heaviside_projection_derivative`) directly into its sensitivity -- so each
-function here does the same: callers pass `H`/`Hs`/`dx` and get back sensitivities that
-are already the finished `dfdx` rows MMA consumes, not raw `d(.)/d(xPhys)` gradients like
-`compliance.py` returns. See `conventions.md` for array-order and tolerance conventions.
+a separate function. Sensitivities come from autograd (Phase 3.4,
+`plans/torch_port_part2.md`) through the caller's own filter/Heaviside chain -- no
+`dx`/`H`/`Hs` arguments here, unlike the hand-derived predecessors kept as a cross-check
+in `tests/reference/constraints.py` (`tests/test_reference_sweep.py`). See
+`conventions.md` for array-order and tolerance conventions.
 
-Each function returns `(fval, dfx, dft)` (density- and time-sensitivity rows separately,
-one of which may be identically zero) rather than a concatenated `dfdx` row -- callers
-(the main optimization loop) assemble the final MMA-input matrix.
+Each function returns the constraint's value alone; callers (the main optimization
+loop) get sensitivities from autograd and assemble the final MMA-input matrix.
 """
 
-import numpy as np
-import scipy.sparse as sp
+import torch
 from jaxtyping import Float, Int
+from torch import Tensor
 
 import sttopt.compliance as compliance
 
 
 def global_volume_fraction(
-    xPhys: Float[np.ndarray, "nely nelx"],
-    dx: Float[np.ndarray, "nely nelx"],
-    H: sp.spmatrix | sp.sparray,
-    Hs: Float[np.ndarray, " nely*nelx"],
-    volfrac: float,
-) -> tuple[float, Float[np.ndarray, " nely*nelx"], Float[np.ndarray, " nely*nelx"]]:
-    """Global printable-volume-fraction constraint: total deposited material vs. `volfrac`.
-
-    `dft` is identically zero -- this constraint has no time-field dependence.
+    xPhys: Float[Tensor, "nely nelx"], volfrac: float
+) -> Float[Tensor, ""]:
+    """Global printable-volume-fraction constraint: total deposited material vs. `volfrac`,
+    differentiable end to end w.r.t. `xPhys`.
     """
     nely, nelx = xPhys.shape
     scale = nelx * nely * volfrac
-    fval = float(np.sum(xPhys) / scale - 1)
-    dv = np.ones((nely, nelx))
-    dfx = H @ (dv.flatten() * dx.flatten() / Hs) / scale
-    dft = np.zeros(nelx * nely)
-    return fval, dfx, dft
+    return torch.sum(xPhys) / scale - 1
 
 
 def time_field_continuity(
-    tPhys: Float[np.ndarray, "nely nelx"],
-    L: sp.spmatrix | sp.sparray,
-    H: sp.spmatrix | sp.sparray,
-    Hs: Float[np.ndarray, " nely*nelx"],
-) -> tuple[float, Float[np.ndarray, " nely*nelx"], Float[np.ndarray, " nely*nelx"]]:
+    tPhys: Float[Tensor, "nely nelx"], L: Tensor
+) -> Float[Tensor, ""]:
     """Time-field smoothness constraint: keeps each element's print time close to its local
     neighborhood average (`filters.continuity_filter`'s `L`), so the deposition sequence
     sweeps coherently across the mesh instead of jumping between distant elements.
-
-    `dfx` is identically zero -- this constraint has no density dependence.
     """
     nely, nelx = tPhys.shape
     nel = nely * nelx
-    # smoothness_weight = 2*nel is an overall tuning multiplier on the whole constraint
-    # (MATLAB source's `kk`, commented "controlling the smoothness of the time field" --
-    # not a paper symbol); it shows up in fval itself, so it isn't a derivative artifact.
-    # The separate explicit `* 2` in dft below IS a derivative factor, from
-    # d(deviation**2)/dt = 2*deviation * d(deviation)/dt.
     smoothness_weight = 2 * nel
     deviation = L @ tPhys.flatten()
-    fval = float(smoothness_weight * (np.sum(deviation**2 / nel) - 1.0e-6))
-    dft = H @ ((smoothness_weight * 2 * (L.T @ deviation)) / Hs) / nel
-    dfx = np.zeros(nel)
-    return fval, dfx, dft
+    return smoothness_weight * (torch.sum(deviation**2 / nel) - 1.0e-6)
 
 
 def start_point(
-    tPhys: Float[np.ndarray, "nely nelx"],
-    Nei: Int[np.ndarray, " k"],
-    H: sp.spmatrix | sp.sparray,
-    Hs: Float[np.ndarray, " nely*nelx"],
-) -> tuple[
-    Float[np.ndarray, " k"],
-    Float[np.ndarray, "k nely*nelx"],
-    Float[np.ndarray, "k nely*nelx"],
-]:
-    """Print-start constraint(s): the deposition-origin element(s) `Nei` (0-indexed element
-    numbers, per `conventions.md`) must start printing at t=0 (up to machine precision).
+    tPhys: Float[Tensor, "nely nelx"], Nei: Int[Tensor, " k"]
+) -> Float[Tensor, " k"]:
+    """Print-start constraint(s): the deposition-origin element(s) `Nei` (0-indexed
+    element numbers, per `conventions.md`) must start printing at t=0 (up to machine
+    precision).
 
-    Example: `Nei` is `[0]` for the single-origin time field (`tfield==1`) -- the elements nearest
-    the print-start origin. `dfx` is identically zero (no density dependence).
+    Example: `Nei` is `[0]` for the single-origin time field (`tfield==1`) -- the
+    elements nearest the print-start origin.
     """
-    nely, nelx = tPhys.shape
-    nel = nely * nelx
-    k = len(Nei)
-    fval = tPhys.flatten()[Nei] - 1.0e-9
-    ss = np.zeros((nel, k))  # ss: one-hot selector, column j picks out element Nei[j]
-    ss[Nei, np.arange(k)] = 1.0
-    dft = (H @ (ss / Hs[:, None])).T
-    dfx = np.zeros((k, nel))
-    return fval, dfx, dft
+    return tPhys.flatten()[Nei] - 1.0e-9
 
 
 def stage_volume_bounds(
-    xPhys: Float[np.ndarray, "nely nelx"],
-    tPhys: Float[np.ndarray, "nely nelx"],
-    dx: Float[np.ndarray, "nely nelx"],
-    H: sp.spmatrix | sp.sparray,
-    Hs: Float[np.ndarray, " nely*nelx"],
+    xPhys: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
     t_stage: float,
     volfrac: float,
     beta_t: float,
-) -> tuple[
-    float, float, Float[np.ndarray, " nely*nelx"], Float[np.ndarray, " nely*nelx"]
-]:
-    """Per-stage material deposition budget: at stage boundary `t_stage` (a fraction of the
-    build, in (0, 1]), the volume fraction deposited so far must stay within a small slack
-    of `t_stage` itself -- an even deposition schedule spends the build's material at the
-    rate the build advances. Returns both the upper- and lower-bound constraint (MMA
-    constraints are one-sided, so an equality-like budget needs both), via a smooth
-    stage-membership mask (`compliance.time_mask`, sharpness `beta_t`) rather than a hard
-    time cutoff.
+) -> Float[Tensor, ""]:
+    """Per-stage material deposition budget's *upper* bound: at stage boundary `t_stage`
+    (a fraction of the build, in (0, 1]), the volume fraction deposited so far must stay
+    within a small slack of `t_stage` itself -- an even deposition schedule spends the
+    build's material at the rate the build advances, via a smooth stage-membership mask
+    (`compliance.time_mask`, sharpness `beta_t`) rather than a hard time cutoff.
 
-    Returns `(fval_upper, fval_lower, dfx, dft)`: the lower bound's sensitivity rows are
-    exactly `-dfx, -dft` (see the MATLAB source), so only one `(dfx, dft)` pair is returned.
+    The lower bound is an explicit negation of the upper's value and sensitivity, so
+    callers build `fval_lower = -fval_upper - 1.0e-5` and `dfdx_lower = -dfdx_upper`
+    themselves rather than differentiating a second expression.
     """
     nely, nelx = xPhys.shape
     scale = nelx * nely * volfrac
     t_mask = compliance.time_mask(tPhys, t_stage, beta_t)
-    dfdt = compliance.time_mask_derivative(tPhys, t_stage, beta_t)
     xtJoint = xPhys * t_mask
-
-    deposited = np.sum(xtJoint) / scale
-    fval_upper = float(deposited - t_stage)
-    fval_lower = float(-deposited + t_stage - 1.0e-5)
-
-    dfx = H @ ((t_mask / scale).flatten() * dx.flatten() / Hs)
-    dft = H @ ((xPhys * dfdt / scale).flatten() / Hs)
-    return fval_upper, fval_lower, dfx, dft
+    return torch.sum(xtJoint) / scale - t_stage

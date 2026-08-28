@@ -11,6 +11,7 @@ import numpy as np
 import sttopt.cli as cli
 import sttopt.conductivity as conductivity
 import sttopt.optimize as optimize
+import sttopt.torch_util as torch_util
 import sttopt.viz as viz
 
 ARGV = [
@@ -119,8 +120,8 @@ def test_cli_closing_plot_uses_pre_final_update_state(tmp_path, monkeypatch):
             problem.q,
             problem.rouf,
         ).reshape(problem.nely, problem.nelx)
-        XPhys = (state.xPhys > 0.5).astype(float)
-        return (1 - K_est) * XPhys
+        XPhys = (state.xPhys > 0.5).to(problem.dtype)
+        return torch_util.to_numpy((1 - K_est) * XPhys)
 
     prev_T1 = _expected_T1(prev_state)
     final_T1 = _expected_T1(final_state)

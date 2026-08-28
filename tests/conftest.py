@@ -15,8 +15,31 @@ are a from-scratch transliteration of the original MATLAB source, kept in its na
 from pathlib import Path
 
 import numpy as np
+import torch
 
 import sttopt.fem as fem
+
+
+def _as_numpy(x) -> np.ndarray:
+    """Coerce a tensor, NumPy array, or scalar to a NumPy array, detaching/moving a
+    tensor to host first so a GPU or autograd-tracked value doesn't error `np.asarray`.
+    """
+    if isinstance(x, torch.Tensor):
+        return x.detach().cpu().numpy()
+    return np.asarray(x)
+
+
+def tt(x, dtype: torch.dtype = torch.float64) -> torch.Tensor:
+    """Convert a NumPy array (or other array-like) to a CPU tensor, for tests that
+    build plain-NumPy inputs to feed the (now torch) leaf math in `sttopt`.
+    """
+    return torch.as_tensor(np.asarray(x), dtype=dtype)
+
+
+def tti(x) -> torch.Tensor:
+    """`tt`, for integer index/mask arrays (`edofMat`, `freedofs`, ...)."""
+    return tt(x, dtype=torch.int64)
+
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -132,5 +155,5 @@ def assert_close(
     else:
         rtol = tier_rtol[tier]
     np.testing.assert_allclose(
-        np.asarray(actual), np.asarray(expected), rtol=rtol, atol=atol
+        _as_numpy(actual), _as_numpy(expected), rtol=rtol, atol=atol
     )

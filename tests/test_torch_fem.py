@@ -1,16 +1,17 @@
-"""Tests for sttopt.torch_fem: the matrix-free matvec/diagonal against sttopt.fem's
-assembled-matrix path, and the Jacobi-PCG solver against sttopt.fem.solve_fe. All on
-CPU and in float64 -- see plans/archive/torch_port.md's Phase 1.
+"""Tests for sttopt.torch_fem: the matrix-free matvec/diagonal against
+tests.reference.fem's assembled-matrix path, and the Jacobi-PCG solver against its
+solve_fe. All on CPU and in float64 -- see plans/archive/torch_port.md's Phase 1.
 """
 
 import numpy as np
 import pytest
 
-import sttopt.compliance as compliance
 import sttopt.fem as fem
 import sttopt.optimize as optimize
 import test_e2e as e2e_mod
-from conftest import assert_close, load_fixture_npz, point_load_problem
+import tests.reference.compliance as compliance_ref
+import tests.reference.fem as fem_ref
+from conftest import assert_close, load_fixture_npz, point_load_problem, tt, tti
 
 # torch is an optional dependency (see pyproject.toml), so skip rather than fail
 # collection where it isn't installed.
@@ -55,7 +56,9 @@ def test_matvec_vs_assembled(nelx, nely):
     rng = np.random.default_rng(0)
     F_np, freedofs_np, ndof, KE_np, edofMat_np, KE, edofMat, mask = _setup(nelx, nely)
     for name, xPhys in _density_fields(nelx, nely, rng).items():
-        K = fem.assemble_stiffness(KE_np, xPhys, EMIN, EMAX, PENAL, edofMat_np, ndof)
+        K = fem_ref.assemble_stiffness(
+            KE_np, xPhys, EMIN, EMAX, PENAL, edofMat_np, ndof
+        )
         v = rng.standard_normal(ndof)
         expected = K @ v
         actual = torch_fem.matvec(
@@ -75,7 +78,9 @@ def test_diagonal_vs_assembled(nelx, nely):
     rng = np.random.default_rng(1)
     F_np, freedofs_np, ndof, KE_np, edofMat_np, KE, edofMat, mask = _setup(nelx, nely)
     for name, xPhys in _density_fields(nelx, nely, rng).items():
-        K = fem.assemble_stiffness(KE_np, xPhys, EMIN, EMAX, PENAL, edofMat_np, ndof)
+        K = fem_ref.assemble_stiffness(
+            KE_np, xPhys, EMIN, EMAX, PENAL, edofMat_np, ndof
+        )
         actual = torch_fem.matvec_diagonal(
             torch_fem.simp_density(
                 torch.tensor(xPhys, dtype=torch.float64), EMIN, EMAX, PENAL
@@ -95,8 +100,10 @@ def test_solve_vs_spsolve(nelx, nely):
     volfrac_xPhys = np.full(nelx * nely, 0.4)
     random_xPhys = rng.uniform(0.05, 1.0, nelx * nely)
     for xPhys in (volfrac_xPhys, random_xPhys):
-        K = fem.assemble_stiffness(KE_np, xPhys, EMIN, EMAX, PENAL, edofMat_np, ndof)
-        expected = fem.solve_fe(K, F_np, freedofs_np)
+        K = fem_ref.assemble_stiffness(
+            KE_np, xPhys, EMIN, EMAX, PENAL, edofMat_np, ndof
+        )
+        expected = fem_ref.solve_fe(K, F_np, freedofs_np)
         actual, n_iter = torch_fem.solve(
             F,
             torch.tensor(xPhys, dtype=torch.float64),
@@ -428,8 +435,10 @@ def test_mgcg_matches_spsolve(nelx, nely):
     F_np, freedofs_np, ndof, KE_np, edofMat_np, _, _, _ = _setup(nelx, nely)
     fixed = np.setdiff1d(np.arange(ndof), freedofs_np)
     for xPhys in _mg_density_fields(nelx, nely, rng).values():
-        K = fem.assemble_stiffness(KE_np, xPhys, EMIN, EMAX, PENAL, edofMat_np, ndof)
-        expected = fem.solve_fe(K, F_np, freedofs_np)
+        K = fem_ref.assemble_stiffness(
+            KE_np, xPhys, EMIN, EMAX, PENAL, edofMat_np, ndof
+        )
+        expected = fem_ref.solve_fe(K, F_np, freedofs_np)
         actual, n_iter = _mg_solve(nelx, nely, xPhys, rtol=1e-11)
         assert n_iter > 0
 
@@ -578,7 +587,8 @@ def test_sensitivities_from_mgcg_match_spsolve_elementwise():
     """
     setup, x, t = _calibration_case()
     n_stage = 2
-    ref = calib.sensitivities(setup, x, t, n_stage)
+    with calib.spsolve_backend():
+        ref = calib.sensitivities(setup, x, t, n_stage)
     with calib.mgcg_backend(setup, rtol=calib.RECOMMENDED_RTOL) as iters:
         got = calib.sensitivities(setup, x, t, n_stage)
     assert len(iters) == 1 + n_stage and min(iters) > 0
@@ -601,7 +611,8 @@ def test_compliance_is_far_more_forgiving_than_its_sensitivities():
     MMA's search direction.
     """
     setup, x, t = _calibration_case()
-    ref = calib.sensitivities(setup, x, t, 1)
+    with calib.spsolve_backend():
+        ref = calib.sensitivities(setup, x, t, 1)
     with calib.mgcg_backend(setup, rtol=1e-4):
         got = calib.sensitivities(setup, x, t, 1)
 
@@ -643,11 +654,12 @@ def test_whole_compliance_fixture_regression_through_mgcg():
     F, freedofs, ndof = point_load_problem(nelx, nely)
     KE = fem.plane_stress_KE(nu=0.3)
     edofMat = fem.element_dof_map(nelx, nely)
+    KE, edofMat, freedofs, F = tt(KE), tti(edofMat), tti(freedofs), tt(F)
 
     with calib.mgcg_backend(setup, rtol=calib.RECOMMENDED_RTOL):
         for k in range(nloop):
-            xPhys = e2e["xPhys_traj"][:, :, k]
-            c, dcx = compliance.whole_compliance(
+            xPhys = tt(e2e["xPhys_traj"][:, :, k])
+            c, dcx = compliance_ref.whole_compliance(
                 xPhys, KE, edofMat, EMIN, EMAX, PENAL, freedofs, F, ndof
             )
             assert_close(c, fx["c_whole_all"][k], tier="solved")

@@ -15,13 +15,21 @@ iteration's move-limit bounds read); `xTilde`/`xPhys`/`tPhys` are the *filtered*
 for density, Heaviside-projected) fields the physics uses.
 `xTilde` alone is carried an extra step (needed for the Heaviside-derivative chain rule
 at the *start* of the next iteration, before that iteration's own update).
+
+**The tensor boundary (`plans/torch_port_part2.md`).** `Problem` and `State` hold torch
+tensors -- `Problem.device`/`.dtype` say where -- and so does every leaf module `step`
+calls: `filters`/`compliance`/`constraints`/`conductivity`/`mma` all take and return
+tensors, and `compliance.py`'s FEM solve runs through `torch_solve.FemSolve`'s
+multigrid-CG, not a NumPy round trip. `fem.py`'s NumPy `assemble_stiffness`/`solve_fe`
+stay only as `tests/reference/`'s independent oracle; nothing in `sttopt/` calls them.
 """
 
 from dataclasses import dataclass
 
 import numpy as np
-import scipy.sparse as sp
-from jaxtyping import Float, Int
+import torch
+from jaxtyping import Bool, Float, Int
+from torch import Tensor
 
 import sttopt.compliance as compliance
 import sttopt.conductivity as conductivity
@@ -31,6 +39,8 @@ import sttopt.filters as filters
 import sttopt.gravity as gravity
 import sttopt.mma as mma
 import sttopt.timefield as timefield
+import sttopt.torch_fem as torch_fem
+import sttopt.torch_util as torch_util
 
 
 @dataclass(frozen=True)
@@ -48,19 +58,23 @@ class Problem:
     Tcr: float
     tfield: timefield.TimeField
 
-    KE: Float[np.ndarray, "8 8"]
-    edofMat: Int[np.ndarray, "nelx*nely 8"]
-    freedofs: Int[np.ndarray, " n_free"]
-    F: Float[np.ndarray, " ndof"]
+    device: torch.device
+    dtype: torch.dtype
+
+    KE: Float[Tensor, "8 8"]
+    edofMat: Int[Tensor, "nelx*nely 8"]
+    freedofs: Int[Tensor, " n_free"]
+    free_mask: Bool[Tensor, " ndof"]  # True at free dofs; the matrix-free path's mask
+    F: Float[Tensor, " ndof"]
     ndof: int
-    H: sp.spmatrix | sp.sparray
-    Hs: Float[np.ndarray, " nel"]
-    L: sp.spmatrix | sp.sparray
-    C: sp.spmatrix | sp.sparray
-    e1: Int[np.ndarray, " npairs"]
-    e2: Int[np.ndarray, " npairs"]
-    w: Float[np.ndarray, " npairs"]
-    Nei: Int[np.ndarray, " k"]
+    H: Tensor  # sparse CSR, shape (nel, nel)
+    Hs: Float[Tensor, " nel"]
+    L: Tensor  # sparse CSR, shape (nel, nel)
+    C: Tensor  # sparse CSR, shape ((nelx+1)*(nely+1), nel)
+    e1: Int[Tensor, " npairs"]
+    e2: Int[Tensor, " npairs"]
+    w: Float[Tensor, " npairs"]
+    Nei: Int[Tensor, " k"]
 
     Emin: float
     Emax: float
@@ -79,24 +93,38 @@ class Problem:
     m: int  # number of MMA constraint rows: vol + continuity + start-point(s) + 2*nStage + hotspot
     n: int  # number of MMA design variables: 2*nelx*nely (density half + time half)
 
+    # Batch whole_compliance's solve with every gravity stage's into one FemSolve call
+    # (plans/torch_port_part2.md Phase 3.3) rather than 1 + nStage separate calls. Part
+    # 1 measured this as a 1.3-1.4x win at 90x30/180x60 and a small loss at 360x120, so
+    # it is a per-Problem setting (build_problem defaults it from mesh size), not
+    # unconditional.
+    batch_fem_solves: bool
+
 
 @dataclass(frozen=True)
 class State:
     """Iteration-dependent state carried from one `step` call to the next."""
 
-    x: Float[np.ndarray, "nely nelx"]  # raw density (unfiltered MMA output)
-    xTilde: Float[np.ndarray, "nely nelx"]  # density-filtered x
-    xPhys: Float[np.ndarray, "nely nelx"]  # density for physics purposes
-    t: Float[np.ndarray, "nely nelx"]  # raw time field (unfiltered MMA output)
-    tPhys: Float[np.ndarray, "nely nelx"]  # time for physics purposes
-    xold1: Float[np.ndarray, " n"]
-    xold2: Float[np.ndarray, " n"]
-    low: Float[np.ndarray, " n"]
-    upp: Float[np.ndarray, " n"]
+    x: Float[Tensor, "nely nelx"]  # raw density (unfiltered MMA output)
+    xTilde: Float[Tensor, "nely nelx"]  # density-filtered x
+    xPhys: Float[Tensor, "nely nelx"]  # density for physics purposes
+    t: Float[Tensor, "nely nelx"]  # raw time field (unfiltered MMA output)
+    tPhys: Float[Tensor, "nely nelx"]  # time for physics purposes
+    xold1: Float[Tensor, " n"]
+    xold2: Float[Tensor, " n"]
+    low: Float[Tensor, " n"]
+    upp: Float[Tensor, " n"]
     loop: int
     beta_t: float  # gravity/stage-mask sigmoid sharpness
     beta_d: float  # Heaviside projection sharpness
     factor: float  # hotspot-constraint rescaling constant, periodically refreshed
+
+    # Batched FEM solution from this iteration's whole_compliance + gravity_compliance
+    # solves, `(1 + nStage, ndof)`, row 0 the whole-structure solve and row `1 + i`
+    # stage `i` -- carried forward to warm-start the next iteration's solves (part 1
+    # measured ~25% fewer CG iterations). `None` when `Problem.batch_fem_solves` is off
+    # (the sequential path doesn't produce a stacked `U` to save -- see optimize.step).
+    U: Float[Tensor, "n_stage_plus_1 ndof"] | None
 
 
 @dataclass(frozen=True)
@@ -120,8 +148,13 @@ class IterationRecord:
 class RunResult:
     state: State  # final state after nloop iterations
     # length nloop+1, index 0 is initial field
-    xPhys_traj: list[Float[np.ndarray, "nely nelx"]]
-    tPhys_traj: list[Float[np.ndarray, "nely nelx"]]  # length nloop+1
+    xPhys_traj: list[Float[Tensor, "nely nelx"]]
+    tPhys_traj: list[Float[Tensor, "nely nelx"]]  # length nloop+1
+    # the raw (unfiltered, unprojected) counterpart of xPhys_traj/tPhys_traj -- what
+    # `state.x`/`state.t` held at each loop, i.e. the input `step` would need to
+    # reproduce that loop's xPhys/tPhys, not the fields themselves
+    x_traj: list[Float[Tensor, "nely nelx"]]
+    t_traj: list[Float[Tensor, "nely nelx"]]  # length nloop+1
     records: list[IterationRecord]  # length nloop
 
 
@@ -151,6 +184,9 @@ def build_problem(
     mma_c: float = 2500.0,
     move: float = 0.01,
     tmove: float = 0.01,
+    device: torch.device | str = "cpu",
+    dtype: torch.dtype = torch.float64,
+    batch_fem_solves: bool | None = None,
 ) -> Problem:
     """Build the fixed FEM/filter/geometry setup once, before the loop starts.
 
@@ -158,7 +194,19 @@ def build_problem(
     conductivity neighborhood) -- passed explicitly rather than hardcoded so callers
     (e.g. the E2E test) can match whatever grid they're running on, since the fixture's
     radii differ from the original full-scale script's.
+
+    :param device: device every tensor field of the returned `Problem` lives on.
+    :param dtype: floating dtype every real-valued tensor field is cast to; integer
+        (index/mask) fields keep their own integer/bool dtype regardless.
+    :param batch_fem_solves: batch whole_compliance's and every gravity stage's solve
+        into one `FemSolve` call (`plans/torch_port_part2.md` Phase 3.3). Defaults to
+        on at or below the production 180x60 mesh -- part 1 measured a 1.3-1.4x win
+        there and a small loss at 360x120 -- but is a plain `bool` so a caller can
+        override the default in either direction.
     """
+    device = torch.device(device)
+    if batch_fem_solves is None:
+        batch_fem_solves = nelx * nely <= 180 * 60
     # A 1x1 mesh has neither extent nor neighbours, so two of the pieces built below
     # degenerate: the CORNER/OPPOSITE_CORNER time fields normalize by a zero max
     # distance, and the continuity filter divides by a zero neighbour count. This is the
@@ -203,6 +251,17 @@ def build_problem(
     # tfield != CORNER (Nei has nely rows); computing from len(Nei) generalizes correctly.
     m = 1 + 1 + len(Nei) + 2 * nStage + 1
 
+    # Batch every float-valued and every int-valued raw array into one boundary crossing
+    # each, rather than a `to_tensor` call per field (plans/torch_port_review_followup.md
+    # Phase 5). Keys match `Problem`'s field names so they splat straight in below.
+    float_fields = torch_util.to_tensors(
+        {"KE": KE, "F": F, "Hs": Hs, "w": w}, device, dtype
+    )
+    int_fields = torch_util.to_tensors(
+        {"edofMat": edofMat, "freedofs": freedofs, "e1": e1, "e2": e2, "Nei": Nei},
+        device,
+        torch.int64,
+    )
     return Problem(
         nelx=nelx,
         nely=nely,
@@ -211,19 +270,13 @@ def build_problem(
         Theta=Theta,
         Tcr=Tcr,
         tfield=tfield,
-        KE=KE,
-        edofMat=edofMat,
-        freedofs=freedofs,
-        F=F,
+        device=device,
+        dtype=dtype,
+        free_mask=torch_fem.free_mask(ndof, int_fields["freedofs"], device=device),
         ndof=ndof,
-        H=H,
-        Hs=Hs,
-        L=L,
-        C=C,
-        e1=e1,
-        e2=e2,
-        w=w,
-        Nei=Nei,
+        H=torch_util.csr_to_tensor(H, device, dtype),
+        L=torch_util.csr_to_tensor(L, device, dtype),
+        C=torch_util.csr_to_tensor(C, device, dtype),
         Emin=Emin,
         Emax=Emax,
         penal=penal,
@@ -239,6 +292,9 @@ def build_problem(
         tmove=tmove,
         m=m,
         n=n,
+        batch_fem_solves=batch_fem_solves,
+        **float_fields,
+        **int_fields,
     )
 
 
@@ -254,20 +310,25 @@ def init_state(problem: Problem, beta_d: float) -> State:
     """
     nely, nelx = problem.nely, problem.nelx
     nel = nelx * nely
+    device, dtype = problem.device, problem.dtype
 
-    def filtered(field):
-        return (problem.H @ field.flatten() / problem.Hs).reshape(nely, nelx)
+    def filtered(field: Tensor) -> Tensor:
+        return ((problem.H @ field.flatten()) / problem.Hs).reshape(nely, nelx)
 
-    x = np.full((nely, nelx), problem.volfrac)
+    x = torch.full((nely, nelx), problem.volfrac, device=device, dtype=dtype)
     xTilde = filtered(x)
     xPhys = filters.heaviside_projection(xTilde, beta_d, problem.eta)
 
-    t = timefield.init_timefield(nelx, nely, problem.tfield)
+    # init_timefield is a NumPy builder (plans/torch_port_part2.md Phase 3.2 item 2);
+    # converted once here, at the tensor boundary.
+    t = torch_util.to_tensor(
+        timefield.init_timefield(nelx, nely, problem.tfield), device, dtype
+    )
     tPhys = filtered(t)
 
     # MATLAB's xold1=xold2=[x(:); zeros(nel,1)] -- provably unread (iterations 1 and 2
     # both take mmasub's `iteration < 2.5` reinit branch), reproduced anyway for fidelity.
-    xold = np.concatenate([x.flatten(), np.zeros(nel)])
+    xold = torch.cat([x.flatten(), torch.zeros(nel, device=device, dtype=dtype)])
 
     return State(
         x=x,
@@ -276,163 +337,286 @@ def init_state(problem: Problem, beta_d: float) -> State:
         t=t,
         tPhys=tPhys,
         xold1=xold,
-        xold2=xold.copy(),
-        low=np.zeros(problem.n),
-        upp=np.zeros(problem.n),
+        xold2=xold.clone(),
+        low=torch.zeros(problem.n, device=device, dtype=dtype),
+        upp=torch.zeros(problem.n, device=device, dtype=dtype),
         loop=0,
         beta_t=10.0,
         beta_d=beta_d,
         factor=1.0,
+        U=None,
     )
+
+
+def _grad_row(
+    output: Float[Tensor, ""], leaves: tuple[Tensor, Tensor]
+) -> Float[Tensor, " n"]:
+    """Sensitivity of one scalar output w.r.t. both leaves, flattened and concatenated
+    into a single MMA row -- one `torch.autograd.grad` call
+    (`plans/torch_port_part2.md` Phase 3.4). `allow_unused` covers rows that depend on
+    only one leaf (e.g. a density-only constraint never touches `t`): the unused
+    leaf's slice is exactly zero, which is what its hand-derived predecessor returned
+    too.
+    """
+    grads = torch.autograd.grad(output, leaves, retain_graph=True, allow_unused=True)
+    return torch.cat(
+        [
+            (g if g is not None else torch.zeros_like(leaf)).flatten()
+            for g, leaf in zip(grads, leaves)
+        ]
+    )
+
+
+def _grad_rows_batched(
+    outputs: Float[Tensor, " k"],
+    xTilde: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+    H: Tensor,
+    Hs: Float[Tensor, " nel"],
+) -> Float[Tensor, "k n"]:
+    """Sensitivities of `k` independent scalar outputs (e.g. one per print-start
+    element, or one per stage) w.r.t. both raw leaves, as `(k, n)` -- one
+    `torch.autograd.grad(..., is_grads_batched=True)` call with one-hot seeds instead
+    of `k` separate calls (`plans/torch_port_part2.md` Phase 3.4's Jacobian-assembly
+    requirement).
+
+    Differentiates down to the *filtered* fields (`xTilde`, `tPhys` -- density's own
+    filtered field, pre-Heaviside, since `xPhys = heaviside_projection(xTilde, ...)`
+    is itself an ordinary pointwise op `is_grads_batched`'s vmap handles fine) rather
+    than all the way to the raw `x`/`t` leaves, then finishes the last, linear step --
+    the density/continuity filter `field = H @ raw / Hs` -- by hand as a plain sparse
+    matmul: `is_grads_batched`'s vmap has no batching rule for the sparse CSR matmul's
+    backward (`RuntimeError: expand is unsupported for SparseCsc tensors`, confirmed
+    locally), so batching must stop one step short of it. This is not a reintroduction
+    of a hand-derived *physics* sensitivity -- every nonlinear term (Heaviside,
+    hotspot's pairwise sigmoids, SIMP) is still autograd's -- only the filter's own
+    adjoint is applied explicitly, and because `H` is symmetric by construction
+    (`filters.density_filter`'s weight depends only on distance), that adjoint is `H`
+    itself: exactly `torch.autograd.grad` would have produced had vmap been able to
+    reach the sparse op.
+    """
+    k = outputs.shape[0]
+    seeds = torch.eye(k, dtype=outputs.dtype, device=outputs.device)
+    d_xTilde, d_tPhys = torch.autograd.grad(
+        outputs,
+        (xTilde, tPhys),
+        grad_outputs=seeds,
+        is_grads_batched=True,
+        retain_graph=True,
+        allow_unused=True,
+    )
+
+    def _filter_adjoint(d_field: Tensor | None) -> Tensor:
+        if d_field is None:
+            return torch.zeros(
+                k, xTilde.numel(), dtype=xTilde.dtype, device=xTilde.device
+            )
+        flat = d_field.reshape(k, -1)  # (k, nel)
+        return (H @ (flat / Hs).T).T  # (k, nel)
+
+    return torch.cat([_filter_adjoint(d_xTilde), _filter_adjoint(d_tPhys)], dim=1)
 
 
 def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
-    """Run one optimization iteration: build the objective + every constraint's
-    value/sensitivity in the reference's exact row order, call `mma.mmasub`, and
+    """Run one optimization iteration: build the objective + every constraint's value
+    in the reference's exact row order, differentiate the whole graph by autograd
+    (`plans/torch_port_part2.md` Phase 3.4 -- `x`/`t` are the autograd leaves, per
+    Decision 4; the filter and Heaviside projection are ordinary forward operations,
+    not accompanied by a hand-derived `dx` chain-rule factor), call `mma.mmasub`, and
     unpack the result into the next state.
 
-    The three periodic state updates below (`beta_t += 5` at loop%30==0, `beta_d *= 2` at
-    loop%50==0, the hotspot `factor` refresh at loop%25==0) never trigger against the
-    small E2E fixture (`nloop=3`) -- unexercised by that fixture, not unimplemented or
-    worked around. The `factor` refresh deviates from the MATLAB reference: it takes
-    effect starting the *next* iteration rather than rescaling this iteration's own
-    `fval`/`df1`/`dt1` mid-loop -- a deliberate simplification, not a fidelity gap.
+    Recomputing `xTilde`/`xPhys`/`tPhys` from this iteration's own `x`/`t` (rather than
+    reading `state.xPhys`/`state.tPhys`, which the hand-derived predecessor did) is a
+    deliberate side effect of Decision 4, not a separate change: it makes the value
+    autograd differentiates and the value MMA optimizes the same expression, and it is
+    the invariant `_assert_state_fields_are_consistent` (test_optimize.py) pins at
+    every iteration -- `state.xPhys`/`state.tPhys` always equal what filtering
+    `state.x`/`state.t` at `state.beta_d` produces.
+
+    All three periodic state updates (`beta_t += 5` at loop%30==0, `beta_d *= 2` at
+    loop%50==0, the hotspot `factor` refresh at loop%25==0) happen at the tail, next to
+    each other, and take effect starting the *next* iteration's `step` call rather than
+    rescaling this iteration's own `fval`/`dfdx`/`xPhys` mid-loop -- a deliberate
+    simplification, not a fidelity gap. None of the three trigger against the small
+    E2E fixture (`nloop=3`) -- unexercised by that fixture, not unimplemented or
+    worked around.
     """
-    prob = problem
-    nely, nelx, nStage = prob.nely, prob.nelx, prob.nStage
+    nely, nelx, nStage = problem.nely, problem.nelx, problem.nStage
     nel = nelx * nely
+    device, dtype = problem.device, problem.dtype
 
     loop = state.loop + 1
     beta_t = state.beta_t
-    if loop % 30 == 0 and beta_t < 50:
-        beta_t += 5
     beta_d = state.beta_d
-    if loop % 50 == 0 and beta_d <= prob.beta_d_max:
-        beta_d *= 2
-    if beta_d > prob.beta_d_max:
-        beta_d = prob.beta_d_max
 
-    xPhys, tPhys = state.xPhys, state.tPhys
-    # Heaviside-derivative chain rule for this iteration's density sensitivities, from
-    # the xTilde carried over from the *previous* iteration's update (or init).
-    dx = filters.heaviside_projection_derivative(state.xTilde, beta_d, prob.eta)
+    # -- Gradient region begins: x/t become autograd leaves. --
+    x = state.x.clone().requires_grad_(True)
+    t = state.t.clone().requires_grad_(True)
+    leaves = (x, t)
+    xTilde = ((problem.H @ x.flatten()) / problem.Hs).reshape(nely, nelx)
+    xPhys = filters.heaviside_projection(xTilde, beta_d, problem.eta)
+    tPhys = ((problem.H @ t.flatten()) / problem.Hs).reshape(nely, nelx)
 
     # -- Objective: whole-structure compliance + Theta-weighted per-stage gravity compliance --
-    c, dcx = compliance.whole_compliance(
-        xPhys,
-        prob.KE,
-        prob.edofMat,
-        prob.Emin,
-        prob.Emax,
-        prob.penal,
-        prob.freedofs,
-        prob.F,
-        prob.ndof,
-    )
-    obj_final_only = c  # compliance of final structure only, saved for logging
-    obj = c
-    dc = prob.H @ (dcx.flatten() * dx.flatten() / prob.Hs)
-    dt = np.zeros(nel)
-
-    for ti in np.linspace(0, 1, nStage + 1)[1:]:
-        cg, dcx_g, dct_g = compliance.gravity_compliance(
+    # `Problem.batch_fem_solves` (Phase 3.3, plans/torch_port_part2.md) puts
+    # whole_compliance's solve and every gravity stage's solve into one FemSolve call;
+    # off, they run sequentially as before.
+    stage_times = [float(ti) for ti in np.linspace(0, 1, nStage + 1)[1:]]
+    if problem.batch_fem_solves:
+        c_t, stage_cs, U_new = compliance.batched_whole_and_gravity_compliance(
             xPhys,
             tPhys,
-            prob.KE,
-            prob.edofMat,
-            prob.Emin,
-            prob.Emax,
-            prob.penal,
-            ti,
-            prob.C,
+            problem.KE,
+            problem.edofMat,
+            problem.Emin,
+            problem.Emax,
+            problem.penal,
+            problem.freedofs,
+            problem.F,
+            problem.ndof,
+            problem.C,
             beta_t,
-            prob.freedofs,
-            prob.ndof,
+            stage_times,
+            x0=state.U,
         )
-        obj += prob.Theta * cg
-        dc = dc + prob.Theta * (prob.H @ (dcx_g * dx.flatten() / prob.Hs))
-        dt = dt + prob.Theta * (prob.H @ (dct_g / prob.Hs))
+    else:
+        c_t, _ = compliance.whole_compliance(
+            xPhys,
+            problem.KE,
+            problem.edofMat,
+            problem.Emin,
+            problem.Emax,
+            problem.penal,
+            problem.freedofs,
+            problem.F,
+            problem.ndof,
+        )
+        stage_cs = []
+        for ti in stage_times:
+            cg_t, _ = compliance.gravity_compliance(
+                xPhys,
+                tPhys,
+                problem.KE,
+                problem.edofMat,
+                problem.Emin,
+                problem.Emax,
+                problem.penal,
+                ti,
+                problem.C,
+                beta_t,
+                problem.freedofs,
+                problem.ndof,
+            )
+            stage_cs.append(cg_t)
+        U_new = None
 
-    df0dx = np.concatenate([dc, dt])
-    f0val = obj
+    obj_final_only = float(
+        c_t.detach()
+    )  # compliance of final structure only, saved for logging
+    f0val_t = c_t
+    for cg_t in stage_cs:
+        f0val_t = f0val_t + problem.Theta * cg_t
+    f0val = float(f0val_t.detach())
+    df0dx = _grad_row(f0val_t, leaves)
 
     # -- Move-limit bounds on this iteration's raw MMA variables --
-    xflat, tflat = state.x.flatten(), state.t.flatten()
-    xminx = np.maximum(0.0, xflat - prob.move)
-    xmaxx = np.minimum(1.0, xflat + prob.move)
-    xmint = np.maximum(0.0, tflat - prob.tmove)
-    xmaxt = np.minimum(1.0, tflat + prob.tmove)
-    xmin = np.concatenate([xminx, xmint])
-    xmax = np.concatenate([xmaxx, xmaxt])
-    xval = np.concatenate([xflat, tflat])
+    xflat = state.x.flatten()
+    tflat = state.t.flatten()
+    xminx = torch.clamp(xflat - problem.move, min=0.0)
+    xmaxx = torch.clamp(xflat + problem.move, max=1.0)
+    xmint = torch.clamp(tflat - problem.tmove, min=0.0)
+    xmaxt = torch.clamp(tflat + problem.tmove, max=1.0)
+    xmin = torch.cat([xminx, xmint])
+    xmax = torch.cat([xmaxx, xmaxt])
+    xval = torch.cat([xflat, tflat])
 
     # -- Constraints, stacked in the reference loop's exact order --
-    fval_parts: list[np.ndarray] = []
-    dfdx_parts: list[np.ndarray] = []
+    fval_parts: list[Tensor] = []
+    dfdx_parts: list[Tensor] = []
 
-    fv, dfx, dft = constraints.global_volume_fraction(
-        xPhys, dx, prob.H, prob.Hs, prob.volfrac
+    fv_vol_t = constraints.global_volume_fraction(xPhys, problem.volfrac)
+    vol_diag = float(xPhys.detach().sum() / (nelx * nely))
+    fval_parts.append(fv_vol_t[None])
+    dfdx_parts.append(_grad_row(fv_vol_t, leaves)[None, :])
+
+    fv_cont_t = constraints.time_field_continuity(tPhys, problem.L)
+    fval_parts.append(fv_cont_t[None])
+    dfdx_parts.append(_grad_row(fv_cont_t, leaves)[None, :])
+
+    fv_start_t = constraints.start_point(tPhys, problem.Nei)
+    fval_parts.append(fv_start_t)
+    dfdx_parts.append(
+        _grad_rows_batched(fv_start_t, xTilde, tPhys, problem.H, problem.Hs)
     )
-    vol_diag = float(np.sum(xPhys) / (nelx * nely))
-    fval_parts.append(np.array([fv]))
-    dfdx_parts.append(np.concatenate([dfx, dft])[None, :])
 
-    fv, dfx, dft = constraints.time_field_continuity(tPhys, prob.L, prob.H, prob.Hs)
-    fval_parts.append(np.array([fv]))
-    dfdx_parts.append(np.concatenate([dfx, dft])[None, :])
-
-    fv, dfx, dft = constraints.start_point(tPhys, prob.Nei, prob.H, prob.Hs)
-    fval_parts.append(fv)
-    dfdx_parts.append(np.concatenate([dfx, dft], axis=1))
-
-    for t_stage in np.linspace(0, 1, nStage + 1)[1:]:
-        fu, fl, dfx, dft = constraints.stage_volume_bounds(
-            xPhys, tPhys, dx, prob.H, prob.Hs, t_stage, prob.volfrac, beta_t
-        )
-        fval_parts.append(np.array([fu, fl]))
-        dfdx_parts.append(
-            np.stack([np.concatenate([dfx, dft]), np.concatenate([-dfx, -dft])])
-        )
+    stage_upper_t = torch.stack(
+        [
+            constraints.stage_volume_bounds(
+                xPhys, tPhys, float(t_stage), problem.volfrac, beta_t
+            )
+            for t_stage in stage_times
+        ]
+    )
+    stage_lower_t = -stage_upper_t - 1.0e-5
+    rows_stage_upper = _grad_rows_batched(
+        stage_upper_t, xTilde, tPhys, problem.H, problem.Hs
+    )
+    rows_stage_lower = -rows_stage_upper
+    for i in range(nStage):
+        fval_parts.append(torch.stack([stage_upper_t[i], stage_lower_t[i]]))
+        dfdx_parts.append(torch.stack([rows_stage_upper[i], rows_stage_lower[i]]))
 
     # Hotspot constraint, evaluated at this iteration's (possibly stale) `factor`.
     # `factor` is refreshed every 25 iterations from this same call's `numer`/`K_est`
     # (both independent of `factor`), but the refresh only takes effect starting next
-    # iteration's `step` call -- `fv`/`df1`/`dt1` below are never rescaled mid-iteration.
-    hotspot = conductivity.hotspot_constraint(
+    # iteration's `step` call -- `fv`/the hotspot row below are never rescaled
+    # mid-iteration.
+    numer_t, K_est_t = conductivity.hotspot_value(
         xPhys,
         tPhys,
-        prob.e1,
-        prob.e2,
-        prob.w,
-        dx,
-        prob.H,
-        prob.Hs,
-        state.factor,
-        prob.Tcr,
-        prob.p,
-        prob.q,
-        prob.r,
-        prob.rouf,
+        problem.e1,
+        problem.e2,
+        problem.w,
+        problem.p,
+        problem.q,
+        problem.r,
+        problem.rouf,
     )
-    fv, df1, dt1 = hotspot.fval, hotspot.df1, hotspot.dt1
+    fv_hotspot_t = state.factor * numer_t / problem.Tcr - 1
+    fval_parts.append(fv_hotspot_t[None])
+    dfdx_parts.append(_grad_row(fv_hotspot_t, leaves)[None, :])
+
+    # -- Periodic state updates, all deferred to take effect starting *next*
+    # iteration's step() call, never rescaling this iteration's own fval/dfdx mid-loop. --
+    numer = float(numer_t.detach())
     factor = state.factor
     if loop % 25 == 0:
-        max_g = float(np.max((1 - hotspot.K_est) * xPhys.flatten() ** prob.r))
-        factor = max_g / hotspot.numer
-    tru_max = factor * hotspot.numer
-    fval_parts.append(np.array([fv]))
-    dfdx_parts.append(np.concatenate([df1, dt1])[None, :])
+        max_g = float(
+            torch.max((1 - K_est_t.detach()) * xPhys.detach().flatten() ** problem.r)
+        )
+        factor = max_g / numer
+    tru_max = factor * numer
 
-    fval = np.concatenate(fval_parts)
-    dfdx = np.concatenate(dfdx_parts, axis=0)
+    if loop % 30 == 0 and beta_t < 50:
+        beta_t += 5
+    if loop % 50 == 0 and beta_d <= problem.beta_d_max:
+        beta_d *= 2
+    if beta_d > problem.beta_d_max:
+        beta_d = problem.beta_d_max
 
-    # -- MMA subproblem solve and update --
-    mma_a = np.zeros(prob.m)
-    mma_c = np.full(prob.m, prob.mma_c)
-    mma_d = np.zeros(prob.m)
+    fval = torch.cat(fval_parts)
+    dfdx = torch.cat(dfdx_parts, dim=0)
+
+    # -- Gradient region ends: mmasub is not part of the autograd graph. df0dx/fval/
+    # dfdx are the last gradient-carrying values, detached here on their way in.
+    # xval/xmin/xmax never required grad -- they're built from state.x/state.t, the
+    # detached fields, not the x/t leaves above.
+    mma_a = torch.zeros(problem.m, device=device, dtype=dtype)
+    mma_c = torch.full((problem.m,), problem.mma_c, device=device, dtype=dtype)
+    mma_d = torch.zeros(problem.m, device=device, dtype=dtype)
     xmma, ymma, zmma, lam, xsi, mma_eta, mu, zet, s, low, upp = mma.mmasub(
-        prob.m,
-        prob.n,
+        problem.m,
+        problem.n,
         loop,
         xval,
         xmin,
@@ -440,12 +624,12 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         state.xold1,
         state.xold2,
         f0val,
-        df0dx,
-        fval,
-        dfdx,
+        df0dx.detach(),
+        fval.detach(),
+        dfdx.detach(),
         state.low,
         state.upp,
-        prob.a0,
+        problem.a0,
         mma_a,
         mma_c,
         mma_d,
@@ -454,9 +638,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     x_new = xmma[:nel].reshape(nely, nelx)
     t_new = xmma[nel:].reshape(nely, nelx)
 
-    xTilde_new = (prob.H @ x_new.flatten() / prob.Hs).reshape(nely, nelx)
-    xPhys_new = filters.heaviside_projection(xTilde_new, beta_d, prob.eta)
-    tPhys_new = (prob.H @ t_new.flatten() / prob.Hs).reshape(nely, nelx)
+    xTilde_new = ((problem.H @ x_new.flatten()) / problem.Hs).reshape(nely, nelx)
+    xPhys_new = filters.heaviside_projection(xTilde_new, beta_d, problem.eta)
+    tPhys_new = ((problem.H @ t_new.flatten()) / problem.Hs).reshape(nely, nelx)
 
     new_state = State(
         x=x_new,
@@ -472,19 +656,23 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         beta_t=beta_t,
         beta_d=beta_d,
         factor=factor,
+        # Required: femsolve() asserts its x0 argument arrives already detached (the
+        # next iteration passes state.U as x0). Undetached, this leaked ~180 MB/step
+        # of multigrid hierarchy across iterations -- see commit 855eb76.
+        U=U_new.detach() if U_new is not None else None,
     )
     record = IterationRecord(
         obj=obj_final_only,
         vol=vol_diag,
         tru_max=tru_max,
-        f0val=f0val,
-        df0dx=df0dx,
-        xmma=xmma,
-        low=low,
-        upp=upp,
-        lam=lam,
-        fval=fval,
-        dfdx=dfdx,
+        f0val=float(f0val),
+        df0dx=torch_util.to_numpy(df0dx),
+        xmma=torch_util.to_numpy(xmma),
+        low=torch_util.to_numpy(low),
+        upp=torch_util.to_numpy(upp),
+        lam=torch_util.to_numpy(lam),
+        fval=torch_util.to_numpy(fval),
+        dfdx=torch_util.to_numpy(dfdx),
     )
     return new_state, record
 
@@ -532,16 +720,25 @@ def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
     choice -- warm-starting from a previous run's final state, or entering at a
     trajectory recorded elsewhere.
     """
-    xPhys_traj = [state.xPhys.copy()]
-    tPhys_traj = [state.tPhys.copy()]
+    xPhys_traj = [state.xPhys.clone()]
+    tPhys_traj = [state.tPhys.clone()]
+    x_traj = [state.x.clone()]
+    t_traj = [state.t.clone()]
     records: list[IterationRecord] = []
 
     for _ in range(nloop):
         state, record = step(problem, state)
-        xPhys_traj.append(state.xPhys.copy())
-        tPhys_traj.append(state.tPhys.copy())
+        xPhys_traj.append(state.xPhys.clone())
+        tPhys_traj.append(state.tPhys.clone())
+        x_traj.append(state.x.clone())
+        t_traj.append(state.t.clone())
         records.append(record)
 
     return RunResult(
-        state=state, xPhys_traj=xPhys_traj, tPhys_traj=tPhys_traj, records=records
+        state=state,
+        xPhys_traj=xPhys_traj,
+        tPhys_traj=tPhys_traj,
+        x_traj=x_traj,
+        t_traj=t_traj,
+        records=records,
     )

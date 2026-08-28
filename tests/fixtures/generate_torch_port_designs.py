@@ -10,7 +10,7 @@ cases a go/no-go should turn on.
 
 Two meshes are run natively (90x30 and the production 180x60); 360x120 is not run, and is
 instead obtained at load time by a nearest-neighbour 2x block repeat of the 180x60 design
-(`load_designs`). Nearest-neighbour, not interpolation: a near-binary design must stay
+(`load_design`). Nearest-neighbour, not interpolation: a near-binary design must stay
 near-binary, and bilinear upscaling would manufacture intermediate densities and quietly
 soften the conditioning that is the property under test. The upscaled 360x120 design
 therefore has features twice as coarse in element units as a natively-converged 360x120
@@ -21,6 +21,16 @@ Filter radii are in element units, so the 90x30 run halves them to pose the same
 problem. `lrmin` is the exception: production `lrmin = 2.0` already resolves to the
 minimum 3x3 stencil (`filters._neighbor_offsets` uses `ceil(r) - 1`), and halving it to
 1.0 leaves an empty stencil, so 90x30 keeps `lrmin = 2.0`.
+
+Each snapshot also stores the raw, pre-filter `(x, t)` MMA output the loop actually left
+behind (`load_design_raw`) -- what a caller must put in `state.x`/`state.t` to get that
+loop's `xPhys`/`tPhys` back out of `step`'s own filter+Heaviside chain, rather than
+double-applying that chain to an already-filtered field (see `benchmarks/profile_step.py`,
+which does exactly this). Unlike `xPhys`/`tPhys`, raw `x`/`t` is only ever captured
+natively at 90x30 -- it is not derivable from a saved `xPhys`/`tPhys` after the fact
+(Heaviside projection and the density filter would both need inverting), so 180x60 and
+360x120's raw snapshots are nearest-neighbour block repeats (2x, 4x) of 90x30's, same
+rationale as the 360x120 derivation above.
 """
 
 import argparse
@@ -44,7 +54,22 @@ def parse_args():
         metavar="NELXxNELY",
         help="regenerate only this mesh, merging into an existing --out (repeatable); default is every mesh, overwriting --out",
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda" if _cuda_available() else "cpu",
+        help="torch device to run on",
+    )
     return parser.parse_args()
+
+
+def _cuda_available() -> bool:
+    try:
+        import torch
+
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
 
 
 if __name__ == "__main__":
@@ -89,6 +114,29 @@ NATIVE_MESHES = tuple(f"{nelx}x{nely}" for nelx, nely, *_ in MESHES)
 #: Meshes obtained by block-repeating a native one, as `derived -> (source, factor)`.
 DERIVED_MESHES = {"360x120": ("180x60", 2)}
 
+#: Raw `(x, t)` is only ever captured natively at 90x30 -- see the module docstring.
+RAW_NATIVE_MESHES = ("90x30",)
+RAW_DERIVED_MESHES = {"180x60": ("90x30", 2), "360x120": ("90x30", 4)}
+
+
+def _load_blocked(
+    x_key: str,
+    t_key: str,
+    source: str,
+    native: tuple[str, ...],
+    factor: int,
+    path: Path,
+) -> tuple[np.ndarray, np.ndarray]:
+    if source not in native:
+        raise ValueError(f"unknown source mesh {source!r}; expected one of: {native}")
+    with np.load(path) as data:
+        x, t = data[x_key], data[t_key]
+    if factor == 1:
+        return x, t
+    # Nearest-neighbour block repeat, not interpolation -- see the module docstring.
+    block = np.ones((factor, factor))
+    return np.kron(x, block), np.kron(t, block)
+
 
 def load_design(
     mesh: str, iteration: int, path: Path | None = None
@@ -102,17 +150,39 @@ def load_design(
     """
     path = path or Path(__file__).parent / "torch_port_designs.npz"
     source, factor = DERIVED_MESHES.get(mesh, (mesh, 1))
-    if source not in NATIVE_MESHES:
-        known = ", ".join((*NATIVE_MESHES, *DERIVED_MESHES))
-        raise ValueError(f"unknown mesh {mesh!r}; expected one of: {known}")
-    with np.load(path) as data:
-        x = data[f"x_{source}_it{iteration:04d}"]
-        t = data[f"t_{source}_it{iteration:04d}"]
-    if factor == 1:
-        return x, t
-    # Nearest-neighbour block repeat, not interpolation -- see the module docstring.
-    block = np.ones((factor, factor))
-    return np.kron(x, block), np.kron(t, block)
+    return _load_blocked(
+        f"x_{source}_it{iteration:04d}",
+        f"t_{source}_it{iteration:04d}",
+        source,
+        (*NATIVE_MESHES, *DERIVED_MESHES),
+        factor,
+        path,
+    )
+
+
+def load_design_raw(
+    mesh: str, iteration: int, path: Path | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """Load one raw, pre-filter `(x, t)` snapshot -- the input `step` needs to reproduce
+    `load_design`'s `(xPhys, tPhys)` for the same `mesh`/`iteration` -- upscaling if the
+    mesh isn't 90x30 (the only one raw `x`/`t` is captured natively for; see the module
+    docstring).
+
+    :param mesh: `"NELXxNELY"`, either `"90x30"` or a key of `RAW_DERIVED_MESHES`.
+    :param iteration: snapshot loop index, one of `SNAPSHOT_LOOPS`.
+    :param path: archive to read, defaulting to the one beside this script.
+    :return: `(x, t)`, each shape `(nely, nelx)`.
+    """
+    path = path or Path(__file__).parent / "torch_port_designs.npz"
+    source, factor = RAW_DERIVED_MESHES.get(mesh, (mesh, 1))
+    return _load_blocked(
+        f"x_raw_{source}_it{iteration:04d}",
+        f"t_raw_{source}_it{iteration:04d}",
+        source,
+        RAW_NATIVE_MESHES,
+        factor,
+        path,
+    )
 
 
 def binariness(x: np.ndarray) -> float:
@@ -122,12 +192,16 @@ def binariness(x: np.ndarray) -> float:
     return float(np.mean((x < 0.01) | (x > 0.99)))
 
 
-def generate(nloop: int, meshes: list[str] | None = None) -> dict[str, np.ndarray]:
+def generate(
+    nloop: int, meshes: list[str] | None = None, device: str = "cpu"
+) -> dict[str, np.ndarray]:
     """Run each mesh's optimization and collect its snapshots.
 
     :param nloop: iterations to run per mesh.
     :param meshes: `"NELXxNELY"` names to restrict generation to, or None for all.
-    :return: snapshot arrays keyed `"{x,t}_{nelx}x{nely}_it{loop:04d}"`.
+    :param device: torch device to run the optimization on.
+    :return: snapshot arrays keyed `"{x,t}_{nelx}x{nely}_it{loop:04d}"` (`xPhys`/`tPhys`)
+        and `"{x,t}_raw_{nelx}x{nely}_it{loop:04d}"` (raw, pre-filter `x`/`t`).
     """
     selected = [m for m in MESHES if meshes is None or f"{m[0]}x{m[1]}" in meshes]
     if meshes is not None and len(selected) != len(meshes):
@@ -150,6 +224,7 @@ def generate(nloop: int, meshes: list[str] | None = None) -> dict[str, np.ndarra
             lrmin,
             rmin_cond,
             beta_d=BETA_INIT,
+            device=device,
         )
         elapsed = time.perf_counter() - t0
         print(
@@ -158,10 +233,14 @@ def generate(nloop: int, meshes: list[str] | None = None) -> dict[str, np.ndarra
         for loop in SNAPSHOT_LOOPS:
             if loop > nloop:
                 continue
-            x = result.xPhys_traj[loop]
-            t = result.tPhys_traj[loop]
+            # .cpu() unconditionally (a no-op already on CPU) since np.savez_compressed
+            # needs plain arrays, not CUDA tensors.
+            x = result.xPhys_traj[loop].cpu().numpy()
+            t = result.tPhys_traj[loop].cpu().numpy()
             out[f"x_{nelx}x{nely}_it{loop:04d}"] = x
             out[f"t_{nelx}x{nely}_it{loop:04d}"] = t
+            out[f"x_raw_{nelx}x{nely}_it{loop:04d}"] = result.x_traj[loop].cpu().numpy()
+            out[f"t_raw_{nelx}x{nely}_it{loop:04d}"] = result.t_traj[loop].cpu().numpy()
             print(
                 f"  it{loop:04d}: binariness={binariness(x):.3f} "
                 f"vol={x.mean():.3f} x in [{x.min():.2e}, {x.max():.4f}]",
@@ -171,7 +250,7 @@ def generate(nloop: int, meshes: list[str] | None = None) -> dict[str, np.ndarra
 
 
 if __name__ == "__main__":
-    designs = generate(args.nloop, args.mesh)
+    designs = generate(args.nloop, args.mesh, device=args.device)
     if args.mesh is not None and args.out.exists():
         # Regenerating one mesh leaves the others in place, so a mesh whose trajectory
         # is known-good doesn't have to be paid for again.

@@ -13,10 +13,18 @@ with `optimize.step` isolates to orchestration rather than to the optimizer. See
 """
 
 import numpy as np
+import torch
 
 import matlab_reference as ref
 
 import sttopt.mma as mma
+
+
+def _tt(x):
+    """This oracle stays plain NumPy throughout (it's an independent transliteration,
+    not a port); only `mma.mmasub` itself now speaks torch, so bridge at that one call.
+    """
+    return torch.as_tensor(np.asarray(x), dtype=torch.float64)
 
 
 def run_reference_loop(
@@ -190,21 +198,27 @@ def run_reference_loop(
             m,
             n,
             loop,
-            xval,
-            xmin,
-            xmax,
-            xold1,
-            xold2,
+            _tt(xval),
+            _tt(xmin),
+            _tt(xmax),
+            _tt(xold1),
+            _tt(xold2),
             f0val,
-            df0dx,
-            fval,
-            dfdx,
-            low,
-            upp,
+            _tt(df0dx),
+            _tt(fval),
+            _tt(dfdx),
+            _tt(low),
+            _tt(upp),
             a0,
-            a,
-            c_,
-            d,
+            _tt(a),
+            _tt(c_),
+            _tt(d),
+        )
+        xmma, low, upp, lam = (
+            np.asarray(xmma),
+            np.asarray(low),
+            np.asarray(upp),
+            np.asarray(lam),
         )
 
         xold2 = xold1

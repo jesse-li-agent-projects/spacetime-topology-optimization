@@ -3,6 +3,7 @@ for the Heaviside projection."""
 
 import numpy as np
 import pytest
+import torch
 from conftest import assert_close, load_fixture_npz
 
 from sttopt.filters import (
@@ -169,7 +170,7 @@ def test_density_filter_window_and_cutoff_against_independent_reference():
 def test_heaviside_projection_derivative_matches_fd(beta, eta):
     rng = np.random.default_rng(0)
     # asymmetric grid, away from 0/1 edges
-    xTilde = rng.uniform(0.02, 0.98, size=(5, 7))
+    xTilde = torch.tensor(rng.uniform(0.02, 0.98, size=(5, 7)))
     h = 1e-6
     fd = (
         heaviside_projection(xTilde + h, beta, eta)
@@ -183,7 +184,7 @@ def test_heaviside_projection_derivative_at_eta_exactly():
     # The trivial case every fixture's xPhys0 happens to hit (xTilde == eta) -- included
     # here so a genuinely broken projection can't hide behind the fixture's blind spot.
     beta, eta = 2.0, 0.5
-    xTilde = np.array(eta)
+    xTilde = torch.tensor(eta, dtype=torch.float64)
     h = 1e-6
     fd = (
         heaviside_projection(xTilde + h, beta, eta)
@@ -196,6 +197,7 @@ def test_heaviside_projection_derivative_at_eta_exactly():
 def test_heaviside_projection_derivative_near_domain_edges():
     beta, eta = 3.0, 0.5
     for xTilde in (1e-3, 1 - 1e-3):
+        xTilde = torch.tensor(xTilde, dtype=torch.float64)
         h = 1e-6
         fd = (
             heaviside_projection(xTilde + h, beta, eta)
@@ -219,7 +221,7 @@ def test_heaviside_projection_interior_values(x, beta, eta, expected):
     # the projection's own output at interior points -- the FD tests above only check
     # consistency between the projection and its derivative, so a bug shared by both
     # (e.g. a sign error) wouldn't be caught there.
-    assert heaviside_projection(np.array(x), beta, eta) == pytest.approx(
+    assert heaviside_projection(torch.tensor(x, dtype=torch.float64), beta, eta).item() == pytest.approx(
         expected, rel=1e-12
     )
 
@@ -227,9 +229,9 @@ def test_heaviside_projection_interior_values(x, beta, eta, expected):
 def test_heaviside_projection_endpoints():
     # f(0) = 0, f(1) = 1 by construction, regardless of beta/eta.
     for beta, eta in [(1.0, 0.5), (5.0, 0.2), (0.3, 0.8)]:
-        assert heaviside_projection(np.array(0.0), beta, eta) == pytest.approx(
-            0.0, abs=1e-12
-        )
-        assert heaviside_projection(np.array(1.0), beta, eta) == pytest.approx(
-            1.0, abs=1e-12
-        )
+        assert heaviside_projection(
+            torch.tensor(0.0, dtype=torch.float64), beta, eta
+        ).item() == pytest.approx(0.0, abs=1e-12)
+        assert heaviside_projection(
+            torch.tensor(1.0, dtype=torch.float64), beta, eta
+        ).item() == pytest.approx(1.0, abs=1e-12)

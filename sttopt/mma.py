@@ -12,29 +12,30 @@ conventions used to test it against the MATLAB source.
 
 import warnings
 
-import numpy as np
+import torch
 from jaxtyping import Float
+from torch import Tensor
 
 
 def mmasub(
     m: int,
     n: int,
     iteration: int,
-    xval: Float[np.ndarray, " n"],
-    xmin: Float[np.ndarray, " n"],
-    xmax: Float[np.ndarray, " n"],
-    xold1: Float[np.ndarray, " n"],
-    xold2: Float[np.ndarray, " n"],
+    xval: Float[Tensor, " n"],
+    xmin: Float[Tensor, " n"],
+    xmax: Float[Tensor, " n"],
+    xold1: Float[Tensor, " n"],
+    xold2: Float[Tensor, " n"],
     f0val: float,
-    df0dx: Float[np.ndarray, " n"],
-    fval: Float[np.ndarray, " m"],
-    dfdx: Float[np.ndarray, "m n"],
-    low: Float[np.ndarray, " n"],
-    upp: Float[np.ndarray, " n"],
+    df0dx: Float[Tensor, " n"],
+    fval: Float[Tensor, " m"],
+    dfdx: Float[Tensor, "m n"],
+    low: Float[Tensor, " n"],
+    upp: Float[Tensor, " n"],
     a0: float,
-    a: Float[np.ndarray, " m"],
-    c: Float[np.ndarray, " m"],
-    d: Float[np.ndarray, " m"],
+    a: Float[Tensor, " m"],
+    c: Float[Tensor, " m"],
+    d: Float[Tensor, " m"],
 ):
     """One MMA iteration: update the moving asymptotes and solve the resulting subproblem.
 
@@ -60,6 +61,8 @@ def mmasub(
     asyincr = 1.2
     asydecr = 0.7
 
+    device, dtype = xval.device, xval.dtype
+
     # Asymptotes: re-initialized on the first two iterations, then adapted based on
     # whether xval is oscillating (zzz < 0) or moving monotonically (zzz > 0) relative
     # to the last two iterates.
@@ -68,7 +71,7 @@ def mmasub(
         upp = xval + asyinit * (xmax - xmin)
     else:
         zzz = (xval - xold1) * (xold1 - xold2)
-        factor = np.ones(n)
+        factor = torch.ones(n, device=device, dtype=dtype)
         factor[zzz > 0] = asyincr
         factor[zzz < 0] = asydecr
         low = xval - factor * (xold1 - low)
@@ -77,22 +80,22 @@ def mmasub(
         lowmax = xval - 0.01 * (xmax - xmin)
         uppmin = xval + 0.01 * (xmax - xmin)
         uppmax = xval + 10 * (xmax - xmin)
-        low = np.maximum(low, lowmin)
-        low = np.minimum(low, lowmax)
-        upp = np.minimum(upp, uppmax)
-        upp = np.maximum(upp, uppmin)
+        low = torch.maximum(low, lowmin)
+        low = torch.minimum(low, lowmax)
+        upp = torch.minimum(upp, uppmax)
+        upp = torch.maximum(upp, uppmin)
 
     # Move-limited bounds alfa, beta for x within this subproblem.
     zzz1 = low + albefa * (xval - low)
     zzz2 = xval - move * (xmax - xmin)
-    alfa = np.maximum(np.maximum(zzz1, zzz2), xmin)
+    alfa = torch.maximum(torch.maximum(zzz1, zzz2), xmin)
     zzz1 = upp - albefa * (upp - xval)
     zzz2 = xval + move * (xmax - xmin)
-    beta = np.minimum(np.minimum(zzz1, zzz2), xmax)
+    beta = torch.minimum(torch.minimum(zzz1, zzz2), xmax)
 
     # Separable convex approximations p0/q0 (objective) and P/Q (constraints) of the
     # reciprocal-asymptote form used by MMA, plus the constraint constant term b.
-    xmami = np.maximum(xmax - xmin, 1e-5)
+    xmami = torch.clamp(xmax - xmin, min=1e-5)
     xmamiinv = 1.0 / xmami
     ux1 = upp - xval
     ux2 = ux1 * ux1
@@ -101,14 +104,14 @@ def mmasub(
     uxinv = 1.0 / ux1
     xlinv = 1.0 / xl1
 
-    p0 = np.maximum(df0dx, 0)
-    q0 = np.maximum(-df0dx, 0)
+    p0 = torch.clamp(df0dx, min=0)
+    q0 = torch.clamp(-df0dx, min=0)
     pq0 = 0.001 * (p0 + q0) + raa0 * xmamiinv
     p0 = (p0 + pq0) * ux2
     q0 = (q0 + pq0) * xl2
 
-    P = np.maximum(dfdx, 0)
-    Q = np.maximum(-dfdx, 0)
+    P = torch.clamp(dfdx, min=0)
+    Q = torch.clamp(-dfdx, min=0)
     # raa0*eeem*xmamiinv' in the source is an (m,n) matrix with every row equal to
     # raa0*xmamiinv; broadcasting over rows does the same without materializing it.
     PQ = 0.001 * (P + Q) + raa0 * xmamiinv[None, :]
@@ -130,19 +133,19 @@ def subsolv(
     m: int,
     n: int,
     epsimin: float,
-    low: Float[np.ndarray, " n"],
-    upp: Float[np.ndarray, " n"],
-    alfa: Float[np.ndarray, " n"],
-    beta: Float[np.ndarray, " n"],
-    p0: Float[np.ndarray, " n"],
-    q0: Float[np.ndarray, " n"],
-    P: Float[np.ndarray, "m n"],
-    Q: Float[np.ndarray, "m n"],
+    low: Float[Tensor, " n"],
+    upp: Float[Tensor, " n"],
+    alfa: Float[Tensor, " n"],
+    beta: Float[Tensor, " n"],
+    p0: Float[Tensor, " n"],
+    q0: Float[Tensor, " n"],
+    P: Float[Tensor, "m n"],
+    Q: Float[Tensor, "m n"],
     a0: float,
-    a: Float[np.ndarray, " m"],
-    b: Float[np.ndarray, " m"],
-    c: Float[np.ndarray, " m"],
-    d: Float[np.ndarray, " m"],
+    a: Float[Tensor, " m"],
+    b: Float[Tensor, " m"],
+    c: Float[Tensor, " m"],
+    d: Float[Tensor, " m"],
 ):
     """Solve the MMA subproblem built by `mmasub` via a primal-dual interior-point Newton method.
 
@@ -157,15 +160,17 @@ def subsolv(
     optimum, its slack `s`, and the Lagrange multipliers for the constraint types
     documented in `mmasub`.
     """
+    device, dtype = low.device, low.dtype
+
     x = 0.5 * (alfa + beta)
-    y = np.ones(m)
-    z = 1.0
-    lam = np.ones(m)
-    xsi = np.maximum(1.0 / (x - alfa), 1.0)
-    eta = np.maximum(1.0 / (beta - x), 1.0)
-    mu = np.maximum(np.ones(m), 0.5 * c)
-    zet = 1.0
-    s = np.ones(m)
+    y = torch.ones(m, device=device, dtype=dtype)
+    z = torch.ones((), device=device, dtype=dtype)
+    lam = torch.ones(m, device=device, dtype=dtype)
+    xsi = torch.clamp(1.0 / (x - alfa), min=1.0)
+    eta = torch.clamp(1.0 / (beta - x), min=1.0)
+    mu = torch.maximum(torch.ones(m, device=device, dtype=dtype), 0.5 * c)
+    zet = torch.ones((), device=device, dtype=dtype)
+    s = torch.ones(m, device=device, dtype=dtype)
     epsi = 1.0
 
     def residual(x, y, z, lam, xsi, eta, mu, zet, s, epsi):
@@ -190,14 +195,14 @@ def subsolv(
         res = lam * s - epsi
         # epsi (a scalar barrier target) broadcasts in place of the source's
         # epsvecn/epsvecm (epsi*ones(n)/epsi*ones(m)); no need to materialize them.
-        return np.concatenate(
-            [rex, rey, [rez], relam, rexsi, reeta, remu, [rezet], res]
+        return torch.cat(
+            [rex, rey, rez[None], relam, rexsi, reeta, remu, rezet[None], res]
         )
 
     while epsi > epsimin:
         residu = residual(x, y, z, lam, xsi, eta, mu, zet, s, epsi)
-        residunorm = np.linalg.norm(residu)
-        residumax = np.abs(residu).max()
+        residunorm = torch.linalg.norm(residu)
+        residumax = torch.abs(residu).max()
 
         ittt = 0
         while residumax > 0.9 * epsi and ittt < 200:
@@ -235,14 +240,21 @@ def subsolv(
             # smoke-tested against a synthetic problem, not validated against MATLAB.
             if m < n:
                 blam = dellam + dely / diagy - GG @ (delx / diagx)
-                bb = np.concatenate([blam, [delz]])
+                bb = torch.cat([blam, delz[None]])
                 # spdiags(diaglamyi,0,m,m) + GG*spdiags(diagxinv,0,n,n)*GG': the diag
                 # scales GG's columns (by n-indexed diagxinv), so it's on the right.
-                Alam = np.diag(diaglamyi) + (GG * (1.0 / diagx)[None, :]) @ GG.T
-                AA = np.block(
-                    [[Alam, a[:, None]], [a[None, :], np.array([[-zet / z]])]]
+                Alam = torch.diag(diaglamyi) + (GG * (1.0 / diagx)[None, :]) @ GG.T
+                AA = torch.cat(
+                    [
+                        torch.cat([Alam, a[:, None]], dim=1),
+                        torch.cat([a[None, :], (-zet / z)[None, None]], dim=1),
+                    ]
                 )
-                solut = np.linalg.solve(AA, bb)
+                # The bordered (m+1, m+1) system is small (~80x80 at production) and
+                # measured faster to factor on the CPU than the GPU (see
+                # `plans/torch_port_part2.md`'s Phase 3.5 results) -- a defensible
+                # exception to the no-round-trips rule, since it moves ~51 KB.
+                solut = torch.linalg.solve(AA.cpu(), bb.cpu()).to(device)
                 dlam = solut[:m]
                 dz = solut[m]
                 dx = -delx / diagx - (GG.T @ dlam) / diagx
@@ -252,14 +264,19 @@ def subsolv(
                 # spdiags(diagx,0,n,n) + GG'*spdiags(diaglamyiinv,0,m,m)*GG: the diag
                 # scales GG.T's columns (by m-indexed diaglamyiinv), so it's on the
                 # right of GG.T here -- easy to misread as scaling GG's rows instead.
-                Axx = np.diag(diagx) + (GG.T * diaglamyiinv[None, :]) @ GG
+                Axx = torch.diag(diagx) + (GG.T * diaglamyiinv[None, :]) @ GG
                 azz = zet / z + a @ (a / diaglamyi)
                 axz = -GG.T @ (a / diaglamyi)
                 bx = delx + GG.T @ (dellamyi / diaglamyi)
                 bz = delz - a @ (dellamyi / diaglamyi)
-                AA = np.block([[Axx, axz[:, None]], [axz[None, :], np.array([[azz]])]])
-                bb = np.concatenate([-bx, [-bz]])
-                solut = np.linalg.solve(AA, bb)
+                AA = torch.cat(
+                    [
+                        torch.cat([Axx, axz[:, None]], dim=1),
+                        torch.cat([axz[None, :], azz[None, None]], dim=1),
+                    ]
+                )
+                bb = torch.cat([-bx, (-bz)[None]])
+                solut = torch.linalg.solve(AA.cpu(), bb.cpu()).to(device)
                 dx = solut[:n]
                 dz = solut[n]
                 dlam = (
@@ -273,15 +290,17 @@ def subsolv(
             dzet = -zet + epsi / z - zet * dz / z
             ds = -s + epsi / lam - (s * dlam) / lam
 
-            xx = np.concatenate([y, [z], lam, xsi, eta, mu, [zet], s])
-            dxx = np.concatenate([dy, [dz], dlam, dxsi, deta, dmu, [dzet], ds])
+            xx = torch.cat([y, z[None], lam, xsi, eta, mu, zet[None], s])
+            dxx = torch.cat([dy, dz[None], dlam, dxsi, deta, dmu, dzet[None], ds])
 
             # Fraction-to-the-boundary step size limit (1.01x safety margin), then
             # backtracking line search on the residual norm below.
             stmxx = (-1.01 * dxx / xx).max()
             stmalfa = (-1.01 * dx / (x - alfa)).max()
             stmbeta = (1.01 * dx / (beta - x)).max()
-            steg = 1.0 / max(stmalfa, stmbeta, stmxx, 1.0)
+            steg = 1.0 / max(
+                stmalfa, stmbeta, stmxx, torch.ones((), device=device, dtype=dtype)
+            )
 
             xold, yold, zold = x, y, z
             lamold, xsiold, etaold = lam, xsi, eta
@@ -301,11 +320,11 @@ def subsolv(
                 zet = zetold + steg * dzet
                 s = sold + steg * ds
                 residu = residual(x, y, z, lam, xsi, eta, mu, zet, s, epsi)
-                resinew = np.linalg.norm(residu)
+                resinew = torch.linalg.norm(residu)
                 steg = steg / 2
 
             residunorm = resinew
-            residumax = np.abs(residu).max()
+            residumax = torch.abs(residu).max()
             steg = 2 * steg
 
         if ittt > 198:
