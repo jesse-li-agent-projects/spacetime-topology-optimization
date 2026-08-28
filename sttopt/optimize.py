@@ -421,20 +421,18 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     Recomputing `xTilde`/`xPhys`/`tPhys` from this iteration's own `x`/`t` (rather than
     reading `state.xPhys`/`state.tPhys`, which the hand-derived predecessor did) is a
     deliberate side effect of Decision 4, not a separate change: it makes the value
-    autograd differentiates and the value MMA optimizes the same expression, at the
-    same `beta_d`, on every iteration -- including the (rare, one-iteration-wide)
-    `loop % 50 == 0` iteration where `beta_d` itself just doubled, on which the
-    hand-derived predecessor evaluated its `dx` factor at the *new* `beta_d` while
-    still optimizing an `xPhys` value built from the *old* one. Both fields are exactly
-    `state.xTilde`/`state.xPhys`/`state.tPhys`'s own values whenever `beta_d` does not
-    change this iteration (48 iterations out of every 50).
+    autograd differentiates and the value MMA optimizes the same expression, and it is
+    the invariant `_assert_state_fields_are_consistent` (test_optimize.py) pins at
+    every iteration -- `state.xPhys`/`state.tPhys` always equal what filtering
+    `state.x`/`state.t` at `state.beta_d` produces.
 
-    The three periodic state updates below (`beta_t += 5` at loop%30==0, `beta_d *= 2` at
-    loop%50==0, the hotspot `factor` refresh at loop%25==0) never trigger against the
-    small E2E fixture (`nloop=3`) -- unexercised by that fixture, not unimplemented or
-    worked around. The `factor` refresh deviates from the MATLAB reference: it takes
-    effect starting the *next* iteration rather than rescaling this iteration's own
-    `fval`/`df1`/`dt1` mid-loop -- a deliberate simplification, not a fidelity gap.
+    All three periodic state updates (`beta_t += 5` at loop%30==0, `beta_d *= 2` at
+    loop%50==0, the hotspot `factor` refresh at loop%25==0) happen at the tail, next to
+    each other, and take effect starting the *next* iteration's `step` call rather than
+    rescaling this iteration's own `fval`/`dfdx`/`xPhys` mid-loop -- a deliberate
+    simplification, not a fidelity gap. None of the three trigger against the small
+    E2E fixture (`nloop=3`) -- unexercised by that fixture, not unimplemented or
+    worked around.
     """
     nely, nelx, nStage = problem.nely, problem.nelx, problem.nStage
     nel = nelx * nely
@@ -442,13 +440,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     loop = state.loop + 1
     beta_t = state.beta_t
-    if loop % 30 == 0 and beta_t < 50:
-        beta_t += 5
     beta_d = state.beta_d
-    if loop % 50 == 0 and beta_d <= problem.beta_d_max:
-        beta_d *= 2
-    if beta_d > problem.beta_d_max:
-        beta_d = problem.beta_d_max
 
     # -- Gradient region begins: x/t become autograd leaves. --
     x = state.x.clone().requires_grad_(True)
@@ -587,6 +579,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     fval_parts.append(fv_hotspot_t[None])
     dfdx_parts.append(_grad_row(fv_hotspot_t, leaves)[None, :])
 
+    # -- Periodic state updates, all deferred to take effect starting *next*
+    # iteration's step() call, never rescaling this iteration's own fval/dfdx mid-loop. --
     numer = float(numer_t.detach())
     factor = state.factor
     if loop % 25 == 0:
@@ -595,6 +589,13 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         )
         factor = max_g / numer
     tru_max = factor * numer
+
+    if loop % 30 == 0 and beta_t < 50:
+        beta_t += 5
+    if loop % 50 == 0 and beta_d <= problem.beta_d_max:
+        beta_d *= 2
+    if beta_d > problem.beta_d_max:
+        beta_d = problem.beta_d_max
 
     fval = torch.cat(fval_parts)
     dfdx = torch.cat(dfdx_parts, dim=0)
