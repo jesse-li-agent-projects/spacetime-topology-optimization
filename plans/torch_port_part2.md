@@ -824,6 +824,13 @@ counterparts vs. the hand-derived ones) and in their reference backend (`rtol=1e
 MGCG vs. `spsolve`) -- see the new script's module docstring for why `spsolve` can't
 serve as an autograd reference.
 
+**Superseded (PR #54, `torch_port_review_followup.md` Phase 4 item 5):** the split above
+rested on the adjoint being a second error-contributing solve. It isn't -- it returns at
+CG iteration zero for any compliance scalar, so `lambda` is a closed-form multiple of the
+forward `U`. The only real obstacle was that `spsolve_backend` detached the graph; making
+it an autograd `Function` (`SpsolveFE`) removed it, and
+`calibrate_cg_rtol_autograd.py` was folded back into `calibrate_cg_rtol.py` and deleted.
+
 ## Phase 3.7: Validation, the end-to-end number, and the deletion
 
 **Status (2026-08-28): profiling and correctness validation done; the deletion below is

@@ -122,8 +122,9 @@ fixtures, and benchmarks do. The independent MATLAB oracle is unaffected either 
 4. `test_reference_sweep.py` keeps comparing against `matlab_reference.py`'s `ref_*`.
    Its other side becomes the autograd path, which makes the sweep a stronger check
    than it was.
-5. Delete `benchmarks/calibrate_cg_rtol.py`. `calibrate_cg_rtol_autograd.py` supersedes
-   it and Phase 3.6 already re-calibrated against autograd. (#45)
+5. Collapse the two calibration scripts into one. The plan originally said to delete
+   `benchmarks/calibrate_cg_rtol.py` as superseded by `calibrate_cg_rtol_autograd.py`;
+   it was the other way round. See the handoff doc's "Phase 4 item 5" section. (#45)
 
 The `.npz` golden fixtures need no regeneration. They are frozen arrays on disk and
 already hold the sensitivities (`dcx_whole_all`, `dcx_grav_all`, `dct_grav_all`,

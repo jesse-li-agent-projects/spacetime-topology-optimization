@@ -3,8 +3,9 @@
 Self-handoff for continuing `plans/torch_port_review_followup.md` (PR #53). Phases 1-2
 are committed and done. Phase 3 is committed with a narrower scope than the plan
 wrote down -- read "Phase 3: what changed" below before touching `step()` again.
-Phase 4 is done, with one scope narrowing -- read "Phase 4: what changed" below
-before touching `benchmarks/calibrate_cg_rtol.py`. Phase 5 is done for item 1 only
+Phase 4 is done, but item 5 landed inverted from what the plan asked -- read
+"Phase 4: what changed" below before touching `benchmarks/calibrate_cg_rtol.py`
+or `FemSolve`'s adjoint. Phase 5 is done for item 1 only
 (items 2-3 need a decision, item 4 done) -- read "Phase 5: what changed" below
 before touching fixture-loading/test conversion helpers. Phase 6 is untouched.
 
@@ -15,7 +16,7 @@ before touching fixture-loading/test conversion helpers. Phase 6 is untouched.
 | 1 -- Docstring and boundary fixes | Done, committed (amended once mid-flight) |
 | 2 -- Delete no-op detaches, mark gradient region | Done, committed |
 | 3 -- Move beta updates to the tail | Done for items 1+3; item 2 (filter-pass removal) **dropped**, not deferred -- see below |
-| 4 -- Move hand-derived formulas to `tests/reference/` | Done for items 1-4; item 5 (delete `calibrate_cg_rtol.py`) **not done, needs a decision** -- see below |
+| 4 -- Move hand-derived formulas to `tests/reference/` | Done, all 5 items -- item 5 landed inverted from the plan, see below |
 | 5 -- One tensor-boundary conversion helper | Done for items 1+4; items 2-3 (fixture-loading conversion, deleting `tt`/`tti`) **not done, needs a decision** -- see below |
 | 6 -- Reply to review comments | Not started |
 
@@ -25,6 +26,7 @@ Commits so far on this branch (`torch-port-review-followup-impl`, PR #54):
 3. Phase 3 (items 1+3 only)
 4. Phase 4 (items 1-4; item 5 pending a decision)
 5. Phase 5 (items 1+4 only; items 2-3 pending a decision)
+6. Phase 4 item 5 (the two calibration scripts merged into one)
 
 ## Phase 3: what changed from the plan, and why
 
@@ -93,32 +95,57 @@ to depend on the moved names: `test_e2e.py`, `test_robustness.py`,
 `calibrate_cg_rtol_autograd.py`) was repointed. Fast suite: 412 passed, 4 skipped --
 same count as Phase 3's baseline (pure reorg, no tests added or dropped).
 
-**Item 5 (delete `benchmarks/calibrate_cg_rtol.py`) is not done -- needs a decision,
-don't do it without confirming.** The plan's premise was that
-`calibrate_cg_rtol_autograd.py` supersedes it. In fact three test files
+### Item 5: done, but inverted from what the plan said
+
+The plan said to delete `calibrate_cg_rtol.py` as superseded by
+`calibrate_cg_rtol_autograd.py`. **It was the other way round**: three test files
 (`test_torch_fem.py`, `test_compliance.py`, `test_torch_solve.py`) import `calib =
-calibrate_cg_rtol` and lean on API `calibrate_cg_rtol_autograd.py` doesn't have at
-all: `spsolve_backend`, `sensitivities`, `mesh_setup`, `FIXTURES`, `EMIN`/`EMAX`/
-`PENAL`/`BETA_T`, `SENSITIVITY_TOL`, `elementwise_errors`, `finite_difference_check`.
-`calibrate_cg_rtol_autograd.py` compares MGCG-at-a-candidate-`rtol` against
-MGCG-at-`1e-12`, not against `spsolve` -- it's a different comparison, not a
-drop-in replacement for the spsolve-vs-MGCG one these three files run. Deleting the
-file as written would delete real fast-suite test coverage (four tests, all
-currently green: `test_sensitivities_from_mgcg_match_spsolve_elementwise`,
-`test_compliance_is_far_more_forgiving_than_its_sensitivities`,
-`test_mgcg_sensitivity_matches_finite_difference`,
-`test_whole_compliance_fixture_regression_through_mgcg`, plus the two
-`test_adjoint_matches_hand_derived_*_near_binary` tests in `test_torch_solve.py`) --
-not a safe mechanical step. What I did instead: kept the file, and repointed its own
-internal `fem.assemble_stiffness`/`fem.solve_fe`/`compliance.whole_compliance`/
-`gravity_compliance` calls at `tests/reference/`'s versions (the same rename Phase 4
-did everywhere else), since Phase 4's renames would otherwise have silently changed
-what `sensitivities()` computes (autograd `dcx=U` instead of hand-derived `dcx`).
-Before deleting this file, either confirm with the user that the coverage
-`calibrate_cg_rtol.py`-only tests provide is fine to drop, or migrate those tests to
-compare against `calibrate_cg_rtol_autograd.py`'s MGCG-vs-tight-MGCG reference
-instead (a real design decision about what those tests should assert once `spsolve`
-is out of the picture, not mechanical).
+calibrate_cg_rtol` and lean on API the autograd script never had (`spsolve_backend`,
+`sensitivities`, `mesh_setup`, `FIXTURES`, `EMIN`/`EMAX`/`PENAL`/`BETA_T`,
+`SENSITIVITY_TOL`, `elementwise_errors`, `finite_difference_check`). So
+`calibrate_cg_rtol_autograd.py` was folded back in and deleted instead.
+
+**The load-bearing finding -- don't re-derive it.** The autograd script's stated reason
+to exist was that autograd runs "a second CG solve whose error compounds with the
+forward's". That is false. `FemSolve.backward` warm-starts the adjoint from `alpha * U`,
+`alpha = (U.g)/(U.F)`, and for *any* compliance scalar `dL/dU = 2KU`, so the warm start
+is already the answer and `pcg` returns at its pre-loop convergence check. `lambda` is
+therefore a closed-form multiple of the forward `U` with no solver error of its own --
+`tests/test_torch_solve.py::test_self_adjoint_shortcut_gives_zero_adjoint_iterations`
+asserts `backward_n_iter == 0`, parametrised over both the fixed load
+(`whole_compliance`) and the density-dependent load (`gravity_compliance`). The
+candidate `rtol` reaches the sensitivities only through the forward solve, exactly as in
+the pre-autograd table.
+
+The only real obstacle to one script was that `spsolve_backend` monkeypatched
+`_solve_fe` with a NumPy round trip, which detaches the graph, so `spsolve` could not
+serve as an *autograd* reference. Fixed by making it an autograd `Function`:
+
+- `tests/reference/fem.py` gained `assemble_from_density(KE, density, edofMat, ndof)`;
+  `assemble_stiffness` is now a thin SIMP wrapper over it. This exists so the backend
+  can be differentiable in `density` -- the same variable `FemSolve` takes -- rather
+  than re-deriving the SIMP power law.
+- `calibrate_cg_rtol.SpsolveFE` is `FemSolve`'s direct-solve counterpart: forward
+  assembles and `spsolve`s; backward runs the same adjoint algebra (`lambda = K^-1 g`,
+  `dL/dF = lambda`, `dL/dd_e = -(lambda_e @ KE) . U_e`) over a second `spsolve`, reusing
+  the `K` saved on `ctx`. Nothing downstream of the solve is duplicated -- SIMP, the
+  gravity load and the strain-energy contraction stay ordinary autograd.
+- `sensitivities` and `finite_difference_check` now read `torch.autograd.grad` off the
+  *production* `sttopt.compliance` objectives under whichever backend is patched in,
+  instead of `tests/reference/compliance.py`'s hand-derived `dcx`/`dct`. Their return
+  contracts are unchanged, so the dependent tests needed no edits.
+
+`mgcg_backend` still yields forward iteration counts only (tests assert on that list).
+The autograd script's `bwd(min-max)` column is gone deliberately: it was a column of
+zeros, and the fact it reported is now pinned by the test named above rather than by a
+benchmark nobody runs.
+
+Re-ran `python -m benchmarks.calibrate_cg_rtol --meshes 90x30 --rtols 1e-6 1e-8 1e-10
+--nstage 2`: the table tells the same story it always did, so `RECOMMENDED_RTOL = 1e-8`
+stands unchanged (at 1e-8, `dcx rel@active` 4.96e-08 vs the 1e-6 bar; `|dc/c|` ~2.4e-12
+at every `rtol`, which is the compliance-vs-sensitivity asymmetry the module exists to
+measure). The FD check reads 9.345e-08 at all three `rtol`s -- expected, `h=1e-4`'s
+O(h^2) truncation error dominates the solver error there.
 
 ## Phase 5: what changed from the plan, and why
 
@@ -184,14 +211,11 @@ started: `femsolve()` now asserts `x0 is None or not x0.requires_grad`; `optimiz
 
 ## Next steps
 
-1. Phase 4 item 5 -- decide `calibrate_cg_rtol.py`'s fate (see above), then act on
-   the decision. Not mechanical; needs the user or a fresh look at the three
-   dependent test files.
-2. Phase 5 items 2-3 -- decide the fixture-loading/`tt`-`tti`/`_K_est`-`_hotspot`
+1. Phase 5 items 2-3 -- decide the fixture-loading/`tt`-`tti`/`_K_est`-`_hotspot`
    scope (see above), then act on the decision. Not mechanical; needs the user or a
    fresh per-call-site audit.
-3. Phase 6 -- reply to and resolve the four review threads that need no code change
+2. Phase 6 -- reply to and resolve the four review threads that need no code change
    (text already drafted in the plan).
-4. Once all phases are done, move `plans/torch_port_review_followup.md` (and this
+3. Once all phases are done, move `plans/torch_port_review_followup.md` (and this
    handoff file) to `plans/archive/` and update `plans/CLAUDE.md`'s index, per that
    directory's own convention.
