@@ -722,6 +722,84 @@ whose error compounds with the forward's, so re-run `benchmarks/calibrate_cg_rto
 method against the autograd gradients before assuming 1e-8 still holds. It may need to be
 tighter; it may (less likely) be loosenable, which would be a straight speed win.
 
+**Status (2026-08-28): only the CG-tolerance re-evaluation below is done, per explicit
+user direction to skip the performance pass for now.** Items 1-5 above (CUDA graphs,
+dropping converged batch members, multigrid re-tuning, a cheaper coarse solve, hotspot
+fusion) are all still open and unstarted; nothing in this phase's performance-pass list
+has been touched. Phase 3.6 is **not** complete.
+
+### Results: CG rtol re-calibration for autograd (2026-08-28, machine idle, RTX PRO 1000
+Blackwell Laptop GPU, 8 GB)
+
+`benchmarks/calibrate_cg_rtol.py`'s table only ever exercised the forward solve --
+it reads the hand-derived `dcx`/`dct` off an already-solved `U`. `benchmarks/
+calibrate_cg_rtol_autograd.py` re-runs the same method through
+`compliance.whole_compliance_value`/`gravity_compliance_value` and
+`torch.autograd.grad`, so both `FemSolve`'s forward *and* its adjoint `backward` run at
+the candidate `rtol`. `spsolve` (the original's reference) detaches the autograd graph
+and can't stand in as a gradient reference here, so the reference is MGCG at
+`rtol=1e-12` instead (see the new script's docstring), cross-checked by a
+solver-independent finite-difference test on `whole_compliance_value` itself.
+
+Production mesh, `it0800` snapshot, `nStage=8`:
+
+```
+=== 90x30 (ndof=5642) ===
+    rtol   fwd(min-max)   bwd(min-max)   dcx rel@act  dcxg rel@act  dctg rel@act
+   1e-06     13-39           0-0            2.32e-06      3.98e-06      1.32e-05
+   1e-07     16-41           0-0            1.85e-07      7.92e-07      7.92e-07
+   1e-08     17-43           0-0            4.96e-08      2.04e-07      2.04e-07
+   1e-09     19-44           0-0            1.93e-09      2.15e-08      1.81e-08
+
+=== 180x60 (ndof=22082, production mesh) ===
+    rtol   fwd(min-max)   bwd(min-max)   dcx rel@act  dcxg rel@act  dctg rel@act
+   1e-06     15-26           0-0            1.18e-04      4.56e-05      5.20e-06
+   1e-07     17-29           0-0            7.92e-06      5.81e-06      3.86e-07
+   1e-08     18-31           0-0            1.50e-07      9.37e-08      9.04e-08
+   1e-09     21-33           0-0            2.70e-08      5.53e-08      1.34e-08
+
+FD check 24x16 (solver-independent, whole_compliance_value differenced directly):
+  rtol=1e-06: max rel error 1.270e-07
+  rtol=1e-08: max rel error 2.685e-07
+  rtol=1e-10: max rel error 7.694e-08
+```
+
+(`rel@act` is the max-over-active-elements relative error against the `rtol=1e-12`
+reference, `elementwise_errors`' first return value; the `abs/peak` column is omitted
+above for brevity and tracked the same pattern.)
+
+**The predicted compounding did not materialize: `bwd(min-max)` is `0-0` at every
+`rtol`, on both objectives.** `FemSolve.backward`'s self-adjoint warm start (Phase 3.3)
+lands on the exact answer at iteration zero whenever `dL/dU` is parallel to `F` --
+true for `whole_compliance` by construction, and it turns out to hold for
+`gravity_compliance` too, because `dL/dU = 2*K*U = 2*F` regardless of how `F` itself
+depends on density (the extra `dcx2`/`dct2` adjoint term is downstream of `FemSolve`'s
+own backward, in the differentiable `_gravity_load` graph, not a second CG solve). So
+in this codebase the adjoint costs nothing extra, and every error row above comes from
+the *forward* solve alone -- the same quantity part 1 already calibrated, just now read
+through autograd's chain instead of the hand-derived formulas.
+
+**Decision: `rtol=1e-8` is unchanged.** At the production mesh, `dcx`/`dcxg`/`dctg` sit
+at `1.50e-07`/`9.37e-08`/`9.04e-08` -- 6.7x-11x inside `SENSITIVITY_TOL = 1e-6`
+(`calibrate_cg_rtol.py`'s "solved"-tier bar), consistent with the margin the original
+hand-derived calibration found. **Loosening is not tempting, let alone something to act
+on unilaterally: `rtol=1e-7` already breaches the bar at 180x60** (`dcx rel@act =
+7.92e-06 > 1e-6`), one order looser than the current default, so the one-decade-per-
+step increments this table checks leave no room to loosen even if the user wanted to
+consider it. No code change made in `sttopt/torch_solve.py` or `sttopt/torch_mg.py`
+(both default `rtol=1e-8`, `torch_solve.femsolve`'s default is the one the production
+call path actually uses). Nothing here needs the user's approval since neither
+direction -- tightening or loosening -- is warranted by the numbers.
+
+**Not done in this pass:** the five performance-pass items above the tolerance
+paragraph remain untouched and open for a future pass, per explicit user direction to
+skip them this time (correctness-only scope). `benchmarks/calibrate_cg_rtol_autograd.py`
+was added as a new script rather than folded into `calibrate_cg_rtol.py`, since the two
+differ in what they patch (`_solve_fe`/`_solve_fe_batched`'s *value*-returning autograd
+counterparts vs. the hand-derived ones) and in their reference backend (`rtol=1e-12`
+MGCG vs. `spsolve`) -- see the new script's module docstring for why `spsolve` can't
+serve as an autograd reference.
+
 ## Phase 3.7: Validation, the end-to-end number, and the deletion
 
 **Profile again.** Re-run `benchmarks/profile_step.py` against the torch `step` at 180x60 /
