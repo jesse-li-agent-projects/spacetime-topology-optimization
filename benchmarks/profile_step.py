@@ -13,10 +13,12 @@ Reports the same component breakdown as `plans/archive/torch_port.md` Phase 0's
 NumPy baseline (spsolve/FEM, `mma.mmasub`, `hotspot_constraint`, assembly, everything
 else) so the two are directly comparable; see `plans/torch_port_part2.md` Phase 3.7.
 
-Profiles from a reconstructed steady-state `State` around the iteration-800 snapshot in
-`tests/fixtures/torch_port_designs.npz` (near-binary, `beta_d`/`beta_t` continuation
-saturated) -- never from `init_state`'s uniform `x = volfrac`, which is the easiest
-conditioning the optimizer ever sees and not representative of production runtime.
+Profiles from a reconstructed steady-state `State` around the iteration-800 raw `(x, t)`
+snapshot in `tests/fixtures/torch_port_designs.npz` (near-binary, `beta_d`/`beta_t`
+continuation saturated) -- never from `init_state`'s uniform `x = volfrac`, which is the
+easiest conditioning the optimizer ever sees and not representative of production
+runtime. Must be the raw slot, not `xPhys`/`tPhys`: see `build_realistic_state`'s
+docstring and PR #52.
 
 Measurement approach: wall-clock timers installed by monkeypatching the exact
 functions of interest (`compliance._solve_fe`/`_solve_fe_batched`,
@@ -58,22 +60,16 @@ if __name__ == "__main__":
     args = parse_args()
 
 import time
-from pathlib import Path
 
 import numpy as np
 import torch
 
 import sttopt.compliance as compliance
 import sttopt.conductivity as conductivity
+import sttopt.filters as filters
 import sttopt.mma as mma
 import sttopt.optimize as optimize
-
-FIXTURES = (
-    Path(__file__).resolve().parent.parent
-    / "tests"
-    / "fixtures"
-    / "torch_port_designs.npz"
-)
+from tests.fixtures.generate_torch_port_designs import load_design_raw
 
 # Matches tests/test_e2e_slow.py's reproduction of the thesis Chapter 4.4 experiment.
 NELX, NELY = 180, 60
@@ -97,22 +93,33 @@ BETA_D = 128.0
 def build_realistic_state(
     problem: optimize.Problem, x_snapshot: np.ndarray, t_snapshot: np.ndarray
 ) -> optimize.State:
-    """Reconstruct a plausible iteration-800 `State` around a saved `(xPhys, tPhys)`
+    """Reconstruct a plausible iteration-800 `State` around a saved raw `(x, t)`
     snapshot, for profiling only -- not a claim that this is bit-identical to what a
     real run holds at loop 800. See the NumPy predecessor's identical docstring (git
     history) for why each approximation below doesn't affect the wall-clock costs
     measured here.
+
+    `x_snapshot`/`t_snapshot` must be the *raw* MMA output (`RunResult.x_traj`/`t_traj`
+    from `tests/fixtures/generate_torch_port_designs.py`, not `xPhys_traj`/`tPhys_traj`):
+    `step` re-derives `xTilde`/`xPhys`/`tPhys` from `state.x`/`state.t` every call, so
+    seeding the raw slots with an already-filtered field would double-apply the density
+    filter and Heaviside projection, blurring interfaces `step` never actually sees in
+    production. See PR #52's description for how this was found.
     """
+    nelx, nely = problem.nelx, problem.nely
     device, dtype = problem.device, problem.dtype
     x_t = torch.as_tensor(x_snapshot, device=device, dtype=dtype)
     t_t = torch.as_tensor(t_snapshot, device=device, dtype=dtype)
+    xTilde = ((problem.H @ x_t.flatten()) / problem.Hs).reshape(nely, nelx)
+    xPhys = filters.heaviside_projection(xTilde, BETA_D, problem.eta)
+    tPhys = ((problem.H @ t_t.flatten()) / problem.Hs).reshape(nely, nelx)
     xval = torch.cat([x_t.flatten(), t_t.flatten()])
     return optimize.State(
         x=x_t.clone(),
-        xTilde=x_t.clone(),
-        xPhys=x_t.clone(),
+        xTilde=xTilde,
+        xPhys=xPhys,
         t=t_t.clone(),
-        tPhys=t_t.clone(),
+        tPhys=tPhys,
         xold1=xval.clone(),
         xold2=xval.clone(),
         low=xval - 0.1,
@@ -201,9 +208,7 @@ def main():
         dtype=torch.float64,
     )
 
-    data = np.load(FIXTURES)
-    x0 = data["x_180x60_it0800"]
-    t0 = data["t_180x60_it0800"]
+    x0, t0 = load_design_raw("180x60", LOOP)
     state = build_realistic_state(problem, x0, t0)
 
     n_solves_per_step = 1 + NSTAGE
