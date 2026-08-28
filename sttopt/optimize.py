@@ -150,6 +150,11 @@ class RunResult:
     # length nloop+1, index 0 is initial field
     xPhys_traj: list[Float[Tensor, "nely nelx"]]
     tPhys_traj: list[Float[Tensor, "nely nelx"]]  # length nloop+1
+    # the raw (unfiltered, unprojected) counterpart of xPhys_traj/tPhys_traj -- what
+    # `state.x`/`state.t` held at each loop, i.e. the input `step` would need to
+    # reproduce that loop's xPhys/tPhys, not the fields themselves
+    x_traj: list[Float[Tensor, "nely nelx"]]
+    t_traj: list[Float[Tensor, "nely nelx"]]  # length nloop+1
     records: list[IterationRecord]  # length nloop
 
 
@@ -714,14 +719,23 @@ def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
     """
     xPhys_traj = [state.xPhys.clone()]
     tPhys_traj = [state.tPhys.clone()]
+    x_traj = [state.x.clone()]
+    t_traj = [state.t.clone()]
     records: list[IterationRecord] = []
 
     for _ in range(nloop):
         state, record = step(problem, state)
         xPhys_traj.append(state.xPhys.clone())
         tPhys_traj.append(state.tPhys.clone())
+        x_traj.append(state.x.clone())
+        t_traj.append(state.t.clone())
         records.append(record)
 
     return RunResult(
-        state=state, xPhys_traj=xPhys_traj, tPhys_traj=tPhys_traj, records=records
+        state=state,
+        xPhys_traj=xPhys_traj,
+        tPhys_traj=tPhys_traj,
+        x_traj=x_traj,
+        t_traj=t_traj,
+        records=records,
     )
