@@ -17,12 +17,11 @@ for density, Heaviside-projected) fields the physics uses.
 at the *start* of the next iteration, before that iteration's own update).
 
 **The tensor boundary (`plans/torch_port_part2.md`).** `Problem` and `State` hold torch
-tensors -- `Problem.device`/`.dtype` say where -- and, as of Phase 3.2, so does every
-leaf module `step` calls: `filters`/`compliance`/`constraints`/`conductivity` all take
-and return tensors. Two things are deliberately not yet ported (Phases 3.3 and 3.5) and
-`step` bridges to NumPy narrowly around just their calls: `compliance.py`'s own
-`fem.assemble_stiffness`/`fem.solve_fe` calls (inside `whole_compliance`/
-`gravity_compliance`, not visible here), and `mma.mmasub` below.
+tensors -- `Problem.device`/`.dtype` say where -- and so does every leaf module `step`
+calls: `filters`/`compliance`/`constraints`/`conductivity`/`mma` all take and return
+tensors, and `compliance.py`'s FEM solve runs through `torch_solve.FemSolve`'s
+multigrid-CG, not a NumPy round trip. `fem.py`'s NumPy `assemble_stiffness`/`solve_fe`
+stay only as `tests/reference/`'s independent oracle; nothing in `sttopt/` calls them.
 """
 
 from dataclasses import dataclass
@@ -456,7 +455,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     # off, they run sequentially as before.
     stage_times = [float(ti) for ti in np.linspace(0, 1, nStage + 1)[1:]]
     if problem.batch_fem_solves:
-        c_t, stage_cs, U_new = compliance.batched_whole_and_gravity_compliance_value(
+        c_t, stage_cs, U_new = compliance.batched_whole_and_gravity_compliance(
             xPhys,
             tPhys,
             problem.KE,
@@ -473,7 +472,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             x0=state.U,
         )
     else:
-        c_t, _ = compliance.whole_compliance_value(
+        c_t, _ = compliance.whole_compliance(
             xPhys,
             problem.KE,
             problem.edofMat,
@@ -486,7 +485,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         )
         stage_cs = []
         for ti in stage_times:
-            cg_t, _ = compliance.gravity_compliance_value(
+            cg_t, _ = compliance.gravity_compliance(
                 xPhys,
                 tPhys,
                 problem.KE,
@@ -527,16 +526,16 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     fval_parts: list[Tensor] = []
     dfdx_parts: list[Tensor] = []
 
-    fv_vol_t = constraints.global_volume_fraction_value(xPhys, problem.volfrac)
+    fv_vol_t = constraints.global_volume_fraction(xPhys, problem.volfrac)
     vol_diag = float(xPhys.detach().sum() / (nelx * nely))
     fval_parts.append(fv_vol_t[None])
     dfdx_parts.append(_grad_row(fv_vol_t, leaves)[None, :])
 
-    fv_cont_t = constraints.time_field_continuity_value(tPhys, problem.L)
+    fv_cont_t = constraints.time_field_continuity(tPhys, problem.L)
     fval_parts.append(fv_cont_t[None])
     dfdx_parts.append(_grad_row(fv_cont_t, leaves)[None, :])
 
-    fv_start_t = constraints.start_point_value(tPhys, problem.Nei)
+    fv_start_t = constraints.start_point(tPhys, problem.Nei)
     fval_parts.append(fv_start_t)
     dfdx_parts.append(
         _grad_rows_batched(fv_start_t, xTilde, tPhys, problem.H, problem.Hs)
@@ -544,7 +543,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     stage_upper_t = torch.stack(
         [
-            constraints.stage_volume_bounds_value(
+            constraints.stage_volume_bounds(
                 xPhys, tPhys, float(t_stage), problem.volfrac, beta_t
             )
             for t_stage in stage_times

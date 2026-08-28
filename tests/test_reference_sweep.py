@@ -39,6 +39,8 @@ import sttopt.gravity as gravity
 import sttopt.optimize as optimize
 import sttopt.timefield as timefield
 import sttopt.torch_util as torch_util
+import tests.reference.compliance as compliance_ref
+import tests.reference.conductivity as conductivity_ref
 
 TIGHT = 1e-11  # purely algebraic quantities
 SOLVED = 1e-8  # downstream of a linear solve
@@ -167,7 +169,7 @@ def test_whole_compliance_matches_reference(nelx, nely):
     c_ref, dcx_ref = ref.ref_whole_compliance(
         nelx, nely, KE, xP, 1e-9, 1.0, 3, freedofs1_ref, F
     )
-    c, dcx = compliance.whole_compliance(
+    c, dcx = compliance_ref.whole_compliance(
         tt(xP),
         tt(KE),
         tti(fem.element_dof_map(nelx, nely)),
@@ -211,7 +213,7 @@ def test_gravity_compliance_matches_reference(nelx, nely, ti):
     c_ref, dcx_ref, dct_ref = ref.ref_gravity_compliance(
         nelx, nely, KE, xP, tP, 1e-9, 1.0, 3, ti, C_ref, 10.0, freedofs1_ref
     )
-    c, dcx, dct = compliance.gravity_compliance(
+    c, dcx, dct = compliance_ref.gravity_compliance(
         tt(xP),
         tt(tP),
         tt(KE),
@@ -268,7 +270,7 @@ def test_hotspot_matches_reference(nelx, nely, rmin_cond, factor):
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
     H_t = torch_util.csr_to_tensor(H, "cpu", torch.float64)
     e1_t, e2_t, w_t = tti(e1), tti(e2), tt(w)
-    result = conductivity.hotspot_constraint(
+    result = conductivity_ref.hotspot_constraint(
         tt(xP),
         tt(tP),
         e1_t,
@@ -328,7 +330,7 @@ def test_hotspot_non_default_constants(p, q, r, rouf):
     )
     H, Hs = filters.density_filter(nelx, nely, 2.0)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, 3.0)
-    result = conductivity.hotspot_constraint(
+    result = conductivity_ref.hotspot_constraint(
         tt(xP),
         tt(tP),
         tti(e1),

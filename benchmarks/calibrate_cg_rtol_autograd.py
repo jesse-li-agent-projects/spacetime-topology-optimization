@@ -6,9 +6,9 @@ compares the hand-derived `dcx`/`dct` computed from a solved `U`, so it only eve
 exercises one CG solve per sensitivity. Autograd's `dL/dxPhys` instead runs `FemSolve`
 forward *and* its adjoint `backward` -- a second CG solve (warm-started, but still a
 solve at the same `rtol`) whose error compounds with the forward's. This module re-runs
-`calibrate_cg_rtol.py`'s method against that longer chain: `compliance.whole_compliance_
-value`/`gravity_compliance_value` (Phase 3.4's autograd-differentiable value functions)
-through `torch.autograd.grad`, with `compliance._solve_fe`/`_solve_fe_batched`
+`calibrate_cg_rtol.py`'s method against that longer chain: `compliance.whole_compliance`/
+`gravity_compliance` (Phase 3.4's autograd-differentiable value functions) through
+`torch.autograd.grad`, with `compliance._solve_fe`/`_solve_fe_batched`
 monkeypatched to run MGCG at each candidate `rtol` -- same monkeypatch mechanism as
 `calibrate_cg_rtol.mgcg_backend`, reused here rather than reimplemented.
 
@@ -18,7 +18,7 @@ cannot serve as an autograd reference here -- there is no gradient to read on th
 side. Instead the reference is MGCG at a much tighter `rtol` (`REFERENCE_RTOL = 1e-12`),
 i.e. the same solver, believed converged to float64's own precision floor rather than
 to a solver-independent oracle. `finite_difference_check` below is the
-solver-independent cross-check: it differences `whole_compliance_value` itself (not a
+solver-independent cross-check: it differences `whole_compliance` itself (not a
 returned sensitivity) at a fixed `rtol`, so an error shared by every `rtol` -- e.g. a
 wrong adjoint sign -- cannot hide behind "MGCG agrees with a tighter MGCG".
 """
@@ -133,9 +133,9 @@ def autograd_sensitivities(setup: dict, x: np.ndarray, t: np.ndarray, nstage: in
     adjoint alike, for the whole-structure and every gravity-stage objective.
 
     Mirrors `calibrate_cg_rtol.sensitivities`, but reads gradients off
-    `whole_compliance_value`/`gravity_compliance_value` via `torch.autograd.grad`
-    instead of the hand-derived `dcx`/`dct` `whole_compliance`/`gravity_compliance`
-    return directly.
+    `compliance.whole_compliance`/`gravity_compliance` via `torch.autograd.grad`
+    instead of the hand-derived `dcx`/`dct` `tests.reference.compliance`'s
+    `whole_compliance`/`gravity_compliance` return directly.
 
     :return: dict with `c`, `dcx`, stacked per-stage `cg`/`dcx_g`/`dct_g`, and
         `fwd_iters`/`bwd_iters` (one entry per `FemSolve` call: 1 whole + `nstage`
@@ -146,7 +146,7 @@ def autograd_sensitivities(setup: dict, x: np.ndarray, t: np.ndarray, nstage: in
 
     with mgcg_backend(setup, rtol=setup["rtol"]) as infos:
         x_t = torch.tensor(x, dtype=dtype, device=device, requires_grad=True)
-        c, _ = compliance.whole_compliance_value(
+        c, _ = compliance.whole_compliance(
             x_t,
             setup["KE_t"],
             setup["edofMat_t"],
@@ -168,7 +168,7 @@ def autograd_sensitivities(setup: dict, x: np.ndarray, t: np.ndarray, nstage: in
         with mgcg_backend(setup, rtol=setup["rtol"]) as infos:
             x_t = torch.tensor(x, dtype=dtype, device=device, requires_grad=True)
             t_t = torch.tensor(t, dtype=dtype, device=device, requires_grad=True)
-            cg, _ = compliance.gravity_compliance_value(
+            cg, _ = compliance.gravity_compliance(
                 x_t,
                 t_t,
                 setup["KE_t"],
@@ -204,7 +204,7 @@ def finite_difference_check(
     setup: dict, x: np.ndarray, rtol: float, elements: np.ndarray, h: float = 1e-4
 ) -> float:
     """Max relative error of the autograd `dcx` against a central difference of
-    `whole_compliance_value` itself, both at the same `rtol` -- the solver-independent
+    `whole_compliance` itself, both at the same `rtol` -- the solver-independent
     cross-check the module docstring describes.
 
     :param setup: `mesh_setup` output.
@@ -217,7 +217,7 @@ def finite_difference_check(
     device, dtype = setup["device"], setup["dtype"]
     with mgcg_backend(setup, rtol=rtol):
         x_t = torch.tensor(x, dtype=dtype, device=device, requires_grad=True)
-        c, _ = compliance.whole_compliance_value(
+        c, _ = compliance.whole_compliance(
             x_t,
             setup["KE_t"],
             setup["edofMat_t"],
@@ -238,7 +238,7 @@ def finite_difference_check(
             for sign in (+1, -1):
                 xp = x.copy()
                 xp.flat[e] += sign * h
-                c_p, _ = compliance.whole_compliance_value(
+                c_p, _ = compliance.whole_compliance(
                     torch.tensor(xp, dtype=dtype, device=device),
                     setup["KE_t"],
                     setup["edofMat_t"],

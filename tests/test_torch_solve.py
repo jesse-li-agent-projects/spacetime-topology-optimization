@@ -14,6 +14,7 @@ torch = pytest.importorskip("torch")
 import sttopt.compliance as compliance  # noqa: E402
 import sttopt.torch_fem as torch_fem  # noqa: E402
 import sttopt.torch_solve as torch_solve  # noqa: E402
+import tests.reference.compliance as compliance_ref  # noqa: E402
 from benchmarks import calibrate_cg_rtol as calib  # noqa: E402
 from test_torch_fem import _binary_design  # noqa: E402
 
@@ -73,12 +74,13 @@ def _near_binary_snapshot():
 
 
 def _autograd_whole_compliance(xPhys, KE, edofMat, mask, nelx, nely, F):
-    """`compliance.whole_compliance`'s forward, kept differentiable end to end.
+    """`tests.reference.compliance.whole_compliance`'s forward, kept differentiable end
+    to end.
 
-    `compliance.whole_compliance` itself casts `c` to a Python `float`, which detaches
-    it from autograd on purpose (its sensitivity is the hand-derived `dcx`, not an
-    autograd gradient -- Phase 3.4 is what changes that). This is the independent
-    autograd path test 2 compares that hand-derived formula against.
+    That function itself casts `c` to a Python `float`, which detaches it from
+    autograd on purpose (its sensitivity is the hand-derived `dcx`, not an autograd
+    gradient). This is the independent autograd path test 2 compares that hand-derived
+    formula against.
     """
     density = torch_fem.simp_density(xPhys, EMIN, EMAX, PENAL)
     U = torch_solve.femsolve(
@@ -92,7 +94,9 @@ def _autograd_whole_compliance(xPhys, KE, edofMat, mask, nelx, nely, F):
 def _autograd_gravity_compliance(
     xPhys, tPhys, KE, edofMat, mask, nelx, nely, ti, C, beta_t, ndof
 ):
-    """`compliance.gravity_compliance`'s forward, kept differentiable end to end."""
+    """`tests.reference.compliance.gravity_compliance`'s forward, kept differentiable
+    end to end.
+    """
     t_mask = compliance.time_mask(tPhys, ti, beta_t)
     xtJoint = xPhys * t_mask
     f = -(C @ xtJoint.flatten())
@@ -113,7 +117,7 @@ def test_adjoint_matches_hand_derived_whole_compliance_near_binary():
     xPhys = torch.tensor(x, dtype=torch.float64, requires_grad=True)
     mask = setup["mask"]
 
-    c_ref, dcx_ref = compliance.whole_compliance(
+    c_ref, dcx_ref = compliance_ref.whole_compliance(
         xPhys.detach(),
         setup["KE_t"],
         setup["edofMat_t"],
@@ -150,7 +154,7 @@ def test_adjoint_matches_hand_derived_gravity_compliance_near_binary():
     mask = setup["mask"]
     ti, beta_t = 0.5, calib.BETA_T
 
-    c_ref, dcx_ref, dct_ref = compliance.gravity_compliance(
+    c_ref, dcx_ref, dct_ref = compliance_ref.gravity_compliance(
         xPhys.detach(),
         tPhys.detach(),
         setup["KE_t"],

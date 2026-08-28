@@ -71,6 +71,8 @@ import torch
 
 import sttopt.compliance as compliance
 import sttopt.fem as fem
+import tests.reference.compliance as compliance_ref
+import tests.reference.fem as fem_ref
 import sttopt.gravity as gravity
 import sttopt.torch_fem as torch_fem
 import sttopt.torch_mg as torch_mg
@@ -227,17 +229,20 @@ def spsolve_backend():
     calibrates MGCG's `rtol` against.
 
     Phase 3.3 (`plans/torch_port_part2.md`) moved `compliance._solve_fe`'s default
-    backend from `fem.assemble_stiffness`/`fem.solve_fe` to `torch_solve.FemSolve`'s
-    MGCG, so this monkeypatches `_solve_fe` back to the NumPy/SciPy path rather than
-    assuming it is still the default -- symmetric with `mgcg_backend` above, and for
-    the same reason: swap the solver underneath, never reimplement the algebra.
+    backend from `assemble_stiffness`/`solve_fe` (now `tests/reference/fem.py`'s) to
+    `torch_solve.FemSolve`'s MGCG, so this monkeypatches `_solve_fe` back to the
+    NumPy/SciPy path rather than assuming it is still the default -- symmetric with
+    `mgcg_backend` above, and for the same reason: swap the solver underneath, never
+    reimplement the algebra. Uses `tests/reference/compliance.py`'s hand-derived
+    `whole_compliance`/`gravity_compliance` for the same reason `sensitivities` below
+    does.
     """
     orig_solve_fe = compliance._solve_fe
 
     def solve_fe(KE, xPhys, Emin, Emax, penal, edofMat, freedofs, F, ndof, *, x0=None):
         # spsolve is a direct solve with no notion of a warm start; x0 is accepted
         # (for signature parity with compliance._solve_fe) and ignored.
-        K = fem.assemble_stiffness(
+        K = fem_ref.assemble_stiffness(
             torch_util.to_numpy(KE),
             torch_util.to_numpy(xPhys),
             Emin,
@@ -246,7 +251,7 @@ def spsolve_backend():
             torch_util.to_numpy(edofMat),
             ndof,
         )
-        U = fem.solve_fe(K, torch_util.to_numpy(F), torch_util.to_numpy(freedofs))
+        U = fem_ref.solve_fe(K, torch_util.to_numpy(F), torch_util.to_numpy(freedofs))
         return torch_util.to_tensor(U, xPhys.device, xPhys.dtype)
 
     compliance._solve_fe = solve_fe
@@ -273,7 +278,7 @@ def sensitivities(setup: dict, x: np.ndarray, t: np.ndarray, nstage: int) -> dic
     device, dtype = setup["device"], setup["dtype"]
     x_t = torch.tensor(x, dtype=dtype, device=device)
     t_t = torch.tensor(t, dtype=dtype, device=device)
-    c, dcx = compliance.whole_compliance(
+    c, dcx = compliance_ref.whole_compliance(
         x_t,
         setup["KE_t"],
         setup["edofMat_t"],
@@ -287,7 +292,7 @@ def sensitivities(setup: dict, x: np.ndarray, t: np.ndarray, nstage: int) -> dic
     dcx = dcx.cpu().numpy()
     cg, dcx_g, dct_g = [], [], []
     for ti in np.linspace(0, 1, nstage + 1)[1:]:
-        c_s, dcx_s, dct_s = compliance.gravity_compliance(
+        c_s, dcx_s, dct_s = compliance_ref.gravity_compliance(
             x_t,
             t_t,
             setup["KE_t"],
@@ -348,7 +353,7 @@ def finite_difference_check(
     """
     device, dtype = setup["device"], setup["dtype"]
     with mgcg_backend(setup, rtol=rtol):
-        _, dcx = compliance.whole_compliance(
+        _, dcx = compliance_ref.whole_compliance(
             torch.tensor(x, dtype=dtype, device=device),
             setup["KE_t"],
             setup["edofMat_t"],
@@ -366,7 +371,7 @@ def finite_difference_check(
             for sign in (+1, -1):
                 xp = x.copy()
                 xp.flat[e] += sign * h
-                c_p, _ = compliance.whole_compliance(
+                c_p, _ = compliance_ref.whole_compliance(
                     torch.tensor(xp, dtype=dtype, device=device),
                     setup["KE_t"],
                     setup["edofMat_t"],

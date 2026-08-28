@@ -21,6 +21,7 @@ import torch
 import sttopt.conductivity as conductivity
 import sttopt.filters as filters
 import sttopt.optimize as optimize
+import tests.reference.conductivity as conductivity_ref
 from conftest import assert_close, load_fixture_npz
 
 NELX, NELY = 7, 5
@@ -155,7 +156,7 @@ def test_hotspot_factor_refresh_at_loop_25():
     dx = filters.heaviside_projection_derivative(
         state.xTilde, state.beta_d, problem.eta
     )
-    old = conductivity.hotspot_constraint(
+    old = conductivity_ref.hotspot_constraint(
         xPhys,
         tPhys,
         problem.e1,

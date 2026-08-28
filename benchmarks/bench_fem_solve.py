@@ -72,9 +72,9 @@ import time
 import numpy as np
 import torch
 
-import sttopt.fem as fem
 import sttopt.torch_fem as torch_fem
 import sttopt.torch_mg as torch_mg
+import tests.reference.fem as fem_ref
 from benchmarks.calibrate_cg_rtol import (
     EMAX,
     EMIN,
@@ -154,7 +154,7 @@ def spsolve_time(setup: dict, densities: np.ndarray, loads: np.ndarray) -> tuple
     t0 = time.perf_counter()
     U = []
     for d, F in zip(densities, loads):
-        K = fem.assemble_stiffness(
+        K = fem_ref.assemble_stiffness(
             setup["KE"],
             d.reshape(setup["nely"], setup["nelx"]),
             EMIN,
@@ -163,7 +163,7 @@ def spsolve_time(setup: dict, densities: np.ndarray, loads: np.ndarray) -> tuple
             setup["edofMat"],
             setup["ndof"],
         )
-        U.append(fem.solve_fe(K, F, setup["freedofs"]))
+        U.append(fem_ref.solve_fe(K, F, setup["freedofs"]))
     return time.perf_counter() - t0, np.array(U)
 
 

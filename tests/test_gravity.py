@@ -5,6 +5,7 @@ import numpy as np
 
 import sttopt.fem as fem
 import sttopt.gravity as gravity
+import tests.reference.fem as fem_ref
 from conftest import assert_close, load_fixture_npz, node_positions
 
 
@@ -44,7 +45,7 @@ def test_gravity_self_weight_column_patch():
     xPhys = np.ones((nely, nelx))
     KE = fem.plane_stress_KE(nu=0.0)
     edofMat = fem.element_dof_map(nelx, nely)
-    K = fem.assemble_stiffness(KE, xPhys, EMIN, EMAX, PENAL, edofMat, ndof)
+    K = fem_ref.assemble_stiffness(KE, xPhys, EMIN, EMAX, PENAL, edofMat, ndof)
 
     C = gravity.gravity_load_matrix(nelx, nely)
     F = np.zeros(ndof)
@@ -57,7 +58,7 @@ def test_gravity_self_weight_column_patch():
     fixeddofs = np.concatenate([2 * top_nodes, 2 * top_nodes + 1])
     freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)
 
-    U = fem.solve_fe(K, F, freedofs)
+    U = fem_ref.solve_fe(K, F, freedofs)
 
     # Bar-under-self-weight closed form: axial force at depth `row` is the weight of
     # everything below it, so strain is linear in row and displacement is quadratic.

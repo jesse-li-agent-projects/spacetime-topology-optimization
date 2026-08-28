@@ -9,6 +9,7 @@ import torch
 import sttopt.constraints as constraints
 import sttopt.filters as filters
 import sttopt.torch_util as torch_util
+import tests.reference.constraints as constraints_ref
 from conftest import assert_close, load_fixture_npz, tt, tti
 
 NELX, NELY = 7, 5
@@ -52,19 +53,21 @@ def test_constraints_match_fixture():
         dfdx_t = dfdx_all[:, nel:]
 
         # (1) global volume
-        fval, dfx, dft = constraints.global_volume_fraction(xPhys, dx, H, Hs, volfrac)
+        fval, dfx, dft = constraints_ref.global_volume_fraction(
+            xPhys, dx, H, Hs, volfrac
+        )
         assert_close(fval, fval_all[0], tier="algebraic")
         assert_close(dfx, dfdx_x[0], tier="algebraic")
         assert_close(dft, dfdx_t[0], tier="algebraic")
 
         # (2) time-field continuity
-        fval, dfx, dft = constraints.time_field_continuity(tPhys, L, H, Hs)
+        fval, dfx, dft = constraints_ref.time_field_continuity(tPhys, L, H, Hs)
         assert_close(fval, fval_all[1], tier="algebraic")
         assert_close(dfx, dfdx_x[1], tier="algebraic")
         assert_close(dft, dfdx_t[1], tier="algebraic")
 
         # (3) start-point
-        fval, dfx, dft = constraints.start_point(tPhys, Nei, H, Hs)
+        fval, dfx, dft = constraints_ref.start_point(tPhys, Nei, H, Hs)
         assert_close(fval, fval_all[2 : 2 + nely], tier="algebraic")
         assert_close(dfx, dfdx_x[2 : 2 + nely], tier="algebraic")
         assert_close(dft, dfdx_t[2 : 2 + nely], tier="algebraic")
@@ -72,7 +75,7 @@ def test_constraints_match_fixture():
         # (4) per-stage volume, upper/lower interleaved starting at row 2+nely
         base = 2 + nely
         for i, t_stage in enumerate(np.linspace(0, 1, nStage + 1)[1:]):
-            fu, fl, dfx, dft = constraints.stage_volume_bounds(
+            fu, fl, dfx, dft = constraints_ref.stage_volume_bounds(
                 xPhys, tPhys, dx, H, Hs, t_stage, volfrac, ROU
             )
             row_u, row_l = base + 2 * i, base + 2 * i + 1
@@ -114,7 +117,7 @@ def test_stage_volume_bounds_fd():
         tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
         dx = filters.heaviside_projection_derivative(xTilde, BETA, ETA)
 
-        _, _, dfx, dft = constraints.stage_volume_bounds(
+        _, _, dfx, dft = constraints_ref.stage_volume_bounds(
             xPhys, tPhys, dx, H, Hs, t_stage, volfrac, ROU
         )
         # Guard against a vacuously-passing FD check (e.g. `ft` saturated near 0/1
@@ -125,7 +128,7 @@ def test_stage_volume_bounds_fd():
         def fval_upper_of(x_raw, t_raw):
             xPhys, _ = _xPhys_of(x_raw, H, Hs, nely, nelx, BETA, ETA)
             tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
-            fu, _, _, _ = constraints.stage_volume_bounds(
+            fu, _, _, _ = constraints_ref.stage_volume_bounds(
                 xPhys, tPhys, dx, H, Hs, t_stage, volfrac, ROU
             )
             return fu
@@ -133,7 +136,7 @@ def test_stage_volume_bounds_fd():
         def fval_lower_of(x_raw, t_raw):
             xPhys, _ = _xPhys_of(x_raw, H, Hs, nely, nelx, BETA, ETA)
             tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
-            _, fl, _, _ = constraints.stage_volume_bounds(
+            _, fl, _, _ = constraints_ref.stage_volume_bounds(
                 xPhys, tPhys, dx, H, Hs, t_stage, volfrac, ROU
             )
             return fl
@@ -185,13 +188,15 @@ def test_global_volume_fraction_fd():
         xPhys, xTilde = _xPhys_of(x_raw, H, Hs, nely, nelx, BETA, ETA)
         dx = filters.heaviside_projection_derivative(xTilde, BETA, ETA)
 
-        _, dfx, dft = constraints.global_volume_fraction(xPhys, dx, H, Hs, volfrac)
+        _, dfx, dft = constraints_ref.global_volume_fraction(xPhys, dx, H, Hs, volfrac)
         np.testing.assert_allclose(dft, 0.0)
         assert dfx.abs().max() > 1e-3  # guard against a vacuous atol-only pass
 
         def fval_of(x_raw):
             xPhys, _ = _xPhys_of(x_raw, H, Hs, nely, nelx, BETA, ETA)
-            fval, _, _ = constraints.global_volume_fraction(xPhys, dx, H, Hs, volfrac)
+            fval, _, _ = constraints_ref.global_volume_fraction(
+                xPhys, dx, H, Hs, volfrac
+            )
             return fval
 
         fd_x = np.zeros(nely * nelx)
@@ -216,13 +221,13 @@ def test_start_point_fd():
         t_raw = tt(rng.uniform(0.05, 0.95, size=(nely, nelx)))
         tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
 
-        fval, dfx, dft = constraints.start_point(tPhys, Nei, H, Hs)
+        fval, dfx, dft = constraints_ref.start_point(tPhys, Nei, H, Hs)
         np.testing.assert_allclose(dfx, 0.0)
         assert dft.abs().max() > 1e-3  # guard against a vacuous atol-only pass
 
         def fval_of(t_raw):
             tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
-            fval, _, _ = constraints.start_point(tPhys, Nei, H, Hs)
+            fval, _, _ = constraints_ref.start_point(tPhys, Nei, H, Hs)
             return fval
 
         fd_t = np.zeros((len(Nei), nely * nelx))
@@ -249,13 +254,13 @@ def test_time_field_continuity_fd():
         t_raw = tt(rng.uniform(0.05, 0.95, size=(nely, nelx)))
         tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
 
-        _, dfx, dft = constraints.time_field_continuity(tPhys, L, H, Hs)
+        _, dfx, dft = constraints_ref.time_field_continuity(tPhys, L, H, Hs)
         np.testing.assert_allclose(dfx, 0.0)
         assert dft.abs().max() > 1e-3  # guard against a vacuous atol-only pass
 
         def fval_of(t_raw):
             tPhys = _tPhys_of(t_raw, H, Hs, nely, nelx)
-            fval, _, _ = constraints.time_field_continuity(tPhys, L, H, Hs)
+            fval, _, _ = constraints_ref.time_field_continuity(tPhys, L, H, Hs)
             return fval
 
         fd_t = np.zeros(nely * nelx)
@@ -288,7 +293,9 @@ def test_global_volume_fraction_uniform_layouts():
             (volfrac, 0.0),
         ):
             xPhys = torch.full((nely, nelx), c, dtype=torch.float64)
-            fval, _, _ = constraints.global_volume_fraction(xPhys, dx, H, Hs, volfrac)
+            fval, _, _ = constraints_ref.global_volume_fraction(
+                xPhys, dx, H, Hs, volfrac
+            )
             np.testing.assert_allclose(fval, expected, rtol=1e-9, atol=1e-9)
 
 
@@ -311,7 +318,7 @@ def test_time_field_continuity_layouts():
     jj, ii = _element_grid(nely, nelx)
 
     def fval_of(tPhys):
-        fval, _, _ = constraints.time_field_continuity(tt(tPhys), L, H, Hs)
+        fval, _, _ = constraints_ref.time_field_continuity(tt(tPhys), L, H, Hs)
         return fval
 
     grad_x = ii / (nelx - 1)
@@ -361,14 +368,14 @@ def test_start_point_layouts():
     ]
     for Nei, wrong_anchor in cases:
         tPhys_valid = tt(_distance_field(Nei, nely, nelx))
-        fval, dfx, dft = constraints.start_point(tPhys_valid, tti(Nei), H, Hs)
+        fval, dfx, dft = constraints_ref.start_point(tPhys_valid, tti(Nei), H, Hs)
         assert fval.shape == (len(Nei),)
         assert dfx.shape == (len(Nei), nel)
         assert dft.shape == (len(Nei), nel)
         assert torch.all(fval < 1e-6)  # satisfied: Nei cells sit at the field's minimum
 
         tPhys_invalid = tt(_distance_field(wrong_anchor, nely, nelx))
-        fval_wrong, _, _ = constraints.start_point(tPhys_invalid, tti(Nei), H, Hs)
+        fval_wrong, _, _ = constraints_ref.start_point(tPhys_invalid, tti(Nei), H, Hs)
         assert torch.all(fval_wrong > 0.05)  # violated: Nei isn't where printing starts
 
 
@@ -388,13 +395,13 @@ def test_stage_volume_bounds_xPhys_weighting():
     tPhys = tt(tPhys)
 
     def fval_upper_of(xPhys):
-        fu, _, _, _ = constraints.stage_volume_bounds(
+        fu, _, _, _ = constraints_ref.stage_volume_bounds(
             xPhys, tPhys, dx, H, Hs, t_stage, volfrac, ROU
         )
         return fu
 
     def fval_lower_of(xPhys):
-        _, fl, _, _ = constraints.stage_volume_bounds(
+        _, fl, _, _ = constraints_ref.stage_volume_bounds(
             xPhys, tPhys, dx, H, Hs, t_stage, volfrac, ROU
         )
         return fl
@@ -441,13 +448,13 @@ def test_stage_volume_bounds_beta_t_sharpness():
     tPhys = tt(tPhys)
 
     def fval_upper_of(beta_t):
-        fu, _, _, _ = constraints.stage_volume_bounds(
+        fu, _, _, _ = constraints_ref.stage_volume_bounds(
             xPhys, tPhys, dx, H, Hs, t_stage, volfrac, beta_t
         )
         return fu
 
     def fval_lower_of(beta_t):
-        _, fl, _, _ = constraints.stage_volume_bounds(
+        _, fl, _, _ = constraints_ref.stage_volume_bounds(
             xPhys, tPhys, dx, H, Hs, t_stage, volfrac, beta_t
         )
         return fl
@@ -475,7 +482,7 @@ def test_stage_volume_bounds_lower_has_slack_margin():
     xPhys = tt(rng.uniform(0.1, 0.9, size=(nely, nelx)))
     tPhys = tt(rng.uniform(0.05, 0.95, size=(nely, nelx)))
 
-    fu, fl, _, _ = constraints.stage_volume_bounds(
+    fu, fl, _, _ = constraints_ref.stage_volume_bounds(
         xPhys, tPhys, dx, H, Hs, t_stage, volfrac, ROU
     )
     assert fl < -fu - 1e-8
@@ -509,10 +516,10 @@ def test_global_volume_fraction_value_matches_hand_derived():
         ((H @ x.detach().flatten()) / Hs).reshape(nely, nelx), BETA, ETA
     )
 
-    fv_ref, dfx_ref, dft_ref = constraints.global_volume_fraction(
+    fv_ref, dfx_ref, dft_ref = constraints_ref.global_volume_fraction(
         xPhys.detach(), dx, H, Hs, volfrac
     )
-    fv = constraints.global_volume_fraction_value(xPhys, volfrac)
+    fv = constraints.global_volume_fraction(xPhys, volfrac)
     dfx, dft = torch.autograd.grad(fv, (x, t), allow_unused=True)
 
     assert_close(fv.detach(), fv_ref, tier="algebraic")
@@ -530,10 +537,10 @@ def test_time_field_continuity_value_matches_hand_derived():
     rng = np.random.default_rng(51)
     x, t, xPhys, tPhys = _filtered_leaves(nelx, nely, H, Hs, rng)
 
-    fv_ref, dfx_ref, dft_ref = constraints.time_field_continuity(
+    fv_ref, dfx_ref, dft_ref = constraints_ref.time_field_continuity(
         tPhys.detach(), L, H, Hs
     )
-    fv = constraints.time_field_continuity_value(tPhys, L)
+    fv = constraints.time_field_continuity(tPhys, L)
     dfx, dft = torch.autograd.grad(fv, (x, t), allow_unused=True)
 
     assert_close(fv.detach(), fv_ref, tier="algebraic")
@@ -549,8 +556,8 @@ def test_start_point_value_matches_hand_derived():
     rng = np.random.default_rng(52)
     x, t, xPhys, tPhys = _filtered_leaves(nelx, nely, H, Hs, rng)
 
-    fv_ref, dfx_ref, dft_ref = constraints.start_point(tPhys.detach(), Nei, H, Hs)
-    fv = constraints.start_point_value(tPhys, Nei)
+    fv_ref, dfx_ref, dft_ref = constraints_ref.start_point(tPhys.detach(), Nei, H, Hs)
+    fv = constraints.start_point(tPhys, Nei)
     for k in range(len(Nei)):
         dfx, dft = torch.autograd.grad(
             fv[k], (x, t), retain_graph=True, allow_unused=True
@@ -570,10 +577,10 @@ def test_stage_volume_bounds_value_matches_hand_derived():
         ((H @ x.detach().flatten()) / Hs).reshape(nely, nelx), BETA, ETA
     )
 
-    fu_ref, fl_ref, dfx_ref, dft_ref = constraints.stage_volume_bounds(
+    fu_ref, fl_ref, dfx_ref, dft_ref = constraints_ref.stage_volume_bounds(
         xPhys.detach(), tPhys.detach(), dx, H, Hs, t_stage, volfrac, ROU
     )
-    fu = constraints.stage_volume_bounds_value(xPhys, tPhys, t_stage, volfrac, ROU)
+    fu = constraints.stage_volume_bounds(xPhys, tPhys, t_stage, volfrac, ROU)
     dfx, dft = torch.autograd.grad(fu, (x, t))
     fl = -fu - 1.0e-5
 

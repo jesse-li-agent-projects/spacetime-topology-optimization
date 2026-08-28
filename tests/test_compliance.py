@@ -13,6 +13,8 @@ import sttopt.compliance as compliance
 import sttopt.fem as fem
 import sttopt.gravity as gravity
 import sttopt.torch_util as torch_util
+import tests.reference.compliance as compliance_ref
+import tests.reference.fem as fem_ref
 from conftest import assert_close, load_fixture_npz, point_load_problem, tt, tti
 
 
@@ -29,7 +31,7 @@ def test_whole_compliance_matches_fixture():
 
     for k in range(nloop):
         xPhys = tt(e2e["xPhys_traj"][:, :, k])
-        c, dcx = compliance.whole_compliance(
+        c, dcx = compliance_ref.whole_compliance(
             xPhys, KE, edofMat, Emin, Emax, penal, freedofs, F, ndof
         )
         assert_close(c, fx["c_whole_all"][k], tier="solved")
@@ -58,7 +60,7 @@ def test_gravity_compliance_matches_fixture():
         tPhys = tt(e2e["tPhys_traj"][:, :, k])
         for i in range(nStage):
             ti = tP[i + 1]
-            c, dcx, dct = compliance.gravity_compliance(
+            c, dcx, dct = compliance_ref.gravity_compliance(
                 xPhys,
                 tPhys,
                 KE,
@@ -135,7 +137,7 @@ def test_whole_compliance_axial_bar_patch(t, Emax):
     F = np.zeros(ndof)
     _add_edge_traction(F, nodes[:, -1], (t, 0.0))
 
-    c, dcx = compliance.whole_compliance(
+    c, dcx = compliance_ref.whole_compliance(
         tt(xPhys), tt(KE), tti(edofMat), Emin, Emax, penal, tti(freedofs), tt(F), ndof
     )
 
@@ -182,7 +184,7 @@ def _cantilever_beam_compliance(
     F = np.zeros(ndof)
     _add_edge_traction(F, nodes[:, -1], (0.0, -P / nely))
 
-    c, dcx = compliance.whole_compliance(
+    c, dcx = compliance_ref.whole_compliance(
         tt(xPhys), tt(KE), tti(edofMat), Emin, Emax, penal, tti(freedofs), tt(F), ndof
     )
 
@@ -259,7 +261,7 @@ def test_whole_compliance_scales_as_load_squared_and_inverse_modulus():
     xPhys = tt(_random_field(np.random.default_rng(3), nely, nelx))
 
     def c_of(alpha, Emax):
-        c, _ = compliance.whole_compliance(
+        c, _ = compliance_ref.whole_compliance(
             xPhys, KE, edofMat, 1e-9 * Emax, Emax, penal, freedofs, alpha * F, ndof
         )
         return c
@@ -301,7 +303,7 @@ def _gravity_cantilever_compliance(
     freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)
     C = gravity.gravity_load_matrix(nelx, nely) * w_scale
 
-    c, _, _ = compliance.gravity_compliance(
+    c, _, _ = compliance_ref.gravity_compliance(
         tt(xPhys),
         tt(tPhys),
         tt(KE),
@@ -418,7 +420,7 @@ def test_whole_compliance_fd_dcx():
     rng = np.random.default_rng(0)
     for seed in range(5):
         xPhys = _random_field(rng, nely, nelx)
-        _, dcx = compliance.whole_compliance(
+        _, dcx = compliance_ref.whole_compliance(
             tt(xPhys), KE, edofMat, Emin, Emax, penal, freedofs, F, ndof
         )
         fd = np.zeros_like(xPhys)
@@ -428,10 +430,10 @@ def test_whole_compliance_fd_dcx():
                 xp[j, i] += h
                 xm = xPhys.copy()
                 xm[j, i] -= h
-                cp, _ = compliance.whole_compliance(
+                cp, _ = compliance_ref.whole_compliance(
                     tt(xp), KE, edofMat, Emin, Emax, penal, freedofs, F, ndof
                 )
-                cm, _ = compliance.whole_compliance(
+                cm, _ = compliance_ref.whole_compliance(
                     tt(xm), KE, edofMat, Emin, Emax, penal, freedofs, F, ndof
                 )
                 fd[j, i] = (cp - cm) / (2 * h)
@@ -461,7 +463,7 @@ def test_gravity_compliance_fd_dcx_and_dct():
     # of the FD probe, not evidence about the analytic formula.
     def well_conditioned(xPhys, tPhys):
         ft = compliance.time_mask(tt(tPhys), ti, beta_t).numpy()
-        K = fem.assemble_stiffness(
+        K = fem_ref.assemble_stiffness(
             KE_np, xPhys * ft, Emin, Emax, penal, edofMat_np, ndof
         )
         Kfree = K[np.ix_(freedofs_np, freedofs_np)].toarray()
@@ -482,7 +484,7 @@ def test_gravity_compliance_fd_dcx_and_dct():
             continue
         accepted += 1
 
-        _, dcx, dct = compliance.gravity_compliance(
+        _, dcx, dct = compliance_ref.gravity_compliance(
             tt(xPhys),
             tt(tPhys),
             KE,
@@ -507,7 +509,7 @@ def test_gravity_compliance_fd_dcx_and_dct():
             xp[j, i] += h
             xm = xPhys.copy()
             xm[j, i] -= h
-            cp, _, _ = compliance.gravity_compliance(
+            cp, _, _ = compliance_ref.gravity_compliance(
                 tt(xp),
                 tt(tPhys),
                 KE,
@@ -521,7 +523,7 @@ def test_gravity_compliance_fd_dcx_and_dct():
                 freedofs,
                 ndof,
             )
-            cm, _, _ = compliance.gravity_compliance(
+            cm, _, _ = compliance_ref.gravity_compliance(
                 tt(xm),
                 tt(tPhys),
                 KE,
@@ -541,7 +543,7 @@ def test_gravity_compliance_fd_dcx_and_dct():
             tp[j, i] += h
             tm = tPhys.copy()
             tm[j, i] -= h
-            cp, _, _ = compliance.gravity_compliance(
+            cp, _, _ = compliance_ref.gravity_compliance(
                 tt(xPhys),
                 tt(tp),
                 KE,
@@ -555,7 +557,7 @@ def test_gravity_compliance_fd_dcx_and_dct():
                 freedofs,
                 ndof,
             )
-            cm, _, _ = compliance.gravity_compliance(
+            cm, _, _ = compliance_ref.gravity_compliance(
                 tt(xPhys),
                 tt(tm),
                 KE,
@@ -580,7 +582,7 @@ def test_time_mask_derivative_matches_fd():
     tPhys = tt(rng.uniform(0.05, 0.95, size=(4, 6)))
     ti, beta_t = 0.4, 10.0
     h = 1e-6
-    analytic = compliance.time_mask_derivative(tPhys, ti, beta_t)
+    analytic = compliance_ref.time_mask_derivative(tPhys, ti, beta_t)
     fd = (
         compliance.time_mask(tPhys + h, ti, beta_t)
         - compliance.time_mask(tPhys - h, ti, beta_t)
@@ -611,7 +613,7 @@ def test_whole_compliance_value_matches_hand_derived_near_binary():
     setup, x, t = _near_binary_snapshot()
     xPhys = torch.tensor(x, dtype=torch.float64, requires_grad=True)
 
-    c_ref, dcx_ref = compliance.whole_compliance(
+    c_ref, dcx_ref = compliance_ref.whole_compliance(
         xPhys.detach(),
         setup["KE_t"],
         setup["edofMat_t"],
@@ -622,7 +624,7 @@ def test_whole_compliance_value_matches_hand_derived_near_binary():
         setup["F_t"],
         setup["ndof"],
     )
-    c, _U = compliance.whole_compliance_value(
+    c, _U = compliance.whole_compliance(
         xPhys,
         setup["KE_t"],
         setup["edofMat_t"],
@@ -654,7 +656,7 @@ def test_gravity_compliance_value_matches_hand_derived_near_binary():
     tPhys = torch.tensor(t, dtype=torch.float64, requires_grad=True)
     ti, beta_t = 0.5, calib.BETA_T
 
-    c_ref, dcx_ref, dct_ref = compliance.gravity_compliance(
+    c_ref, dcx_ref, dct_ref = compliance_ref.gravity_compliance(
         xPhys.detach(),
         tPhys.detach(),
         setup["KE_t"],
@@ -668,7 +670,7 @@ def test_gravity_compliance_value_matches_hand_derived_near_binary():
         setup["freedofs_t"],
         setup["ndof"],
     )
-    cg, _U = compliance.gravity_compliance_value(
+    cg, _U = compliance.gravity_compliance(
         xPhys,
         tPhys,
         setup["KE_t"],
@@ -707,7 +709,7 @@ def test_batched_whole_and_gravity_compliance_value_matches_sequential():
         xPhys = torch.tensor(x, dtype=torch.float64, requires_grad=True)
         tPhys = torch.tensor(t, dtype=torch.float64, requires_grad=True)
         if batched:
-            c, stage_cs, _U = compliance.batched_whole_and_gravity_compliance_value(
+            c, stage_cs, _U = compliance.batched_whole_and_gravity_compliance(
                 xPhys,
                 tPhys,
                 setup["KE_t"],
@@ -723,7 +725,7 @@ def test_batched_whole_and_gravity_compliance_value_matches_sequential():
                 stage_times,
             )
         else:
-            c, _U = compliance.whole_compliance_value(
+            c, _U = compliance.whole_compliance(
                 xPhys,
                 setup["KE_t"],
                 setup["edofMat_t"],
@@ -735,7 +737,7 @@ def test_batched_whole_and_gravity_compliance_value_matches_sequential():
                 setup["ndof"],
             )
             stage_cs = [
-                compliance.gravity_compliance_value(
+                compliance.gravity_compliance(
                     xPhys,
                     tPhys,
                     setup["KE_t"],

@@ -25,6 +25,7 @@ import sttopt.mma as mma
 import sttopt.optimize as optimize
 import sttopt.torch_util as torch_util
 import sttopt.viz as viz
+import tests.reference.conductivity as conductivity_ref
 
 NELX, NELY, NSTAGE, NLOOP = 7, 5, 3, 3
 
@@ -243,7 +244,7 @@ def test_hotspot_gradients_finite_for_large_rouf():
     dx = torch.ones(nely, nelx, dtype=torch.float64)
 
     for rouf in [100.0, 800.0, 2000.0, 1e6]:
-        result = conductivity.hotspot_constraint(
+        result = conductivity_ref.hotspot_constraint(
             tt(xPhys),
             tt(tPhys),
             tti(e1),

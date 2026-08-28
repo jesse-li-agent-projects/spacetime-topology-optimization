@@ -1,15 +1,18 @@
 """Autograd vs. hand-derived sensitivities, `plans/torch_port_part2.md` Phase 3.4.
 
-Times the hand-derived value-plus-sensitivity call against the autograd forward-plus-
-backward, for each of the six sensitivity-producing call sites (`whole_compliance`,
-`gravity_compliance`, the four constraints, `hotspot_constraint`), at 90x30 / 180x60 /
-360x120, on the `it0800` near-binary snapshots. Both sides are torch, on the same
-device, on the same inputs -- the plan's "methodological trap to avoid": comparing
-autograd-on-GPU against the original NumPy-on-CPU hand-derived code would measure the
-port and the autodiff together and would flatter autograd. `sttopt.compliance`/
-`constraints`/`conductivity` still carry a torch hand-derived implementation (Phase
-3.2) precisely so this comparison is possible; this script is the one place that
-comparison is exercised end to end.
+Times the hand-derived value-plus-sensitivity call (`tests/reference/`'s
+`compliance`/`constraints`/`conductivity`) against the production autograd
+forward-plus-backward (`sttopt`'s), for each of the six sensitivity-producing call
+sites (`whole_compliance`, `gravity_compliance`, the four constraints,
+`hotspot_constraint`), at 90x30 / 180x60 / 360x120, on the `it0800` near-binary
+snapshots. Both sides are torch, on the same device, on the same inputs -- the plan's
+"methodological trap to avoid": comparing autograd-on-GPU against the original
+NumPy-on-CPU hand-derived code would measure the port and the autodiff together and
+would flatter autograd. `tests/reference/`'s hand-derived formulas are the torch port
+(Phase 3.2), kept as this comparison's other side after Phase 3.4's autograd
+sensitivities superseded them in production (`plans/torch_port_review_followup.md`
+Phase 4 moved them out of `sttopt/`); this script is the one place that comparison is
+exercised end to end.
 
 Forward and backward are timed separately (a slow backward and a slow forward have
 different fixes), and peak memory is reported alongside (the `npairs`-sized hotspot
@@ -20,15 +23,16 @@ warm-up discarded, median of `--repeats` timings, and the machine must be idle f
 numbers to be trustworthy (this script cannot verify that; say so when reporting).
 
 **Fairness: both sides must report the cost of the same quantity.** The four
-constraints (`constraints.py`) and `hotspot_constraint` bake the density-filter/
-Heaviside-projection chain rule (`H`, `Hs`, `dx`) directly into their returned
-sensitivity -- they hand back a finished `dfdx` row in raw `x`/`t` space, not
-`d(.)/d(xPhys)` (see `constraints.py`'s module docstring). Their `*_value` autograd
-counterparts deliberately do not -- Decision 4 makes the filter/projection an ordinary
-forward op for the *caller* to differentiate through -- so a naive `backward()` on a
-`*_value` output stops one step short, at `d(.)/d(xPhys)` or `d(.)/d(tPhys)`. Timing
-that against the hand-derived function's *finished* row is not apples to apples: it
-omits exactly the sparse `H @ (... / Hs)` matmul(s) the hand side spends time on.
+constraints (`tests/reference/constraints.py`) and `hotspot_constraint`
+(`tests/reference/conductivity.py`) bake the density-filter/Heaviside-projection
+chain rule (`H`, `Hs`, `dx`) directly into their returned sensitivity -- they hand
+back a finished `dfdx` row in raw `x`/`t` space, not `d(.)/d(xPhys)`. Their
+production autograd counterparts (`sttopt.constraints`/`conductivity.hotspot_value`)
+deliberately do not -- Decision 4 makes the filter/projection an ordinary forward op
+for the *caller* to differentiate through -- so a naive `backward()` on one of those
+stops one step short, at `d(.)/d(xPhys)` or `d(.)/d(tPhys)`. Timing that against the
+hand-derived function's *finished* row is not apples to apples: it omits exactly the
+sparse `H @ (... / Hs)` matmul(s) the hand side spends time on.
 
 This benchmark closes that gap by finishing the chain explicitly after every autograd
 backward call, timed as part of the same forward+backward region (`_finish_density_chain`/
@@ -99,6 +103,9 @@ import sttopt.filters as filters
 import sttopt.gravity as gravity
 import sttopt.torch_fem as torch_fem
 import sttopt.torch_util as torch_util
+import tests.reference.compliance as compliance_ref
+import tests.reference.conductivity as conductivity_ref
+import tests.reference.constraints as constraints_ref
 from benchmarks.calibrate_cg_rtol import BETA_T, EMAX, EMIN, PENAL, RECOMMENDED_RTOL
 from tests.fixtures.generate_torch_port_designs import load_design
 
@@ -267,7 +274,7 @@ def bench_whole_compliance(s, device, repeats, warmup, rows):
 
         def fwd():
             if mode == "hand":
-                compliance.whole_compliance(
+                compliance_ref.whole_compliance(
                     xPhys.detach(),
                     s["KE"],
                     s["edofMat"],
@@ -279,7 +286,7 @@ def bench_whole_compliance(s, device, repeats, warmup, rows):
                     s["ndof"],
                 )
             else:
-                compliance.whole_compliance_value(
+                compliance.whole_compliance(
                     xPhys.detach().requires_grad_(True),
                     s["KE"],
                     s["edofMat"],
@@ -295,7 +302,7 @@ def bench_whole_compliance(s, device, repeats, warmup, rows):
 
         def fwdbwd():
             if mode == "hand":
-                compliance.whole_compliance(
+                compliance_ref.whole_compliance(
                     xPhys.detach(),
                     s["KE"],
                     s["edofMat"],
@@ -308,7 +315,7 @@ def bench_whole_compliance(s, device, repeats, warmup, rows):
                 )
             else:
                 leaf = xPhys.detach().requires_grad_(True)
-                c, _U = compliance.whole_compliance_value(
+                c, _U = compliance.whole_compliance(
                     leaf,
                     s["KE"],
                     s["edofMat"],
@@ -338,7 +345,7 @@ def bench_gravity_compliance(s, device, repeats, warmup, rows):
             xPhys = s["xPhys"].detach()
             tPhys = s["tPhys"].detach()
             if mode == "hand":
-                compliance.gravity_compliance(
+                compliance_ref.gravity_compliance(
                     xPhys,
                     tPhys,
                     s["KE"],
@@ -353,7 +360,7 @@ def bench_gravity_compliance(s, device, repeats, warmup, rows):
                     s["ndof"],
                 )
             else:
-                compliance.gravity_compliance_value(
+                compliance.gravity_compliance(
                     xPhys.requires_grad_(True),
                     tPhys.requires_grad_(True),
                     s["KE"],
@@ -374,7 +381,7 @@ def bench_gravity_compliance(s, device, repeats, warmup, rows):
             xPhys = s["xPhys"].detach()
             tPhys = s["tPhys"].detach()
             if mode == "hand":
-                compliance.gravity_compliance(
+                compliance_ref.gravity_compliance(
                     xPhys,
                     tPhys,
                     s["KE"],
@@ -390,7 +397,7 @@ def bench_gravity_compliance(s, device, repeats, warmup, rows):
                 )
             else:
                 xl, tl = xPhys.requires_grad_(True), tPhys.requires_grad_(True)
-                cg, _U = compliance.gravity_compliance_value(
+                cg, _U = compliance.gravity_compliance(
                     xl,
                     tl,
                     s["KE"],
@@ -418,28 +425,28 @@ def bench_constraints(s, device, repeats, warmup, rows):
     specs = [
         (
             "global_volume_fraction",
-            lambda xPhys: constraints.global_volume_fraction(
+            lambda xPhys: constraints_ref.global_volume_fraction(
                 xPhys.detach(), s["dx"], s["H"], s["Hs"], VOLFRAC
             ),
-            lambda xPhys: constraints.global_volume_fraction_value(xPhys, VOLFRAC),
+            lambda xPhys: constraints.global_volume_fraction(xPhys, VOLFRAC),
         ),
         (
             "time_field_continuity",
-            lambda tPhys: constraints.time_field_continuity(
+            lambda tPhys: constraints_ref.time_field_continuity(
                 tPhys.detach(), s["L"], s["H"], s["Hs"]
             ),
-            lambda tPhys: constraints.time_field_continuity_value(tPhys, s["L"]),
+            lambda tPhys: constraints.time_field_continuity(tPhys, s["L"]),
         ),
         (
             "start_point",
-            lambda tPhys: constraints.start_point(
+            lambda tPhys: constraints_ref.start_point(
                 tPhys.detach(), s["Nei"], s["H"], s["Hs"]
             ),
-            lambda tPhys: constraints.start_point_value(tPhys, s["Nei"]),
+            lambda tPhys: constraints.start_point(tPhys, s["Nei"]),
         ),
         (
             "stage_volume_bounds",
-            lambda xPhys, tPhys: constraints.stage_volume_bounds(
+            lambda xPhys, tPhys: constraints_ref.stage_volume_bounds(
                 xPhys.detach(),
                 tPhys.detach(),
                 s["dx"],
@@ -449,7 +456,7 @@ def bench_constraints(s, device, repeats, warmup, rows):
                 VOLFRAC,
                 50.0,
             ),
-            lambda xPhys, tPhys: constraints.stage_volume_bounds_value(
+            lambda xPhys, tPhys: constraints.stage_volume_bounds(
                 xPhys, tPhys, 0.5, VOLFRAC, 50.0
             ),
         ),
@@ -531,7 +538,7 @@ def bench_hotspot(s, device, repeats, warmup, rows):
         def fwd(mode=mode, hotspot_fn=hotspot_fn):
             xPhys, tPhys = s["xPhys"].detach(), s["tPhys"].detach()
             if mode == "hand":
-                conductivity.hotspot_constraint(
+                conductivity_ref.hotspot_constraint(
                     xPhys,
                     tPhys,
                     s["e1"],
@@ -565,7 +572,7 @@ def bench_hotspot(s, device, repeats, warmup, rows):
         def fwdbwd(mode=mode, hotspot_fn=hotspot_fn):
             xPhys, tPhys = s["xPhys"].detach(), s["tPhys"].detach()
             if mode == "hand":
-                conductivity.hotspot_constraint(
+                conductivity_ref.hotspot_constraint(
                     xPhys,
                     tPhys,
                     s["e1"],

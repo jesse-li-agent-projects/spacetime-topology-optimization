@@ -7,18 +7,16 @@ load, so the gravity load itself depends on both density and time, giving both a
 `dcx` and `dct` sensitivity plus an extra adjoint term (see `gravity_compliance`).
 
 Both solve via `torch_solve.FemSolve` (`plans/torch_port_part2.md` Phase 3.3), the
-multigrid-CG solve as an autograd `Function` -- no NumPy round trip. The sensitivities
-below stay the hand-derived formulas Phase 3.2 ported (Phase 3.4 replaces them with
-autograd); `FemSolve`'s adjoint isn't exercised by this module, only its forward.
-Array-order and mesh conventions (element order, dof layout) follow `conventions.md`
-and `fem.py`.
+multigrid-CG solve as an autograd `Function` -- no NumPy round trip -- and get their
+sensitivities from autograd through it (Phase 3.4), rather than hand-derived algebra.
+`tests/reference/compliance.py` keeps the hand-derived predecessor these replaced, as
+a cross-check (`tests/test_reference_sweep.py`) and a timing baseline
+(`benchmarks/bench_sensitivities.py`). Array-order and mesh conventions (element
+order, dof layout) follow `conventions.md` and `fem.py`.
 
 `batched_whole_and_gravity_compliance` is `optimize.step`'s entry point when
 `Problem.batch_fem_solves` is on: one `FemSolve` call for `whole_compliance`'s solve
 plus every stage's `gravity_compliance` solve, instead of `1 + nStage` separate calls.
-It shares the same `_whole_compliance_from_U`/`_gravity_compliance_from_U` sensitivity
-algebra `whole_compliance`/`gravity_compliance` use standalone -- only the solve is
-batched, not the formulas.
 """
 
 import math
@@ -43,15 +41,6 @@ def time_mask(
     num = math.tanh(beta * ti) + torch.tanh(beta * (tPhys - ti))
     den = math.tanh(beta * ti) + math.tanh(beta * (1 - ti))
     return 1 - num / den
-
-
-def time_mask_derivative(
-    tPhys: Float[Tensor, "nely nelx"], ti: float, beta: float
-) -> Float[Tensor, "nely nelx"]:
-    """d(`time_mask`)/d(tPhys), element-wise."""
-    num = beta * (torch.tanh(beta * (tPhys - ti)) ** 2 - 1)
-    den = math.tanh(beta * (ti - 1)) - math.tanh(beta * ti)
-    return -num / den
 
 
 def _element_strain_energy(
@@ -116,52 +105,6 @@ def _solve_fe_batched(
     return torch_solve.femsolve(density, F, edofMat, KE, mask, nelx, nely, x0=x0)
 
 
-def whole_compliance_value(
-    xPhys: Float[Tensor, "nely nelx"],
-    KE: Float[Tensor, "8 8"],
-    edofMat: Int[Tensor, "nelx*nely 8"],
-    Emin: float,
-    Emax: float,
-    penal: float,
-    freedofs: Int[Tensor, " n_free"],
-    F: Float[Tensor, " ndof"],
-    ndof: int,
-    *,
-    x0: Float[Tensor, " ndof"] | None = None,
-) -> tuple[Float[Tensor, ""], Float[Tensor, " ndof"]]:
-    """`whole_compliance`'s value alone, kept differentiable end to end w.r.t. `xPhys`
-    (autograd sensitivity path, `plans/torch_port_part2.md` Phase 3.4) instead of
-    returning the hand-derived `dcx`. See `whole_compliance` for that predecessor,
-    which `benchmarks/bench_sensitivities.py` times this against.
-
-    :param x0: optional warm start for the solve.
-    :return: `(c, U)` -- `U` for the caller's next-iteration warm start.
-    """
-    U = _solve_fe(KE, xPhys, Emin, Emax, penal, edofMat, freedofs, F, ndof, x0=x0)
-    nely, nelx = xPhys.shape
-    ce = _element_strain_energy(U, edofMat, KE, nely, nelx)
-    simp = Emin + xPhys**penal * (Emax - Emin)
-    return torch.sum(simp * ce), U
-
-
-def _whole_compliance_from_U(
-    xPhys: Float[Tensor, "nely nelx"],
-    KE: Float[Tensor, "8 8"],
-    edofMat: Int[Tensor, "nelx*nely 8"],
-    Emin: float,
-    Emax: float,
-    penal: float,
-    U: Float[Tensor, " ndof"],
-) -> tuple[float, Float[Tensor, "nely nelx"]]:
-    """`whole_compliance`'s value/sensitivity algebra, given an already-solved `U`."""
-    nely, nelx = xPhys.shape
-    ce = _element_strain_energy(U, edofMat, KE, nely, nelx)
-    simp = Emin + xPhys**penal * (Emax - Emin)
-    c = float(torch.sum(simp * ce))
-    dcx = -penal * (Emax - Emin) * xPhys ** (penal - 1) * ce
-    return c, dcx
-
-
 def whole_compliance(
     xPhys: Float[Tensor, "nely nelx"],
     KE: Float[Tensor, "8 8"],
@@ -174,13 +117,18 @@ def whole_compliance(
     ndof: int,
     *,
     x0: Float[Tensor, " ndof"] | None = None,
-) -> tuple[float, Float[Tensor, "nely nelx"]]:
-    """SIMP compliance and its density sensitivity under a fixed external load `F`.
+) -> tuple[Float[Tensor, ""], Float[Tensor, " ndof"]]:
+    """SIMP compliance under a fixed external load `F`, differentiable end to end
+    w.r.t. `xPhys` (autograd sensitivity path, `plans/torch_port_part2.md` Phase 3.4).
 
     :param x0: optional warm start for the solve.
+    :return: `(c, U)` -- `U` for the caller's next-iteration warm start.
     """
     U = _solve_fe(KE, xPhys, Emin, Emax, penal, edofMat, freedofs, F, ndof, x0=x0)
-    return _whole_compliance_from_U(xPhys, KE, edofMat, Emin, Emax, penal, U)
+    nely, nelx = xPhys.shape
+    ce = _element_strain_energy(U, edofMat, KE, nely, nelx)
+    simp = Emin + xPhys**penal * (Emax - Emin)
+    return torch.sum(simp * ce), U
 
 
 def _gravity_load(
@@ -193,23 +141,24 @@ def _gravity_load(
 ) -> tuple[
     Float[Tensor, "nely nelx"],
     Float[Tensor, "nely nelx"],
-    Float[Tensor, "nely nelx"],
     Float[Tensor, " ndof"],
 ]:
-    """One gravity stage's `t_mask`/`dfdt`/`xtJoint`/load vector `F` -- the part of
-    `gravity_compliance` that has to run before the solve, shared with the batched path.
+    """One gravity stage's `t_mask`/`xtJoint`/load vector `F` -- the part of
+    `gravity_compliance` that has to run before the solve, shared with the batched
+    path. Autograd differentiates through `t_mask`/`xtJoint` itself, so unlike
+    `tests/reference/compliance.py`'s hand-derived counterpart, this has no separate
+    `dfdt` to compute.
     """
     t_mask = time_mask(tPhys, ti, beta_t)
-    dfdt = time_mask_derivative(tPhys, ti, beta_t)
     xtJoint = xPhys * t_mask
 
     f = -(C @ xtJoint.flatten())
     F = torch.zeros(ndof, dtype=xPhys.dtype, device=xPhys.device)
     F[1::2] = f  # y-dof of each node; x-dof stays 0 (gravity acts in -y)
-    return t_mask, dfdt, xtJoint, F
+    return t_mask, xtJoint, F
 
 
-def gravity_compliance_value(
+def gravity_compliance(
     xPhys: Float[Tensor, "nely nelx"],
     tPhys: Float[Tensor, "nely nelx"],
     KE: Float[Tensor, "8 8"],
@@ -225,13 +174,17 @@ def gravity_compliance_value(
     *,
     x0: Float[Tensor, " ndof"] | None = None,
 ) -> tuple[Float[Tensor, ""], Float[Tensor, " ndof"]]:
-    """`gravity_compliance`'s value alone, autograd counterpart of
-    `whole_compliance_value` -- see that function's docstring.
+    """SIMP compliance under self-weight gravity, differentiable end to end w.r.t.
+    `xPhys`/`tPhys` -- autograd counterpart of `whole_compliance`.
+
+    Only elements active by stage time `ti` (per `time_mask`, sharpness `beta_t` --
+    MATLAB source's `lamda`/`rou`) carry density-weighted self-weight load, built via
+    `gravity.gravity_load_matrix`'s `C`.
 
     :param x0: optional warm start for the solve.
     :return: `(cg, U)`.
     """
-    t_mask, dfdt, xtJoint, F = _gravity_load(xPhys, tPhys, ti, C, beta_t, ndof)
+    _, xtJoint, F = _gravity_load(xPhys, tPhys, ti, C, beta_t, ndof)
     U = _solve_fe(KE, xtJoint, Emin, Emax, penal, edofMat, freedofs, F, ndof, x0=x0)
     nely, nelx = xPhys.shape
     ce = _element_strain_energy(U, edofMat, KE, nely, nelx)
@@ -239,148 +192,7 @@ def gravity_compliance_value(
     return torch.sum(simp * ce), U
 
 
-def _gravity_compliance_from_U(
-    xPhys: Float[Tensor, "nely nelx"],
-    xtJoint: Float[Tensor, "nely nelx"],
-    t_mask: Float[Tensor, "nely nelx"],
-    dfdt: Float[Tensor, "nely nelx"],
-    KE: Float[Tensor, "8 8"],
-    edofMat: Int[Tensor, "nelx*nely 8"],
-    Emin: float,
-    Emax: float,
-    penal: float,
-    C: Tensor,
-    U: Float[Tensor, " ndof"],
-) -> tuple[float, Float[Tensor, " nely*nelx"], Float[Tensor, " nely*nelx"]]:
-    """`gravity_compliance`'s value/sensitivity algebra, given an already-solved `U`.
-
-    See `gravity_compliance`'s docstring for the extra adjoint term this computes.
-    """
-    nely, nelx = xPhys.shape
-    ce = _element_strain_energy(U, edofMat, KE, nely, nelx)
-
-    simp = Emin + xtJoint**penal * (Emax - Emin)
-    c = float(torch.sum(simp * ce))
-
-    dcx1 = -penal * (Emax - Emin) * xtJoint ** (penal - 1) * ce * t_mask
-    dct1 = -penal * (Emax - Emin) * xtJoint ** (penal - 1) * ce * xPhys * dfdt
-
-    Uy = U[1::2]  # y-displacement dof of every node, in the node order C's rows use
-    adjoint = -(
-        C.t() @ Uy
-    )  # (nel,): d(load)/d(density) term, adjoint-contracted with U
-
-    dcx2 = adjoint * t_mask.flatten()
-    dct2 = adjoint * xPhys.flatten() * dfdt.flatten()
-
-    dcx = 2 * dcx2 + dcx1.flatten()
-    dct = 2 * dct2 + dct1.flatten()
-    return c, dcx, dct
-
-
-def gravity_compliance(
-    xPhys: Float[Tensor, "nely nelx"],
-    tPhys: Float[Tensor, "nely nelx"],
-    KE: Float[Tensor, "8 8"],
-    edofMat: Int[Tensor, "nelx*nely 8"],
-    Emin: float,
-    Emax: float,
-    penal: float,
-    ti: float,
-    # gravity.gravity_load_matrix's output, converted to a sparse CSR tensor
-    C: Tensor,
-    beta_t: float,
-    freedofs: Int[Tensor, " n_free"],
-    ndof: int,
-    *,
-    x0: Float[Tensor, " ndof"] | None = None,
-) -> tuple[float, Float[Tensor, " nely*nelx"], Float[Tensor, " nely*nelx"]]:
-    """SIMP compliance and its density/time sensitivities under self-weight gravity.
-
-    Only elements active by stage time `ti` (per `time_mask`, sharpness `beta_t` --
-    MATLAB source's `lamda`/`rou`) carry density-weighted self-weight load, built via
-    `gravity.gravity_load_matrix`'s `C`. Because the load itself depends on `xPhys`
-    (through the joint density-time field `xtJoint = xPhys * t_mask`), the sensitivities
-    pick up an extra adjoint term (`dcx2`/`dct2` below, from differentiating the load
-    through the displacement it produces) beyond the direct SIMP-stiffness term
-    (`dcx1`/`dct1`); the factor of 2 combining them is the standard self-adjoint
-    compliance-sensitivity result for a density-dependent load, not a simplification.
-
-    :param x0: optional warm start for the solve.
-    """
-    t_mask, dfdt, xtJoint, F = _gravity_load(xPhys, tPhys, ti, C, beta_t, ndof)
-    U = _solve_fe(KE, xtJoint, Emin, Emax, penal, edofMat, freedofs, F, ndof, x0=x0)
-    return _gravity_compliance_from_U(
-        xPhys, xtJoint, t_mask, dfdt, KE, edofMat, Emin, Emax, penal, C, U
-    )
-
-
 def batched_whole_and_gravity_compliance(
-    xPhys: Float[Tensor, "nely nelx"],
-    tPhys: Float[Tensor, "nely nelx"],
-    KE: Float[Tensor, "8 8"],
-    edofMat: Int[Tensor, "nelx*nely 8"],
-    Emin: float,
-    Emax: float,
-    penal: float,
-    freedofs: Int[Tensor, " n_free"],
-    F: Float[Tensor, " ndof"],
-    ndof: int,
-    C: Tensor,
-    beta_t: float,
-    stage_times: list[float],
-    *,
-    x0: Float[Tensor, "n_stage_plus_1 ndof"] | None = None,
-) -> tuple[
-    float,
-    Float[Tensor, "nely nelx"],
-    list[tuple[float, Float[Tensor, " nely*nelx"], Float[Tensor, " nely*nelx"]]],
-    Float[Tensor, "n_stage_plus_1 ndof"],
-]:
-    """`whole_compliance`'s solve plus every stage's `gravity_compliance` solve, as one
-    batched `FemSolve` call (`plans/torch_port_part2.md` Phase 3.3's batching
-    requirement) -- `optimize.step`'s entry point when `Problem.batch_fem_solves` is on.
-
-    Only the solve is batched; the value/sensitivity algebra afterwards is exactly
-    `_whole_compliance_from_U`/`_gravity_compliance_from_U`, applied per row -- the same
-    hand-derived formulas `whole_compliance`/`gravity_compliance` use standalone.
-
-    :param stage_times: this iteration's `ti` for each gravity stage, in order.
-    :param x0: optional warm start, `(1 + len(stage_times), ndof)` -- typically the
-        previous iteration's returned `U`.
-    :return: `(c, dcx, stages, U)` where `stages[i]` is `(cg, dcx_g, dct_g)` for
-        `stage_times[i]` and `U` is `(1 + len(stage_times), ndof)`, for the next
-        iteration's `x0`.
-    """
-    nely, nelx = xPhys.shape
-    mask = torch_fem.free_mask(ndof, freedofs, device=xPhys.device)
-
-    density_rows = [torch_fem.simp_density(xPhys, Emin, Emax, penal).flatten()]
-    F_rows = [F]
-    stage_loads = []
-    for ti in stage_times:
-        t_mask, dfdt, xtJoint, F_g = _gravity_load(xPhys, tPhys, ti, C, beta_t, ndof)
-        density_rows.append(
-            torch_fem.simp_density(xtJoint, Emin, Emax, penal).flatten()
-        )
-        F_rows.append(F_g)
-        stage_loads.append((xtJoint, t_mask, dfdt))
-
-    density = torch.stack(density_rows)
-    F_stack = torch.stack(F_rows)
-    U = _solve_fe_batched(KE, density, edofMat, mask, nelx, nely, F_stack, x0=x0)
-
-    c, dcx = _whole_compliance_from_U(xPhys, KE, edofMat, Emin, Emax, penal, U[0])
-    stages = [
-        _gravity_compliance_from_U(
-            xPhys, xtJoint, t_mask, dfdt, KE, edofMat, Emin, Emax, penal, C, U[1 + i]
-        )
-        for i, (xtJoint, t_mask, dfdt) in enumerate(stage_loads)
-    ]
-    return c, dcx, stages, U
-
-
-def batched_whole_and_gravity_compliance_value(
     xPhys: Float[Tensor, "nely nelx"],
     tPhys: Float[Tensor, "nely nelx"],
     KE: Float[Tensor, "8 8"],
@@ -401,10 +213,9 @@ def batched_whole_and_gravity_compliance_value(
     list[Float[Tensor, ""]],
     Float[Tensor, "n_stage_plus_1 ndof"],
 ]:
-    """`batched_whole_and_gravity_compliance`'s values alone, autograd counterpart --
-    same batched `FemSolve` call, but the per-row algebra is `whole_compliance_value`/
-    `gravity_compliance_value`'s (value only, kept differentiable) rather than the
-    hand-derived `_whole_compliance_from_U`/`_gravity_compliance_from_U`.
+    """`whole_compliance`'s solve plus every stage's `gravity_compliance` solve, as one
+    batched `FemSolve` call (`plans/torch_port_part2.md` Phase 3.3's batching
+    requirement) -- `optimize.step`'s entry point when `Problem.batch_fem_solves` is on.
 
     :param stage_times: this iteration's `ti` for each gravity stage, in order.
     :param x0: optional warm start, `(1 + len(stage_times), ndof)`.
@@ -417,7 +228,7 @@ def batched_whole_and_gravity_compliance_value(
     F_rows = [F]
     xtJoints = []
     for ti in stage_times:
-        _, _, xtJoint, F_g = _gravity_load(xPhys, tPhys, ti, C, beta_t, ndof)
+        _, xtJoint, F_g = _gravity_load(xPhys, tPhys, ti, C, beta_t, ndof)
         density_rows.append(
             torch_fem.simp_density(xtJoint, Emin, Emax, penal).flatten()
         )

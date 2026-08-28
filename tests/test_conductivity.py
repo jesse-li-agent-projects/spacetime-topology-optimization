@@ -11,6 +11,7 @@ import torch
 import sttopt.conductivity as conductivity
 import sttopt.filters as filters
 import sttopt.torch_util as torch_util
+import tests.reference.conductivity as conductivity_ref
 from conftest import assert_close, load_fixture_npz, tt, tti
 
 NELX, NELY = 7, 5
@@ -38,7 +39,7 @@ def _K_est(xPhys, tPhys, e1, e2, w, q, rouf):
 def _hotspot(xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, p, q, r, rouf):
     """`conductivity.hotspot_constraint`, wrapped the same way as `_K_est` above."""
     H_t = H if torch.is_tensor(H) else torch_util.csr_to_tensor(H, "cpu", torch.float64)
-    res = conductivity.hotspot_constraint(
+    res = conductivity_ref.hotspot_constraint(
         tt(xPhys),
         tt(tPhys),
         tti(e1),
@@ -54,7 +55,7 @@ def _hotspot(xPhys, tPhys, e1, e2, w, dx, H, Hs, factor, Tcr, p, q, r, rouf):
         r,
         rouf,
     )
-    return conductivity.HotspotConstraintResult(
+    return conductivity_ref.HotspotConstraintResult(
         res.fval,
         res.df1.detach().numpy(),
         res.dt1.detach().numpy(),

@@ -24,11 +24,11 @@ import pytest
 import torch
 
 import sttopt.compliance as compliance
-import sttopt.fem as fem
 import sttopt.filters as filters
 import sttopt.optimize as optimize
 import sttopt.timefield as timefield
 import sttopt.torch_util as torch_util
+import tests.reference.fem as fem_ref
 from conftest import FIXTURES_DIR
 
 VOLFRAC = 0.4
@@ -317,9 +317,10 @@ MAX_COND = 1e10
 
 
 def _well_conditioned(problem, state, beta_t):
-    # `fem.assemble_stiffness` is unported NumPy (Phase 3.1 leaves it that way -- see
-    # sttopt/optimize.py's module docstring); `problem`'s tensor fields need the same
-    # bridge `optimize.step` uses internally.
+    # tests/reference/fem.py's assemble_stiffness -- the NumPy oracle, unrelated to
+    # optimize.step's own torch/MGCG solve -- is the cheapest way to get a dense
+    # `K_free` to condition-number-check, so `problem`'s tensor fields get bridged to
+    # NumPy just for this.
     p = problem
     KE = torch_util.to_numpy(p.KE)
     edofMat = torch_util.to_numpy(p.edofMat)
@@ -330,7 +331,7 @@ def _well_conditioned(problem, state, beta_t):
     for i in range(1, p.nStage + 1):
         fields.append(state.xPhys * compliance.time_mask(state.tPhys, tP[i], beta_t))
     for field in fields:
-        K = fem.assemble_stiffness(
+        K = fem_ref.assemble_stiffness(
             KE, torch_util.to_numpy(field), p.Emin, p.Emax, p.penal, edofMat, p.ndof
         )
         Kfree = K[np.ix_(freedofs, freedofs)].toarray()
