@@ -1,7 +1,6 @@
 """Conversion helpers at the boundary between torch tensors (`Problem`/`State`'s fields,
-per `plans/torch_port_part2.md`'s Phase 3.1) and the NumPy/SciPy arrays that fixtures,
-`viz`, CLI printing, and -- until later phases in that plan port them -- the leaf math
-modules still speak.
+per `plans/torch_port_part2.md`'s Phase 3.1) and the NumPy/SciPy arrays that fixture
+writing, `viz`, and CLI printing still speak.
 
 A plain NumPy array and a torch tensor do not mix in an arithmetic expression (`ndarray
 * tensor` raises `TypeError`, it does not silently upcast), so `optimize.step`/
@@ -34,6 +33,27 @@ def to_tensor(
     """
     t = array if isinstance(array, Tensor) else torch.as_tensor(np.asarray(array))
     return t.to(device=device, dtype=dtype)
+
+
+def to_tensors(
+    arrays: dict[str, np.ndarray | Tensor],
+    device: torch.device | str,
+    dtype: torch.dtype | None = None,
+) -> dict[str, Tensor]:
+    """
+    `to_tensor`, applied to every value in `arrays` at once.
+
+    For a call site (e.g. `build_problem`) converting several same-dtype fields onto
+    the same device in one boundary crossing -- keys match the returned dict's keys, so
+    the result can be splatted straight into a dataclass constructor whose field names
+    line up (`Problem(..., **to_tensors(...))`).
+
+    :param arrays: mapping from field name to source array (or tensor).
+    :param device: target device for every value.
+    :param dtype: target dtype for every value; omitted to keep each source's own dtype.
+    :return: mapping with the same keys, values converted.
+    """
+    return {name: to_tensor(a, device, dtype) for name, a in arrays.items()}
 
 
 def csr_to_tensor(
@@ -69,9 +89,10 @@ def to_numpy(x: Tensor | np.ndarray) -> np.ndarray:
     """
     Convert a dense tensor back to a NumPy array; pass a NumPy array through unchanged.
 
-    For boundary code that still takes plain arrays: fixtures, `viz`, CLI printing, and
-    (until later phases port them) the leaf math modules -- and for a SciPy sparse
-    multiplication that needs a real array on its other side.
+    For boundary code that stays plain-array by nature and isn't going to be ported:
+    fixture writing, `viz`, CLI printing -- and for a SciPy sparse multiplication that
+    needs a real array on its other side. `cli.py`/`viz.py`/fixture writing all need
+    this to stay public.
 
     :param x: dense tensor or NumPy array.
     :return: NumPy array, detached and moved to host first if `x` was a tensor.

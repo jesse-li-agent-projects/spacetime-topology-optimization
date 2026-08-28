@@ -246,7 +246,17 @@ def build_problem(
     # tfield != CORNER (Nei has nely rows); computing from len(Nei) generalizes correctly.
     m = 1 + 1 + len(Nei) + 2 * nStage + 1
 
-    freedofs_t = torch_util.to_tensor(freedofs, device, torch.int64)
+    # Batch every float-valued and every int-valued raw array into one boundary crossing
+    # each, rather than a `to_tensor` call per field (plans/torch_port_review_followup.md
+    # Phase 5). Keys match `Problem`'s field names so they splat straight in below.
+    float_fields = torch_util.to_tensors(
+        {"KE": KE, "F": F, "Hs": Hs, "w": w}, device, dtype
+    )
+    int_fields = torch_util.to_tensors(
+        {"edofMat": edofMat, "freedofs": freedofs, "e1": e1, "e2": e2, "Nei": Nei},
+        device,
+        torch.int64,
+    )
     return Problem(
         nelx=nelx,
         nely=nely,
@@ -257,20 +267,11 @@ def build_problem(
         tfield=tfield,
         device=device,
         dtype=dtype,
-        KE=torch_util.to_tensor(KE, device, dtype),
-        edofMat=torch_util.to_tensor(edofMat, device, torch.int64),
-        freedofs=freedofs_t,
-        free_mask=torch_fem.free_mask(ndof, freedofs_t, device=device),
-        F=torch_util.to_tensor(F, device, dtype),
+        free_mask=torch_fem.free_mask(ndof, int_fields["freedofs"], device=device),
         ndof=ndof,
         H=torch_util.csr_to_tensor(H, device, dtype),
-        Hs=torch_util.to_tensor(Hs, device, dtype),
         L=torch_util.csr_to_tensor(L, device, dtype),
         C=torch_util.csr_to_tensor(C, device, dtype),
-        e1=torch_util.to_tensor(e1, device, torch.int64),
-        e2=torch_util.to_tensor(e2, device, torch.int64),
-        w=torch_util.to_tensor(w, device, dtype),
-        Nei=torch_util.to_tensor(Nei, device, torch.int64),
         Emin=Emin,
         Emax=Emax,
         penal=penal,
@@ -287,6 +288,8 @@ def build_problem(
         m=m,
         n=n,
         batch_fem_solves=batch_fem_solves,
+        **float_fields,
+        **int_fields,
     )
 
 
