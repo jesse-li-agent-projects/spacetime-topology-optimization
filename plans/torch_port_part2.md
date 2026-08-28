@@ -221,6 +221,30 @@ job -- log it in `plans/code_quality_review.md`.
   that must happen before Phase 3.1, so do it first and record the numbers even though
   nothing has changed yet -- after the port there is no way to go back and take it.
 
+### Results: pre-port slow-test baseline (captured retroactively, 2026-08-28, commit 97ef372)
+
+The baseline capture above was missed: Phases 3.1 through 3.6 were merged (through PR #50)
+without it ever having been run. This section records it anyway, captured late rather than
+lost, since git kept the exact pre-port code. `97ef372` (the merge just before Phase 3.1's
+first commit, `26d89f9`) is byte-identical pre-port code, checked out detached in an isolated
+worktree (no phase-3.x branches touched) on an otherwise idle machine (load average ~0.6 on a
+16-core box; this pre-port code is NumPy/SciPy only and runs on CPU, so no GPU check applied).
+
+`pytest -m slow -v tests/test_e2e_slow.py` at `97ef372`:
+
+- **Result:** 1 passed.
+- **Wall clock:** 1895.33s (0:31:35).
+- The test only asserts bounds, not the values themselves, so a second, instrumented run
+  (same parameters, same commit, calling `optimize.run` directly and printing
+  `record.f0val` / `record.tru_max`) was made immediately after to get concrete numbers:
+  - **Wall clock:** 1747.22s (0:29:07).
+  - **f0val:** 192.84432887244273 (assertion window was 185 < f0val < 195).
+  - **tru_max:** 0.8005839213907026 (assertion window was |tru_max - 0.8| <= 0.008).
+
+Phase 3.7's end-of-port run should diff against `f0val ~ 192.84` and `tru_max ~ 0.8006`, not
+just re-check the same pass/fail bounds -- those bounds are loose enough to hide a regression
+this baseline's concrete numbers would catch.
+
 ---
 
 ## Phase 3.1: Device/dtype plumbing and the tensor boundary
