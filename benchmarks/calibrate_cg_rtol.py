@@ -8,11 +8,22 @@ of `U`; the sensitivities are not stationary, because `dcx` is built from per-el
 against `c` would therefore pick a tolerance that looks excellent and quietly degrades
 the optimizer's search direction.
 
-Method: run the *unmodified* `sttopt.compliance` sensitivity algebra twice per design --
-once over `spsolve`'s `U` and once over MGCG's `U` at each candidate `rtol` -- and
-compare the two element-wise. Swapping the solver underneath rather than reimplementing
-the algebra is deliberate: any reimplementation could drift from the production formulas
-and would then be calibrating the wrong thing.
+Method: differentiate the *unmodified* `sttopt.compliance` objectives twice per design --
+once with `spsolve` underneath and once with MGCG at each candidate `rtol` -- and compare
+the two sensitivities element-wise. Swapping the solver underneath rather than
+reimplementing the algebra is deliberate: any reimplementation could drift from the
+production formulas and would then be calibrating the wrong thing. Both backends are
+autograd `Function`s over the same downstream code (`SpsolveFE` and
+`torch_solve.FemSolve`), so the linear solve is the only thing that differs between the
+two columns.
+
+The adjoint adds no solver error of its own to calibrate for. `FemSolve.backward`
+warm-starts from `alpha * U`, which for any compliance scalar (`dL/dU = 2KU`) is already
+the answer, so the adjoint returns at CG iteration zero and `lambda` is a closed-form
+multiple of the forward `U` -- pinned by
+`tests/test_torch_solve.py::test_self_adjoint_shortcut_gives_zero_adjoint_iterations`.
+The candidate `rtol` therefore enters the sensitivities only through the forward solve,
+which is what this table measures.
 
 Two element-wise error measures are reported per sensitivity array, because a bare
 per-element relative error is not meaningful on this field. At a near-binary design most
@@ -71,11 +82,9 @@ import torch
 
 import sttopt.compliance as compliance
 import sttopt.fem as fem
-import tests.reference.compliance as compliance_ref
 import tests.reference.fem as fem_ref
 import sttopt.gravity as gravity
 import sttopt.torch_fem as torch_fem
-import sttopt.torch_mg as torch_mg
 import sttopt.torch_solve as torch_solve
 import sttopt.torch_util as torch_util
 
@@ -223,6 +232,57 @@ def mgcg_backend(setup: dict, *, rtol: float, max_iter: int = 2000):
         compliance._solve_fe_batched = orig_solve_fe_batched
 
 
+class SpsolveFE(torch.autograd.Function):
+    """`K @ U = F` by assemble-plus-`spsolve`, differentiable in `density` and `F`.
+
+    `torch_solve.FemSolve`'s direct-solve counterpart, and for the same reason it is a
+    `Function` at all: the linear solve is where the two paths differ, so it is the only
+    place the substitution belongs. Its adjoint is the same algebra `FemSolve.backward`
+    runs (`lambda = K^-1 g`, `dL/dF = lambda`, `dL/dd_e = -(lambda_e @ KE) . U_e`) over a
+    direct solve rather than MGCG, so nothing downstream of the solve -- SIMP, the
+    gravity load, the strain-energy contraction -- is duplicated here; autograd chains
+    it exactly as it does in production.
+
+    Takes `density` (`torch_fem.simp_density`'s output) rather than `xPhys`, matching
+    `FemSolve`: the SIMP power law stays ordinary torch code on both paths.
+    """
+
+    @staticmethod
+    def forward(ctx, density, F, KE, edofMat, freedofs, ndof):
+        KE_np = torch_util.to_numpy(KE)
+        edofMat_np = torch_util.to_numpy(edofMat)
+        freedofs_np = torch_util.to_numpy(freedofs)
+        K = fem_ref.assemble_from_density(
+            KE_np, torch_util.to_numpy(density), edofMat_np, ndof
+        )
+        U = fem_ref.solve_fe(K, torch_util.to_numpy(F), freedofs_np)
+
+        ctx.K, ctx.freedofs_np, ctx.KE_np, ctx.edofMat_np = (
+            K,
+            freedofs_np,
+            KE_np,
+            edofMat_np,
+        )
+        U_t = torch_util.to_tensor(U, density.device, density.dtype)
+        ctx.save_for_backward(U_t)
+        return U_t
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (U_t,) = ctx.saved_tensors
+        # solve_fe reads only the free dofs of its right-hand side and zero-fills the
+        # rest, which is the projection FemSolve.backward applies explicitly.
+        lam = fem_ref.solve_fe(ctx.K, torch_util.to_numpy(grad_output), ctx.freedofs_np)
+        lam_t = torch_util.to_tensor(lam, grad_output.device, grad_output.dtype)
+
+        edofMat_t = torch.as_tensor(ctx.edofMat_np, device=U_t.device)
+        Ue = U_t[edofMat_t]
+        lam_e = lam_t[edofMat_t]
+        KE_t = torch_util.to_tensor(ctx.KE_np, U_t.device, U_t.dtype)
+        grad_density = -torch.sum((lam_e @ KE_t) * Ue, dim=-1)
+        return grad_density, lam_t, None, None, None, None
+
+
 @contextlib.contextmanager
 def spsolve_backend():
     """Run `sttopt.compliance` over assemble-plus-`spsolve`, the reference this module
@@ -233,32 +293,44 @@ def spsolve_backend():
     `torch_solve.FemSolve`'s MGCG, so this monkeypatches `_solve_fe` back to the
     NumPy/SciPy path rather than assuming it is still the default -- symmetric with
     `mgcg_backend` above, and for the same reason: swap the solver underneath, never
-    reimplement the algebra. Uses `tests/reference/compliance.py`'s hand-derived
-    `whole_compliance`/`gravity_compliance` for the same reason `sensitivities` below
-    does.
+    reimplement the algebra.
+
+    The replacement is `SpsolveFE`, an autograd `Function`, not a bare NumPy round trip:
+    `sensitivities` reads autograd gradients, so a backend that detached the graph could
+    not serve as their reference at all.
     """
     orig_solve_fe = compliance._solve_fe
 
     def solve_fe(KE, xPhys, Emin, Emax, penal, edofMat, freedofs, F, ndof, *, x0=None):
         # spsolve is a direct solve with no notion of a warm start; x0 is accepted
         # (for signature parity with compliance._solve_fe) and ignored.
-        K = fem_ref.assemble_stiffness(
-            torch_util.to_numpy(KE),
-            torch_util.to_numpy(xPhys),
-            Emin,
-            Emax,
-            penal,
-            torch_util.to_numpy(edofMat),
-            ndof,
-        )
-        U = fem_ref.solve_fe(K, torch_util.to_numpy(F), torch_util.to_numpy(freedofs))
-        return torch_util.to_tensor(U, xPhys.device, xPhys.dtype)
+        density = torch_fem.simp_density(xPhys, Emin, Emax, penal)
+        return SpsolveFE.apply(density.flatten(), F, KE, edofMat, freedofs, ndof)
 
     compliance._solve_fe = solve_fe
     try:
         yield
     finally:
         compliance._solve_fe = orig_solve_fe
+
+
+def _whole_compliance_and_grad(setup: dict, x: np.ndarray):
+    """`(c, dc/dxPhys)` from `compliance.whole_compliance` via autograd."""
+    device, dtype = setup["device"], setup["dtype"]
+    x_t = torch.tensor(x, dtype=dtype, device=device, requires_grad=True)
+    c, _ = compliance.whole_compliance(
+        x_t,
+        setup["KE_t"],
+        setup["edofMat_t"],
+        EMIN,
+        EMAX,
+        PENAL,
+        setup["freedofs_t"],
+        setup["F_t"],
+        setup["ndof"],
+    )
+    (dcx,) = torch.autograd.grad(c, x_t)
+    return float(c.detach()), dcx.detach().cpu().numpy()
 
 
 def sensitivities(setup: dict, x: np.ndarray, t: np.ndarray, nstage: int) -> dict:
@@ -272,27 +344,14 @@ def sensitivities(setup: dict, x: np.ndarray, t: np.ndarray, nstage: int) -> dic
     :return: dict with `c` (whole), `dcx` (whole), and stacked per-stage `cg`, `dcx_g`,
         `dct_g`.
     """
-    # sttopt.compliance is torch-native (Phase 3.2, plans/torch_port_part2.md); this
-    # module stays NumPy throughout (mgcg_backend's monkeypatched fem.assemble_stiffness/
-    # fem.solve_fe are the actual thing under test), so convert at just this boundary.
     device, dtype = setup["device"], setup["dtype"]
-    x_t = torch.tensor(x, dtype=dtype, device=device)
-    t_t = torch.tensor(t, dtype=dtype, device=device)
-    c, dcx = compliance_ref.whole_compliance(
-        x_t,
-        setup["KE_t"],
-        setup["edofMat_t"],
-        EMIN,
-        EMAX,
-        PENAL,
-        setup["freedofs_t"],
-        setup["F_t"],
-        setup["ndof"],
-    )
-    dcx = dcx.cpu().numpy()
+    c, dcx = _whole_compliance_and_grad(setup, x)
+
     cg, dcx_g, dct_g = [], [], []
     for ti in np.linspace(0, 1, nstage + 1)[1:]:
-        c_s, dcx_s, dct_s = compliance_ref.gravity_compliance(
+        x_t = torch.tensor(x, dtype=dtype, device=device, requires_grad=True)
+        t_t = torch.tensor(t, dtype=dtype, device=device, requires_grad=True)
+        c_s, _ = compliance.gravity_compliance(
             x_t,
             t_t,
             setup["KE_t"],
@@ -306,9 +365,10 @@ def sensitivities(setup: dict, x: np.ndarray, t: np.ndarray, nstage: int) -> dic
             setup["freedofs_t"],
             setup["ndof"],
         )
-        cg.append(c_s)
-        dcx_g.append(dcx_s.cpu().numpy())
-        dct_g.append(dct_s.cpu().numpy())
+        dcx_s, dct_s = torch.autograd.grad(c_s, (x_t, t_t))
+        cg.append(float(c_s.detach()))
+        dcx_g.append(dcx_s.detach().cpu().numpy())
+        dct_g.append(dct_s.detach().cpu().numpy())
     return {
         "c": c,
         "dcx": dcx.flatten(),
@@ -351,37 +411,15 @@ def finite_difference_check(
         measurably degrade the check.
     :return: max over `elements` of the relative error.
     """
-    device, dtype = setup["device"], setup["dtype"]
     with mgcg_backend(setup, rtol=rtol):
-        _, dcx = compliance_ref.whole_compliance(
-            torch.tensor(x, dtype=dtype, device=device),
-            setup["KE_t"],
-            setup["edofMat_t"],
-            EMIN,
-            EMAX,
-            PENAL,
-            setup["freedofs_t"],
-            setup["F_t"],
-            setup["ndof"],
-        )
-        dcx = dcx.cpu().numpy()
+        _, dcx = _whole_compliance_and_grad(setup, x)
         worst = 0.0
         for e in elements:
             cs = []
             for sign in (+1, -1):
                 xp = x.copy()
                 xp.flat[e] += sign * h
-                c_p, _ = compliance_ref.whole_compliance(
-                    torch.tensor(xp, dtype=dtype, device=device),
-                    setup["KE_t"],
-                    setup["edofMat_t"],
-                    EMIN,
-                    EMAX,
-                    PENAL,
-                    setup["freedofs_t"],
-                    setup["F_t"],
-                    setup["ndof"],
-                )
+                c_p, _ = _whole_compliance_and_grad(setup, xp)
                 cs.append(c_p)
             fd = (cs[0] - cs[1]) / (2 * h)
             worst = max(worst, abs(fd - dcx.flat[e]) / abs(dcx.flat[e]))
