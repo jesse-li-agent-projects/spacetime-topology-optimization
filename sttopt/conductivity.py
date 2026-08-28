@@ -152,19 +152,23 @@ def _conductivity_terms(
 
 
 def _safe_pmean(u: Float[Tensor, ""], p: float) -> Float[Tensor, ""]:
-    """`u**(1/p)`, with value and gradient both `0` at `u == 0` (`1/p - 1 < 0` for `p >
-    1`, so the naive gradient diverges there) rather than the finite forward value
-    followed by a `nan` backward.
+    """
+    `u**(1/p)`, with value and gradient both `0` at `u == 0`, rather than the finite
+    forward value followed by a `nan` backward (`1/p - 1 < 0` for `p > 1`, so the naive
+    gradient diverges there).
 
-    `u = sum_cond / nel == 0` means every element has `T_val == 0` (a fully "cool",
-    well-supported part) -- a legitimate optimizer state, not a corner case, and one
-    `hotspot_constraint`'s hand-derived sensitivity already special-cases (`scale = 0.0
-    if sum_cond == 0`, whose docstring comment derives the same zero limit). Standard
-    "safe input, then re-select" pattern: evaluate the singular branch at a substitute
-    input that never actually triggers the singularity, so its local gradient is
-    finite, then `where`-select the *value* -- `torch.where`'s backward routes zero
-    incoming gradient into the discarded branch precisely where it was substituted, so
-    the substitute's finite-but-irrelevant gradient never multiplies a `0 * inf`.
+    Standard "safe input, then re-select" pattern: evaluate the singular branch at a
+    substitute input that never actually triggers the singularity, so its local
+    gradient is finite, then `where`-select the *value* -- `torch.where`'s backward
+    routes zero incoming gradient into the discarded branch precisely where it was
+    substituted, so the substitute's finite-but-irrelevant gradient never multiplies a
+    `0 * inf`.
+
+    :param u: a nonnegative mean of `p`-th powers. `u == 0` is a legitimate value, not
+        a corner case -- it occurs whenever every element's contribution is zero.
+    :param p: the power `u` is being inverted by; the singularity at `u == 0` requires
+        `p > 1`.
+    :return: `u**(1/p)`, gradient-safe at `u == 0`.
     """
     safe_u = torch.where(u == 0, torch.ones_like(u), u)
     val = safe_u ** (1 / p)

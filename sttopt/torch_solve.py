@@ -191,7 +191,9 @@ def femsolve(
     :param rtol: CG relative-residual tolerance, forward and adjoint alike.
     :param max_iter: CG iteration cap.
     :param x0: optional warm start for the forward solve (the adjoint warm-starts on
-        its own, from `alpha * U` -- see the module docstring).
+        its own, from `alpha * U` -- see the module docstring). Must already be
+        detached -- `FemSolve.backward` returns `None` for it unconditionally, so no
+        caller should be routing gradient through it.
     :param omega: damped-Jacobi relaxation factor for the V-cycle smoother.
     :param n_smooth: pre-/post-smoothing sweeps per level.
     :param gamma: coarse cycles per visit; 1 is a V-cycle, 2 a W-cycle.
@@ -201,6 +203,10 @@ def femsolve(
         adjoint solve).
     :return: `U`.
     """
+    assert x0 is None or not x0.requires_grad, (
+        "x0 must already be detached -- FemSolve.backward returns None for it "
+        "unconditionally, so no caller should be routing gradient through it."
+    )
     return FemSolve.apply(
         density,
         F,
