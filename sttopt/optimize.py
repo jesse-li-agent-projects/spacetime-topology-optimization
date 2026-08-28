@@ -450,8 +450,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     if beta_d > problem.beta_d_max:
         beta_d = problem.beta_d_max
 
-    x = state.x.detach().clone().requires_grad_(True)
-    t = state.t.detach().clone().requires_grad_(True)
+    # -- Gradient region begins: x/t become autograd leaves. --
+    x = state.x.clone().requires_grad_(True)
+    t = state.t.clone().requires_grad_(True)
     leaves = (x, t)
     xTilde = ((problem.H @ x.flatten()) / problem.Hs).reshape(nely, nelx)
     xPhys = filters.heaviside_projection(xTilde, beta_d, problem.eta)
@@ -598,9 +599,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     fval = torch.cat(fval_parts)
     dfdx = torch.cat(dfdx_parts, dim=0)
 
-    # -- MMA subproblem solve and update -- (`mmasub` is not part of the autograd
-    # graph; `fval`/`dfdx` in particular hold the constraint forward values used above
-    # to compute sensitivities, so they still require grad at this point.)
+    # -- Gradient region ends: mmasub is not part of the autograd graph. df0dx/fval/
+    # dfdx are the last gradient-carrying values, detached here on their way in.
+    # xval/xmin/xmax never required grad -- they're built from state.x/state.t, the
+    # detached fields, not the x/t leaves above.
     mma_a = torch.zeros(problem.m, device=device, dtype=dtype)
     mma_c = torch.full((problem.m,), problem.mma_c, device=device, dtype=dtype)
     mma_d = torch.zeros(problem.m, device=device, dtype=dtype)
@@ -608,9 +610,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         problem.m,
         problem.n,
         loop,
-        xval.detach(),
-        xmin.detach(),
-        xmax.detach(),
+        xval,
+        xmin,
+        xmax,
         state.xold1,
         state.xold2,
         f0val,
@@ -638,7 +640,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         xPhys=xPhys_new,
         t=t_new,
         tPhys=tPhys_new,
-        xold1=xval.detach(),
+        xold1=xval,
         xold2=state.xold1,
         low=low,
         upp=upp,
