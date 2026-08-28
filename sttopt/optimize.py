@@ -598,34 +598,35 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     fval = torch.cat(fval_parts)
     dfdx = torch.cat(dfdx_parts, dim=0)
 
-    # -- MMA subproblem solve and update -- (mma.py isn't ported yet, Phase 3.5: bridge
-    # to NumPy narrowly around just this call.)
-    mma_a = np.zeros(problem.m)
-    mma_c = np.full(problem.m, problem.mma_c)
-    mma_d = np.zeros(problem.m)
+    # -- MMA subproblem solve and update -- (`mmasub` is not part of the autograd
+    # graph; `fval`/`dfdx` in particular hold the constraint forward values used above
+    # to compute sensitivities, so they still require grad at this point.)
+    mma_a = torch.zeros(problem.m, device=device, dtype=dtype)
+    mma_c = torch.full((problem.m,), problem.mma_c, device=device, dtype=dtype)
+    mma_d = torch.zeros(problem.m, device=device, dtype=dtype)
     xmma, ymma, zmma, lam, xsi, mma_eta, mu, zet, s, low, upp = mma.mmasub(
         problem.m,
         problem.n,
         loop,
-        torch_util.to_numpy(xval),
-        torch_util.to_numpy(xmin),
-        torch_util.to_numpy(xmax),
-        torch_util.to_numpy(state.xold1),
-        torch_util.to_numpy(state.xold2),
-        float(f0val),
-        torch_util.to_numpy(df0dx),
-        torch_util.to_numpy(fval),
-        torch_util.to_numpy(dfdx),
-        torch_util.to_numpy(state.low),
-        torch_util.to_numpy(state.upp),
+        xval.detach(),
+        xmin.detach(),
+        xmax.detach(),
+        state.xold1,
+        state.xold2,
+        f0val,
+        df0dx.detach(),
+        fval.detach(),
+        dfdx.detach(),
+        state.low,
+        state.upp,
         problem.a0,
         mma_a,
         mma_c,
         mma_d,
     )
 
-    x_new = torch_util.to_tensor(xmma[:nel].reshape(nely, nelx), device, dtype)
-    t_new = torch_util.to_tensor(xmma[nel:].reshape(nely, nelx), device, dtype)
+    x_new = xmma[:nel].reshape(nely, nelx)
+    t_new = xmma[nel:].reshape(nely, nelx)
 
     xTilde_new = ((problem.H @ x_new.flatten()) / problem.Hs).reshape(nely, nelx)
     xPhys_new = filters.heaviside_projection(xTilde_new, beta_d, problem.eta)
@@ -637,10 +638,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         xPhys=xPhys_new,
         t=t_new,
         tPhys=tPhys_new,
-        xold1=xval,
+        xold1=xval.detach(),
         xold2=state.xold1,
-        low=torch_util.to_tensor(low, device, dtype),
-        upp=torch_util.to_tensor(upp, device, dtype),
+        low=low,
+        upp=upp,
         loop=loop,
         beta_t=beta_t,
         beta_d=beta_d,
@@ -653,10 +654,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         tru_max=tru_max,
         f0val=float(f0val),
         df0dx=torch_util.to_numpy(df0dx),
-        xmma=xmma,
-        low=low,
-        upp=upp,
-        lam=lam,
+        xmma=torch_util.to_numpy(xmma),
+        low=torch_util.to_numpy(low),
+        upp=torch_util.to_numpy(upp),
+        lam=torch_util.to_numpy(lam),
         fval=torch_util.to_numpy(fval),
         dfdx=torch_util.to_numpy(dfdx),
     )
