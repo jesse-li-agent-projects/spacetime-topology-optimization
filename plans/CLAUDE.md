@@ -14,11 +14,6 @@ This directory contains plans for agents.
       passed (MGCG beats scipy.spsolve by 4.36x at 180x60). Covers device/dtype plumbing,
       the FEM solve as an autograd Function with a hand-written adjoint, autograd replacing
       the hand-derived sensitivities, MMA, and the deletion of the NumPy path.
-- torch_port_review_followup.md
-    - Executes the design-review comments left on the Phase 3.1-3.7 PRs: moves the
-      hand-derived formulas and the NumPy FEM path out of `sttopt/`, reorders the
-      periodic `beta` updates, deletes the no-op detaches in `step()`, and collapses
-      the tensor boundary in the tests down to one conversion helper.
 
 Completed plans live in `plans/archive/` and are not summarized here to keep this
 index short. Only open one if you specifically need the history behind a past
