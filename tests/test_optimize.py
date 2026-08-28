@@ -518,6 +518,30 @@ def test_step_batched_matches_sequential_fem_solves():
     assert state_sequential.U is None
 
 
+def test_step_state_U_does_not_carry_grad_across_iterations():
+    """`State.U` is a warm-start seed for the *next* iteration's solve, not a value that
+    should carry gradient across iterations -- storing it undetached lets `FemSolve`'s
+    `x0` argument wire one iteration's whole multigrid hierarchy into the next
+    iteration's autograd graph, and the next iteration's `U` does the same to the one
+    after that. Confirmed by direct measurement (see `optimize.step`'s comment on `U=`):
+    left undetached, this chains every iteration's hierarchy into one never-freed graph,
+    growing GPU memory ~180 MB/step at 180x60 and OOMing an 8 GB card by iteration ~40;
+    detached, memory is flat. Runs a few iterations rather than reproducing the OOM
+    directly -- `requires_grad`/`grad_fn` are the property that actually matters, and
+    checking it doesn't need a GPU or hundreds of iterations to be a real regression
+    guard.
+    """
+    problem = _problem(nelx=6, nely=4, nStage=3)
+    assert problem.batch_fem_solves
+    state = optimize.init_state(problem, BETA_D)
+
+    for _ in range(3):
+        state, _ = optimize.step(problem, state)
+        assert state.U is not None
+        assert not state.U.requires_grad
+        assert state.U.grad_fn is None
+
+
 def test_step_batched_warm_starts_from_previous_iteration():
     """The batched path's second call uses fewer CG iterations than the first, warm-
     started from the `U` the first call left on `State` -- part 1's ~25% saving,

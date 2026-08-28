@@ -646,7 +646,17 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         beta_t=beta_t,
         beta_d=beta_d,
         factor=factor,
-        U=U_new,
+        # Detached: U_new is a warm-start seed for the *next* iteration's solve
+        # (`_solve_fe_batched(..., x0=state.U)`, itself never detaching it), not a value
+        # that should carry gradient across iterations. Undetached, `FemSolve.apply`'s
+        # `x0` argument wires this iteration's whole multigrid hierarchy into the next
+        # iteration's autograd graph via the `grad_fn` edge (even though `backward`
+        # always returns `None` for it) -- and the next iteration's `U` does the same to
+        # the one after that, chaining every iteration's hierarchy into one graph that
+        # never gets freed. Confirmed by direct measurement: undetached, GPU memory grows
+        # ~180 MB/step at 180x60 (OOMs an 8 GB card by iteration ~40); detached, it is
+        # flat.
+        U=U_new.detach() if U_new is not None else None,
     )
     record = IterationRecord(
         obj=obj_final_only,
