@@ -37,7 +37,17 @@ Unlike the MATLAB source (arbitrary-mesh node/face patch construction, needed fo
 generic FEM mesh), every element here is an axis-aligned unit square on a regular grid,
 so both functions below build polygons/edges directly from `(row, col)` -- no
 `order='F'` flatten is needed (or used) anywhere in this module.
+
+Run as a script (`python -m sttopt.viz <tag>`) to regenerate plots for a saved run from
+its `output/<tag>/` artefacts, without rerunning the optimization. This reads
+`final_design.npz`'s `xPhys`/`tPhys` -- the state *after* the last MMA update -- whereas
+`cli.py`'s own end-of-run plot uses `prev_state` (the state entering that last update);
+the two differ by one iteration. See `cli.py`'s module docstring for why it uses
+`prev_state`.
 """
+
+import argparse
+from pathlib import Path
 
 import numpy as np
 from jaxtyping import Float
@@ -155,3 +165,93 @@ def stage_boundary_plot(
     ax.set_aspect("equal")
     ax.autoscale_view()
     return ax
+
+
+def hotspot_severity_plot(
+    xPhys: Float[np.ndarray, "nely nelx"],
+    hotspot_severity: Float[np.ndarray, "nely nelx"],
+    tPhys: Float[np.ndarray, "nely nelx"],
+    nStage: int,
+    *,
+    ax: Axes | None = None,
+) -> Axes:
+    """`combination_plot` (binarized density, colored by `hotspot_severity`) with
+    `stage_boundary_plot` overlaid in its `combination_coords` frame -- the plot recipe
+    `cli.py` saves as `final_structure.png`, factored out here so both `cli.py` and this
+    module's CLI (which reloads a saved run's fields instead of using an in-process
+    state) draw the same thing.
+
+    :param xPhys: physical density field (not yet binarized).
+    :param hotspot_severity: per-element overheating severity, e.g. `(1 - K_est) * (xPhys > 0.5)`.
+    :param tPhys: physical print-time field.
+    :param nStage: number of print stages, for `stage_boundary_plot`'s binning.
+    :return: the `Axes` drawn into.
+    """
+    XPhys = (xPhys > 0.5).astype(xPhys.dtype)
+    ax = combination_plot(XPhys, hotspot_severity, eps=1.0e-1, ax=ax)
+    stage_boundary_plot(tPhys, nStage, ax=ax, combination_coords=True)
+    return ax
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Regenerate plots for a saved run from its output/<tag>/ "
+        "artefacts, saved under plot/<tag>/."
+    )
+    parser.add_argument("tag", help="run identifier, matching output/<tag>/")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("output"),
+        help="parent directory of run artefacts (default: output)",
+    )
+    parser.add_argument(
+        "--plot-dir",
+        type=Path,
+        default=Path("plot"),
+        help="parent directory to save plots under (default: plot)",
+    )
+    return parser.parse_args(argv)
+
+
+def _main(args: argparse.Namespace) -> None:
+    import json
+
+    import sttopt.conductivity as conductivity
+    import sttopt.optimize as optimize
+    import sttopt.torch_util as torch_util
+    from sttopt.run_config import RunConfig
+
+    run_dir = args.output_dir / args.tag
+    config = RunConfig.from_dict(json.loads((run_dir / "config.json").read_text()))
+    design = np.load(run_dir / "final_design.npz")
+    xPhys, tPhys = design["xPhys"], design["tPhys"]
+
+    # Only e1/e2/w/q/rouf (the conductivity-estimation neighborhood) are needed below,
+    # but build_problem doesn't expose that setup on its own -- see cli.py's post-loop
+    # section, which computes hotspot_severity the same way.
+    problem = optimize.build_problem(config)
+    K_est = conductivity.estimated_conductivity(
+        torch_util.to_tensor(xPhys, device=problem.device, dtype=problem.dtype),
+        torch_util.to_tensor(tPhys, device=problem.device, dtype=problem.dtype),
+        problem.e1,
+        problem.e2,
+        problem.w,
+        problem.config.q,
+        problem.config.rouf,
+    ).reshape(config.nely, config.nelx)
+    K_est = torch_util.to_numpy(K_est)
+    hotspot_severity = (1 - K_est) * (xPhys > 0.5)
+
+    ax = hotspot_severity_plot(xPhys, hotspot_severity, tPhys, config.nStage)
+
+    plot_dir = args.plot_dir / args.tag
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    out_path = plot_dir / "final_structure.png"
+    ax.figure.savefig(out_path, dpi=150)
+    print(f"Saved final structure plot to {out_path}")
+
+
+if __name__ == "__main__":
+    _args = _parse_args()  # early-exits on --help before the heavy imports below
+    _main(_args)

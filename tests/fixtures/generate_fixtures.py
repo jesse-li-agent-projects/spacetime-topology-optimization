@@ -13,6 +13,10 @@ Run from anywhere (paths are resolved relative to this script's own location):
     python tests/fixtures/generate_fixtures.py
 """
 
+import dataclasses
+import json
+from pathlib import Path
+
 import numpy as np
 
 import sttopt.compliance as compliance
@@ -21,12 +25,13 @@ import sttopt.fem as fem
 import sttopt.filters as filters
 import sttopt.gravity as gravity
 import sttopt.optimize as optimize
+import sttopt.run_config as run_config
 import sttopt.timefield as timefield
 import tests.reference.compliance as compliance_ref
 import tests.reference.conductivity as conductivity_ref
 import tests.reference.fem as fem_ref
 
-OUT = __import__("pathlib").Path(__file__).parent
+OUT = Path(__file__).parent
 
 # Problem size -- deliberately small, asymmetric (nelx != nely), matching the
 # retired MATLAB harness so existing shape assumptions in tests keep holding.
@@ -43,6 +48,27 @@ BETA_D_INIT = 1.0
 EMIN, EMAX, PENAL = 1e-9, 1.0, 3
 NU = 0.3
 
+# The rest of RunConfig's hyperparameters (eta, beta_d_max, p, q, r, rouf, a0, mma_c,
+# move, tmove, batch_fem_solves) aren't varied by these fixtures, so they come from
+# config/default.json rather than being restated here.
+_DEFAULT_CONFIG = run_config.RunConfig.from_dict(
+    json.loads((OUT.parent.parent / "config" / "default.json").read_text())
+)
+CONFIG = dataclasses.replace(
+    _DEFAULT_CONFIG,
+    nelx=NELX,
+    nely=NELY,
+    nStage=NSTAGE,
+    volfrac=VOLFRAC,
+    Theta=THETA,
+    Tcr=TCR,
+    tfield=int(TFIELD),
+    rmin=RMIN,
+    lrmin=LRMIN,
+    rmin_cond=RMIN_COND,
+    nloop=NLOOP,
+)
+
 
 def main():
     # -- fem_setup.npz: KE, edofMat -----------------------------------------------
@@ -51,11 +77,9 @@ def main():
     np.savez(OUT / "fem_setup.npz", KE=KE, edofMat=edofMat, nelx=NELX, nely=NELY)
 
     # -- fem_solve.npz: standalone FE solve at the initial (uniform) density ------
-    problem = optimize.build_problem(
-        NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
-    )
+    problem = optimize.build_problem(CONFIG)
     xPhys0 = filters.heaviside_projection(
-        np.full((NELY, NELX), VOLFRAC), BETA_D_INIT, problem.eta
+        np.full((NELY, NELX), VOLFRAC), BETA_D_INIT, problem.config.eta
     )
     c0, dcx0 = compliance_ref.whole_compliance(
         xPhys0,
@@ -156,14 +180,14 @@ def main():
     xval_1 = np.concatenate([state.x.flatten(), state.t.flatten()])
     xmin_1 = np.concatenate(
         [
-            np.maximum(0.0, state.x.flatten() - problem.move),
-            np.maximum(0.0, state.t.flatten() - problem.tmove),
+            np.maximum(0.0, state.x.flatten() - problem.config.move),
+            np.maximum(0.0, state.t.flatten() - problem.config.tmove),
         ]
     )
     xmax_1 = np.concatenate(
         [
-            np.minimum(1.0, state.x.flatten() + problem.move),
-            np.minimum(1.0, state.t.flatten() + problem.tmove),
+            np.minimum(1.0, state.x.flatten() + problem.config.move),
+            np.minimum(1.0, state.t.flatten() + problem.config.tmove),
         ]
     )
     xold1_1 = state.xold1.copy()
@@ -179,7 +203,7 @@ def main():
 
     for k in range(NLOOP):
         dx = filters.heaviside_projection_derivative(
-            state.xTilde, state.beta_d, problem.eta
+            state.xTilde, state.beta_d, problem.config.eta
         )
         dx_all[:, :, k] = dx
 
@@ -217,7 +241,7 @@ def main():
             dct_grav_all[:, i, k] = dct_grav
 
         K_est = conductivity.estimated_conductivity(
-            state.xPhys, state.tPhys, e1, e2, w, problem.q, problem.rouf
+            state.xPhys, state.tPhys, e1, e2, w, problem.config.q, problem.config.rouf
         )
         hotspot = conductivity_ref.hotspot_constraint(
             state.xPhys,
@@ -229,11 +253,11 @@ def main():
             problem.H,
             problem.Hs,
             state.factor,
-            problem.Tcr,
-            problem.p,
-            problem.q,
-            problem.r,
-            problem.rouf,
+            problem.config.Tcr,
+            problem.config.p,
+            problem.config.q,
+            problem.config.r,
+            problem.config.rouf,
         )
         K_est_all[:, k] = K_est
         numer_all[k] = hotspot.numer

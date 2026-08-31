@@ -54,7 +54,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--tag",
-        default=None,
+        default="default",
         help="run identifier; artefacts (progress snapshots, final design, final plot, "
         "config.json) are saved under output/<tag>/",
     )
@@ -69,8 +69,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def resolve_config(args: argparse.Namespace) -> "RunConfig":
     """
-    Build the `RunConfig` for a run: load `--config` if given, then apply any
-    explicitly-passed CLI flags on top.
+    Build the `RunConfig` for a run: load `--config`, then apply `--nloop` on top if
+    given. `--tag`/`--device` are run bookkeeping, not part of `RunConfig` -- read
+    them directly off `args` instead.
 
     :param args: parsed CLI arguments (`parse_args`'s return value)
     :return: the resolved `RunConfig`
@@ -80,10 +81,8 @@ def resolve_config(args: argparse.Namespace) -> "RunConfig":
     from sttopt.run_config import RunConfig
 
     config = RunConfig.from_dict(json.loads(args.config.read_text()))
-    for field in ("nloop", "tag", "device"):
-        value = getattr(args, field)
-        if value is not None:
-            setattr(config, field, value)
+    if args.nloop is not None:
+        config.nloop = args.nloop
     return config
 
 
@@ -100,38 +99,11 @@ def main(args: argparse.Namespace) -> None:
     config = resolve_config(args)
 
     # Fail fast on an unwritable output dir, before spending nloop iterations of compute.
-    output_dir = Path("output") / config.tag
+    output_dir = Path("output") / args.tag
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "config.json").write_text(json.dumps(config.to_dict(), indent=2))
 
-    problem = optimize.build_problem(
-        config.nelx,
-        config.nely,
-        config.nStage,
-        config.volfrac,
-        config.Theta,
-        config.Tcr,
-        config.tfield,
-        config.rmin,
-        config.lrmin,
-        config.rmin_cond,
-        beta_d_max=config.beta_d_max,
-        Emin=config.Emin,
-        Emax=config.Emax,
-        nu=config.nu,
-        penal=config.penal,
-        eta=config.eta,
-        p=config.p,
-        q=config.q,
-        r=config.r,
-        rouf=config.rouf,
-        a0=config.a0,
-        mma_c=config.mma_c,
-        move=config.move,
-        tmove=config.tmove,
-        device=config.device,
-        batch_fem_solves=config.batch_fem_solves,
-    )
+    problem = optimize.build_problem(config, device=args.device)
     state = optimize.init_state(problem, beta_d=1.0)
 
     prev_state = state  # state entering the final `step` call -- see module docstring
@@ -173,21 +145,20 @@ def main(args: argparse.Namespace) -> None:
         problem.e1,
         problem.e2,
         problem.w,
-        problem.q,
-        problem.rouf,
-    ).reshape(problem.nely, problem.nelx)
+        problem.config.q,
+        problem.config.rouf,
+    ).reshape(problem.config.nely, problem.config.nelx)
     XPhys = (prev_state.xPhys > 0.5).to(problem.dtype)
     # Same quantity as hotspot_constraint's internal T_val (conductivity.py), density-masked
     # for display -- not a print time, despite feeding combination_plot's "timing" slot.
     hotspot_severity = (1 - K_est) * XPhys
 
     # Tensor boundary: `viz` takes plain arrays -- see sttopt/torch_util.py.
-    XPhys = torch_util.to_numpy(XPhys)
+    xPhys = torch_util.to_numpy(prev_state.xPhys)
     hotspot_severity = torch_util.to_numpy(hotspot_severity)
     tPhys = torch_util.to_numpy(prev_state.tPhys)
 
-    ax = viz.combination_plot(XPhys, hotspot_severity, eps=1.0e-1)
-    viz.stage_boundary_plot(tPhys, config.nStage, ax=ax, combination_coords=True)
+    ax = viz.hotspot_severity_plot(xPhys, hotspot_severity, tPhys, config.nStage)
 
     out_path = output_dir / "final_structure.png"
     ax.figure.savefig(out_path, dpi=150)

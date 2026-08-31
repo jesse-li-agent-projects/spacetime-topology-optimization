@@ -18,7 +18,7 @@ import io
 import numpy as np
 import scipy.sparse as sp
 import torch
-from conftest import e2e_rtol, load_fixture_npz, tt, tti
+from conftest import default_run_config, e2e_rtol, load_fixture_npz, tt, tti
 
 import sttopt.conductivity as conductivity
 import sttopt.mma as mma
@@ -49,9 +49,19 @@ def test_e2e_agreement_is_at_machine_precision():
     """
     e2e = load_fixture_npz("e2e")
     cons = load_fixture_npz("constraints")
-    problem = optimize.build_problem(
-        NELX, NELY, NSTAGE, 0.5, 0.1, 0.8, 3, 2.0, 2.0, 3.0
+    config = default_run_config(
+        nelx=NELX,
+        nely=NELY,
+        nStage=NSTAGE,
+        volfrac=0.5,
+        Theta=0.1,
+        Tcr=0.8,
+        tfield=3,
+        rmin=2.0,
+        lrmin=2.0,
+        rmin_cond=3.0,
     )
+    problem = optimize.build_problem(config)
     result = optimize.run_from_state(problem, optimize.init_state(problem, 1.0), NLOOP)
 
     strict = 1e-12

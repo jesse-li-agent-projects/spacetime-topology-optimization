@@ -29,7 +29,7 @@ import sttopt.optimize as optimize
 import sttopt.timefield as timefield
 import sttopt.torch_util as torch_util
 import tests.reference.fem as fem_ref
-from conftest import FIXTURES_DIR
+from conftest import FIXTURES_DIR, default_run_config
 
 VOLFRAC = 0.4
 TCR = 0.8
@@ -51,7 +51,7 @@ def _filter_field(problem, raw):
     """
     device, dtype = problem.device, problem.dtype
     flat = (problem.H @ torch_util.to_tensor(raw, device, dtype).flatten()) / problem.Hs
-    return flat.reshape((problem.nely, problem.nelx))
+    return flat.reshape((problem.config.nely, problem.config.nelx))
 
 
 # --- init_state: the initialization invariant ----------------------------------------
@@ -78,7 +78,7 @@ def _assert_state_fields_are_consistent(problem, state, beta_d):
     )
     np.testing.assert_allclose(
         state.xPhys,
-        filters.heaviside_projection(state.xTilde, beta_d, problem.eta),
+        filters.heaviside_projection(state.xTilde, beta_d, problem.config.eta),
         rtol=1e-12,
         atol=1e-14,
     )
@@ -87,10 +87,20 @@ def _assert_state_fields_are_consistent(problem, state, beta_d):
     )
 
 
-def _problem(nelx=7, nely=5, nStage=3, tfield=3, Theta=1.0):
-    return optimize.build_problem(
-        nelx, nely, nStage, VOLFRAC, Theta, TCR, tfield, RMIN, LRMIN, RMIN_COND
+def _problem(nelx=7, nely=5, nStage=3, tfield=3, Theta=1.0, **kwargs):
+    config = default_run_config(
+        nelx=nelx,
+        nely=nely,
+        nStage=nStage,
+        volfrac=VOLFRAC,
+        Theta=Theta,
+        Tcr=TCR,
+        tfield=tfield,
+        rmin=RMIN,
+        lrmin=LRMIN,
+        rmin_cond=RMIN_COND,
     )
+    return optimize.build_problem(config, **kwargs)
 
 
 # --- Phase 3.1 (plans/torch_port_part2.md): the tensor boundary -----------------------
@@ -123,9 +133,7 @@ def test_build_problem_honors_requested_dtype():
     (`edofMat`/`freedofs`/`e1`/`e2`/`Nei`) and mask (`free_mask`) fields keep their own
     int64/bool dtype regardless -- `dtype` governs the problem's real-valued fields, not
     every tensor it happens to hold."""
-    problem = optimize.build_problem(
-        7, 5, 3, VOLFRAC, 1.0, TCR, 3, RMIN, LRMIN, RMIN_COND, dtype=torch.float32
-    )
+    problem = _problem(dtype=torch.float32)
     assert problem.dtype == torch.float32
     for name, t in _tensor_fields(problem):
         if t.dtype.is_floating_point:
@@ -157,9 +165,7 @@ def test_build_problem_on_cuda_has_no_lingering_cpu_tensor():
     CUDA. A field left on a stray default device would pass every CPU-only test and
     only surface as silently wrong, or a device-mismatch crash, once later phases run
     the loop on the GPU."""
-    problem = optimize.build_problem(
-        7, 5, 3, VOLFRAC, 1.0, TCR, 3, RMIN, LRMIN, RMIN_COND, device="cuda"
-    )
+    problem = _problem(device="cuda")
     assert problem.device.type == "cuda"
     for name, t in _tensor_fields(problem):
         assert t.device.type == "cuda", name
@@ -201,7 +207,7 @@ def test_init_state_seeds_the_raw_fields(tfield):
     np.testing.assert_allclose(state.x, VOLFRAC, rtol=1e-14)
     np.testing.assert_allclose(
         state.t,
-        timefield.init_timefield(problem.nelx, problem.nely, tfield),
+        timefield.init_timefield(problem.config.nelx, problem.config.nely, tfield),
         rtol=1e-14,
         atol=1e-15,
     )
@@ -222,7 +228,7 @@ def test_init_state_density_half_is_derived_from_its_seed(tfield):
     np.testing.assert_allclose(state.xTilde, VOLFRAC, rtol=1e-14)
     np.testing.assert_allclose(
         state.xPhys,
-        filters.heaviside_projection(state.xTilde, BETA_D, problem.eta),
+        filters.heaviside_projection(state.xTilde, BETA_D, problem.config.eta),
         rtol=1e-12,
         atol=1e-14,
     )
@@ -243,7 +249,7 @@ def test_init_state_time_half_is_derived_from_its_seed(tfield):
     problem = _problem(tfield=tfield)
     state = optimize.init_state(problem, BETA_D)
 
-    seed = timefield.init_timefield(problem.nelx, problem.nely, tfield)
+    seed = timefield.init_timefield(problem.config.nelx, problem.config.nely, tfield)
     assert not np.allclose(_filter_field(problem, seed), seed), (
         "premise: the seed is not a fixed point of the density filter, so filtering it "
         "is observable"
@@ -278,13 +284,13 @@ def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, factor=1.0, beta_t=
     jumps as a function of the design, and the reported gradient deliberately does not
     account for that -- a different question from the one this test asks.)
     """
-    nely, nelx = problem.nely, problem.nelx
+    nely, nelx = problem.config.nely, problem.config.nelx
     device, dtype = problem.device, problem.dtype
     xTilde = _filter_field(problem, x_raw)
     return optimize.State(
         x=torch_util.to_tensor(x_raw, device, dtype),
         xTilde=xTilde,
-        xPhys=filters.heaviside_projection(xTilde, beta_d, problem.eta),
+        xPhys=filters.heaviside_projection(xTilde, beta_d, problem.config.eta),
         t=torch_util.to_tensor(t_raw, device, dtype),
         tPhys=_filter_field(problem, t_raw),
         xold1=torch.zeros(problem.n, device=device, dtype=dtype),
@@ -327,12 +333,18 @@ def _well_conditioned(problem, state, beta_t):
     freedofs = torch_util.to_numpy(p.freedofs)
 
     fields = [state.xPhys]
-    tP = np.linspace(0, 1, p.nStage + 1)
-    for i in range(1, p.nStage + 1):
+    tP = np.linspace(0, 1, p.config.nStage + 1)
+    for i in range(1, p.config.nStage + 1):
         fields.append(state.xPhys * compliance.time_mask(state.tPhys, tP[i], beta_t))
     for field in fields:
         K = fem_ref.assemble_stiffness(
-            KE, torch_util.to_numpy(field), p.Emin, p.Emax, p.penal, edofMat, p.ndof
+            KE,
+            torch_util.to_numpy(field),
+            p.config.Emin,
+            p.config.Emax,
+            p.config.penal,
+            edofMat,
+            p.ndof,
         )
         Kfree = K[np.ix_(freedofs, freedofs)].toarray()
         if np.linalg.cond(Kfree) >= MAX_COND:
@@ -342,8 +354,8 @@ def _well_conditioned(problem, state, beta_t):
 
 def _draw_well_conditioned_state(problem, rng, *, beta_t=10.0, max_tries=50):
     for _ in range(max_tries):
-        x_raw = rng.uniform(0.3, 0.7, size=(problem.nely, problem.nelx))
-        t_raw = rng.uniform(0.1, 0.9, size=(problem.nely, problem.nelx))
+        x_raw = rng.uniform(0.3, 0.7, size=(problem.config.nely, problem.config.nelx))
+        t_raw = rng.uniform(0.1, 0.9, size=(problem.config.nely, problem.config.nelx))
         state = _state_from_raw(problem, x_raw, t_raw, beta_t=beta_t)
         if _well_conditioned(problem, state, beta_t):
             return x_raw, t_raw, state
@@ -515,7 +527,10 @@ def test_step_batched_matches_sequential_fem_solves():
 
     # Only the batched path carries a stacked U forward, for the next call's warm start.
     assert state_batched.U is not None
-    assert state_batched.U.shape == (1 + problem_batched.nStage, problem_batched.ndof)
+    assert state_batched.U.shape == (
+        1 + problem_batched.config.nStage,
+        problem_batched.ndof,
+    )
     assert state_sequential.U is None
 
 
@@ -599,7 +614,19 @@ def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
         t = data["t_90x30_it0800"]
     assert np.any(x == 0.0)  # premise: exact zeros are actually present
 
-    problem = optimize.build_problem(nelx, nely, 8, 0.5, 0.1, TCR, 3, 2.0, 2.0, 6.0)
+    config = default_run_config(
+        nelx=nelx,
+        nely=nely,
+        nStage=8,
+        volfrac=0.5,
+        Theta=0.1,
+        Tcr=TCR,
+        tfield=3,
+        rmin=2.0,
+        lrmin=2.0,
+        rmin_cond=6.0,
+    )
+    problem = optimize.build_problem(config)
     xPhys = torch_util.to_tensor(x, problem.device, problem.dtype)
     tPhys = torch_util.to_tensor(t, problem.device, problem.dtype)
     xval = torch.cat([xPhys.flatten(), tPhys.flatten()])

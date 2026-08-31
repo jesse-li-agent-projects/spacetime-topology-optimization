@@ -59,7 +59,9 @@ def _cuda_available() -> bool:
 if __name__ == "__main__":
     args = parse_args()
 
+import json
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -69,16 +71,16 @@ import sttopt.conductivity as conductivity
 import sttopt.filters as filters
 import sttopt.mma as mma
 import sttopt.optimize as optimize
+import sttopt.run_config as run_config
 from tests.fixtures.generate_torch_port_designs import load_design_raw
 
-# Matches tests/test_e2e_slow.py's reproduction of the thesis Chapter 4.4 experiment.
+# Matches tests/test_e2e_slow.py's reproduction of the thesis Chapter 4.4 experiment
+# -- the same mesh/hyperparameters as config/default.json, loaded from there directly.
 NELX, NELY = 180, 60
 NSTAGE = 8
-VOLFRAC = 0.5
-THETA = 0.1
-TCR = 0.8
-TFIELD = 3
-RMIN, LRMIN, RMIN_COND = 4.0, 2.0, 12.0
+CONFIG = run_config.RunConfig.from_dict(
+    json.loads((Path(__file__).parent.parent / "config" / "default.json").read_text())
+)
 
 # beta_t and beta_d as of loop 800, per optimize.step's continuation schedules
 # (beta_t += 5 every 30 loops while < 50; beta_d *= 2 every 50 loops, capped at
@@ -106,12 +108,12 @@ def build_realistic_state(
     filter and Heaviside projection, blurring interfaces `step` never actually sees in
     production. See PR #52's description for how this was found.
     """
-    nelx, nely = problem.nelx, problem.nely
+    nelx, nely = problem.config.nelx, problem.config.nely
     device, dtype = problem.device, problem.dtype
     x_t = torch.as_tensor(x_snapshot, device=device, dtype=dtype)
     t_t = torch.as_tensor(t_snapshot, device=device, dtype=dtype)
     xTilde = ((problem.H @ x_t.flatten()) / problem.Hs).reshape(nely, nelx)
-    xPhys = filters.heaviside_projection(xTilde, BETA_D, problem.eta)
+    xPhys = filters.heaviside_projection(xTilde, BETA_D, problem.config.eta)
     tPhys = ((problem.H @ t_t.flatten()) / problem.Hs).reshape(nely, nelx)
     xval = torch.cat([x_t.flatten(), t_t.flatten()])
     return optimize.State(
@@ -193,20 +195,7 @@ def install_timers(device: torch.device) -> tuple[dict[str, _Timer], "callable"]
 
 def main():
     device = torch.device(args.device)
-    problem = optimize.build_problem(
-        NELX,
-        NELY,
-        NSTAGE,
-        VOLFRAC,
-        THETA,
-        TCR,
-        TFIELD,
-        RMIN,
-        LRMIN,
-        RMIN_COND,
-        device=device,
-        dtype=torch.float64,
-    )
+    problem = optimize.build_problem(CONFIG, device=device, dtype=torch.float64)
 
     x0, t0 = load_design_raw("180x60", LOOP)
     state = build_realistic_state(problem, x0, t0)
