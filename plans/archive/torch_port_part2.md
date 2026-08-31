@@ -1,10 +1,11 @@
 # Plan: PyTorch port, part 2 -- porting the optimization loop
 
-> **Status (2026-08-27): not started; the user's open questions are answered** (see the
-> final section). This plan replaces Phase 3 of
-> `plans/archive/torch_port.md`, whose Phases 0a/0/1/2 are complete and whose GPU gate
-> passed at 4.36x. Read that plan's *Results* sections for the measurements this one
-> builds on; do not re-derive them.
+> **Status (2026-08-31): done.** Phases 3.1-3.7 are complete; see Phase 3.7's Results
+> subsections for the final end-to-end number (6.0x, after the `profile_step.py`
+> harness bug fix below) and the Done criteria check at the bottom of Phase 3.7. This
+> plan replaces Phase 3 of `plans/archive/torch_port.md`, whose Phases 0a/0/1/2 are
+> complete and whose GPU gate passed at 4.36x. Read that plan's *Results* sections for
+> the measurements this one builds on; do not re-derive them.
 
 ## What part 1 established
 
@@ -833,12 +834,31 @@ it an autograd `Function` (`SpsolveFE`) removed it, and
 
 ## Phase 3.7: Validation, the end-to-end number, and the deletion
 
-**Status (2026-08-28): profiling and correctness validation done; the deletion below is
-NOT done and is left for a follow-up task.** The measured end-to-end number came in below
-the 4x acceptance floor (2.74x -- see the Results subsection below), which per this
-phase's own "below 4x, stop and report rather than deleting the hand-derived code"
-instruction means the deletion should wait for the user to see the finding first, not
-proceed automatically in the same task that measured it.
+**Status (2026-08-31): done.** The 2.74x below-floor result recorded below turned out to
+be a profiling-harness bug, not a genuine regression -- see "Results: re-profile after
+the harness fix" immediately after the original results. Fixed and re-measured at
+**6.0x**, clearing the 4x floor, so the deletion this phase gates on is unblocked. The
+deletion itself was already carried out, in a different shape than this phase originally
+specified: PR #57's `torch_port_review_followup.md` Phase 4 *moved* (rather than
+literally deleted) the hand-derived sensitivity formulas from `sttopt/` into
+`tests/reference/`, a deliberate decision (recorded in that now-deleted plan, since it
+was transient review follow-up, not archived) that keeps the autograd-vs-hand-derived
+comparison tests running as a cross-check and timing baseline rather than losing that
+coverage outright. This satisfies this plan's own Done criterion --"the hand-derived
+sensitivity code is gone from `sttopt/` and the independent oracles in `tests/` are what
+pin correctness" -- word for word: `sttopt/compliance.py`, `sttopt/constraints.py`, and
+`sttopt/conductivity.py` contain only the autograd path (verified by inspection while
+closing out this plan), and `tests/reference/{compliance,conductivity,constraints,fem}.py`
+plus `tests/test_reference_sweep.py` are the oracles. The "Then delete" paragraph and
+sanity-check below are left as-written for the historical record of what this phase
+originally asked for; treat "moved to `tests/reference/`" as satisfying it.
+
+**Status (2026-08-28, superseded above): profiling and correctness validation done; the
+deletion below is NOT done and is left for a follow-up task.** The measured end-to-end
+number came in below the 4x acceptance floor (2.74x -- see the Results subsection below),
+which per this phase's own "below 4x, stop and report rather than deleting the
+hand-derived code" instruction means the deletion should wait for the user to see the
+finding first, not proceed automatically in the same task that measured it.
 
 **Profile again.** Re-run `benchmarks/profile_step.py` against the torch `step` at 180x60 /
 `nStage=8` on the `it0800` snapshot, machine idle. Report the same table as part 1's Phase
@@ -937,6 +957,22 @@ there. **Not fixed here** -- reworking `build_realistic_state` to seed a self-co
 raw `x`/`t` (rather than approximating it with `xPhys`/`tPhys`) is follow-up work for
 whoever next touches this script or Phase 3.6's performance pass, and is exactly the kind
 of thing a fresh profile after that fix should re-check before trusting either number.
+
+### Results: re-profile after the harness fix (PR #57, commit `e55061c`, 2026-08-28)
+
+The fix predicted above was made: `build_realistic_state` now loads the raw `x`/`t`
+snapshot (`load_design_raw`) and derives `xTilde`/`xPhys`/`tPhys` from it exactly as
+`step()` would, instead of feeding an already-projected `xPhys`/`tPhys` snapshot into the
+raw `x`/`t` slots and letting `step()` double-apply the filter/Heaviside chain.
+
+Re-measured at 180x60 on GPU: `fem_solve` drops from 828 ms/call to 360 ms/call,
+per-step from 1116 ms to 510 ms.
+
+**3060 / 510 = 6.0x -- clears the 4x floor**, and lands close to the ~7x "honest
+expectation" projected at the top of this section. This resolves the "stop and report"
+condition the 2.74x result triggered: the below-floor number was the profiling harness
+double-projecting the field, not a real solver regression, so the deletion this phase
+gates on is unblocked (see this phase's Status note at the top).
 
 **A second, unrelated bug found and fixed while instrumenting this measurement (not a
 Phase 3.6 performance question, not a physics/algorithm question -- a plain autograd
