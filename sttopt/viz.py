@@ -192,6 +192,32 @@ def timefield_plot(
     return ax
 
 
+def timefield_contour_plot(
+    xPhys: Float[np.ndarray, "nely nelx"],
+    tPhys: Float[np.ndarray, "nely nelx"],
+    nContours: int,
+    *,
+    ax: Axes | None = None,
+) -> Axes:
+    """`timefield_plot` with `nContours` thin black contour lines of `tPhys` overlaid,
+    masked to the same `xPhys > 0.5` region.
+
+    :param xPhys: physical density field (not yet binarized).
+    :param tPhys: physical print-time field.
+    :param nContours: number of contour lines.
+    :return: the `Axes` drawn into.
+    """
+    ax = timefield_plot(xPhys, tPhys, ax=ax)
+
+    nely, nelx = tPhys.shape
+    # Cell centers, in combination_plot's coordinate frame: x in [col, col+1],
+    # y in [-(row+1), -row].
+    X, Y = np.meshgrid(np.arange(nelx) + 0.5, -(np.arange(nely) + 0.5))
+    masked_tPhys = np.where(xPhys > 0.5, tPhys, np.nan)
+    ax.contour(X, Y, masked_tPhys, levels=nContours, colors="black", linewidths=0.5)
+    return ax
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Regenerate plots for a saved run from its output/<tag>/ "
@@ -209,6 +235,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=Path("plot"),
         help="parent directory to save plots under (default: plot)",
+    )
+    parser.add_argument(
+        "--n-contours",
+        type=int,
+        default=10,
+        help="number of time field contour lines (default: 10)",
     )
     return parser.parse_args(argv)
 
@@ -253,6 +285,11 @@ def _main(args: argparse.Namespace) -> None:
     out_path = plot_dir / "timefield.png"
     ax.figure.savefig(out_path)
     print(f"Saved time field plot to {out_path}")
+
+    ax = timefield_contour_plot(xPhys, tPhys, args.n_contours)
+    out_path = plot_dir / "timefield_contour.png"
+    ax.figure.savefig(out_path)
+    print(f"Saved time field contour plot to {out_path}")
 
 
 if __name__ == "__main__":
