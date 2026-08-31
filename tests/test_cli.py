@@ -18,13 +18,13 @@ import sttopt.torch_util as torch_util
 import sttopt.viz as viz
 from sttopt.run_config import RunConfig
 
-# nStage/rmin/lrmin/rmin_cond are config-file-only (not CLI flags), so this fixture's
-# overrides for them go through --config rather than argv.
+# nelx/nely/nStage/rmin/lrmin/rmin_cond are config-file-only (not CLI flags), so this
+# fixture's overrides for them go through --config rather than argv.
 _DEFAULT_CONFIG = RunConfig.from_dict(
     json.loads((Path(__file__).parent.parent / "config" / "default.json").read_text())
 )
 _FIXTURE_CONFIG = dataclasses.replace(
-    _DEFAULT_CONFIG, nStage=2, rmin=2, lrmin=2, rmin_cond=3
+    _DEFAULT_CONFIG, nelx=7, nely=5, nStage=2, rmin=2, lrmin=2, rmin_cond=3
 )
 
 
@@ -34,10 +34,6 @@ def _argv(tmp_path, tag):
     return [
         "--config",
         str(config_path),
-        "--nelx",
-        "7",
-        "--nely",
-        "5",
         "--nloop",
         "2",
         "--tag",

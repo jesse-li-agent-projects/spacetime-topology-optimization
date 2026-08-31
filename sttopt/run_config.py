@@ -24,14 +24,14 @@ class RunConfig:
     """
 
     # Frequently varied -- also exposed as CLI flags in cli.py.
-    nelx: int
-    nely: int
     nloop: int
-    volfrac: float
     tag: str
     device: str | None
 
     # Config-file-only.
+    nelx: int
+    nely: int
+    volfrac: float
     nStage: int
     Theta: float
     Tcr: float
