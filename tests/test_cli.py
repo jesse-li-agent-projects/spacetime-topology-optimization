@@ -4,8 +4,10 @@ tiny overrides -- per the repo's sandbox rules, nothing near production scale
 lightest testing budget of the whole port.
 """
 
+import dataclasses
 import json
 import re
+from pathlib import Path
 
 import numpy as np
 
@@ -18,7 +20,12 @@ from sttopt.run_config import RunConfig
 
 # nStage/rmin/lrmin/rmin_cond are config-file-only (not CLI flags), so this fixture's
 # overrides for them go through --config rather than argv.
-_FIXTURE_CONFIG = RunConfig(nStage=2, rmin=2, lrmin=2, rmin_cond=3)
+_DEFAULT_CONFIG = RunConfig.from_dict(
+    json.loads((Path(__file__).parent.parent / "config" / "default.json").read_text())
+)
+_FIXTURE_CONFIG = dataclasses.replace(
+    _DEFAULT_CONFIG, nStage=2, rmin=2, lrmin=2, rmin_cond=3
+)
 
 
 def _argv(tmp_path, tag):

@@ -4,7 +4,9 @@ what produced it.
 
 Only a small subset of fields (the ones varied run-to-run in practice) are exposed as
 CLI flags in `cli.py`; the rest are reachable only via a `--config` JSON file or by
-constructing `RunConfig` directly in code.
+constructing `RunConfig` directly in code. `RunConfig` itself has no default values --
+`config/default.json` (loaded by `cli.py` when `--config` is omitted) is the single
+source of default settings.
 """
 
 import dataclasses
@@ -22,36 +24,36 @@ class RunConfig:
     """
 
     # Frequently varied -- also exposed as CLI flags in cli.py.
-    nelx: int = 180
-    nely: int = 60
-    nloop: int = 800
-    volfrac: float = 0.5
-    tag: str = "default"
-    device: str | None = None
+    nelx: int
+    nely: int
+    nloop: int
+    volfrac: float
+    tag: str
+    device: str | None
 
     # Config-file-only.
-    nStage: int = 8
-    Theta: float = 0.1
-    Tcr: float = 0.8
-    tfield: int = 3
-    rmin: float = 4.0
-    lrmin: float = 2.0
-    rmin_cond: float = 12.0
-    beta_d_max: float = 128.0
-    Emin: float = 1e-9
-    Emax: float = 1.0
-    nu: float = 0.3
-    penal: float = 3.0
-    eta: float = 0.5
-    p: float = 25.0
-    q: float = 3.0
-    r: float = 0.05
-    rouf: float = 100.0
-    a0: float = 1.0
-    mma_c: float = 2500.0
-    move: float = 0.01
-    tmove: float = 0.01
-    batch_fem_solves: bool | None = None
+    nStage: int
+    Theta: float
+    Tcr: float
+    tfield: int
+    rmin: float
+    lrmin: float
+    rmin_cond: float
+    beta_d_max: float
+    Emin: float
+    Emax: float
+    nu: float
+    penal: float
+    eta: float
+    p: float
+    q: float
+    r: float
+    rouf: float
+    a0: float
+    mma_c: float
+    move: float
+    tmove: float
+    batch_fem_solves: bool | None
 
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)
