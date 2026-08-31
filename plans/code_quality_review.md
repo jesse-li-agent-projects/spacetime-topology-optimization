@@ -193,13 +193,20 @@ the natural acceptance criteria for an autodiff swap.
   float64-calibrated tolerances (`conftest.assert_close`, `test_reference_sweep`'s
   `TIGHT`/`SOLVED`) carry over unchanged and the port is judged on correctness alone.
   Revisit only if float32/GPU throughput turns out to be the reason for porting.
-- [ ] After a PyTorch port, evaluate replacing some of the hand-derived sensitivity
+- [x] After a PyTorch port, evaluate replacing some of the hand-derived sensitivity
   (`dc`/`dt`/adjoint) code with autodiff, at least for the more mundane/straightforward
   derivative chains -- manually-written sensitivities are a common source of subtle
   correctness bugs (mismatched chain rule terms, stale derivatives after a forward-pass
   change) that autodiff sidesteps. Likely not a full replacement everywhere -- some
   sensitivities may be intentionally hand-optimized or awkward to express in autodiff --
   so this needs a per-case call, not a blanket switch.
+  **Done via `plans/archive/torch_port_part2.md`:** every sensitivity in
+  `sttopt/compliance.py`, `sttopt/constraints.py`, `sttopt/conductivity.py`, and the FEM
+  solve now comes from autograd, including the adjoint (`sttopt/torch_solve.py`'s
+  `FemSolve`). No hand-derived call site was intentionally kept for performance --
+  Phase 3.4's benchmark found plain autograd already faster than the hand-derived
+  hotspot algebra at the production mesh. The hand-derived formulas survive only as an
+  oracle in `tests/reference/`.
 
 ## Open questions
 
