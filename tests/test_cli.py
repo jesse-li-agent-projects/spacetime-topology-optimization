@@ -47,7 +47,8 @@ def test_cli_smoke(tmp_path, monkeypatch):
 
     cli.main(args)
 
-    assert (tmp_path / "output" / "smoke" / "final_structure.png").exists()
+    assert (tmp_path / "output" / "smoke" / "hotspot_severity.png").exists()
+    assert (tmp_path / "output" / "smoke" / "timefield.png").exists()
     assert (tmp_path / "output" / "smoke" / "final_design.npz").exists()
 
 
@@ -135,15 +136,16 @@ def test_cli_closing_plot_uses_pre_final_update_state(tmp_path, monkeypatch):
     # cli.py does `import sttopt.viz as viz` *inside* main(), so `cli.viz` isn't a module
     # attribute -- patch the real sttopt.viz module (the same object that local import
     # binds to) instead.
-    captured = {}
+    calls = []
     original = viz.combination_plot
 
-    def spy(xPhys, tPhys, eps, **kwargs):
-        captured["T1"] = tPhys
-        return original(xPhys, tPhys, eps, **kwargs)
+    def spy(xPhys, values, eps, **kwargs):
+        calls.append(values)
+        return original(xPhys, values, eps, **kwargs)
 
     monkeypatch.setattr(viz, "combination_plot", spy)
     cli.main(args)
 
-    np.testing.assert_allclose(captured["T1"], prev_T1, rtol=1e-8)
-    assert not np.allclose(captured["T1"], final_T1)
+    # First call is hotspot_severity_plot's (via combination_plot's "values" slot).
+    np.testing.assert_allclose(calls[0], prev_T1, rtol=1e-8)
+    assert not np.allclose(calls[0], final_T1)

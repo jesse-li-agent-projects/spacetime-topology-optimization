@@ -159,10 +159,11 @@ def main(args: argparse.Namespace) -> None:
     tPhys = torch_util.to_numpy(prev_state.tPhys)
 
     ax = viz.hotspot_severity_plot(xPhys, hotspot_severity, tPhys, config.nStage)
+    ax.figure.savefig(output_dir / "hotspot_severity.png", dpi=150, bbox_inches="tight")
 
-    out_path = output_dir / "final_structure.png"
-    ax.figure.savefig(out_path, dpi=150)
-    print(f"Saved final structure plot to {out_path}")
+    ax = viz.timefield_plot(xPhys, tPhys)
+    ax.figure.savefig(output_dir / "timefield.png", dpi=150, bbox_inches="tight")
+    print(f"Saved hotspot severity and time field plots to {output_dir}")
 
 
 if __name__ == "__main__":
