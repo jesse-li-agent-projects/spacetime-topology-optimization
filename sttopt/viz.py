@@ -1,59 +1,39 @@
 """Plots for the printed structure: elements colored by print time, and the boundaries
-between print stages -- ports `draw_combination1.m`/`draw_boundary.m` (the only two
-plotting calls the main script actually exercises; see
-`plans/archive/conductivity_estimation_2d_python_port.md`'s Scope section for why
-`draw_combination2`/`3` and the main script's call to the undefined `draw_combination`
-(line 577; no such file exists, only `draw_combination1`/`2`/`3`) are out of scope /
-resolved to `draw_combination1`).
+between print stages -- ports `draw_combination1.m`/`draw_boundary.m`.
 
 When no `ax` is passed, both functions build their own `Figure` directly rather than
-going through `pyplot`, so importing or calling this module registers nothing in a
-global figure registry and leaves nothing for the caller to close -- `savefig` still
-works, picking its canvas from the output format. Pass your own `ax` (e.g. from
-`plt.subplots()`) to draw into a pyplot-managed, interactive figure instead.
+going through `pyplot`, so nothing is registered globally and there's nothing for the
+caller to close; `savefig` still works. Pass your own `ax` (e.g. from `plt.subplots()`)
+to draw into a pyplot-managed, interactive figure instead.
 
-**Missing `draw_line` helper**: `draw_boundary.m` calls a `draw_line(V(e,:), 3, [0 0 0])`
-helper that does not exist anywhere in the source repo (confirmed by search) -- an
-unresolvable external dependency, not something with a real definition to recover. Its
-call site is unambiguous though: two `(x, y)` node coordinates, linewidth 3, RGB black.
-`stage_boundary_plot` below ports that directly as a black `LineCollection` (the vectorized
-equivalent of calling `draw_line` once per boundary edge) rather than trying to
-reverse-engineer a fancier helper that isn't there; the linewidth (`_BOUNDARY_LINEWIDTH`)
-is a cosmetic default, not a MATLAB-parity number.
+`draw_boundary.m`'s `draw_line` helper has no definition anywhere in the source repo;
+`stage_boundary_plot` ports its call site (two `(x, y)` nodes, linewidth 3, black)
+directly as a black `LineCollection`.
 
-**Coordinate conventions differ between the two functions, on purpose**: `draw_combination1`
-places element `(row, col)` at `x in [col, col+1]`, `y in [-(row+1), -row]` (y flipped, so
-larger row -> more negative y); `draw_boundary` places the same element at
-`x in [col+0.5, col+1.5]`, `y in [row+0.5, row+1.5]` (no flip, offset by half a cell). This
-mirrors a real difference in the MATLAB source (`yElement = s(:)-0.5` vs.
-`y = -(s(:)-1)`), not a typo -- `stage_boundary_plot` ports its own convention faithfully by
-default (`combination_coords=False`); it is *not* pixel-aligned with `combination_plot` in
-that mode. The two frames are related by a verified affine map, though (element `(row,
-col)`'s footprint in one frame lands exactly on its footprint in the other under
-`x' = x - 0.5, y' = 0.5 - y`) -- `stage_boundary_plot(..., combination_coords=True)` applies
-it, for composing both plots on one `Axes` (as `cli.py` does). See `conventions.md`.
-
-Unlike the MATLAB source (arbitrary-mesh node/face patch construction, needed for a
-generic FEM mesh), every element here is an axis-aligned unit square on a regular grid,
-so both functions below build polygons/edges directly from `(row, col)` -- no
-`order='F'` flatten is needed (or used) anywhere in this module.
+Coordinate conventions differ between the two functions, on purpose: `combination_plot`
+places element `(row, col)` at `x in [col, col+1]`, `y in [-(row+1), -row]` (y flipped);
+`stage_boundary_plot` places it at `x in [col+0.5, col+1.5]`, `y in [row+0.5, row+1.5]`
+(no flip, half-cell offset) -- this mirrors the MATLAB source. The two frames are related
+by `x' = x - 0.5, y' = 0.5 - y`; `stage_boundary_plot(..., combination_coords=True)`
+applies it to compose both plots on one `Axes` (as `cli.py` does). See `conventions.md`.
 
 Run as a script (`python -m sttopt.viz <tag>`) to regenerate plots for a saved run from
 its `output/<tag>/` artefacts, without rerunning the optimization. This reads
 `final_design.npz`'s `xPhys`/`tPhys` -- the state *after* the last MMA update -- whereas
-`cli.py`'s own end-of-run plot uses `prev_state` (the state entering that last update);
-the two differ by one iteration. See `cli.py`'s module docstring for why it uses
-`prev_state`.
+`cli.py`'s own end-of-run plot uses `prev_state` (the state entering that last update).
 """
 
 import argparse
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 from jaxtyping import Float
 from matplotlib.axes import Axes
 from matplotlib.collections import LineCollection, PolyCollection
 from matplotlib.figure import Figure
+
+matplotlib.rcParams["savefig.bbox"] = "tight"
 
 _BOUNDARY_LINEWIDTH = 1.5
 
@@ -61,14 +41,9 @@ _BOUNDARY_LINEWIDTH = 1.5
 def _new_axes() -> Axes:
     """A standalone `Axes` on a `Figure` that pyplot does not own.
 
-    Nothing needs to close this figure, because `plt.close()` is a deregistration
-    rather than a destructor: pyplot holds a strong reference to every figure it
-    creates, and *that* reference, not the caller's, is what keeps it alive. A
-    directly-instantiated `Figure` never enters that registry, so it is reclaimed by
+    Not registered with pyplot, so it needs no `plt.close()` -- it's reclaimed by
     ordinary garbage collection once the returned `Axes` goes out of scope. Creating
-    `Figure` directly is matplotlib's documented route for library/application code
-    (see `matplotlib.figure`'s module docstring); pyplot stays the right choice for
-    interactive use, which callers reach by passing their own `ax` instead.
+    `Figure` directly is matplotlib's documented route for library/application code.
     """
     return Figure().add_subplot()
 
@@ -83,10 +58,9 @@ def combination_plot(
     ax: Axes | None = None,
 ) -> Axes:
     """Ports `draw_combination1`: draws only the elements with density `>= eps`, each
-    colored by `values` (per-face flat color -- not interpolated from vertices, matching
-    the MATLAB source's `FaceColor='flat'`). Typically `tPhys`, but the MATLAB source also
-    reuses this same call with a per-element hotspot-severity score in place of print time
-    (see `cli.py`) -- `values` is any per-element scalar, not necessarily a time field.
+    colored by `values` (per-face flat color, matching the MATLAB source's
+    `FaceColor='flat'`). `values` is any per-element scalar (e.g. `tPhys`, or a
+    hotspot-severity score), not necessarily a time field.
 
     :param cmap: colormap name; the MATLAB source hardcodes `jet` (this default), but
         callers below pick a colormap that suits `values`.
@@ -126,20 +100,14 @@ def stage_boundary_plot(
     combination_coords: bool = False,
 ) -> Axes:
     """Ports `draw_boundary`: assigns each element to one of `nStage` print stages by its
-    `tPhys` value (the `tt`/`mt` binning loop -- half-open `(tt[j], tt[j+1]]` bins except
-    the first, which is closed on both ends), then draws a black line along every internal
-    mesh edge whose two adjacent elements fall in different stages.
+    `tPhys` value (half-open `(tt[j], tt[j+1]]` bins except the first, which is closed on
+    both ends), then draws a black line along every internal mesh edge whose two adjacent
+    elements fall in different stages.
 
-    The MATLAB source finds these edges via a generic sparse node/edge/face table (built
-    for an arbitrary mesh); since this mesh is always a regular `(nely, nelx)` grid, every
-    internal edge is exactly the shared edge between two orthogonally-adjacent elements, so
-    this ports the same result directly from array comparisons instead.
-
-    `combination_coords`: `draw_boundary`'s native frame (the default) is *not* the same
-    frame as `combination_plot`'s -- see the module docstring. Set this to remap edges into
-    `combination_plot`'s frame (`x' = x - 0.5, y' = 0.5 - y`) before drawing, e.g. to overlay
-    onto an `Axes` a prior `combination_plot` call already populated; leave it `False` for a
-    standalone, MATLAB-faithful boundary plot.
+    :param combination_coords: remap edges into `combination_plot`'s coordinate frame
+        (`x' = x - 0.5, y' = 0.5 - y`) before drawing, e.g. to overlay onto an `Axes` a
+        prior `combination_plot` call already populated; leave `False` for a standalone,
+        MATLAB-faithful boundary plot. See the module docstring.
     """
     if ax is None:
         ax = _new_axes()
@@ -185,9 +153,7 @@ def hotspot_severity_plot(
     """`combination_plot` (binarized density, colored by `hotspot_severity`, `plasma`
     colormap, labelled horizontal colorbar) with `stage_boundary_plot` overlaid in its
     `combination_coords` frame -- the plot recipe `cli.py` saves as
-    `hotspot_severity.png`, factored out here so both `cli.py` and this module's CLI
-    (which reloads a saved run's fields instead of using an in-process state) draw the
-    same thing.
+    `hotspot_severity.png`.
 
     :param xPhys: physical density field (not yet binarized).
     :param hotspot_severity: per-element overheating severity, e.g. `(1 - K_est) * (xPhys > 0.5)`.
@@ -285,12 +251,12 @@ def _main(args: argparse.Namespace) -> None:
     plot_dir.mkdir(parents=True, exist_ok=True)
     ax = hotspot_severity_plot(xPhys, hotspot_severity, tPhys, config.nStage)
     out_path = plot_dir / "hotspot_severity.png"
-    ax.figure.savefig(out_path, dpi=150, bbox_inches="tight")
+    ax.figure.savefig(out_path, dpi=150)
     print(f"Saved hotspot severity plot to {out_path}")
 
     ax = timefield_plot(xPhys, tPhys)
     out_path = plot_dir / "timefield.png"
-    ax.figure.savefig(out_path, dpi=150, bbox_inches="tight")
+    ax.figure.savefig(out_path, dpi=150)
     print(f"Saved time field plot to {out_path}")
 
 
