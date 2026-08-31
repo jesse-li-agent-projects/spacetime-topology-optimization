@@ -32,12 +32,14 @@ ARGV = [
 ]
 
 
-def test_cli_smoke(tmp_path):
-    args = cli.parse_args(ARGV + ["--output-dir", str(tmp_path)])
+def test_cli_smoke(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    args = cli.parse_args(ARGV + ["--tag", "smoke"])
 
     cli.main(args)
 
-    assert (tmp_path / "final_structure.png").exists()
+    assert (tmp_path / "output" / "smoke" / "final_structure.png").exists()
+    assert (tmp_path / "output" / "smoke" / "final_design.npz").exists()
 
 
 def _reference_run(args):
@@ -69,12 +71,15 @@ def _reference_run(args):
     return problem, prev_state, state, records, states
 
 
-def test_cli_prints_full_objective_and_post_update_volume(capsys, tmp_path):
+def test_cli_prints_full_objective_and_post_update_volume(
+    capsys, tmp_path, monkeypatch
+):
     """Regression test for the Phase 9 review findings: "Obj." must be the full MMA
     objective (f0val), not whole-structure-compliance-only (IterationRecord.obj); "Vol."
     must be this iteration's post-update xPhys, not IterationRecord.vol (pre-update).
     """
-    args = cli.parse_args(ARGV + ["--output-dir", str(tmp_path)])
+    monkeypatch.chdir(tmp_path)
+    args = cli.parse_args(ARGV + ["--tag", "obj_vol"])
     _, _, _, records, states = _reference_run(args)
 
     cli.main(args)
@@ -101,7 +106,8 @@ def test_cli_closing_plot_uses_pre_final_update_state(tmp_path, monkeypatch):
     captured at the top of the last loop iteration -- not the post-update state (which
     is one MMA step ahead of what MATLAB actually plots).
     """
-    args = cli.parse_args(ARGV + ["--output-dir", str(tmp_path)])
+    monkeypatch.chdir(tmp_path)
+    args = cli.parse_args(ARGV + ["--tag", "plot_state"])
     problem, prev_state, final_state, _, _ = _reference_run(args)
 
     def _expected_T1(state):
