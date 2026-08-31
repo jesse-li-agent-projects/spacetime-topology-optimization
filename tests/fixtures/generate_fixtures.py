@@ -50,9 +50,9 @@ NU = 0.3
 
 # The rest of RunConfig's hyperparameters (eta, beta_d_max, p, q, r, rouf, a0, mma_c,
 # move, tmove, batch_fem_solves) aren't varied by these fixtures, so they come from
-# config/default.json rather than being restated here.
+# configs/default.json rather than being restated here.
 _DEFAULT_CONFIG = run_config.RunConfig.from_dict(
-    json.loads((OUT.parent.parent / "config" / "default.json").read_text())
+    json.loads((OUT.parent.parent / "configs" / "default.json").read_text())
 )
 CONFIG = dataclasses.replace(
     _DEFAULT_CONFIG,

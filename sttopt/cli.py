@@ -42,7 +42,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path(__file__).parent.parent / "config" / "default.json",
+        default=Path(__file__).parent.parent / "configs" / "default.json",
         help="path to a RunConfig JSON file (e.g. a previous run's output/<tag>/"
         "config.json). Fields not listed below "
         "(nelx, nely, volfrac, nStage, Theta, Tcr, tfield, rmin, lrmin, rmin_cond, "
