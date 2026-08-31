@@ -182,12 +182,11 @@ def main(args: argparse.Namespace) -> None:
     hotspot_severity = (1 - K_est) * XPhys
 
     # Tensor boundary: `viz` takes plain arrays -- see sttopt/torch_util.py.
-    XPhys = torch_util.to_numpy(XPhys)
+    xPhys = torch_util.to_numpy(prev_state.xPhys)
     hotspot_severity = torch_util.to_numpy(hotspot_severity)
     tPhys = torch_util.to_numpy(prev_state.tPhys)
 
-    ax = viz.combination_plot(XPhys, hotspot_severity, eps=1.0e-1)
-    viz.stage_boundary_plot(tPhys, config.nStage, ax=ax, combination_coords=True)
+    ax = viz.hotspot_severity_plot(xPhys, hotspot_severity, tPhys, config.nStage)
 
     out_path = output_dir / "final_structure.png"
     ax.figure.savefig(out_path, dpi=150)
