@@ -45,17 +45,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=Path(__file__).parent.parent / "config" / "default.json",
         help="path to a RunConfig JSON file (e.g. a previous run's output/<tag>/"
         "config.json). Fields not listed below "
-        "(nStage, Theta, Tcr, tfield, rmin, lrmin, rmin_cond, beta_d_max, and the rest "
-        "of build_problem's hyperparameters) are settable only through this file. CLI "
-        "flags below override values loaded from it",
+        "(nelx, nely, volfrac, nStage, Theta, Tcr, tfield, rmin, lrmin, rmin_cond, "
+        "beta_d_max, and the rest of build_problem's hyperparameters) are settable "
+        "only through this file. CLI flags below override values loaded from it",
     )
-    parser.add_argument("--nelx", type=int, default=None, help="mesh elements in x")
-    parser.add_argument("--nely", type=int, default=None, help="mesh elements in y")
     parser.add_argument(
         "--nloop", type=int, default=None, help="number of MMA iterations"
-    )
-    parser.add_argument(
-        "--volfrac", type=float, default=None, help="volume fraction budget"
     )
     parser.add_argument(
         "--tag",
@@ -85,7 +80,7 @@ def resolve_config(args: argparse.Namespace) -> "RunConfig":
     from sttopt.run_config import RunConfig
 
     config = RunConfig.from_dict(json.loads(args.config.read_text()))
-    for field in ("nelx", "nely", "nloop", "volfrac", "tag", "device"):
+    for field in ("nloop", "tag", "device"):
         value = getattr(args, field)
         if value is not None:
             setattr(config, field, value)
