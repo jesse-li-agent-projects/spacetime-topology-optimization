@@ -80,6 +80,7 @@ import time
 import numpy as np
 
 import sttopt.optimize as optimize
+from sttopt.run_config import RunConfig
 
 # Matches tests/test_e2e_slow.py's reproduction of the thesis Chapter 4.4 experiment.
 NSTAGE = 8
@@ -88,6 +89,26 @@ THETA = 0.1
 TCR = 0.8
 TFIELD = 3
 BETA_INIT = 1.0
+
+# The rest of RunConfig's hyperparameters, at the same values test_e2e_slow.py's
+# CONFIG hardcodes (not sourced from config/default.json -- see that file's comment).
+_EXTRA_CONFIG_FIELDS = dict(
+    beta_d_max=128.0,
+    Emin=1e-9,
+    Emax=1.0,
+    nu=0.3,
+    penal=3.0,
+    eta=0.5,
+    p=25.0,
+    q=3.0,
+    r=0.05,
+    rouf=100.0,
+    a0=1.0,
+    mma_c=2500.0,
+    move=0.01,
+    tmove=0.01,
+    batch_fem_solves=None,
+)
 
 # (nelx, nely, rmin, lrmin, rmin_cond). Radii are in element units; see module docstring
 # for why 90x30 keeps lrmin at 2.0 rather than halving it.
@@ -211,21 +232,21 @@ def generate(
     out: dict[str, np.ndarray] = {}
     for nelx, nely, rmin, lrmin, rmin_cond in selected:
         t0 = time.perf_counter()
-        result = optimize.run(
-            nelx,
-            nely,
-            nloop,
-            NSTAGE,
-            VOLFRAC,
-            THETA,
-            TCR,
-            TFIELD,
-            rmin,
-            lrmin,
-            rmin_cond,
-            beta_d=BETA_INIT,
-            device=device,
+        config = RunConfig(
+            nloop=nloop,
+            nelx=nelx,
+            nely=nely,
+            volfrac=VOLFRAC,
+            nStage=NSTAGE,
+            Theta=THETA,
+            Tcr=TCR,
+            tfield=TFIELD,
+            rmin=rmin,
+            lrmin=lrmin,
+            rmin_cond=rmin_cond,
+            **_EXTRA_CONFIG_FIELDS,
         )
+        result = optimize.run(config, beta_d=BETA_INIT, device=device)
         elapsed = time.perf_counter() - t0
         print(
             f"{nelx}x{nely}: {nloop} iterations in {elapsed / 60:.1f} min", flush=True

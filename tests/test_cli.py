@@ -57,19 +57,7 @@ def _reference_run(config):
     quantity (see the Phase 9 review: cli.py originally printed IterationRecord.obj/.vol,
     which are NOT what MATLAB's disp actually prints; see cli.py's module docstring).
     """
-    problem = optimize.build_problem(
-        config.nelx,
-        config.nely,
-        config.nStage,
-        config.volfrac,
-        config.Theta,
-        config.Tcr,
-        config.tfield,
-        config.rmin,
-        config.lrmin,
-        config.rmin_cond,
-        beta_d_max=config.beta_d_max,
-    )
+    problem = optimize.build_problem(config)
     state = optimize.init_state(problem, beta_d=1.0)
     prev_state, records, states = state, [], []
     for _ in range(config.nloop):
@@ -132,9 +120,9 @@ def test_cli_closing_plot_uses_pre_final_update_state(tmp_path, monkeypatch):
             problem.e1,
             problem.e2,
             problem.w,
-            problem.q,
-            problem.rouf,
-        ).reshape(problem.nely, problem.nelx)
+            problem.config.q,
+            problem.config.rouf,
+        ).reshape(problem.config.nely, problem.config.nelx)
         XPhys = (state.xPhys > 0.5).to(problem.dtype)
         return torch_util.to_numpy((1 - K_est) * XPhys)
 

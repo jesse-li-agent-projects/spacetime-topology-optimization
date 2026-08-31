@@ -21,11 +21,13 @@ the run, making a tight bound on it fragile.
 import pytest
 
 import sttopt.optimize as optimize
+from sttopt.run_config import RunConfig
 
 # Matches conductivity_estimation_2d/conductivity_estimation_stto_main.m directly
 # (nelx/nely/nloop/nStage/volfrac/Theta/Tcr/tfield/rmin/lrmin, and rmin_cond from the
-# conductivity-filter radius set later in that script) -- not derived from cli.py's
-# argparse defaults, which happen to match today but aren't pinned to this experiment.
+# conductivity-filter radius set later in that script) -- not derived from
+# config/default.json, which happens to match today but isn't pinned to this
+# experiment.
 NELX, NELY = 180, 60
 NSTAGE = 8
 VOLFRAC = 0.5
@@ -36,6 +38,35 @@ NLOOP = 800
 RMIN, LRMIN, RMIN_COND = 4.0, 2.0, 12.0
 BETA_INIT = 1.0
 
+CONFIG = RunConfig(
+    nloop=NLOOP,
+    nelx=NELX,
+    nely=NELY,
+    volfrac=VOLFRAC,
+    nStage=NSTAGE,
+    Theta=THETA,
+    Tcr=TCR,
+    tfield=TFIELD,
+    rmin=RMIN,
+    lrmin=LRMIN,
+    rmin_cond=RMIN_COND,
+    beta_d_max=128.0,
+    Emin=1e-9,
+    Emax=1.0,
+    nu=0.3,
+    penal=3.0,
+    eta=0.5,
+    p=25.0,
+    q=3.0,
+    r=0.05,
+    rouf=100.0,
+    a0=1.0,
+    mma_c=2500.0,
+    move=0.01,
+    tmove=0.01,
+    batch_fem_solves=None,
+)
+
 F0VAL_CEILING = 195.0
 F0VAL_FLOOR = 185.0
 TRU_MAX_TARGET = 0.8
@@ -44,20 +75,7 @@ TRU_MAX_TOL = 0.008  # 1% of TRU_MAX_TARGET
 
 @pytest.mark.slow
 def test_thesis_4_4_reproduction():
-    result = optimize.run(
-        NELX,
-        NELY,
-        NLOOP,
-        NSTAGE,
-        VOLFRAC,
-        THETA,
-        TCR,
-        TFIELD,
-        RMIN,
-        LRMIN,
-        RMIN_COND,
-        beta_d=BETA_INIT,
-    )
+    result = optimize.run(CONFIG, beta_d=BETA_INIT)
     record = result.records[-1]
 
     assert record.f0val < F0VAL_CEILING

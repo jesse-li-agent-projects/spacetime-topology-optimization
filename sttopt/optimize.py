@@ -38,6 +38,7 @@ import sttopt.fem as fem
 import sttopt.filters as filters
 import sttopt.gravity as gravity
 import sttopt.mma as mma
+import sttopt.run_config as run_config
 import sttopt.timefield as timefield
 import sttopt.torch_fem as torch_fem
 import sttopt.torch_util as torch_util
@@ -50,13 +51,9 @@ class Problem:
     Built once by `build_problem` and passed unchanged to every `step` call.
     """
 
-    nelx: int
-    nely: int
-    nStage: int
-    volfrac: float
-    Theta: float
-    Tcr: float
-    tfield: timefield.TimeField
+    # Hyperparameters -- see RunConfig for field docs. Read as `problem.config.nelx`,
+    # etc., rather than duplicated as Problem's own fields.
+    config: run_config.RunConfig
 
     device: torch.device
     dtype: torch.dtype
@@ -76,20 +73,6 @@ class Problem:
     w: Float[Tensor, " npairs"]
     Nei: Int[Tensor, " k"]
 
-    Emin: float
-    Emax: float
-    penal: float
-    eta: float
-    beta_d_max: float
-    p: float
-    q: float
-    r: float
-    rouf: float  # hotspot/conductivity-selection sigmoid sharpness (Das 2023 zeta) -- unrelated to beta_t/beta_d
-    a0: float
-    mma_c: float
-    move: float
-    tmove: float
-
     m: int  # number of MMA constraint rows: vol + continuity + start-point(s) + 2*nStage + hotspot
     n: int  # number of MMA design variables: 2*nelx*nely (density half + time half)
 
@@ -97,7 +80,7 @@ class Problem:
     # (plans/torch_port_part2.md Phase 3.3) rather than 1 + nStage separate calls. Part
     # 1 measured this as a 1.3-1.4x win at 90x30/180x60 and a small loss at 360x120, so
     # it is a per-Problem setting (build_problem defaults it from mesh size), not
-    # unconditional.
+    # unconditional. Resolved from `config.batch_fem_solves`, which may be `None`.
     batch_fem_solves: bool
 
 
@@ -159,56 +142,31 @@ class RunResult:
 
 
 def build_problem(
-    nelx: int,
-    nely: int,
-    nStage: int,
-    volfrac: float,
-    Theta: float,
-    Tcr: float,
-    tfield: timefield.TimeField,
-    rmin: float,
-    lrmin: float,
-    rmin_cond: float,
+    config: run_config.RunConfig,
     *,
-    Emin: float = 1e-9,
-    Emax: float = 1.0,
-    nu: float = 0.3,
-    penal: float = 3.0,
-    eta: float = 0.5,
-    beta_d_max: float = 128.0,
-    p: float = 25.0,
-    q: float = 3.0,
-    r: float = 0.05,
-    rouf: float = 100.0,
-    a0: float = 1.0,
-    mma_c: float = 2500.0,
-    move: float = 0.01,
-    tmove: float = 0.01,
     device: torch.device | str | None = None,
     dtype: torch.dtype = torch.float64,
-    batch_fem_solves: bool | None = None,
 ) -> Problem:
     """Build the fixed FEM/filter/geometry setup once, before the loop starts.
 
-    `rmin`/`lrmin`/`rmin_cond` are filter radii (density filter, continuity filter,
-    conductivity neighborhood) -- passed explicitly rather than hardcoded so callers
-    (e.g. the E2E test) can match whatever grid they're running on, since the fixture's
-    radii differ from the original full-scale script's.
+    `config.rmin`/`.lrmin`/`.rmin_cond` are filter radii (density filter, continuity
+    filter, conductivity neighborhood) -- settable per `RunConfig` rather than
+    hardcoded so callers (e.g. the E2E test) can match whatever grid they're running
+    on, since the fixture's radii differ from the original full-scale script's.
 
     :param device: device every tensor field of the returned `Problem` lives on. Defaults
         to CUDA when available, else CPU.
     :param dtype: floating dtype every real-valued tensor field is cast to; integer
         (index/mask) fields keep their own integer/bool dtype regardless.
-    :param batch_fem_solves: batch whole_compliance's and every gravity stage's solve
-        into one `FemSolve` call (`plans/torch_port_part2.md` Phase 3.3). Defaults to
-        on at or below the production 180x60 mesh -- part 1 measured a 1.3-1.4x win
-        there and a small loss at 360x120 -- but is a plain `bool` so a caller can
-        override the default in either direction.
     """
+    nelx, nely, nStage = config.nelx, config.nely, config.nStage
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
+    batch_fem_solves = config.batch_fem_solves
     if batch_fem_solves is None:
+        # Part 1 (plans/torch_port_part2.md Phase 3.3) measured a 1.3-1.4x win at
+        # 90x30/180x60 and a small loss at 360x120.
         batch_fem_solves = nelx * nely <= 180 * 60
     # A 1x1 mesh has neither extent nor neighbours, so two of the pieces built below
     # degenerate: the CORNER/OPPOSITE_CORNER time fields normalize by a zero max
@@ -219,8 +177,8 @@ def build_problem(
             f"nelx and nely cannot both be 1, got nelx={nelx}, nely={nely}"
         )
 
-    tfield = timefield.TimeField(tfield)
-    KE = fem.plane_stress_KE(nu)
+    tfield = timefield.TimeField(config.tfield)
+    KE = fem.plane_stress_KE(config.nu)
     edofMat = fem.element_dof_map(nelx, nely)
     ndof = 2 * (nelx + 1) * (nely + 1)
 
@@ -234,10 +192,10 @@ def build_problem(
     fixeddofs = np.stack([2 * left_edge, 2 * left_edge + 1], axis=-1).ravel()
     freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)
 
-    H, Hs = filters.density_filter(nelx, nely, rmin)
-    L = filters.continuity_filter(nelx, nely, lrmin)
+    H, Hs = filters.density_filter(nelx, nely, config.rmin)
+    L = filters.continuity_filter(nelx, nely, config.lrmin)
     C = gravity.gravity_load_matrix(nelx, nely)
-    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, config.rmin_cond)
 
     # Print-start element(s): the whole first mesh column for tfield != CORNER, the
     # single origin element for tfield == CORNER (constraints.start_point's own
@@ -266,13 +224,7 @@ def build_problem(
         torch.int64,
     )
     return Problem(
-        nelx=nelx,
-        nely=nely,
-        nStage=nStage,
-        volfrac=volfrac,
-        Theta=Theta,
-        Tcr=Tcr,
-        tfield=tfield,
+        config=config,
         device=device,
         dtype=dtype,
         free_mask=torch_fem.free_mask(ndof, int_fields["freedofs"], device=device),
@@ -280,19 +232,6 @@ def build_problem(
         H=torch_util.csr_to_tensor(H, device, dtype),
         L=torch_util.csr_to_tensor(L, device, dtype),
         C=torch_util.csr_to_tensor(C, device, dtype),
-        Emin=Emin,
-        Emax=Emax,
-        penal=penal,
-        eta=eta,
-        beta_d_max=beta_d_max,
-        p=p,
-        q=q,
-        r=r,
-        rouf=rouf,
-        a0=a0,
-        mma_c=mma_c,
-        move=move,
-        tmove=tmove,
         m=m,
         n=n,
         batch_fem_solves=batch_fem_solves,
@@ -302,8 +241,9 @@ def build_problem(
 
 
 def init_state(problem: Problem, beta_d: float) -> State:
-    """Initial state: `x`/`t` are the raw seed (uniform `problem.volfrac`, time field per
-    `problem.tfield`); the physics fields are derived from them exactly as in `step`.
+    """Initial state: `x`/`t` are the raw seed (uniform `problem.config.volfrac`, time
+    field per `problem.config.tfield`); the physics fields are derived from them
+    exactly as in `step`.
 
     The MATLAB source instead assigns `xTilde = x` and `t = tPhys` unfiltered here. For
     the density half that is a numeric no-op -- `x` is uniform and the filter fixes
@@ -311,21 +251,24 @@ def init_state(problem: Problem, beta_d: float) -> State:
     unfiltered made iteration 1 the one iteration whose forward map disagreed with the
     `tPhys = H @ t / Hs` that `step`'s chain rule differentiates. See PR #26.
     """
-    nely, nelx = problem.nely, problem.nelx
+    config = problem.config
+    nely, nelx = config.nely, config.nelx
     nel = nelx * nely
     device, dtype = problem.device, problem.dtype
 
     def filtered(field: Tensor) -> Tensor:
         return ((problem.H @ field.flatten()) / problem.Hs).reshape(nely, nelx)
 
-    x = torch.full((nely, nelx), problem.volfrac, device=device, dtype=dtype)
+    x = torch.full((nely, nelx), config.volfrac, device=device, dtype=dtype)
     xTilde = filtered(x)
-    xPhys = filters.heaviside_projection(xTilde, beta_d, problem.eta)
+    xPhys = filters.heaviside_projection(xTilde, beta_d, config.eta)
 
     # init_timefield is a NumPy builder (plans/torch_port_part2.md Phase 3.2 item 2);
     # converted once here, at the tensor boundary.
     t = torch_util.to_tensor(
-        timefield.init_timefield(nelx, nely, problem.tfield), device, dtype
+        timefield.init_timefield(nelx, nely, timefield.TimeField(config.tfield)),
+        device,
+        dtype,
     )
     tPhys = filtered(t)
 
@@ -444,7 +387,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     E2E fixture (`nloop=3`) -- unexercised by that fixture, not unimplemented or
     worked around.
     """
-    nely, nelx, nStage = problem.nely, problem.nelx, problem.nStage
+    config = problem.config
+    nely, nelx, nStage = config.nely, config.nelx, config.nStage
     nel = nelx * nely
     device, dtype = problem.device, problem.dtype
 
@@ -457,7 +401,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     t = state.t.clone().requires_grad_(True)
     leaves = (x, t)
     xTilde = ((problem.H @ x.flatten()) / problem.Hs).reshape(nely, nelx)
-    xPhys = filters.heaviside_projection(xTilde, beta_d, problem.eta)
+    xPhys = filters.heaviside_projection(xTilde, beta_d, config.eta)
     tPhys = ((problem.H @ t.flatten()) / problem.Hs).reshape(nely, nelx)
 
     # -- Objective: whole-structure compliance + Theta-weighted per-stage gravity compliance --
@@ -471,9 +415,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             tPhys,
             problem.KE,
             problem.edofMat,
-            problem.Emin,
-            problem.Emax,
-            problem.penal,
+            config.Emin,
+            config.Emax,
+            config.penal,
             problem.freedofs,
             problem.F,
             problem.ndof,
@@ -487,9 +431,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             xPhys,
             problem.KE,
             problem.edofMat,
-            problem.Emin,
-            problem.Emax,
-            problem.penal,
+            config.Emin,
+            config.Emax,
+            config.penal,
             problem.freedofs,
             problem.F,
             problem.ndof,
@@ -501,9 +445,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
                 tPhys,
                 problem.KE,
                 problem.edofMat,
-                problem.Emin,
-                problem.Emax,
-                problem.penal,
+                config.Emin,
+                config.Emax,
+                config.penal,
                 ti,
                 problem.C,
                 beta_t,
@@ -518,17 +462,17 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     )  # compliance of final structure only, saved for logging
     f0val_t = c_t
     for cg_t in stage_cs:
-        f0val_t = f0val_t + problem.Theta * cg_t
+        f0val_t = f0val_t + config.Theta * cg_t
     f0val = float(f0val_t.detach())
     df0dx = _grad_row(f0val_t, leaves)
 
     # -- Move-limit bounds on this iteration's raw MMA variables --
     xflat = state.x.flatten()
     tflat = state.t.flatten()
-    xminx = torch.clamp(xflat - problem.move, min=0.0)
-    xmaxx = torch.clamp(xflat + problem.move, max=1.0)
-    xmint = torch.clamp(tflat - problem.tmove, min=0.0)
-    xmaxt = torch.clamp(tflat + problem.tmove, max=1.0)
+    xminx = torch.clamp(xflat - config.move, min=0.0)
+    xmaxx = torch.clamp(xflat + config.move, max=1.0)
+    xmint = torch.clamp(tflat - config.tmove, min=0.0)
+    xmaxt = torch.clamp(tflat + config.tmove, max=1.0)
     xmin = torch.cat([xminx, xmint])
     xmax = torch.cat([xmaxx, xmaxt])
     xval = torch.cat([xflat, tflat])
@@ -537,7 +481,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     fval_parts: list[Tensor] = []
     dfdx_parts: list[Tensor] = []
 
-    fv_vol_t = constraints.global_volume_fraction(xPhys, problem.volfrac)
+    fv_vol_t = constraints.global_volume_fraction(xPhys, config.volfrac)
     vol_diag = float(xPhys.detach().sum() / (nelx * nely))
     fval_parts.append(fv_vol_t[None])
     dfdx_parts.append(_grad_row(fv_vol_t, leaves)[None, :])
@@ -555,7 +499,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     stage_upper_t = torch.stack(
         [
             constraints.stage_volume_bounds(
-                xPhys, tPhys, float(t_stage), problem.volfrac, beta_t
+                xPhys, tPhys, float(t_stage), config.volfrac, beta_t
             )
             for t_stage in stage_times
         ]
@@ -580,12 +524,12 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         problem.e1,
         problem.e2,
         problem.w,
-        problem.p,
-        problem.q,
-        problem.r,
-        problem.rouf,
+        config.p,
+        config.q,
+        config.r,
+        config.rouf,
     )
-    fv_hotspot_t = state.factor * numer_t / problem.Tcr - 1
+    fv_hotspot_t = state.factor * numer_t / config.Tcr - 1
     fval_parts.append(fv_hotspot_t[None])
     dfdx_parts.append(_grad_row(fv_hotspot_t, leaves)[None, :])
 
@@ -595,17 +539,17 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     factor = state.factor
     if loop % 25 == 0:
         max_g = float(
-            torch.max((1 - K_est_t.detach()) * xPhys.detach().flatten() ** problem.r)
+            torch.max((1 - K_est_t.detach()) * xPhys.detach().flatten() ** config.r)
         )
         factor = max_g / numer
     tru_max = factor * numer
 
     if loop % 30 == 0 and beta_t < 50:
         beta_t += 5
-    if loop % 50 == 0 and beta_d <= problem.beta_d_max:
+    if loop % 50 == 0 and beta_d <= config.beta_d_max:
         beta_d *= 2
-    if beta_d > problem.beta_d_max:
-        beta_d = problem.beta_d_max
+    if beta_d > config.beta_d_max:
+        beta_d = config.beta_d_max
 
     fval = torch.cat(fval_parts)
     dfdx = torch.cat(dfdx_parts, dim=0)
@@ -615,7 +559,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     # xval/xmin/xmax never required grad -- they're built from state.x/state.t, the
     # detached fields, not the x/t leaves above.
     mma_a = torch.zeros(problem.m, device=device, dtype=dtype)
-    mma_c = torch.full((problem.m,), problem.mma_c, device=device, dtype=dtype)
+    mma_c = torch.full((problem.m,), config.mma_c, device=device, dtype=dtype)
     mma_d = torch.zeros(problem.m, device=device, dtype=dtype)
     xmma, ymma, zmma, lam, xsi, mma_eta, mu, zet, s, low, upp = mma.mmasub(
         problem.m,
@@ -632,7 +576,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         dfdx.detach(),
         state.low,
         state.upp,
-        problem.a0,
+        config.a0,
         mma_a,
         mma_c,
         mma_d,
@@ -642,7 +586,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     t_new = xmma[nel:].reshape(nely, nelx)
 
     xTilde_new = ((problem.H @ x_new.flatten()) / problem.Hs).reshape(nely, nelx)
-    xPhys_new = filters.heaviside_projection(xTilde_new, beta_d, problem.eta)
+    xPhys_new = filters.heaviside_projection(xTilde_new, beta_d, config.eta)
     tPhys_new = ((problem.H @ t_new.flatten()) / problem.Hs).reshape(nely, nelx)
 
     new_state = State(
@@ -681,40 +625,18 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
 
 def run(
-    nelx: int,
-    nely: int,
-    nloop: int,
-    nStage: int,
-    volfrac: float,
-    Theta: float,
-    Tcr: float,
-    tfield: timefield.TimeField,
-    rmin: float,
-    lrmin: float,
-    rmin_cond: float,
+    config: run_config.RunConfig,
     *,
     beta_d: float = 1.0,
     **problem_kwargs,
 ) -> RunResult:
-    """Build the fixed setup and run `nloop` optimization iterations from the standard
-    initialization (uniform density at `volfrac`, `timefield.init_timefield` for the
-    print-time field). `problem_kwargs` forwards to `build_problem` (SIMP/Heaviside/
-    hotspot/MMA constants) for callers that need non-default values.
+    """Build the fixed setup and run `config.nloop` optimization iterations from the
+    standard initialization (uniform density at `config.volfrac`,
+    `timefield.init_timefield` for the print-time field). `problem_kwargs` forwards to
+    `build_problem` (`device`/`dtype`) for callers that need non-default values.
     """
-    problem = build_problem(
-        nelx,
-        nely,
-        nStage,
-        volfrac,
-        Theta,
-        Tcr,
-        tfield,
-        rmin,
-        lrmin,
-        rmin_cond,
-        **problem_kwargs,
-    )
-    return run_from_state(problem, init_state(problem, beta_d), nloop)
+    problem = build_problem(config, **problem_kwargs)
+    return run_from_state(problem, init_state(problem, beta_d), config.nloop)
 
 
 def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:

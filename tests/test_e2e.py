@@ -22,7 +22,7 @@ import sttopt.conductivity as conductivity
 import sttopt.filters as filters
 import sttopt.optimize as optimize
 import tests.reference.conductivity as conductivity_ref
-from conftest import assert_close, load_fixture_npz
+from conftest import assert_close, default_run_config, load_fixture_npz
 
 NELX, NELY = 7, 5
 NSTAGE = 3
@@ -34,11 +34,23 @@ NLOOP = 3
 RMIN, LRMIN, RMIN_COND = 2, 2, 3
 BETA_INIT = 1.0
 
+CONFIG = default_run_config(
+    nelx=NELX,
+    nely=NELY,
+    nStage=NSTAGE,
+    volfrac=VOLFRAC,
+    Theta=THETA,
+    Tcr=TCR,
+    tfield=TFIELD,
+    rmin=RMIN,
+    lrmin=LRMIN,
+    rmin_cond=RMIN_COND,
+    nloop=NLOOP,
+)
+
 
 def _run():
-    problem = optimize.build_problem(
-        NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
-    )
+    problem = optimize.build_problem(CONFIG)
     return optimize.run_from_state(
         problem, optimize.init_state(problem, BETA_INIT), NLOOP
     )
@@ -51,9 +63,7 @@ def test_iteration1_assembly_matches_fixture():
     or wrong per-stage `ti` in the objective sum would pass every other test here.
     """
     fx = load_fixture_npz("mma")
-    problem = optimize.build_problem(
-        NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
-    )
+    problem = optimize.build_problem(CONFIG)
     state = optimize.init_state(problem, BETA_INIT)
 
     _, record = optimize.step(problem, state)
@@ -67,9 +77,7 @@ def test_iteration1_assembly_matches_fixture():
 
 def test_mma_state_threading_matches_fixture():
     fx = load_fixture_npz("mma")
-    problem = optimize.build_problem(
-        NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
-    )
+    problem = optimize.build_problem(CONFIG)
     state = optimize.init_state(problem, BETA_INIT)
 
     for k in range(NLOOP):
@@ -87,9 +95,7 @@ def test_constraints_stacking_matches_fixture():
     swapped-but-correctly-shaped row wouldn't fail them).
     """
     fx = load_fixture_npz("constraints")
-    problem = optimize.build_problem(
-        NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
-    )
+    problem = optimize.build_problem(CONFIG)
     state = optimize.init_state(problem, BETA_INIT)
 
     for k in range(NLOOP):
@@ -136,9 +142,7 @@ def test_hotspot_factor_refresh_at_loop_25():
     it: loop 25's own `fval`/`dfdx` are evaluated at the old `factor`, and the new
     `factor` only lands in `new_state.factor` for loop 26 onward.
     """
-    problem = optimize.build_problem(
-        NELX, NELY, NSTAGE, VOLFRAC, THETA, TCR, TFIELD, RMIN, LRMIN, RMIN_COND
-    )
+    problem = optimize.build_problem(CONFIG)
     state = optimize.init_state(problem, BETA_INIT)
     for _ in range(24):
         state, _ = optimize.step(problem, state)
@@ -154,7 +158,7 @@ def test_hotspot_factor_refresh_at_loop_25():
     # Independent recomputation of the refresh formula (factor = max_g / numer), using
     # the pre-update xPhys/tPhys/dx the refresh actually saw.
     dx = filters.heaviside_projection_derivative(
-        state.xTilde, state.beta_d, problem.eta
+        state.xTilde, state.beta_d, problem.config.eta
     )
     old = conductivity_ref.hotspot_constraint(
         xPhys,
@@ -166,23 +170,23 @@ def test_hotspot_factor_refresh_at_loop_25():
         problem.H,
         problem.Hs,
         state.factor,
-        problem.Tcr,
-        problem.p,
-        problem.q,
-        problem.r,
-        problem.rouf,
+        problem.config.Tcr,
+        problem.config.p,
+        problem.config.q,
+        problem.config.r,
+        problem.config.rouf,
     )
-    numer = (old.fval + 1) * problem.Tcr / state.factor
+    numer = (old.fval + 1) * problem.config.Tcr / state.factor
     K_est = conductivity.estimated_conductivity(
         xPhys,
         tPhys,
         problem.e1,
         problem.e2,
         problem.w,
-        problem.q,
-        problem.rouf,
+        problem.config.q,
+        problem.config.rouf,
     )
-    max_g = float(torch.max((1 - K_est) * xPhys.flatten() ** problem.r))
+    max_g = float(torch.max((1 - K_est) * xPhys.flatten() ** problem.config.r))
     expected_factor = max_g / numer
 
     assert not np.isclose(expected_factor, state.factor), "refresh must be non-vacuous"
@@ -192,7 +196,7 @@ def test_hotspot_factor_refresh_at_loop_25():
     # factor -- they must match `old` (already computed above at `state.factor`), not
     # a recompute at `expected_factor`. `tru_max`, a pure diagnostic, uses the refreshed
     # factor immediately.
-    nel = problem.nelx * problem.nely
+    nel = problem.config.nelx * problem.config.nely
     assert_close(record.fval[-1], old.fval, tier="algebraic")
     assert_close(record.dfdx[-1, :nel], old.df1, tier="algebraic")
     assert_close(record.dfdx[-1, nel:], old.dt1, tier="algebraic")

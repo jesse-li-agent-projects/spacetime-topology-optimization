@@ -3,8 +3,6 @@
   "nely": 60,
   "nloop": 800,
   "volfrac": 0.5,
-  "tag": "default",
-  "device": null,
   "nStage": 8,
   "Theta": 0.1,
   "Tcr": 0.8,

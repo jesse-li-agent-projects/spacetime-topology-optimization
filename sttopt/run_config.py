@@ -1,12 +1,14 @@
 """`RunConfig`: the full set of `optimize.build_problem` hyperparameters as a single
-serializable object, so every run directory carries a `config.json` record of exactly
-what produced it.
+serializable object -- `Problem.config` holds the exact one a `Problem` was built
+from, and every run directory carries a `config.json` record of exactly what produced
+it.
 
-Only a small subset of fields (the ones varied run-to-run in practice) are exposed as
-CLI flags in `cli.py`; the rest are reachable only via a `--config` JSON file or by
-constructing `RunConfig` directly in code. `RunConfig` itself has no default values --
-`config/default.json` (loaded by `cli.py` when `--config` is omitted) is the single
-source of default settings.
+`nloop` is also exposed as a `cli.py` flag; every other field is reachable only via a
+`--config` JSON file or by constructing `RunConfig` directly in code. Run bookkeeping
+that isn't a `build_problem` hyperparameter (`--tag`, `--device`) lives on `cli.py`'s
+`args`, not here. `RunConfig` itself has no default values -- `config/default.json`
+(loaded by `cli.py` when `--config` is omitted) is the single source of default
+settings.
 """
 
 import dataclasses
@@ -23,10 +25,8 @@ class RunConfig:
     :param tfield: `timefield.TimeField` value, stored as a plain int for JSON.
     """
 
-    # Frequently varied -- also exposed as CLI flags in cli.py.
+    # Frequently varied -- also exposed as a CLI flag in cli.py.
     nloop: int
-    tag: str
-    device: str | None
 
     # Config-file-only.
     nelx: int

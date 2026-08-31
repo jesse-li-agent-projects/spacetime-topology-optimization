@@ -674,18 +674,7 @@ def test_e2e_trajectory_through_mgcg():
     tolerance instead feeds MMA, moves the design, and compounds over iterations.
     """
     fx = load_fixture_npz("e2e")
-    problem = optimize.build_problem(
-        e2e_mod.NELX,
-        e2e_mod.NELY,
-        e2e_mod.NSTAGE,
-        e2e_mod.VOLFRAC,
-        e2e_mod.THETA,
-        e2e_mod.TCR,
-        e2e_mod.TFIELD,
-        e2e_mod.RMIN,
-        e2e_mod.LRMIN,
-        e2e_mod.RMIN_COND,
-    )
+    problem = optimize.build_problem(e2e_mod.CONFIG)
     setup = calib.mesh_setup(e2e_mod.NELX, e2e_mod.NELY)
     with calib.mgcg_backend(setup, rtol=calib.RECOMMENDED_RTOL) as iters:
         result = optimize.run_from_state(

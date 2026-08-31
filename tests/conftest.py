@@ -12,12 +12,15 @@ are a from-scratch transliteration of the original MATLAB source, kept in its na
 `sttopt`'s 0-indexed, C-order convention for comparison.
 """
 
+import dataclasses
+import json
 from pathlib import Path
 
 import numpy as np
 import torch
 
 import sttopt.fem as fem
+from sttopt.run_config import RunConfig
 
 
 def _as_numpy(x) -> np.ndarray:
@@ -42,6 +45,17 @@ def tti(x) -> torch.Tensor:
 
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "config" / "default.json"
+
+
+def default_run_config(**overrides) -> RunConfig:
+    """`RunConfig` loaded from `config/default.json` (the single source of default
+    hyperparameters) with `overrides` applied -- for tests/benchmarks that only care
+    about a handful of fields (typically mesh size) and want everything else at the
+    production default.
+    """
+    base = RunConfig.from_dict(json.loads(DEFAULT_CONFIG_PATH.read_text()))
+    return dataclasses.replace(base, **overrides)
 
 
 def matlab_reference_node_perm(nelx: int, nely: int) -> np.ndarray:

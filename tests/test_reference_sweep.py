@@ -23,6 +23,7 @@ import numpy as np
 import pytest
 import torch
 from conftest import (
+    default_run_config,
     matlab_reference_dof_perm,
     point_load_problem,
     reindex_matlab_reference_nodes,
@@ -379,9 +380,20 @@ def test_full_loop_matches_reference(
     trace = run_reference_loop(
         nelx, nely, nloop, nStage, volfrac, Theta, Tcr, tfield, rmin, lrmin, rmin_cond
     )
-    result = optimize.run(
-        nelx, nely, nloop, nStage, volfrac, Theta, Tcr, tfield, rmin, lrmin, rmin_cond
+    config = default_run_config(
+        nelx=nelx,
+        nely=nely,
+        nloop=nloop,
+        nStage=nStage,
+        volfrac=volfrac,
+        Theta=Theta,
+        Tcr=Tcr,
+        tfield=tfield,
+        rmin=rmin,
+        lrmin=lrmin,
+        rmin_cond=rmin_cond,
     )
+    result = optimize.run(config)
     for k, (rec, want) in enumerate(zip(result.records, trace), start=1):
         assert len(rec.fval) == want["m"], f"iteration {k}: constraint count"
         assert rel([rec.f0val], [want["f0val"]]) < SOLVED, f"iteration {k}: f0val"
@@ -410,7 +422,20 @@ def test_periodic_schedules_match_reference():
     nelx, nely, nloop, nStage = 5, 3, 51, 2
     args = (nelx, nely, nloop, nStage, 0.5, 0.1, 0.8, 3, 2.0, 2.0, 3.0)
     trace = run_reference_loop(*args)
-    result = optimize.run(*args)
+    config = default_run_config(
+        nelx=nelx,
+        nely=nely,
+        nloop=nloop,
+        nStage=nStage,
+        volfrac=0.5,
+        Theta=0.1,
+        Tcr=0.8,
+        tfield=3,
+        rmin=2.0,
+        lrmin=2.0,
+        rmin_cond=3.0,
+    )
+    result = optimize.run(config)
 
     assert (
         trace[24]["factor"] != 1.0
