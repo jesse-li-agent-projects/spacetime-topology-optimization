@@ -42,19 +42,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path(__file__).parent.parent / "configs" / "default.json",
         help="path to a RunConfig JSON file (e.g. a previous run's output/<tag>/"
         "config.json). Fields not listed below "
         "(nelx, nely, volfrac, nStage, Theta, Tcr, print_base, rmin, lrmin, rmin_cond, "
         "beta_d_max, and the rest of build_problem's hyperparameters) are settable "
         "only through this file. CLI flags below override values loaded from it",
     )
-    parser.add_argument(
-        "--nloop", type=int, default=None, help="number of MMA iterations"
-    )
+    parser.add_argument("--nloop", type=int, help="number of MMA iterations")
     parser.add_argument(
         "--tag",
-        default="default",
         help="run identifier; artefacts (progress snapshots, final design, final plot, "
         "config.json) are saved under output/<tag>/",
     )
@@ -138,32 +134,6 @@ def main(args: argparse.Namespace) -> None:
         vol=vol,
         tru_max=tru_max,
     )
-
-    K_est = conductivity.estimated_conductivity(
-        prev_state.xPhys,
-        prev_state.tPhys,
-        problem.e1,
-        problem.e2,
-        problem.w,
-        problem.config.q,
-        problem.config.rouf,
-    ).reshape(problem.config.nely, problem.config.nelx)
-    XPhys = (prev_state.xPhys > 0.5).to(problem.dtype)
-    # Same quantity as hotspot_constraint's internal T_val (conductivity.py), density-masked
-    # for display -- not a print time, despite feeding combination_plot's "timing" slot.
-    hotspot_severity = (1 - K_est) * XPhys
-
-    # Tensor boundary: `viz` takes plain arrays -- see sttopt/torch_util.py.
-    xPhys = torch_util.to_numpy(prev_state.xPhys)
-    hotspot_severity = torch_util.to_numpy(hotspot_severity)
-    tPhys = torch_util.to_numpy(prev_state.tPhys)
-
-    ax = viz.hotspot_severity_plot(xPhys, hotspot_severity, tPhys, config.nStage)
-    ax.figure.savefig(output_dir / "hotspot_severity.png", dpi=150, bbox_inches="tight")
-
-    ax = viz.timefield_plot(xPhys, tPhys)
-    ax.figure.savefig(output_dir / "timefield.png", dpi=150, bbox_inches="tight")
-    print(f"Saved hotspot severity and time field plots to {output_dir}")
 
 
 if __name__ == "__main__":
