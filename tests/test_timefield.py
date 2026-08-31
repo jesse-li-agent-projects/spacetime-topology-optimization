@@ -25,7 +25,8 @@ def test_timefield_variant_matches_fixture(variant, key):
     assert got.shape == fx[key].shape == (nely, nelx)
     assert_close(got, fx[key], tier="algebraic")
 
-    # A bare int dispatches identically -- RunConfig.tfield is stored as a plain int.
+    # A bare int dispatches identically -- optimize.build_problem resolves
+    # RunConfig.print_base's string to a TimeField member before this point.
     assert np.array_equal(got, timefield.init_timefield(nelx, nely, int(variant)))
 
 

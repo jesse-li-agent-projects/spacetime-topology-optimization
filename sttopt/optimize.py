@@ -177,7 +177,7 @@ def build_problem(
             f"nelx and nely cannot both be 1, got nelx={nelx}, nely={nely}"
         )
 
-    tfield = timefield.TimeField(config.tfield)
+    tfield = timefield.TimeField[config.print_base.upper()]
     KE = fem.plane_stress_KE(config.nu)
     edofMat = fem.element_dof_map(nelx, nely)
     ndof = 2 * (nelx + 1) * (nely + 1)
@@ -242,7 +242,7 @@ def build_problem(
 
 def init_state(problem: Problem, beta_d: float) -> State:
     """Initial state: `x`/`t` are the raw seed (uniform `problem.config.volfrac`, time
-    field per `problem.config.tfield`); the physics fields are derived from them
+    field per `problem.config.print_base`); the physics fields are derived from them
     exactly as in `step`.
 
     The MATLAB source instead assigns `xTilde = x` and `t = tPhys` unfiltered here. For
@@ -266,7 +266,9 @@ def init_state(problem: Problem, beta_d: float) -> State:
     # init_timefield is a NumPy builder (plans/torch_port_part2.md Phase 3.2 item 2);
     # converted once here, at the tensor boundary.
     t = torch_util.to_tensor(
-        timefield.init_timefield(nelx, nely, timefield.TimeField(config.tfield)),
+        timefield.init_timefield(
+            nelx, nely, timefield.TimeField[config.print_base.upper()]
+        ),
         device,
         dtype,
     )

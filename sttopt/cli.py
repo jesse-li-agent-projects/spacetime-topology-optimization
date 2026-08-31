@@ -45,7 +45,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=Path(__file__).parent.parent / "configs" / "default.json",
         help="path to a RunConfig JSON file (e.g. a previous run's output/<tag>/"
         "config.json). Fields not listed below "
-        "(nelx, nely, volfrac, nStage, Theta, Tcr, tfield, rmin, lrmin, rmin_cond, "
+        "(nelx, nely, volfrac, nStage, Theta, Tcr, print_base, rmin, lrmin, rmin_cond, "
         "beta_d_max, and the rest of build_problem's hyperparameters) are settable "
         "only through this file. CLI flags below override values loaded from it",
     )

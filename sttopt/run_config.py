@@ -22,7 +22,8 @@ class RunConfig:
     Full hyperparameter set for a single optimization run, mirroring
     `optimize.build_problem`'s parameters.
 
-    :param tfield: `timefield.TimeField` value, stored as a plain int for JSON.
+    :param print_base: 3D-printing base/start location, naming a
+        `timefield.TimeField` member (case-insensitively) for JSON.
     """
 
     # Frequently varied -- also exposed as a CLI flag in cli.py.
@@ -35,7 +36,7 @@ class RunConfig:
     nStage: int
     Theta: float
     Tcr: float
-    tfield: int
+    print_base: str
     rmin: float
     lrmin: float
     rmin_cond: float
