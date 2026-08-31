@@ -75,11 +75,11 @@ import sttopt.run_config as run_config
 from tests.fixtures.generate_torch_port_designs import load_design_raw
 
 # Matches tests/test_e2e_slow.py's reproduction of the thesis Chapter 4.4 experiment
-# -- the same mesh/hyperparameters as config/default.json, loaded from there directly.
+# -- the same mesh/hyperparameters as configs/default.json, loaded from there directly.
 NELX, NELY = 180, 60
 NSTAGE = 8
 CONFIG = run_config.RunConfig.from_dict(
-    json.loads((Path(__file__).parent.parent / "config" / "default.json").read_text())
+    json.loads((Path(__file__).parent.parent / "configs" / "default.json").read_text())
 )
 
 # beta_t and beta_d as of loop 800, per optimize.step's continuation schedules

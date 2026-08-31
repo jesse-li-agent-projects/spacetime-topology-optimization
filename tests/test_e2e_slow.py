@@ -26,7 +26,7 @@ from sttopt.run_config import RunConfig
 # Matches conductivity_estimation_2d/conductivity_estimation_stto_main.m directly
 # (nelx/nely/nloop/nStage/volfrac/Theta/Tcr/tfield/rmin/lrmin, and rmin_cond from the
 # conductivity-filter radius set later in that script) -- not derived from
-# config/default.json, which happens to match today but isn't pinned to this
+# configs/default.json, which happens to match today but isn't pinned to this
 # experiment.
 NELX, NELY = 180, 60
 NSTAGE = 8

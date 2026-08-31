@@ -6,7 +6,7 @@ it.
 `nloop` is also exposed as a `cli.py` flag; every other field is reachable only via a
 `--config` JSON file or by constructing `RunConfig` directly in code. Run bookkeeping
 that isn't a `build_problem` hyperparameter (`--tag`, `--device`) lives on `cli.py`'s
-`args`, not here. `RunConfig` itself has no default values -- `config/default.json`
+`args`, not here. `RunConfig` itself has no default values -- `configs/default.json`
 (loaded by `cli.py` when `--config` is omitted) is the single source of default
 settings.
 """

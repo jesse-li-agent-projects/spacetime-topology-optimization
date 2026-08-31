@@ -45,11 +45,11 @@ def tti(x) -> torch.Tensor:
 
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
-DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "config" / "default.json"
+DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "configs" / "default.json"
 
 
 def default_run_config(**overrides) -> RunConfig:
-    """`RunConfig` loaded from `config/default.json` (the single source of default
+    """`RunConfig` loaded from `configs/default.json` (the single source of default
     hyperparameters) with `overrides` applied -- for tests/benchmarks that only care
     about a handful of fields (typically mesh size) and want everything else at the
     production default.
