@@ -84,6 +84,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=Path("./plot"),
         help="directory to save the final combination+boundary plot into",
     )
+    parser.add_argument(
+        "--device",
+        default=None,
+        help="torch device to run on, e.g. 'cpu' or 'cuda:0' (default: CUDA if "
+        "available, else CPU)",
+    )
     return parser.parse_args(argv)
 
 
@@ -108,6 +114,7 @@ def main(args: argparse.Namespace) -> None:
         args.lrmin,
         args.rmin_cond,
         beta_d_max=args.beta_d_max,
+        device=args.device,
     )
     state = optimize.init_state(problem, beta_d=1.0)
 
