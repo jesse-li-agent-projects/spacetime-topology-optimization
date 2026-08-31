@@ -107,7 +107,6 @@ def combination_plot(
     ax.add_collection(coll)
     ax.set_aspect("equal")
     ax.autoscale_view()
-    ax.set_axis_off()
     return ax
 
 
@@ -248,7 +247,7 @@ def _main(args: argparse.Namespace) -> None:
     plot_dir = args.plot_dir / args.tag
     plot_dir.mkdir(parents=True, exist_ok=True)
     out_path = plot_dir / "final_structure.png"
-    ax.figure.savefig(out_path, dpi=150)
+    ax.figure.savefig(out_path, dpi=150, bbox_inches="tight")
     print(f"Saved final structure plot to {out_path}")
 
 
