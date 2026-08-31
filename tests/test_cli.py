@@ -4,6 +4,7 @@ tiny overrides -- per the repo's sandbox rules, nothing near production scale
 lightest testing budget of the whole port.
 """
 
+import json
 import re
 
 import numpy as np
@@ -13,28 +14,33 @@ import sttopt.conductivity as conductivity
 import sttopt.optimize as optimize
 import sttopt.torch_util as torch_util
 import sttopt.viz as viz
+from sttopt.run_config import RunConfig
 
-ARGV = [
-    "--nelx",
-    "7",
-    "--nely",
-    "5",
-    "--nloop",
-    "2",
-    "--nStage",
-    "2",
-    "--rmin",
-    "2",
-    "--lrmin",
-    "2",
-    "--rmin-cond",
-    "3",
-]
+# nStage/rmin/lrmin/rmin_cond are config-file-only (not CLI flags), so this fixture's
+# overrides for them go through --config rather than argv.
+_FIXTURE_CONFIG = RunConfig(nStage=2, rmin=2, lrmin=2, rmin_cond=3)
+
+
+def _argv(tmp_path, tag):
+    config_path = tmp_path / "fixture_config.json"
+    config_path.write_text(json.dumps(_FIXTURE_CONFIG.to_dict()))
+    return [
+        "--config",
+        str(config_path),
+        "--nelx",
+        "7",
+        "--nely",
+        "5",
+        "--nloop",
+        "2",
+        "--tag",
+        tag,
+    ]
 
 
 def test_cli_smoke(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    args = cli.parse_args(ARGV + ["--tag", "smoke"])
+    args = cli.parse_args(_argv(tmp_path, "smoke"))
 
     cli.main(args)
 
@@ -42,28 +48,28 @@ def test_cli_smoke(tmp_path, monkeypatch):
     assert (tmp_path / "output" / "smoke" / "final_design.npz").exists()
 
 
-def _reference_run(args):
+def _reference_run(config):
     """Independently drives the same optimize loop main() does, for comparison against
     what main() actually prints/plots -- catches a regression to the wrong MATLAB
     quantity (see the Phase 9 review: cli.py originally printed IterationRecord.obj/.vol,
     which are NOT what MATLAB's disp actually prints; see cli.py's module docstring).
     """
     problem = optimize.build_problem(
-        args.nelx,
-        args.nely,
-        args.nStage,
-        args.volfrac,
-        args.Theta,
-        args.Tcr,
-        args.tfield,
-        args.rmin,
-        args.lrmin,
-        args.rmin_cond,
-        beta_d_max=args.beta_d_max,
+        config.nelx,
+        config.nely,
+        config.nStage,
+        config.volfrac,
+        config.Theta,
+        config.Tcr,
+        config.tfield,
+        config.rmin,
+        config.lrmin,
+        config.rmin_cond,
+        beta_d_max=config.beta_d_max,
     )
     state = optimize.init_state(problem, beta_d=1.0)
     prev_state, records, states = state, [], []
-    for _ in range(args.nloop):
+    for _ in range(config.nloop):
         prev_state = state
         state, record = optimize.step(problem, state)
         records.append(record)
@@ -79,8 +85,8 @@ def test_cli_prints_full_objective_and_post_update_volume(
     must be this iteration's post-update xPhys, not IterationRecord.vol (pre-update).
     """
     monkeypatch.chdir(tmp_path)
-    args = cli.parse_args(ARGV + ["--tag", "obj_vol"])
-    _, _, _, records, states = _reference_run(args)
+    args = cli.parse_args(_argv(tmp_path, "obj_vol"))
+    _, _, _, records, states = _reference_run(cli.resolve_config(args))
 
     cli.main(args)
     out = capsys.readouterr().out
@@ -107,8 +113,8 @@ def test_cli_closing_plot_uses_pre_final_update_state(tmp_path, monkeypatch):
     is one MMA step ahead of what MATLAB actually plots).
     """
     monkeypatch.chdir(tmp_path)
-    args = cli.parse_args(ARGV + ["--tag", "plot_state"])
-    problem, prev_state, final_state, _, _ = _reference_run(args)
+    args = cli.parse_args(_argv(tmp_path, "plot_state"))
+    problem, prev_state, final_state, _, _ = _reference_run(cli.resolve_config(args))
 
     def _expected_T1(state):
         """The color field cli.py's closing plot computes from a given state -- a
