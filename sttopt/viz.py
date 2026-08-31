@@ -45,6 +45,23 @@ def _new_axes() -> Axes:
     return Figure().add_subplot()
 
 
+def _cell_verts(
+    rows: Float[np.ndarray, "n"], cols: Float[np.ndarray, "n"]
+) -> Float[np.ndarray, "n 4 2"]:
+    """Unit-square corners for elements `(rows[i], cols[i])`, in `combination_plot`'s
+    coordinate frame: `x in [col, col+1]`, `y in [-(row+1), -row]`.
+    """
+    return np.stack(
+        [
+            np.stack([cols, -rows], axis=1),
+            np.stack([cols + 1, -rows], axis=1),
+            np.stack([cols + 1, -(rows + 1)], axis=1),
+            np.stack([cols, -(rows + 1)], axis=1),
+        ],
+        axis=1,
+    ).astype(float)
+
+
 def combination_plot(
     xPhys: Float[np.ndarray, "nely nelx"],
     values: Float[np.ndarray, "nely nelx"],
@@ -66,16 +83,7 @@ def combination_plot(
         ax = _new_axes()
 
     rows, cols = np.nonzero(xPhys >= eps)
-    # Element (row, col) -> unit square x in [col, col+1], y in [-(row+1), -row].
-    verts = np.stack(
-        [
-            np.stack([cols, -rows], axis=1),
-            np.stack([cols + 1, -rows], axis=1),
-            np.stack([cols + 1, -(rows + 1)], axis=1),
-            np.stack([cols, -(rows + 1)], axis=1),
-        ],
-        axis=1,
-    ).astype(float)
+    verts = _cell_verts(rows, cols)
     values = values[rows, cols]
 
     coll = PolyCollection(verts, array=values, cmap=cmap, edgecolors="none")
@@ -218,6 +226,51 @@ def timefield_contour_plot(
     return ax
 
 
+def timefield_filled_contour_plot(
+    xPhys: Float[np.ndarray, "nely nelx"],
+    tPhys: Float[np.ndarray, "nely nelx"],
+    nContours: int,
+    *,
+    ax: Axes | None = None,
+) -> Axes:
+    """Filled contour plot of `tPhys` with a colorbar and thin black borders between
+    the filled segments.
+
+    Unlike `timefield_contour_plot`, this doesn't mask `tPhys` to `xPhys > 0.5` before
+    contouring (which would clip segments to a jagged element boundary); instead it
+    contours the full field, then paints elements without material white in a layer
+    above the contour, hiding the fill and borders outside the printed region.
+
+    :param xPhys: physical density field (not yet binarized).
+    :param tPhys: physical print-time field.
+    :param nContours: number of filled contour levels.
+    :return: the `Axes` drawn into.
+    """
+    if ax is None:
+        ax = _new_axes()
+
+    nely, nelx = tPhys.shape
+    # Cell centers, in combination_plot's coordinate frame: x in [col, col+1],
+    # y in [-(row+1), -row].
+    X, Y = np.meshgrid(np.arange(nelx) + 0.5, -(np.arange(nely) + 0.5))
+    levels = np.linspace(tPhys.min(), tPhys.max(), nContours + 1)
+
+    filled = ax.contourf(X, Y, tPhys, levels=levels, cmap="viridis")
+    ax.contour(X, Y, tPhys, levels=levels, colors="black", linewidths=0.5)
+    ax.figure.colorbar(filled, ax=ax, orientation="horizontal", label="Time field")
+
+    rows, cols = np.nonzero(xPhys <= 0.5)
+    empty = PolyCollection(
+        _cell_verts(rows, cols), facecolors="white", edgecolors="none", zorder=10
+    )
+    ax.add_collection(empty)
+
+    ax.set_aspect("equal")
+    ax.autoscale_view()
+    ax.set_title("Time field (filled contour)")
+    return ax
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Regenerate plots for a saved run from its output/<tag>/ "
@@ -290,6 +343,11 @@ def _main(args: argparse.Namespace) -> None:
     out_path = plot_dir / "timefield_contour.png"
     ax.figure.savefig(out_path)
     print(f"Saved time field contour plot to {out_path}")
+
+    ax = timefield_filled_contour_plot(xPhys, tPhys, args.n_contours)
+    out_path = plot_dir / "timefield_filled_contour.png"
+    ax.figure.savefig(out_path)
+    print(f"Saved time field filled contour plot to {out_path}")
 
 
 if __name__ == "__main__":
