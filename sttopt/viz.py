@@ -30,6 +30,7 @@ from matplotlib.collections import LineCollection, PolyCollection
 from matplotlib.figure import Figure
 
 matplotlib.rcParams["savefig.bbox"] = "tight"
+matplotlib.rcParams["savefig.dpi"] = "300"
 
 _BOUNDARY_LINEWIDTH = 1.5
 
