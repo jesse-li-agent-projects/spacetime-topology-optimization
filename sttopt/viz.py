@@ -239,7 +239,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--n-contours",
         type=int,
-        default=10,
+        default=30,
         help="number of time field contour lines (default: 10)",
     )
     return parser.parse_args(argv)
