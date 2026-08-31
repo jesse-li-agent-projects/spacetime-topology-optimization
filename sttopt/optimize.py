@@ -184,7 +184,7 @@ def build_problem(
     mma_c: float = 2500.0,
     move: float = 0.01,
     tmove: float = 0.01,
-    device: torch.device | str = "cpu",
+    device: torch.device | str | None = None,
     dtype: torch.dtype = torch.float64,
     batch_fem_solves: bool | None = None,
 ) -> Problem:
@@ -195,7 +195,8 @@ def build_problem(
     (e.g. the E2E test) can match whatever grid they're running on, since the fixture's
     radii differ from the original full-scale script's.
 
-    :param device: device every tensor field of the returned `Problem` lives on.
+    :param device: device every tensor field of the returned `Problem` lives on. Defaults
+        to CUDA when available, else CPU.
     :param dtype: floating dtype every real-valued tensor field is cast to; integer
         (index/mask) fields keep their own integer/bool dtype regardless.
     :param batch_fem_solves: batch whole_compliance's and every gravity stage's solve
@@ -204,6 +205,8 @@ def build_problem(
         there and a small loss at 360x120 -- but is a plain `bool` so a caller can
         override the default in either direction.
     """
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
     if batch_fem_solves is None:
         batch_fem_solves = nelx * nely <= 180 * 60
