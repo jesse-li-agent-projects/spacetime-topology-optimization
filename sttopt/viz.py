@@ -49,7 +49,7 @@ def combination_plot(
     values: Float[np.ndarray, "nely nelx"],
     eps: float,
     *,
-    cmap: str = "jet",
+    cmap: str = "viridis",
     colorbar_label: str | None = None,
     ax: Axes | None = None,
 ) -> Axes:
@@ -245,12 +245,12 @@ def _main(args: argparse.Namespace) -> None:
     plot_dir.mkdir(parents=True, exist_ok=True)
     ax = hotspot_severity_plot(xPhys, hotspot_severity, tPhys, config.nStage)
     out_path = plot_dir / "hotspot_severity.png"
-    ax.figure.savefig(out_path, dpi=150)
+    ax.figure.savefig(out_path)
     print(f"Saved hotspot severity plot to {out_path}")
 
     ax = timefield_plot(xPhys, tPhys)
     out_path = plot_dir / "timefield.png"
-    ax.figure.savefig(out_path, dpi=150)
+    ax.figure.savefig(out_path)
     print(f"Saved time field plot to {out_path}")
 
 
