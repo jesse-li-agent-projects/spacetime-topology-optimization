@@ -78,11 +78,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Heaviside projection sharpness cap",
     )
     parser.add_argument(
-        "--output-dir",
-        dest="output_dir",
-        type=Path,
-        default=Path("./plot"),
-        help="directory to save the final combination+boundary plot into",
+        "--tag",
+        default="default",
+        help="run identifier; artefacts (progress snapshots, final design, final plot) "
+        "are saved under output/<tag>/",
     )
     parser.add_argument(
         "--device",
@@ -94,13 +93,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(args: argparse.Namespace) -> None:
+    import numpy as np
+
     import sttopt.conductivity as conductivity
     import sttopt.optimize as optimize
     import sttopt.torch_util as torch_util
     import sttopt.viz as viz
 
     # Fail fast on an unwritable output dir, before spending nloop iterations of compute.
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = Path("output") / args.tag
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     problem = optimize.build_problem(
         args.nelx,
@@ -119,6 +121,7 @@ def main(args: argparse.Namespace) -> None:
     state = optimize.init_state(problem, beta_d=1.0)
 
     prev_state = state  # state entering the final `step` call -- see module docstring
+    record = None  # unset if --nloop 0 (no `step` calls)
     for _ in range(args.nloop):
         prev_state = state
         state, record = optimize.step(problem, state)
@@ -126,6 +129,29 @@ def main(args: argparse.Namespace) -> None:
             f"It.: {state.loop:4d} Obj.: {record.f0val:10.4f} "
             f"Vol.: {state.xPhys.mean():6.3f} Tm.: {record.tru_max:7.3f}"
         )
+        if state.loop % 50 == 0:
+            np.savez(
+                output_dir / f"design_it{state.loop:04d}.npz",
+                x=torch_util.to_numpy(state.x),
+                t=torch_util.to_numpy(state.t),
+            )
+
+    # nan if --nloop 0 (no `step` calls, so no IterationRecord to read these from)
+    f0val = record.f0val if record is not None else float("nan")
+    vol = record.vol if record is not None else float("nan")
+    tru_max = record.tru_max if record is not None else float("nan")
+    np.savez(
+        output_dir / "final_design.npz",
+        loop=state.loop,
+        x=torch_util.to_numpy(state.x),
+        xTilde=torch_util.to_numpy(state.xTilde),
+        xPhys=torch_util.to_numpy(state.xPhys),
+        t=torch_util.to_numpy(state.t),
+        tPhys=torch_util.to_numpy(state.tPhys),
+        f0val=f0val,
+        vol=vol,
+        tru_max=tru_max,
+    )
 
     K_est = conductivity.estimated_conductivity(
         prev_state.xPhys,
@@ -149,7 +175,7 @@ def main(args: argparse.Namespace) -> None:
     ax = viz.combination_plot(XPhys, hotspot_severity, eps=1.0e-1)
     viz.stage_boundary_plot(tPhys, args.nStage, ax=ax, combination_coords=True)
 
-    out_path = args.output_dir / "final_structure.png"
+    out_path = output_dir / "final_structure.png"
     ax.figure.savefig(out_path, dpi=150)
     print(f"Saved final structure plot to {out_path}")
 
