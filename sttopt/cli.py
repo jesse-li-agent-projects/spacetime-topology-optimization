@@ -28,6 +28,10 @@ entering the final `step` call), recomputing `K_est` via
 
 import argparse
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sttopt.run_config import RunConfig
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -35,53 +39,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Space-time topology optimization with a conductivity-based "
         "overheating (hotspot) constraint."
     )
-    parser.add_argument("--nelx", type=int, default=180, help="mesh elements in x")
-    parser.add_argument("--nely", type=int, default=60, help="mesh elements in y")
     parser.add_argument(
-        "--nloop", type=int, default=800, help="number of MMA iterations"
+        "--config",
+        type=Path,
+        default=None,
+        help="path to a RunConfig JSON file (e.g. a previous run's output/<tag>/"
+        "config.json); fields not listed below (nStage, Theta, Tcr, tfield, rmin, "
+        "lrmin, rmin_cond, beta_d_max, and the rest of build_problem's hyperparameters) "
+        "are settable only through this file. CLI flags below override values loaded "
+        "from it",
     )
-    parser.add_argument("--nStage", type=int, default=8, help="number of print stages")
+    parser.add_argument("--nelx", type=int, default=None, help="mesh elements in x")
+    parser.add_argument("--nely", type=int, default=None, help="mesh elements in y")
     parser.add_argument(
-        "--volfrac", type=float, default=0.5, help="volume fraction budget"
-    )
-    parser.add_argument(
-        "--Theta", type=float, default=0.1, help="gravity-compliance objective weight"
-    )
-    parser.add_argument(
-        "--Tcr", type=float, default=0.8, help="hotspot constraint threshold"
-    )
-    parser.add_argument(
-        "--tfield",
-        type=int,
-        default=3,
-        choices=(1, 2, 3),
-        help="initial time-field variant: 1=top-left corner, 2=left edge, 3=bottom-left corner "
-        "(coerced to a TimeField by build_problem)",
-    )
-    parser.add_argument("--rmin", type=float, default=4.0, help="density filter radius")
-    parser.add_argument(
-        "--lrmin", type=float, default=2.0, help="time-field continuity filter radius"
+        "--nloop", type=int, default=None, help="number of MMA iterations"
     )
     parser.add_argument(
-        "--rmin-cond",
-        dest="rmin_cond",
-        type=float,
-        default=12.0,
-        help="conductivity neighborhood radius (unrelated to --rmin despite the MATLAB "
-        "source reusing the name `rmin` for both -- see the port plan)",
-    )
-    parser.add_argument(
-        "--beta-d-max",
-        dest="beta_d_max",
-        type=float,
-        default=128.0,
-        help="Heaviside projection sharpness cap",
+        "--volfrac", type=float, default=None, help="volume fraction budget"
     )
     parser.add_argument(
         "--tag",
-        default="default",
-        help="run identifier; artefacts (progress snapshots, final design, final plot) "
-        "are saved under output/<tag>/",
+        default=None,
+        help="run identifier; artefacts (progress snapshots, final design, final plot, "
+        "config.json) are saved under output/<tag>/",
     )
     parser.add_argument(
         "--device",
@@ -92,7 +72,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def resolve_config(args: argparse.Namespace) -> "RunConfig":
+    """
+    Build the `RunConfig` for a run: load `--config` if given, then apply any
+    explicitly-passed CLI flags on top.
+
+    :param args: parsed CLI arguments (`parse_args`'s return value)
+    :return: the resolved `RunConfig`
+    """
+    import json
+
+    from sttopt.run_config import RunConfig
+
+    if args.config is not None:
+        config = RunConfig.from_dict(json.loads(args.config.read_text()))
+    else:
+        config = RunConfig()
+    for field in ("nelx", "nely", "nloop", "volfrac", "tag", "device"):
+        value = getattr(args, field)
+        if value is not None:
+            setattr(config, field, value)
+    return config
+
+
 def main(args: argparse.Namespace) -> None:
+    import json
+
     import numpy as np
 
     import sttopt.conductivity as conductivity
@@ -100,23 +105,40 @@ def main(args: argparse.Namespace) -> None:
     import sttopt.torch_util as torch_util
     import sttopt.viz as viz
 
+    config = resolve_config(args)
+
     # Fail fast on an unwritable output dir, before spending nloop iterations of compute.
-    output_dir = Path("output") / args.tag
+    output_dir = Path("output") / config.tag
     output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "config.json").write_text(json.dumps(config.to_dict(), indent=2))
 
     problem = optimize.build_problem(
-        args.nelx,
-        args.nely,
-        args.nStage,
-        args.volfrac,
-        args.Theta,
-        args.Tcr,
-        args.tfield,
-        args.rmin,
-        args.lrmin,
-        args.rmin_cond,
-        beta_d_max=args.beta_d_max,
-        device=args.device,
+        config.nelx,
+        config.nely,
+        config.nStage,
+        config.volfrac,
+        config.Theta,
+        config.Tcr,
+        config.tfield,
+        config.rmin,
+        config.lrmin,
+        config.rmin_cond,
+        beta_d_max=config.beta_d_max,
+        Emin=config.Emin,
+        Emax=config.Emax,
+        nu=config.nu,
+        penal=config.penal,
+        eta=config.eta,
+        p=config.p,
+        q=config.q,
+        r=config.r,
+        rouf=config.rouf,
+        a0=config.a0,
+        mma_c=config.mma_c,
+        move=config.move,
+        tmove=config.tmove,
+        device=config.device,
+        batch_fem_solves=config.batch_fem_solves,
     )
     state = optimize.init_state(problem, beta_d=1.0)
 
@@ -173,7 +195,7 @@ def main(args: argparse.Namespace) -> None:
     tPhys = torch_util.to_numpy(prev_state.tPhys)
 
     ax = viz.combination_plot(XPhys, hotspot_severity, eps=1.0e-1)
-    viz.stage_boundary_plot(tPhys, args.nStage, ax=ax, combination_coords=True)
+    viz.stage_boundary_plot(tPhys, config.nStage, ax=ax, combination_coords=True)
 
     out_path = output_dir / "final_structure.png"
     ax.figure.savefig(out_path, dpi=150)
