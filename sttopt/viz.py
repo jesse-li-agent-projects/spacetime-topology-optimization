@@ -230,42 +230,15 @@ def _main(args: argparse.Namespace) -> None:
     # Only e1/e2/w/q/rouf (the conductivity-estimation neighborhood) are needed below,
     # but build_problem doesn't expose that setup on its own -- see cli.py's post-loop
     # section, which computes hotspot_severity the same way.
-    problem = optimize.build_problem(
-        config.nelx,
-        config.nely,
-        config.nStage,
-        config.volfrac,
-        config.Theta,
-        config.Tcr,
-        config.tfield,
-        config.rmin,
-        config.lrmin,
-        config.rmin_cond,
-        beta_d_max=config.beta_d_max,
-        Emin=config.Emin,
-        Emax=config.Emax,
-        nu=config.nu,
-        penal=config.penal,
-        eta=config.eta,
-        p=config.p,
-        q=config.q,
-        r=config.r,
-        rouf=config.rouf,
-        a0=config.a0,
-        mma_c=config.mma_c,
-        move=config.move,
-        tmove=config.tmove,
-        device=config.device,
-        batch_fem_solves=config.batch_fem_solves,
-    )
+    problem = optimize.build_problem(config)
     K_est = conductivity.estimated_conductivity(
         torch_util.to_tensor(xPhys, device=problem.device, dtype=problem.dtype),
         torch_util.to_tensor(tPhys, device=problem.device, dtype=problem.dtype),
         problem.e1,
         problem.e2,
         problem.w,
-        problem.q,
-        problem.rouf,
+        problem.config.q,
+        problem.config.rouf,
     ).reshape(config.nely, config.nelx)
     K_est = torch_util.to_numpy(K_est)
     hotspot_severity = (1 - K_est) * (xPhys > 0.5)
