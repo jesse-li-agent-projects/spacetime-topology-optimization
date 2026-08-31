@@ -1,21 +1,17 @@
 """Plots for the printed structure: elements colored by print time, and the boundaries
-between print stages -- ports `draw_combination1.m`/`draw_boundary.m`.
+between print stages.
 
 When no `ax` is passed, both functions build their own `Figure` directly rather than
 going through `pyplot`, so nothing is registered globally and there's nothing for the
 caller to close; `savefig` still works. Pass your own `ax` (e.g. from `plt.subplots()`)
 to draw into a pyplot-managed, interactive figure instead.
 
-`draw_boundary.m`'s `draw_line` helper has no definition anywhere in the source repo;
-`stage_boundary_plot` ports its call site (two `(x, y)` nodes, linewidth 3, black)
-directly as a black `LineCollection`.
-
 Coordinate conventions differ between the two functions, on purpose: `combination_plot`
 places element `(row, col)` at `x in [col, col+1]`, `y in [-(row+1), -row]` (y flipped);
 `stage_boundary_plot` places it at `x in [col+0.5, col+1.5]`, `y in [row+0.5, row+1.5]`
-(no flip, half-cell offset) -- this mirrors the MATLAB source. The two frames are related
-by `x' = x - 0.5, y' = 0.5 - y`; `stage_boundary_plot(..., combination_coords=True)`
-applies it to compose both plots on one `Axes` (as `cli.py` does). See `conventions.md`.
+(no flip, half-cell offset). The two frames are related by `x' = x - 0.5, y' = 0.5 - y`;
+`stage_boundary_plot(..., combination_coords=True)` applies it to compose both plots on
+one `Axes` (as `cli.py` does). See `conventions.md`.
 
 Run as a script (`python -m sttopt.viz <tag>`) to regenerate plots for a saved run from
 its `output/<tag>/` artefacts, without rerunning the optimization. This reads
@@ -57,13 +53,11 @@ def combination_plot(
     colorbar_label: str | None = None,
     ax: Axes | None = None,
 ) -> Axes:
-    """Ports `draw_combination1`: draws only the elements with density `>= eps`, each
-    colored by `values` (per-face flat color, matching the MATLAB source's
-    `FaceColor='flat'`). `values` is any per-element scalar (e.g. `tPhys`, or a
-    hotspot-severity score), not necessarily a time field.
+    """Draws only the elements with density `>= eps`, each colored by `values` (flat
+    per-face color, not interpolated). `values` is any per-element scalar (e.g. `tPhys`,
+    or a hotspot-severity score), not necessarily a time field.
 
-    :param cmap: colormap name; the MATLAB source hardcodes `jet` (this default), but
-        callers below pick a colormap that suits `values`.
+    :param cmap: colormap name; callers below pick one that suits `values`.
     :param colorbar_label: if given, adds a horizontal colorbar below `ax` labelled with
         this string; omitted (the default) draws no colorbar.
     """
@@ -99,15 +93,15 @@ def stage_boundary_plot(
     ax: Axes | None = None,
     combination_coords: bool = False,
 ) -> Axes:
-    """Ports `draw_boundary`: assigns each element to one of `nStage` print stages by its
-    `tPhys` value (half-open `(tt[j], tt[j+1]]` bins except the first, which is closed on
-    both ends), then draws a black line along every internal mesh edge whose two adjacent
-    elements fall in different stages.
+    """Assigns each element to one of `nStage` print stages by its `tPhys` value
+    (half-open `(tt[j], tt[j+1]]` bins except the first, which is closed on both ends),
+    then draws a black line along every internal mesh edge whose two adjacent elements
+    fall in different stages.
 
     :param combination_coords: remap edges into `combination_plot`'s coordinate frame
         (`x' = x - 0.5, y' = 0.5 - y`) before drawing, e.g. to overlay onto an `Axes` a
-        prior `combination_plot` call already populated; leave `False` for a standalone,
-        MATLAB-faithful boundary plot. See the module docstring.
+        prior `combination_plot` call already populated; leave `False` for a standalone
+        plot. See the module docstring.
     """
     if ax is None:
         ax = _new_axes()
