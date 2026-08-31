@@ -87,7 +87,7 @@ NSTAGE = 8
 VOLFRAC = 0.5
 THETA = 0.1
 TCR = 0.8
-TFIELD = 3
+PRINT_BASE = "opposite_corner"
 BETA_INIT = 1.0
 
 # The rest of RunConfig's hyperparameters, at the same values test_e2e_slow.py's
@@ -240,7 +240,7 @@ def generate(
             nStage=NSTAGE,
             Theta=THETA,
             Tcr=TCR,
-            tfield=TFIELD,
+            print_base=PRINT_BASE,
             rmin=rmin,
             lrmin=lrmin,
             rmin_cond=rmin_cond,

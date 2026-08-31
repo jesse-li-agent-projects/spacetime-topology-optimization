@@ -56,7 +56,7 @@ def test_e2e_agreement_is_at_machine_precision():
         volfrac=0.5,
         Theta=0.1,
         Tcr=0.8,
-        tfield=3,
+        print_base="opposite_corner",
         rmin=2.0,
         lrmin=2.0,
         rmin_cond=3.0,
