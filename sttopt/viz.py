@@ -78,14 +78,20 @@ def combination_plot(
     values: Float[np.ndarray, "nely nelx"],
     eps: float,
     *,
+    cmap: str = "jet",
+    colorbar_label: str | None = None,
     ax: Axes | None = None,
 ) -> Axes:
     """Ports `draw_combination1`: draws only the elements with density `>= eps`, each
-    colored by `values` (jet colormap, per-face flat color -- not interpolated from
-    vertices, matching the MATLAB source's `FaceColor='flat'`). Typically `tPhys`, but
-    the MATLAB source also reuses this same call with a per-element hotspot-severity
-    score in place of print time (see `cli.py`) -- `values` is any per-element scalar,
-    not necessarily a time field.
+    colored by `values` (per-face flat color -- not interpolated from vertices, matching
+    the MATLAB source's `FaceColor='flat'`). Typically `tPhys`, but the MATLAB source also
+    reuses this same call with a per-element hotspot-severity score in place of print time
+    (see `cli.py`) -- `values` is any per-element scalar, not necessarily a time field.
+
+    :param cmap: colormap name; the MATLAB source hardcodes `jet` (this default), but
+        callers below pick a colormap that suits `values`.
+    :param colorbar_label: if given, adds a horizontal colorbar below `ax` labelled with
+        this string; omitted (the default) draws no colorbar.
     """
     if ax is None:
         ax = _new_axes()
@@ -103,10 +109,12 @@ def combination_plot(
     ).astype(float)
     values = values[rows, cols]
 
-    coll = PolyCollection(verts, array=values, cmap="jet", edgecolors="none")
+    coll = PolyCollection(verts, array=values, cmap=cmap, edgecolors="none")
     ax.add_collection(coll)
     ax.set_aspect("equal")
     ax.autoscale_view()
+    if colorbar_label is not None:
+        ax.figure.colorbar(coll, ax=ax, orientation="horizontal", label=colorbar_label)
     return ax
 
 
@@ -174,11 +182,12 @@ def hotspot_severity_plot(
     *,
     ax: Axes | None = None,
 ) -> Axes:
-    """`combination_plot` (binarized density, colored by `hotspot_severity`) with
-    `stage_boundary_plot` overlaid in its `combination_coords` frame -- the plot recipe
-    `cli.py` saves as `final_structure.png`, factored out here so both `cli.py` and this
-    module's CLI (which reloads a saved run's fields instead of using an in-process
-    state) draw the same thing.
+    """`combination_plot` (binarized density, colored by `hotspot_severity`, `plasma`
+    colormap, labelled horizontal colorbar) with `stage_boundary_plot` overlaid in its
+    `combination_coords` frame -- the plot recipe `cli.py` saves as
+    `hotspot_severity.png`, factored out here so both `cli.py` and this module's CLI
+    (which reloads a saved run's fields instead of using an in-process state) draw the
+    same thing.
 
     :param xPhys: physical density field (not yet binarized).
     :param hotspot_severity: per-element overheating severity, e.g. `(1 - K_est) * (xPhys > 0.5)`.
@@ -187,8 +196,38 @@ def hotspot_severity_plot(
     :return: the `Axes` drawn into.
     """
     XPhys = (xPhys > 0.5).astype(xPhys.dtype)
-    ax = combination_plot(XPhys, hotspot_severity, eps=1.0e-1, ax=ax)
+    ax = combination_plot(
+        XPhys,
+        hotspot_severity,
+        eps=1.0e-1,
+        cmap="plasma",
+        colorbar_label="Hotspot severity",
+        ax=ax,
+    )
     stage_boundary_plot(tPhys, nStage, ax=ax, combination_coords=True)
+    ax.set_title("Hotspot severity")
+    return ax
+
+
+def timefield_plot(
+    xPhys: Float[np.ndarray, "nely nelx"],
+    tPhys: Float[np.ndarray, "nely nelx"],
+    *,
+    ax: Axes | None = None,
+) -> Axes:
+    """`combination_plot` (binarized density, colored by `tPhys`, `viridis` colormap,
+    labelled horizontal colorbar) -- masked to the same `xPhys > 0.5` elements as
+    `hotspot_severity_plot`, so the two plots cover the same printed region.
+
+    :param xPhys: physical density field (not yet binarized).
+    :param tPhys: physical print-time field.
+    :return: the `Axes` drawn into.
+    """
+    XPhys = (xPhys > 0.5).astype(xPhys.dtype)
+    ax = combination_plot(
+        XPhys, tPhys, eps=1.0e-1, cmap="viridis", colorbar_label="Time field", ax=ax
+    )
+    ax.set_title("Time field")
     return ax
 
 
@@ -242,13 +281,17 @@ def _main(args: argparse.Namespace) -> None:
     K_est = torch_util.to_numpy(K_est)
     hotspot_severity = (1 - K_est) * (xPhys > 0.5)
 
-    ax = hotspot_severity_plot(xPhys, hotspot_severity, tPhys, config.nStage)
-
     plot_dir = args.plot_dir / args.tag
     plot_dir.mkdir(parents=True, exist_ok=True)
-    out_path = plot_dir / "final_structure.png"
+    ax = hotspot_severity_plot(xPhys, hotspot_severity, tPhys, config.nStage)
+    out_path = plot_dir / "hotspot_severity.png"
     ax.figure.savefig(out_path, dpi=150, bbox_inches="tight")
-    print(f"Saved final structure plot to {out_path}")
+    print(f"Saved hotspot severity plot to {out_path}")
+
+    ax = timefield_plot(xPhys, tPhys)
+    out_path = plot_dir / "timefield.png"
+    ax.figure.savefig(out_path, dpi=150, bbox_inches="tight")
+    print(f"Saved time field plot to {out_path}")
 
 
 if __name__ == "__main__":
