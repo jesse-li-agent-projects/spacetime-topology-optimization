@@ -24,6 +24,8 @@ class RunConfig:
 
     :param print_base: 3D-printing base/start location, naming a
         `timefield.TimeField` member (case-insensitively) for JSON.
+    :param Gamma: weight of the layer-thickness-uniformity objective term
+        (`timefield.gradient_magnitude_std`); 0 disables it.
     """
 
     # Frequently varied -- also exposed as a CLI flag in cli.py.
@@ -35,6 +37,7 @@ class RunConfig:
     volfrac: float
     nStage: int
     Theta: float
+    Gamma: float
     Tcr: float
     print_base: str
     rmin: float

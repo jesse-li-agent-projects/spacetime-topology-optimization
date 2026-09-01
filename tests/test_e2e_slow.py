@@ -45,6 +45,7 @@ CONFIG = RunConfig(
     volfrac=VOLFRAC,
     nStage=NSTAGE,
     Theta=THETA,
+    Gamma=0.0,
     Tcr=TCR,
     print_base=PRINT_BASE,
     rmin=RMIN,

@@ -107,7 +107,8 @@ def main(args: argparse.Namespace) -> None:
         state, record = optimize.step(problem, state)
         print(
             f"It.: {state.loop:4d} Obj.: {record.f:10.4f} "
-            f"Vol.: {state.xPhys.mean():6.3f} Tm.: {record.tru_max:7.3f}"
+            f"Vol.: {state.xPhys.mean():6.3f} Tm.: {record.tru_max:7.3f} "
+            f"dTstd.: {record.grad_std:8.5f}"
         )
         if state.loop % 50 == 0:
             np.savez(
@@ -127,6 +128,7 @@ def main(args: argparse.Namespace) -> None:
         f=record.f,
         vol=record.vol,
         tru_max=record.tru_max,
+        grad_std=record.grad_std,
     )
 
 
