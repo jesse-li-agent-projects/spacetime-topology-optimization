@@ -33,9 +33,9 @@ prolongation and hence keeps the whole V-cycle a symmetric positive-definite
 preconditioner -- a requirement of CG's convergence theory, not a nicety.
 """
 
+import dataclasses
 import functools
 from dataclasses import dataclass
-from typing import Callable
 
 import torch
 from jaxtyping import Bool, Float, Int
@@ -182,19 +182,68 @@ def keff_matvec(
     )
 
 
+def _select_rows(t: Tensor | None, rows: Int[Tensor, " k"], core_ndim: int) -> Tensor:
+    """Index `t` along its batch dim, passing an unbatched tensor through unchanged.
+
+    `core_ndim` is `t`'s rank without a batch dim, so a tensor of exactly that rank is
+    the broadcast case (one density field shared by every right-hand side) and has no
+    rows to take.
+    """
+    if t is None or t.ndim == core_ndim:
+        return t
+    assert (
+        t.ndim == core_ndim + 1
+    ), f"row selection needs a single batch dim, got shape {tuple(t.shape)}"
+    return t[rows]
+
+
 @dataclass
 class _Level:
-    """One grid in the hierarchy: its operator, its Jacobi diagonal, and how it coarsens."""
+    """One grid in the hierarchy: its operator's data, its Jacobi diagonal, and how it
+    coarsens.
+
+    The level *is* its operator -- calling it applies `A(v) = P(K P(v))` at this grid --
+    so it can also hand back the same operator restricted to a subset of batch rows
+    (`select`), which is what lets `torch_fem.pcg` retire rows as they converge.
+
+    Exactly one of `density` (the fine level, whose `K` is `density * KE`) and `keff`
+    (a Galerkin-coarsened level, carrying an explicit 8x8 matrix per element) is set.
+    """
 
     nelx: int
     nely: int
     ndof: int
     mask: Bool[Tensor, " ndof"]
     diag: Float[Tensor, "*batch ndof"]
-    apply_A: Callable[[Tensor], Tensor]
+    edofMat: Int[Tensor, "nel 8"]
+    KE: Float[Tensor, "8 8"] | None = None
+    density: Float[Tensor, "*batch nel"] | None = None
+    keff: Float[Tensor, "*batch nel 8 8"] | None = None
     kx: int = 1
     ky: int = 1
     chol: Float[Tensor, "*batch n n"] | None = None
+
+    def __call__(self, v: Float[Tensor, "*batch ndof"]) -> Float[Tensor, "*batch ndof"]:
+        if self.keff is None:
+            return torch_fem.operator(
+                v, self.density, self.edofMat, self.KE, self.ndof, self.mask
+            )
+        return torch_fem.project(
+            keff_matvec(
+                torch_fem.project(v, self.mask), self.keff, self.edofMat, self.ndof
+            ),
+            self.mask,
+        )
+
+    def select(self, rows: Int[Tensor, " k"]) -> "_Level":
+        """This level restricted to batch rows `rows`; shared tensors pass through."""
+        return dataclasses.replace(
+            self,
+            diag=_select_rows(self.diag, rows, 1),
+            density=_select_rows(self.density, rows, 1),
+            keff=_select_rows(self.keff, rows, 3),
+            chol=_select_rows(self.chol, rows, 2),
+        )
 
 
 def _dense_cholesky(
@@ -257,7 +306,9 @@ def build_hierarchy(
             ndof=ndof,
             mask=mask,
             diag=diag,
-            apply_A=lambda v: torch_fem.operator(v, density, edofMat, KE, ndof, mask),
+            edofMat=edofMat,
+            KE=KE,
+            density=density,
         )
     ]
 
@@ -295,11 +346,8 @@ def build_hierarchy(
                 ndof=cndof,
                 mask=cmask,
                 diag=cdiag,
-                apply_A=(
-                    lambda v, k=keff, e=cedof, n=cndof, m=cmask: torch_fem.project(
-                        keff_matvec(torch_fem.project(v, m), k, e, n), m
-                    )
-                ),
+                edofMat=cedof,
+                keff=keff,
             )
         )
 
@@ -307,10 +355,9 @@ def build_hierarchy(
     if keff is None:
         # No coarsening was possible at all: factorize the fine level itself.
         keff = density[..., :, None, None] * KE
-        cedof = edofMat
-    else:
-        cedof = element_dof_map_tensor(coarsest.nelx, coarsest.nely, device)
-    coarsest.chol = _dense_cholesky(keff, cedof, coarsest.ndof, coarsest.mask)
+    coarsest.chol = _dense_cholesky(
+        keff, coarsest.edofMat, coarsest.ndof, coarsest.mask
+    )
     return levels
 
 
@@ -342,9 +389,18 @@ class VCycle:
         self.n_smooth = n_smooth
         self.gamma = gamma
 
+    def select(self, rows: Int[Tensor, " k"]) -> "VCycle":
+        """The same preconditioner restricted to batch rows `rows`."""
+        return VCycle(
+            [level.select(rows) for level in self.levels],
+            omega=self.omega,
+            n_smooth=self.n_smooth,
+            gamma=self.gamma,
+        )
+
     def _smooth(self, level: _Level, x: Tensor, b: Tensor) -> Tensor:
         for _ in range(self.n_smooth):
-            x = x + self.omega * (b - level.apply_A(x)) / level.diag
+            x = x + self.omega * (b - level(x)) / level.diag
         return torch_fem.project(x, level.mask)
 
     def _cycle(self, i: int, b: Tensor) -> Tensor:
@@ -357,7 +413,7 @@ class VCycle:
             return torch_fem.project(x, level.mask)
 
         x = self._smooth(level, torch.zeros_like(b), b)
-        r = b - level.apply_A(x)
+        r = b - level(x)
         coarse = self.levels[i + 1]
         rc = _on_node_grid(
             r, level.nelx + 1, level.nely + 1, level.kx, level.ky, _restrict_axis
@@ -365,7 +421,7 @@ class VCycle:
         rc = torch_fem.project(rc, coarse.mask)
         ec = self._cycle(i + 1, rc)
         for _ in range(self.gamma - 1):
-            ec = ec + self._cycle(i + 1, rc - coarse.apply_A(ec))
+            ec = ec + self._cycle(i + 1, rc - coarse(ec))
         ef = _on_node_grid(
             torch_fem.project(ec, coarse.mask),
             coarse.nelx + 1,
@@ -427,7 +483,7 @@ def solve(
     )
     precond = VCycle(levels, omega=omega, n_smooth=n_smooth, gamma=gamma)
     U, n_iter = torch_fem.pcg(
-        levels[0].apply_A,
+        levels[0],
         torch_fem.project(F, mask),
         precond,
         rtol=rtol,

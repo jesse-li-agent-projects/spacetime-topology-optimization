@@ -363,7 +363,7 @@ def test_coarse_operator_is_exact_galerkin(nelx, nely):
         )
         RAPv = torch_fem.project(
             torch_mg._on_node_grid(
-                fine.apply_A(Pv),
+                fine(Pv),
                 fine.nelx + 1,
                 fine.nely + 1,
                 fine.kx,
@@ -372,7 +372,7 @@ def test_coarse_operator_is_exact_galerkin(nelx, nely):
             ),
             coarse.mask,
         )
-        assert_close(coarse.apply_A(v).numpy(), RAPv.numpy(), tier="algebraic")
+        assert_close(coarse(v).numpy(), RAPv.numpy(), tier="algebraic")
 
 
 def test_coarsening_stops_rather_than_mis_coarsening_odd_dimensions():
