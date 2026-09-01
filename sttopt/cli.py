@@ -12,18 +12,6 @@ here, not MATLAB's periodic live-figure updates, which this port doesn't replica
 printed "Obj."/"Vol." read the current iteration's full MMA objective and post-update
 density -- not `IterationRecord.obj`/`.vol` (see that class's field comments), which are
 different, pre-update quantities MATLAB's own `disp` line doesn't read either.
-
-At the end, saves one PNG combining `viz.combination_plot`/`viz.stage_boundary_plot` on
-one `Axes` (via `stage_boundary_plot`'s `combination_coords=True`, needed because the two
-functions' native coordinate frames don't coincide -- see `viz.py`'s docstring) -- more
-useful as a saved artifact than MATLAB's separate two-figure/two-window layout. Reproduces
-the main script's final plot recipe: `XPhys` binarized (`>0.5 -> 1, else 0`), colored by
-`hotspot_severity = (1-K_est)*XPhys` -- not a print time, despite feeding
-`combination_plot`'s color-by slot -- with stage-boundary lines overlaid. MATLAB computes
-this from the *pre-update* density/time fields entering the last iteration, not the
-post-loop state (one MMA update further along) -- so this uses `prev_state` (the state
-entering the final `step` call), recomputing `K_est` via
-`conductivity.estimated_conductivity` since `IterationRecord` doesn't carry it.
 """
 
 import argparse
@@ -51,7 +39,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--nloop", type=int, help="number of MMA iterations")
     parser.add_argument(
         "--tag",
-        help="run identifier; artefacts (progress snapshots, final design, final plot, "
+        help="run identifier; artefacts (progress snapshots, final design, "
         "config.json) are saved under output/<tag>/",
     )
     parser.add_argument(
@@ -95,10 +83,8 @@ def main(args: argparse.Namespace) -> None:
 
     import numpy as np
 
-    import sttopt.conductivity as conductivity
     import sttopt.optimize as optimize
     import sttopt.torch_util as torch_util
-    import sttopt.viz as viz
 
     config = resolve_config(args)
 
@@ -119,10 +105,8 @@ def main(args: argparse.Namespace) -> None:
     problem = optimize.build_problem(config, device=args.device)
     state = optimize.init_state(problem, beta_d=1.0)
 
-    prev_state = state  # state entering the final `step` call -- see module docstring
     record = None  # unset if --nloop 0 (no `step` calls)
     for _ in range(args.nloop):
-        prev_state = state
         state, record = optimize.step(problem, state)
         print(
             f"It.: {state.loop:4d} Obj.: {record.f0val:10.4f} "
