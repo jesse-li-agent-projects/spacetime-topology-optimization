@@ -52,7 +52,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--tag",
         help="run identifier; artefacts (progress snapshots, final design, final plot, "
-        "config.json) are saved under output/<tag>/",
+        "config.json) are saved under output/<tag>/. Bookkeeping only (like "
+        "--tag-force below): run control that's never persisted to config.json",
+    )
+    parser.add_argument(
+        "--tag-force",
+        action="store_true",
+        help="delete an existing output/<tag> directory before this run, instead of "
+        "erroring out. Bookkeeping only, like --tag above",
     )
     parser.add_argument(
         "--device",
@@ -66,8 +73,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def resolve_config(args: argparse.Namespace) -> "RunConfig":
     """
     Build the `RunConfig` for a run: load `--config`, then apply `--nloop` on top if
-    given. `--tag`/`--device` are run bookkeeping, not part of `RunConfig` -- read
-    them directly off `args` instead.
+    given. `--tag`/`--tag-force`/`--device` are run bookkeeping -- they control where/
+    whether a run's artefacts land, not the optimization itself -- so they're never
+    part of `RunConfig`; read them directly off `args` instead.
 
     :param args: parsed CLI arguments (`parse_args`'s return value)
     :return: the resolved `RunConfig`
@@ -84,6 +92,7 @@ def resolve_config(args: argparse.Namespace) -> "RunConfig":
 
 def main(args: argparse.Namespace) -> None:
     import json
+    import shutil
 
     import numpy as np
 
@@ -94,8 +103,17 @@ def main(args: argparse.Namespace) -> None:
 
     config = resolve_config(args)
 
-    # Fail fast on an unwritable output dir, before spending nloop iterations of compute.
+    # Fail fast on an unwritable/clobbered output dir, before spending nloop
+    # iterations of compute.
     output_dir = Path("output") / args.tag
+    if output_dir.exists():
+        if args.tag_force:
+            shutil.rmtree(output_dir)
+        else:
+            raise SystemExit(
+                f"[error] {output_dir} already exists. Use --tag-force to overwrite, "
+                f"or pick a different --tag."
+            )
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "config.json").write_text(json.dumps(config.to_dict(), indent=2))
 
