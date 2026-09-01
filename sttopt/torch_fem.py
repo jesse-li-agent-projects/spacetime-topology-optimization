@@ -154,6 +154,12 @@ def safe_div(
     return torch.where(den != 0, num / safe_den, torch.zeros_like(den))
 
 
+def _report(info: dict | None, row_iters: int) -> None:
+    """Record `pcg`'s work counters, if the caller asked for them."""
+    if info is not None:
+        info["row_iters"] = row_iters
+
+
 def pcg(
     apply_A,
     b: Float[Tensor, "*batch ndof"],
@@ -162,6 +168,7 @@ def pcg(
     rtol: float = 1e-8,
     max_iter: int = 10000,
     x0: Float[Tensor, "*batch ndof"] | None = None,
+    info: dict | None = None,
 ) -> tuple[Float[Tensor, "*batch ndof"], int]:
     """Preconditioned CG on the batched system `apply_A(x) = b`.
 
@@ -199,6 +206,9 @@ def pcg(
     :param rtol: relative residual tolerance `||r|| / ||b||`.
     :param max_iter: maximum CG iterations before raising.
     :param x0: optional warm-start initial guess, defaults to zero.
+    :param info: optional dict that receives `row_iters`, the iterations-times-rows the
+        call actually paid for. `n_iter` alone cannot say that once rows retire at
+        different iterations, and it is the quantity retirement exists to reduce.
     :return: `(x, n_iter)` -- the solution and the number of iterations actually run,
         i.e. the count the last row to converge needed.
     """
@@ -213,7 +223,10 @@ def pcg(
     # converged, and an exact one makes the first alpha a 0/0 nan.
     converged = rel_resid <= rtol
     n_remaining = int(torch.count_nonzero(~converged))
+    n_rows = b.shape[0] if b.ndim == 2 else 1
+    row_iters = 0
     if n_remaining == 0:
+        _report(info, row_iters)
         return x, 0
 
     can_retire = (
@@ -240,6 +253,7 @@ def pcg(
         ones exist depends on whether the loop has started yet.
         """
         nonlocal apply_A, apply_M, active, n_at_last_compaction, b_norm_safe, rel_resid
+        nonlocal n_rows
         done, keep = (torch.nonzero(m).flatten() for m in (converged, ~converged))
         x_out[active[done]] = x[done]
         resid_out[active[done]] = rel_resid[done]
@@ -247,6 +261,7 @@ def pcg(
         n_at_last_compaction = keep.numel()
         apply_A, apply_M = apply_A.select(keep), apply_M.select(keep)
         b_norm_safe, rel_resid = b_norm_safe[keep], rel_resid[keep]
+        n_rows = keep.numel()
         return keep
 
     if worth_compacting():
@@ -258,6 +273,7 @@ def pcg(
     rz_old = (r * z).sum(dim=-1)
 
     for n_iter in range(1, max_iter + 1):
+        row_iters += n_rows
         Ap = apply_A(p)
         alpha = safe_div(rz_old, (p * Ap).sum(dim=-1))[..., None]
         x.addcmul_(alpha, p)
@@ -279,8 +295,10 @@ def pcg(
         if can_retire:
             resid_out[active] = rel_resid
             rel_resid = resid_out
+        _report(info, row_iters)
         raise CGConvergenceError(rel_resid, max_iter, rtol)
 
+    _report(info, row_iters)
     if can_retire:
         x_out[active] = x
         return x_out, n_iter

@@ -456,6 +456,7 @@ def solve(
     n_smooth: int = 2,
     gamma: int = 1,
     max_coarse_elements: int = MAX_COARSE_ELEMENTS,
+    info: dict | None = None,
 ) -> tuple[Float[Tensor, "*batch ndof"], int]:
     """Multigrid-preconditioned CG for `K @ U = F`, the MGCG counterpart of `torch_fem.solve`.
 
@@ -469,6 +470,7 @@ def solve(
     :param n_smooth: pre- and post-smoothing sweeps per level.
     :param gamma: coarse cycles per visit; 1 is a V-cycle, 2 a W-cycle.
     :param max_coarse_elements: coarsening stops at or below this element count.
+    :param info: optional dict, passed straight to `torch_fem.pcg`.
     :return: `(U, n_iter)`.
     """
     density = torch_fem.simp_density(xPhys, Emin, Emax, penal)
@@ -489,5 +491,6 @@ def solve(
         rtol=rtol,
         max_iter=max_iter,
         x0=x0,
+        info=info,
     )
     return torch_fem.project(U, mask), n_iter
