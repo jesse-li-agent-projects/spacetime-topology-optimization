@@ -50,7 +50,9 @@ GRIDS = [(7, 5), (5, 7), (9, 3), (4, 4), (3, 1), (1, 4)]
 
 
 def rel(got, want):
-    got, want = np.asarray(got, float), np.asarray(want, float)
+    got, want = torch_util.to_numpy(got).astype(float), torch_util.to_numpy(
+        want
+    ).astype(float)
     assert got.shape == want.shape, f"shape {got.shape} != {want.shape}"
     return np.abs(got - want).max() / max(np.abs(want).max(), 1e-30)
 
