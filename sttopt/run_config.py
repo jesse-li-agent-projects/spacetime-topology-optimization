@@ -54,7 +54,6 @@ class RunConfig:
     mma_c: float
     move: float
     tmove: float
-    batch_fem_solves: bool | None
 
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)

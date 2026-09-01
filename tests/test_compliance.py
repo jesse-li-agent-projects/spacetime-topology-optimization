@@ -698,8 +698,8 @@ def test_gravity_compliance_value_matches_hand_derived_near_binary():
 def test_batched_whole_and_gravity_compliance_value_matches_sequential():
     """`batched_whole_and_gravity_compliance_value`'s values and autograd sensitivities
     against calling `whole_compliance_value`/`gravity_compliance_value` sequentially,
-    one `FemSolve` call each -- the batched path must agree with the unbatched one it
-    replaces in `optimize.step` when `Problem.batch_fem_solves` is on.
+    one `FemSolve` call each -- `optimize.step` runs only the batched path, so this is
+    what keeps it equivalent to the single-solve functions it is built out of.
     """
     setup, x, t = _near_binary_snapshot()
     nstage = 3

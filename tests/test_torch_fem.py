@@ -363,7 +363,7 @@ def test_coarse_operator_is_exact_galerkin(nelx, nely):
         )
         RAPv = torch_fem.project(
             torch_mg._on_node_grid(
-                fine.apply_A(Pv),
+                fine(Pv),
                 fine.nelx + 1,
                 fine.nely + 1,
                 fine.kx,
@@ -372,7 +372,7 @@ def test_coarse_operator_is_exact_galerkin(nelx, nely):
             ),
             coarse.mask,
         )
-        assert_close(coarse.apply_A(v).numpy(), RAPv.numpy(), tier="algebraic")
+        assert_close(coarse(v).numpy(), RAPv.numpy(), tier="algebraic")
 
 
 def test_coarsening_stops_rather_than_mis_coarsening_odd_dimensions():
@@ -555,6 +555,162 @@ def test_mgcg_nonconvergence_raises():
     with pytest.raises(torch_fem.CGConvergenceError) as excinfo:
         _mg_solve(nelx, nely, _binary_design(nelx, nely), rtol=1e-14, max_iter=2)
     assert excinfo.value.n_iter == 2
+
+
+class _RowCountingOperator:
+    """A selectable operator that appends every matvec's batch row count to `log`.
+
+    Row retirement is invisible in the returned solution -- that is the whole point --
+    so the tests below observe it here, in the size of the batch the operator is
+    actually asked to multiply.
+    """
+
+    def __init__(self, op, log: list[int]) -> None:
+        self.op = op
+        self.log = log
+
+    def __call__(self, v):
+        self.log.append(v.shape[0])
+        return self.op(v)
+
+    def select(self, rows):
+        return _RowCountingOperator(self.op.select(rows), self.log)
+
+
+def _retiring_pcg(nelx, nely, xPhys, F, *, rtol=1e-11, max_iter=500, x0=None):
+    """MGCG over a batch of density fields, with each matvec's row count recorded.
+
+    `torch_mg.solve` builds its own operators, so the hierarchy is assembled here in
+    order to wrap them.
+
+    :return: `(U, n_iter, row_counts)`.
+    """
+    _, _, _, _, _, _, _, mask = _setup(nelx, nely)
+    levels = _hierarchy(nelx, nely, xPhys)
+    log: list[int] = []
+    U, n_iter = torch_fem.pcg(
+        _RowCountingOperator(levels[0], log),
+        torch_fem.project(F, mask),
+        _RowCountingOperator(torch_mg.VCycle(levels), log),
+        rtol=rtol,
+        max_iter=max_iter,
+        x0=x0,
+    )
+    return torch_fem.project(U, mask), n_iter, log
+
+
+def _unequal_difficulty_batch(nelx, nely):
+    """Three density fields whose CG iteration counts differ widely, hardest first."""
+    return np.stack(
+        [
+            _binary_design(nelx, nely),
+            np.full(nelx * nely, 0.4),
+            np.full(nelx * nely, 0.9),
+        ]
+    )
+
+
+def test_retired_rows_match_solving_each_row_on_its_own():
+    """Rows retire at different iterations, and each still gets its own exact answer.
+
+    Retirement is only sound because the operator is block-diagonal across rows, so the
+    check that matters is against the same rows solved separately -- not against the
+    all-rows-together schedule, which is just one more batched arrangement.
+    """
+    nelx, nely = 18, 12
+    xPhys = _unequal_difficulty_batch(nelx, nely)
+    F_np, _, _ = point_load_problem(nelx, nely)
+    F = torch.tensor(F_np, dtype=torch.float64).expand(len(xPhys), -1)
+
+    U, _, rows = _retiring_pcg(nelx, nely, xPhys, F)
+    assert min(rows) < len(xPhys), (
+        f"no row ever retired (row counts {sorted(set(rows))}); the rest of this test "
+        "would pass on the unretired schedule too"
+    )
+    for s in range(len(xPhys)):
+        expected = _mg_solve(nelx, nely, xPhys[s], rtol=1e-11)[0].numpy()
+        assert_close(
+            U[s].numpy(),
+            expected,
+            tier="solved",
+            atol=1e-6 * np.abs(expected).max(),
+        )
+
+
+def test_iteration_count_is_the_slowest_row_s():
+    """`n_iter` keeps meaning "iterations this call ran", i.e. what the last row needed."""
+    nelx, nely = 18, 12
+    xPhys = _unequal_difficulty_batch(nelx, nely)
+    F_np, _, _ = point_load_problem(nelx, nely)
+    F = torch.tensor(F_np, dtype=torch.float64).expand(len(xPhys), -1)
+
+    _, n_iter, _ = _retiring_pcg(nelx, nely, xPhys, F)
+    separate = [
+        _mg_solve(nelx, nely, xPhys[s], rtol=1e-11)[1] for s in range(len(xPhys))
+    ]
+    assert min(separate) < max(separate), "the rows are not of unequal difficulty"
+    assert n_iter == max(separate)
+
+
+def test_zero_rhs_row_is_exactly_zero_and_retires_at_iteration_zero():
+    """An all-zero right-hand side is converged before any work is done.
+
+    This is the case a batched `FemSolve` backward hits on every call: a one-hot
+    `grad_output` leaves every other row with a zero right-hand side.
+    """
+    nelx, nely = 18, 12
+    xPhys = np.stack([_binary_design(nelx, nely), np.full(nelx * nely, 0.4)])
+    F_np, _, _ = point_load_problem(nelx, nely)
+    F = torch.stack(
+        [
+            torch.tensor(F_np, dtype=torch.float64),
+            torch.zeros(len(F_np), dtype=torch.float64),
+        ]
+    )
+
+    U, _, rows = _retiring_pcg(nelx, nely, xPhys, F)
+    assert torch.all(U[1] == 0.0)
+    assert (
+        rows[0] == 2 and rows[1] == 1
+    ), f"the zero row should be gone after the initial residual, row counts {rows[:2]}"
+
+
+def test_converged_warm_start_row_retires_before_the_first_iteration():
+    nelx, nely = 18, 12
+    xPhys = np.stack([_binary_design(nelx, nely), np.full(nelx * nely, 0.4)])
+    F_np, _, _ = point_load_problem(nelx, nely)
+    F = torch.tensor(F_np, dtype=torch.float64).expand(2, -1)
+
+    solved_row = _mg_solve(nelx, nely, xPhys[1], rtol=1e-13)[0]
+    x0 = torch.stack([torch.zeros_like(solved_row), solved_row])
+
+    U, _, rows = _retiring_pcg(nelx, nely, xPhys, F, rtol=1e-10, x0=x0)
+    assert rows[0] == 2 and rows[1] == 1
+    assert_close(
+        U[1].numpy(),
+        solved_row.numpy(),
+        tier="solved",
+        atol=1e-6 * np.abs(solved_row.numpy()).max(),
+    )
+
+
+def test_nonconvergence_names_the_original_row_indices():
+    """The failing row's index is its index in the caller's batch, not in whatever is
+    left of it after the converged rows have been retired."""
+    nelx, nely = 18, 12
+    xPhys = np.stack([np.full(nelx * nely, 0.4), _binary_design(nelx, nely)])
+    F_np, _, _ = point_load_problem(nelx, nely)
+    F = torch.stack(
+        [
+            torch.zeros(len(F_np), dtype=torch.float64),
+            torch.tensor(F_np, dtype=torch.float64),
+        ]
+    )
+
+    with pytest.raises(torch_fem.CGConvergenceError) as excinfo:
+        _retiring_pcg(nelx, nely, xPhys, F, rtol=1e-14, max_iter=2)
+    assert excinfo.value.residuals.shape == (2,)
+    assert "failed batch indices [1]" in str(excinfo.value)
 
 
 def test_mgcg_dtype_float64_end_to_end():

@@ -23,6 +23,12 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
+#: Compact the CG batch only once the active rows have fallen to this fraction of their
+#: count at the last compaction. Restricting the operator gathers the whole multigrid
+#: hierarchy -- roughly one V-cycle of work -- so compacting on every single retired row
+#: can cost more than the rows it drops save.
+COMPACTION_RATIO = 0.75
+
 
 class CGConvergenceError(RuntimeError):
     """Raised when preconditioned CG fails to reach `rtol` within `max_iter`.
@@ -148,6 +154,12 @@ def safe_div(
     return torch.where(den != 0, num / safe_den, torch.zeros_like(den))
 
 
+def _report(info: dict | None, row_iters: int) -> None:
+    """Record `pcg`'s work counters, if the caller asked for them."""
+    if info is not None:
+        info["row_iters"] = row_iters
+
+
 def pcg(
     apply_A,
     b: Float[Tensor, "*batch ndof"],
@@ -156,36 +168,49 @@ def pcg(
     rtol: float = 1e-8,
     max_iter: int = 10000,
     x0: Float[Tensor, "*batch ndof"] | None = None,
+    info: dict | None = None,
 ) -> tuple[Float[Tensor, "*batch ndof"], int]:
     """Preconditioned CG on the batched system `apply_A(x) = b`.
 
-    Every batch member runs the same number of iterations (the batch shares one matmul
-    schedule, which is the point of batching), continuing until every member has
-    reached `rtol` on `||r|| / ||b||` or `max_iter` is hit. Supports warm-starting via
-    `x0`. Raises `CGConvergenceError` -- never returns an unconverged result -- if any
-    batch member fails to converge within `max_iter`.
+    Iterates until every batch row has reached `rtol` on `||r|| / ||b||` or `max_iter`
+    is hit. Supports warm-starting via `x0`. Raises `CGConvergenceError` -- never
+    returns an unconverged result -- if any batch row fails to converge within
+    `max_iter`.
+
+    **Rows retire as they converge.** Rows converge tens of iterations apart on the
+    production batch, so running every row for the slowest row's iteration count wastes
+    a third of the work at the larger meshes. A converged row's `x` is therefore moved
+    into the output and the row dropped from the batch, and the loop continues on a
+    restricted operator. This is exact, not an approximation: `alpha`/`beta`/`rz` are
+    per-row scalars and the operator is block-diagonal across rows, so retiring a row
+    changes no other row's arithmetic -- results match the all-rows schedule up to
+    kernel reduction order, not bitwise. Retirement needs `apply_A` and `apply_M` to
+    supply `select` (see `torch_mg._Level.select`) and a single batch dim; with a plain
+    callable, or any other batch rank, the whole batch runs one shared schedule as
+    before.
 
     `apply_M` must be a fixed symmetric positive-definite linear operator; anything
     state-dependent or nonsymmetric (an inner CG, an unequal-sweep multigrid cycle)
     silently invalidates the short recurrence this algorithm relies on.
 
-    A batch member whose residual hits exact zero before the others converge (e.g. an
-    all-zero `b`) is frozen rather than divided: `alpha`/`beta` for that member come out
-    of `safe_div` as `0` instead of `0/0` nan, which leaves its `x` (already correct)
-    and `p` (already zero) unchanged on every later iteration. This is not only a
-    finite-difference-gradcheck corner case -- an autograd backward seeded with a
-    one-hot `grad_output` leaves every other batch member with an all-zero right-hand
-    side, so it fires on every batched `FemSolve` backward (`sttopt/torch_solve.py`).
+    `safe_div` guards `alpha`/`beta` against an exact-zero denominator, which a row with
+    an all-zero `b` reaches (it converges and retires at iteration 0, but the guard also
+    covers a row whose `rz` underflows to zero mid-solve).
 
-    :param apply_A: callable, `Tensor -> Tensor`, the (implicitly batched) operator.
+    :param apply_A: callable, `Tensor -> Tensor`, the (implicitly batched) operator;
+        optionally with `select(rows)` returning the same operator on a row subset.
     :param b: right-hand side.
     :param apply_M: callable, `Tensor -> Tensor`, the preconditioner approximating `A^-1`
         (`1/jacobi_preconditioner_diag` for the diagonal one, `torch_mg.VCycle` for
-        multigrid).
+        multigrid); same optional `select`.
     :param rtol: relative residual tolerance `||r|| / ||b||`.
     :param max_iter: maximum CG iterations before raising.
     :param x0: optional warm-start initial guess, defaults to zero.
-    :return: `(x, n_iter)` -- the solution and the number of iterations actually run.
+    :param info: optional dict that receives `row_iters`, the iterations-times-rows the
+        call actually paid for. `n_iter` alone cannot say that once rows retire at
+        different iterations, and it is the quantity retirement exists to reduce.
+    :return: `(x, n_iter)` -- the solution and the number of iterations actually run,
+        i.e. the count the last row to converge needed.
     """
     b_norm = b.norm(dim=-1)
     b_norm_safe = torch.where(b_norm > 0, b_norm, torch.ones_like(b_norm))
@@ -194,31 +219,90 @@ def pcg(
     r = b - apply_A(x)
     rel_resid = r.norm(dim=-1) / b_norm_safe
 
-    n_iter = 0
     # Checked before the first iteration, not only after: a warm start can already be
     # converged, and an exact one makes the first alpha a 0/0 nan.
-    if torch.all(rel_resid <= rtol):
-        return x, n_iter
+    converged = rel_resid <= rtol
+    n_remaining = int(torch.count_nonzero(~converged))
+    n_rows = b.shape[0] if b.ndim == 2 else 1
+    row_iters = 0
+    if n_remaining == 0:
+        _report(info, row_iters)
+        return x, 0
+
+    can_retire = (
+        b.ndim == 2
+        and r.ndim == 2
+        and hasattr(apply_A, "select")
+        and hasattr(apply_M, "select")
+    )
+    if can_retire:
+        # Retired rows land in these full-size buffers; `active` maps a row of the
+        # shrinking batch back to its original index, for the output and the error.
+        x_out = torch.zeros_like(b)
+        resid_out = torch.zeros_like(rel_resid)
+        active = torch.arange(b.shape[0], device=b.device)
+        n_at_last_compaction = b.shape[0]
+
+    def worth_compacting() -> bool:
+        return can_retire and n_remaining <= COMPACTION_RATIO * n_at_last_compaction
+
+    def retire() -> Int[Tensor, " k"]:
+        """Bank the converged rows, shrink the operators, and return the rows kept.
+
+        The caller slices its own iteration vectors by the returned indices -- which
+        ones exist depends on whether the loop has started yet.
+        """
+        nonlocal apply_A, apply_M, active, n_at_last_compaction, b_norm_safe, rel_resid
+        nonlocal n_rows
+        done, keep = (torch.nonzero(m).flatten() for m in (converged, ~converged))
+        x_out[active[done]] = x[done]
+        resid_out[active[done]] = rel_resid[done]
+        active = active[keep]
+        n_at_last_compaction = keep.numel()
+        apply_A, apply_M = apply_A.select(keep), apply_M.select(keep)
+        b_norm_safe, rel_resid = b_norm_safe[keep], rel_resid[keep]
+        n_rows = keep.numel()
+        return keep
+
+    if worth_compacting():
+        keep = retire()
+        x, r = x[keep], r[keep]
 
     z = apply_M(r)
     p = z.clone()
     rz_old = (r * z).sum(dim=-1)
 
-    for it in range(1, max_iter + 1):
-        n_iter = it
+    for n_iter in range(1, max_iter + 1):
+        row_iters += n_rows
         Ap = apply_A(p)
         alpha = safe_div(rz_old, (p * Ap).sum(dim=-1))[..., None]
         x.addcmul_(alpha, p)
         r.addcmul_(alpha, Ap, value=-1)
         rel_resid = r.norm(dim=-1) / b_norm_safe
-        if torch.all(rel_resid <= rtol):
-            return x, n_iter
+        converged = rel_resid <= rtol
+        n_remaining = int(torch.count_nonzero(~converged))
+        if n_remaining == 0:
+            break
         z = apply_M(r)
         rz_new = (r * z).sum(dim=-1)
         p.mul_(safe_div(rz_new, rz_old)[..., None]).add_(z)
         rz_old = rz_new
 
-    raise CGConvergenceError(rel_resid, n_iter, rtol)
+        if worth_compacting():
+            keep = retire()
+            x, r, p, rz_old = x[keep], r[keep], p[keep], rz_old[keep]
+    else:
+        if can_retire:
+            resid_out[active] = rel_resid
+            rel_resid = resid_out
+        _report(info, row_iters)
+        raise CGConvergenceError(rel_resid, max_iter, rtol)
+
+    _report(info, row_iters)
+    if can_retire:
+        x_out[active] = x
+        return x_out, n_iter
+    return x, n_iter
 
 
 def solve(

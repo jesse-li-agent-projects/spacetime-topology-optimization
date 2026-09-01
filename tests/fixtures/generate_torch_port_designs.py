@@ -107,7 +107,6 @@ _EXTRA_CONFIG_FIELDS = dict(
     mma_c=2500.0,
     move=0.01,
     tmove=0.01,
-    batch_fem_solves=None,
 )
 
 # (nelx, nely, rmin, lrmin, rmin_cond). Radii are in element units; see module docstring

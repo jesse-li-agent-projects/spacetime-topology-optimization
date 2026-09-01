@@ -86,7 +86,7 @@ class FemSolve(torch.autograd.Function):
         precond = torch_mg.VCycle(levels, omega=omega, n_smooth=n_smooth, gamma=gamma)
         b = torch_fem.project(F, mask)
         U, n_iter = torch_fem.pcg(
-            levels[0].apply_A, b, precond, rtol=rtol, max_iter=max_iter, x0=x0
+            levels[0], b, precond, rtol=rtol, max_iter=max_iter, x0=x0
         )
         U = torch_fem.project(U, mask)
 
@@ -122,7 +122,7 @@ class FemSolve(torch.autograd.Function):
         )
         b = torch_fem.project(grad_output, ctx.mask)
         lam, n_iter = torch_fem.pcg(
-            ctx.levels[0].apply_A,
+            ctx.levels[0],
             b,
             precond,
             rtol=ctx.rtol,

@@ -24,7 +24,11 @@ Everything the plan warns against is deliberately covered:
   sensitivity tolerance. A timing at unmatched accuracy would be meaningless, and a fast
   solve at a loose tolerance is not a win.
 
-Iteration counts are reported beside every time because they are what explains a result.
+Iteration counts are reported beside every time because they are what explains a result,
+and `row_iters` (iterations times rows) beside those: solving the rows separately pays
+one row-iteration per row per iteration *that row* needed, so the gap between a batched
+cell's `row_iters` and the sequential cell's is exactly the work batching wastes on rows
+that have already converged.
 """
 
 import argparse
@@ -55,6 +59,13 @@ def parse_args():
     )
     parser.add_argument(
         "--rtol", type=float, default=None, help="CG tolerance (default: calibrated)"
+    )
+    parser.add_argument(
+        "--compaction-ratio",
+        type=float,
+        default=None,
+        help="override torch_fem.COMPACTION_RATIO; 0 retires no rows, i.e. runs the "
+        "whole batch on one shared schedule",
     )
     parser.add_argument(
         "--skip-cpu-cg",
@@ -170,7 +181,8 @@ def spsolve_time(setup: dict, densities: np.ndarray, loads: np.ndarray) -> tuple
 def mgcg_time(
     setup: dict, densities: torch.Tensor, F: torch.Tensor, *, rtol: float, x0=None
 ) -> tuple:
-    """Time one torch MGCG call (hierarchy build included) and return `(s, U, n_iter)`.
+    """Time one torch MGCG call (hierarchy build included), returning
+    `(s, U, n_iter, row_iters)`.
 
     `torch.cuda.synchronize()` brackets the region on CUDA -- without it the launches
     return immediately and the measurement is of queueing, not of work.
@@ -179,6 +191,7 @@ def mgcg_time(
     if device.type == "cuda":
         torch.cuda.synchronize()
     t0 = time.perf_counter()
+    info = {}
     U, n_iter = torch_mg.solve(
         F,
         densities,
@@ -193,10 +206,11 @@ def mgcg_time(
         rtol=rtol,
         max_iter=2000,
         x0=x0,
+        info=info,
     )
     if device.type == "cuda":
         torch.cuda.synchronize()
-    return time.perf_counter() - t0, U, n_iter
+    return time.perf_counter() - t0, U, n_iter, info["row_iters"]
 
 
 def accuracy(U_cg: torch.Tensor, U_ref: np.ndarray, setup: dict) -> float:
@@ -241,14 +255,15 @@ class Table:
         print(
             f"{row['mesh']:>8} {row['field']:>11} {row['cell']:>12} {row['start']:>5}"
             f" {row['batch']:>10} {row['ms']:>9.1f} {row['iters']:>6}"
-            f" {row['ce_err']:>9.1e} {row['speedup']:>8}",
+            f" {row['row_iters']:>10} {row['ce_err']:>9.1e} {row['speedup']:>8}",
             flush=True,
         )
 
     def header(self) -> None:
         print(
             f"\n{'mesh':>8} {'field':>11} {'cell':>12} {'start':>5} {'batch':>10}"
-            f" {'ms/solve':>9} {'iters':>6} {'ce_err':>9} {'speedup':>8}",
+            f" {'ms/solve':>9} {'iters':>6} {'row_iters':>10} {'ce_err':>9}"
+            f" {'speedup':>8}",
             flush=True,
         )
 
@@ -299,6 +314,7 @@ def benchmark_mesh(mesh: str, table: Table, rtol: float, opts) -> None:
                 batch="sequential",
                 ms=base_ms,
                 iters="-",
+                row_iters="-",
                 ce_err=0.0,
                 speedup="1.00x",
             )
@@ -321,17 +337,18 @@ def benchmark_mesh(mesh: str, table: Table, rtol: float, opts) -> None:
                         ]
 
                     def run(calls=calls):
-                        total, U, iters = 0.0, [], []
+                        total, U, iters, row_iters = 0.0, [], [], 0
                         for d, F, x0 in calls:
-                            s, u, n = mgcg_time(setup, d, F, rtol=rtol, x0=x0)
+                            s, u, n, ri = mgcg_time(setup, d, F, rtol=rtol, x0=x0)
                             total += s
                             U.append(u.reshape(-1, setup["ndof"]))
                             iters.append(n)
-                        return total, torch.cat(U), iters
+                            row_iters += ri
+                        return total, torch.cat(U), iters, row_iters
 
                     try:
                         ms = 1e3 * repeat_time(run, opts.repeats, opts.warmup)
-                        _, U_cg, iters = run()
+                        _, U_cg, iters, row_iters = run()
                     except torch_fem.CGConvergenceError as exc:
                         print(f"  {mesh} {field_name} {cell} {start} {batch}: {exc}")
                         continue
@@ -350,12 +367,16 @@ def benchmark_mesh(mesh: str, table: Table, rtol: float, opts) -> None:
                         batch=batch,
                         ms=ms / opts.nstage,
                         iters=f"{min(iters)}-{max(iters)}",
+                        row_iters=row_iters,
                         ce_err=err,
                         speedup=f"{base_ms / (ms / opts.nstage):.2f}x",
                     )
 
 
 def main():
+    if args.compaction_ratio is not None:
+        torch_fem.COMPACTION_RATIO = args.compaction_ratio
+        print(f"COMPACTION_RATIO = {args.compaction_ratio}")
     rtol = args.rtol if args.rtol is not None else RECOMMENDED_RTOL
     print(f"CG rtol = {rtol:.0e} (calibrated; see benchmarks/calibrate_cg_rtol.py)")
     if torch.cuda.is_available():

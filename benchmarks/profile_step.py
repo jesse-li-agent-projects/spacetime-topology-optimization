@@ -39,6 +39,19 @@ def parse_args():
         "--iters", type=int, default=5, help="step() calls to time (after warmup)"
     )
     parser.add_argument(
+        "--mesh",
+        type=str,
+        default="180x60",
+        help="mesh to profile, as NELXxNELY; must be one the snapshot archive can supply",
+    )
+    parser.add_argument(
+        "--compaction-ratio",
+        type=float,
+        default=None,
+        help="override torch_fem.COMPACTION_RATIO; 0 retires no CG rows, i.e. runs the "
+        "whole batch on one shared schedule",
+    )
+    parser.add_argument(
         "--device",
         type=str,
         default="cuda" if _cuda_available() else "cpu",
@@ -59,6 +72,7 @@ def _cuda_available() -> bool:
 if __name__ == "__main__":
     args = parse_args()
 
+import dataclasses
 import json
 import time
 from pathlib import Path
@@ -72,11 +86,13 @@ import sttopt.filters as filters
 import sttopt.mma as mma
 import sttopt.optimize as optimize
 import sttopt.run_config as run_config
+import sttopt.torch_fem as torch_fem
 from tests.fixtures.generate_torch_port_designs import load_design_raw
 
 # Matches tests/test_e2e_slow.py's reproduction of the thesis Chapter 4.4 experiment
-# -- the same mesh/hyperparameters as configs/default.json, loaded from there directly.
-NELX, NELY = 180, 60
+# -- the same hyperparameters as configs/default.json, loaded from there directly. The
+# mesh is `--mesh`'s to override, since the solve's share of step time is exactly what
+# changes with it.
 NSTAGE = 8
 CONFIG = run_config.RunConfig.from_dict(
     json.loads((Path(__file__).parent.parent / "configs" / "default.json").read_text())
@@ -164,8 +180,7 @@ class _Timer:
 
 def install_timers(device: torch.device) -> tuple[dict[str, _Timer], "callable"]:
     """Monkeypatch the suspects with timing wrappers; return the timers and a restore
-    function. Patches `compliance._solve_fe`/`_solve_fe_batched` (the FEM solve --
-    exactly one of the two runs per step depending on `Problem.batch_fem_solves`),
+    function. Patches `compliance._solve_fe`/`_solve_fe_batched` (the FEM solve),
     `conductivity.hotspot_value`, and `mma.mmasub`.
     """
     timers = {
@@ -195,16 +210,20 @@ def install_timers(device: torch.device) -> tuple[dict[str, _Timer], "callable"]
 
 def main():
     device = torch.device(args.device)
-    problem = optimize.build_problem(CONFIG, device=device, dtype=torch.float64)
+    if args.compaction_ratio is not None:
+        torch_fem.COMPACTION_RATIO = args.compaction_ratio
+        print(f"COMPACTION_RATIO = {args.compaction_ratio}")
+    nelx, nely = (int(v) for v in args.mesh.split("x"))
+    config = dataclasses.replace(CONFIG, nelx=nelx, nely=nely)
+    problem = optimize.build_problem(config, device=device, dtype=torch.float64)
 
-    x0, t0 = load_design_raw("180x60", LOOP)
+    x0, t0 = load_design_raw(args.mesh, LOOP)
     state = build_realistic_state(problem, x0, t0)
 
     n_solves_per_step = 1 + NSTAGE
 
     print(f"device: {device}")
-    print(f"mesh: {NELX}x{NELY}, ndof={problem.ndof}")
-    print(f"batch_fem_solves: {problem.batch_fem_solves}")
+    print(f"mesh: {nelx}x{nely}, ndof={problem.ndof}")
     print(f"solves/step (if unbatched): {n_solves_per_step}")
     print(f"npairs (hotspot neighbor list): {problem.e1.shape[0]}")
     print(f"warmup steps: {args.warmup}, timed steps: {args.iters}")
@@ -255,7 +274,7 @@ def main():
     print()
     print(
         f"*** fem_solve: {timers['fem_solve'].total / timers['fem_solve'].calls * 1000:.3f} ms/call "
-        f"({timers['fem_solve'].total / timers['fem_solve'].calls:.6f} s/call) at {NELX}x{NELY} "
+        f"({timers['fem_solve'].total / timers['fem_solve'].calls:.6f} s/call) at {nelx}x{nely} "
         f"on device {device}, near-binary (loop {LOOP}) design ***"
     )
 
