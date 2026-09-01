@@ -7,9 +7,10 @@ order live, and until now it was covered only by the `.mat` trajectory fixtures 
 MATLAB-transliteration oracle in `matlab_reference_loop.py` -- i.e. only ever by
 "matches MATLAB", never by "is the derivative of the thing it claims to differentiate".
 
-The FD test here closes that: it takes `step`'s own stacked `df0dx`/`dfdx` and checks
-them against central differences of `step`'s own `f0val`/`fval`, with respect to the raw
-design vector `[x; t]` that MMA actually optimizes. It is also the acceptance criterion
+The FD test here closes that: it takes `step`'s own stacked `IterationRecord.df`/`.dg`
+and checks them against central differences of `step`'s own `.f`/`.g`, with respect to
+the raw design vector `[x; t]` that MMA actually optimizes. It is also the acceptance
+criterion
 for swapping the hand-derived sensitivities for autodiff -- the replacement has to pass
 this unchanged.
 
@@ -299,7 +300,7 @@ def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, factor=1.0, beta_t=
     per the invariant above -- i.e. the state `step` itself would have produced.
 
     `loop` is left at 0 so the ensuing `step` runs as iteration 1, which is none of
-    30/50/25: `beta_t`, `beta_d` and `factor` all stay fixed across the call, so `f0val`/`fval`
+    30/50/25: `beta_t`, `beta_d` and `factor` all stay fixed across the call, so `.f`/`.g`
     are smooth functions of the raw variables alone. (At a refresh iteration `factor`
     jumps as a function of the design, and the reported gradient deliberately does not
     account for that -- a different question from the one this test asks.)
@@ -431,19 +432,19 @@ def test_sensitivity_rows_batched_matches_unbatched():
     ],
 )
 def test_step_assembled_sensitivities_match_finite_differences(nStage, tfield, Theta):
-    """`step`'s stacked `df0dx` and `dfdx` against central differences of its own
-    `f0val`/`fval`, w.r.t. the raw design vector `[x; t]`.
+    """`step`'s stacked `IterationRecord.df` and `.dg` against central differences of
+    its own `.f`/`.g`, w.r.t. the raw design vector `[x; t]`.
 
     This is the only check in the suite on the *assembly* rather than the parts. In
     particular it is the only thing that pins, without reference to MATLAB:
 
-      * the `Theta` weighting of the per-stage gravity compliances into `f0val`, and the
+      * the `Theta` weighting of the per-stage gravity compliances into `.f`, and the
         matching `Theta` on their contributions to `dc`/`dt`;
       * the `H @ (dct_g / Hs)` chain rule on the time half -- note the density half
         carries an extra `dx` (Heaviside) factor and the time half does not, an asymmetry
         nothing else tests;
       * the constraint *row order* and the row count `m`. A permuted or miscounted stack
-        makes row `k` of `dfdx` the derivative of a different row of `fval`, and the
+        makes row `k` of `.dg` the derivative of a different row of `.g`, and the
         comparison fails per-row.
 
     `Theta != 1` and `nStage != 3` are swept because the fixture only ever exercises
@@ -451,7 +452,7 @@ def test_step_assembled_sensitivities_match_finite_differences(nStage, tfield, T
     single `nStage` a stage-indexing error can hide.
     """
     nelx, nely = 10, 8
-    # f0val is O(1e3) here (a compliance), so its central difference is roundoff-dominated
+    # .f is O(1e3) here (a compliance), so its central difference is roundoff-dominated
     # and *improves* with a larger step: an h-sweep gives absolute errors of 1.2e-2 /
     # 1.0e-1 / 1.0e0 at h = 1e-5 / 1e-6 / 1e-7 -- a clean 1/h roundoff slope, no truncation
     # regime in reach. 1e-5 is the best of them. The constraint rows are O(0.1) and match
@@ -468,17 +469,17 @@ def test_step_assembled_sensitivities_match_finite_differences(nStage, tfield, T
     # Row count follows from the stack `step` builds: volume, continuity, one row per
     # print-start element, an upper and a lower bound per stage, and the hotspot row.
     assert problem.m == 1 + 1 + len(problem.Nei) + 2 * nStage + 1
-    assert record.df0dx.shape == (problem.n,)
-    assert record.fval.shape == (problem.m,)
-    assert record.dfdx.shape == (problem.m, problem.n)
+    assert record.df.shape == (problem.n,)
+    assert record.g.shape == (problem.m,)
+    assert record.dg.shape == (problem.m, problem.n)
 
     # Non-vacuity: an all-but-zero gradient would pass the comparison below regardless.
-    assert np.abs(record.df0dx).max() > 1e-3
-    assert np.abs(record.dfdx).max(axis=1).min() > 1e-3
+    assert np.abs(record.df).max() > 1e-3
+    assert np.abs(record.dg).max(axis=1).min() > 1e-3
 
     def values_at(x_raw, t_raw):
         _, rec = optimize.step(problem, _state_from_raw(problem, x_raw, t_raw))
-        return rec.f0val, rec.fval
+        return rec.f, rec.g
 
     fd_f0 = np.zeros(problem.n)
     fd_f = np.zeros((problem.m, problem.n))
@@ -501,18 +502,18 @@ def test_step_assembled_sensitivities_match_finite_differences(nStage, tfield, T
         fd_f0[nel + e] = (f0_p - f0_m) / (2 * h)
         fd_f[:, nel + e] = (f_p - f_m) / (2 * h)
 
-    # df0dx spans several orders of magnitude across elements, so an absolute floor has
+    # .df spans several orders of magnitude across elements, so an absolute floor has
     # to be set against the gradient's own scale rather than against 1: at h = 1e-5 the
-    # observed error is ~2e-6 of max|df0dx|, so a floor at 1e-4 of it leaves ~50x margin
+    # observed error is ~2e-6 of max|.df|, so a floor at 1e-4 of it leaves ~50x margin
     # while still being far tighter than the entries it is guarding.
     np.testing.assert_allclose(
-        record.df0dx, fd_f0, rtol=1e-4, atol=1e-4 * np.abs(record.df0dx).max()
+        record.df, fd_f0, rtol=1e-4, atol=1e-4 * np.abs(record.df).max()
     )
     # The constraint rows are purely algebraic in xPhys/tPhys (no linear solve), and
     # match ~1000x tighter than this.
     for row in range(problem.m):
         np.testing.assert_allclose(
-            record.dfdx[row],
+            record.dg[row],
             fd_f[row],
             rtol=1e-5,
             atol=1e-8,
@@ -521,30 +522,30 @@ def test_step_assembled_sensitivities_match_finite_differences(nStage, tfield, T
 
 
 def test_step_objective_is_theta_weighted_sum_of_stage_compliances():
-    """`f0val` is the whole-structure compliance plus `Theta` times the sum of the
-    per-stage gravity compliances -- so it must be exactly affine in `Theta`, with
-    intercept the whole-structure compliance alone and slope the stage sum. Recovering
-    both from three `Theta` values pins the weighting independently of the FD check
-    (which sees the gradient, not the value), and `Theta == 0` recovers the pure
+    """`IterationRecord.f` is the whole-structure compliance plus `Theta` times the sum
+    of the per-stage gravity compliances -- so it must be exactly affine in `Theta`,
+    with intercept the whole-structure compliance alone and slope the stage sum.
+    Recovering both from three `Theta` values pins the weighting independently of the FD
+    check (which sees the gradient, not the value), and `Theta == 0` recovers the pure
     compliance problem the stage terms are layered onto.
     """
     nelx, nely, nStage = 10, 8, 3
     rng = np.random.default_rng(1)
 
-    def f0val_at(Theta):
+    def f_at(Theta):
         problem = _problem(nelx=nelx, nely=nely, nStage=nStage, Theta=Theta)
         state = _state_from_raw(problem, x_raw, t_raw)
         _, rec = optimize.step(problem, state)
-        return rec.f0val, rec.obj
+        return rec.f, rec.obj
 
     base = _problem(nelx=nelx, nely=nely, nStage=nStage)
     x_raw, t_raw, _ = _draw_well_conditioned_state(base, rng)
 
-    f0_0, obj_0 = f0val_at(0.0)
-    f0_1, _ = f0val_at(1.0)
-    f0_3, _ = f0val_at(3.0)
+    f0_0, obj_0 = f_at(0.0)
+    f0_1, _ = f_at(1.0)
+    f0_3, _ = f_at(3.0)
 
-    # At Theta = 0 the stage terms drop out and f0val is the whole-structure compliance,
+    # At Theta = 0 the stage terms drop out and .f is the whole-structure compliance,
     # which `IterationRecord.obj` reports separately at every Theta.
     np.testing.assert_allclose(f0_0, obj_0, rtol=1e-12)
     stage_sum = f0_1 - f0_0
@@ -619,7 +620,7 @@ def test_step_batched_warm_starts_from_previous_iteration():
 
 
 def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
-    """`optimize.step`'s assembled `df0dx`/`dfdx` must stay finite on a real late-run
+    """`optimize.step`'s assembled `IterationRecord.df`/`.dg` must stay finite on a real late-run
     snapshot with exact zeros in `xPhys` (`x_90x30_it0800`, from
     `tests/fixtures/torch_port_designs.npz` -- generated by
     `generate_torch_port_designs.py` at the production filter radii/schedules, not
@@ -669,10 +670,10 @@ def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
     )
 
     _, record = optimize.step(problem, state)
-    assert np.all(np.isfinite(record.df0dx))
-    assert np.all(np.isfinite(record.dfdx))
-    assert np.all(np.isfinite(record.fval))
-    assert np.isfinite(record.f0val)
+    assert np.all(np.isfinite(record.df))
+    assert np.all(np.isfinite(record.dg))
+    assert np.all(np.isfinite(record.g))
+    assert np.isfinite(record.f)
 
 
 def test_step_would_have_produced_nan_without_the_nan_safe_rewrite():

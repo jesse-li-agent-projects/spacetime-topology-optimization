@@ -272,18 +272,18 @@ def main():
         objf[k] = record.obj
         vol[k] = record.vol
         tru_max_all[k] = record.tru_max
-        fval_all[:, k] = record.fval
-        dfdx_all[:, :, k] = record.dfdx
+        fval_all[:, k] = record.g
+        dfdx_all[:, :, k] = record.dg
         xmma_all[:, k] = record.xmma
         low_all[:, k] = record.low
         upp_all[:, k] = record.upp
         lam_all[:, k] = record.lam
 
         if k == 0:
-            f0val_1 = record.f0val
-            df0dx_1 = record.df0dx
-            fval_1 = record.fval
-            dfdx_1 = record.dfdx
+            f0val_1 = record.f
+            df0dx_1 = record.df
+            fval_1 = record.g
+            dfdx_1 = record.dg
 
     xPhys_traj = np.stack(xPhys_traj, axis=-1)  # (nely, nelx, nloop+1)
     tPhys_traj = np.stack(tPhys_traj, axis=-1)

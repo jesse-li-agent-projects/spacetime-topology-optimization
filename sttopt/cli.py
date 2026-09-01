@@ -106,7 +106,7 @@ def main(args: argparse.Namespace) -> None:
     for _ in range(config.nloop):
         state, record = optimize.step(problem, state)
         print(
-            f"It.: {state.loop:4d} Obj.: {record.f0val:10.4f} "
+            f"It.: {state.loop:4d} Obj.: {record.f:10.4f} "
             f"Vol.: {state.xPhys.mean():6.3f} Tm.: {record.tru_max:7.3f}"
         )
         if state.loop % 50 == 0:
@@ -124,7 +124,7 @@ def main(args: argparse.Namespace) -> None:
         xPhys=torch_util.to_numpy(state.xPhys),
         t=torch_util.to_numpy(state.t),
         tPhys=torch_util.to_numpy(state.tPhys),
-        f0val=record.f0val,
+        f=record.f,
         vol=record.vol,
         tru_max=record.tru_max,
     )

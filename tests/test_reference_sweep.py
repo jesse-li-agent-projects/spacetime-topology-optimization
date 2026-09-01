@@ -397,10 +397,10 @@ def test_full_loop_matches_reference(
     )
     result = optimize.run(config)
     for k, (rec, want) in enumerate(zip(result.records, trace), start=1):
-        assert len(rec.fval) == want["m"], f"iteration {k}: constraint count"
-        assert rel([rec.f0val], [want["f0val"]]) < SOLVED, f"iteration {k}: f0val"
-        assert rel(rec.fval, want["fval"]) < SOLVED, f"iteration {k}: fval"
-        assert rel(rec.dfdx, want["dfdx"]) < SOLVED, f"iteration {k}: dfdx"
+        assert len(rec.g) == want["m"], f"iteration {k}: constraint count"
+        assert rel([rec.f], [want["f0val"]]) < SOLVED, f"iteration {k}: f0val"
+        assert rel(rec.g, want["fval"]) < SOLVED, f"iteration {k}: fval"
+        assert rel(rec.dg, want["dfdx"]) < SOLVED, f"iteration {k}: dfdx"
         assert rel(rec.xmma, want["xmma"]) < SOLVED, f"iteration {k}: xmma"
 
 
@@ -414,8 +414,8 @@ def test_periodic_schedules_match_reference():
 
     Past loop 25 the port and this literal MATLAB transliteration intentionally
     disagree: the port applies a refreshed `factor` starting the *next* iteration
-    rather than rescaling that same iteration's `fval`/`dfdx` mid-loop (see
-    `optimize.step`'s docstring). That one-row `fval` disagreement at loop 25 then
+    rather than rescaling that same iteration's `.g`/`.dg` mid-loop (see
+    `optimize.step`'s docstring). That one-row `.g` disagreement at loop 25 then
     feeds MMA and diverges the whole design trajectory downstream, so full trajectory
     comparison stops there; `rou`/`beta` (pure loop-index schedules, independent of
     `factor` or the design) and `factor`-refreshed-at-all are instead checked against
@@ -451,7 +451,7 @@ def test_periodic_schedules_match_reference():
     for k, (rec, want) in enumerate(zip(result.records, trace), start=1):
         if k >= 25:
             break
-        assert rel([rec.f0val], [want["f0val"]]) < SOLVED, f"iteration {k}: f0val"
+        assert rel([rec.f], [want["f0val"]]) < SOLVED, f"iteration {k}: f0val"
         assert rel([rec.tru_max], [want["tru_max"]]) < SOLVED, f"iteration {k}: tru_max"
-        assert rel(rec.fval, want["fval"]) < SOLVED, f"iteration {k}: fval"
-        assert rel(rec.dfdx, want["dfdx"]) < SOLVED, f"iteration {k}: dfdx"
+        assert rel(rec.g, want["fval"]) < SOLVED, f"iteration {k}: fval"
+        assert rel(rec.dg, want["dfdx"]) < SOLVED, f"iteration {k}: dfdx"
