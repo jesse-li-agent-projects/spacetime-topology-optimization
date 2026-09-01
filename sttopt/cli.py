@@ -52,14 +52,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--tag",
         help="run identifier; artefacts (progress snapshots, final design, final plot, "
-        "config.json) are saved under output/<tag>/. Bookkeeping only (like "
-        "--tag-force below): run control that's never persisted to config.json",
+        "config.json) are saved under output/<tag>/",
     )
     parser.add_argument(
         "--tag-force",
         action="store_true",
         help="delete an existing output/<tag> directory before this run, instead of "
-        "erroring out. Bookkeeping only, like --tag above",
+        "erroring out",
     )
     parser.add_argument(
         "--device",
