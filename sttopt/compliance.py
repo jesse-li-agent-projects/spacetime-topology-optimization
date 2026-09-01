@@ -14,9 +14,10 @@ a cross-check (`tests/test_reference_sweep.py`) and a timing baseline
 (`benchmarks/bench_sensitivities.py`). Array-order and mesh conventions (element
 order, dof layout) follow `conventions.md` and `fem.py`.
 
-`batched_whole_and_gravity_compliance` is `optimize.step`'s entry point when
-`Problem.batch_fem_solves` is on: one `FemSolve` call for `whole_compliance`'s solve
-plus every stage's `gravity_compliance` solve, instead of `1 + nStage` separate calls.
+`batched_whole_and_gravity_compliance` is `optimize.step`'s entry point: one `FemSolve`
+call for `whole_compliance`'s solve plus every stage's `gravity_compliance` solve,
+instead of `1 + nStage` separate calls. `whole_compliance`/`gravity_compliance` stay as
+the single-solve API, and as what the batched function is checked against.
 """
 
 import math
@@ -214,8 +215,7 @@ def batched_whole_and_gravity_compliance(
     Float[Tensor, "n_stage_plus_1 ndof"],
 ]:
     """`whole_compliance`'s solve plus every stage's `gravity_compliance` solve, as one
-    batched `FemSolve` call (`plans/torch_port_part2.md` Phase 3.3's batching
-    requirement) -- `optimize.step`'s entry point when `Problem.batch_fem_solves` is on.
+    batched `FemSolve` call -- `optimize.step`'s entry point.
 
     :param stage_times: this iteration's `ti` for each gravity stage, in order.
     :param x0: optional warm start, `(1 + len(stage_times), ndof)`.

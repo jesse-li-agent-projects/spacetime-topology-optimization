@@ -76,13 +76,6 @@ class Problem:
     m: int  # number of MMA constraint rows: vol + continuity + start-point(s) + 2*nStage + hotspot
     n: int  # number of MMA design variables: 2*nelx*nely (density half + time half)
 
-    # Batch whole_compliance's solve with every gravity stage's into one FemSolve call
-    # (plans/torch_port_part2.md Phase 3.3) rather than 1 + nStage separate calls. Part
-    # 1 measured this as a 1.3-1.4x win at 90x30/180x60 and a small loss at 360x120, so
-    # it is a per-Problem setting (build_problem defaults it from mesh size), not
-    # unconditional. Resolved from `config.batch_fem_solves`, which may be `None`.
-    batch_fem_solves: bool
-
 
 @dataclass(frozen=True)
 class State:
@@ -105,8 +98,8 @@ class State:
     # Batched FEM solution from this iteration's whole_compliance + gravity_compliance
     # solves, `(1 + nStage, ndof)`, row 0 the whole-structure solve and row `1 + i`
     # stage `i` -- carried forward to warm-start the next iteration's solves (part 1
-    # measured ~25% fewer CG iterations). `None` when `Problem.batch_fem_solves` is off
-    # (the sequential path doesn't produce a stacked `U` to save -- see optimize.step).
+    # measured ~25% fewer CG iterations). `None` only at `init_state`, which has no
+    # previous solution to carry.
     U: Float[Tensor, "n_stage_plus_1 ndof"] | None
 
 
@@ -163,11 +156,6 @@ def build_problem(
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
-    batch_fem_solves = config.batch_fem_solves
-    if batch_fem_solves is None:
-        # Part 1 (plans/torch_port_part2.md Phase 3.3) measured a 1.3-1.4x win at
-        # 90x30/180x60 and a small loss at 360x120.
-        batch_fem_solves = nelx * nely <= 180 * 60
     # A 1x1 mesh has neither extent nor neighbours, so two of the pieces built below
     # degenerate: the CORNER/OPPOSITE_CORNER time fields normalize by a zero max
     # distance, and the continuity filter divides by a zero neighbour count. This is the
@@ -234,7 +222,6 @@ def build_problem(
         C=torch_util.csr_to_tensor(C, device, dtype),
         m=m,
         n=n,
-        batch_fem_solves=batch_fem_solves,
         **float_fields,
         **int_fields,
     )
@@ -407,57 +394,26 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     tPhys = ((problem.H @ t.flatten()) / problem.Hs).reshape(nely, nelx)
 
     # -- Objective: whole-structure compliance + Theta-weighted per-stage gravity compliance --
-    # `Problem.batch_fem_solves` (Phase 3.3, plans/torch_port_part2.md) puts
-    # whole_compliance's solve and every gravity stage's solve into one FemSolve call;
-    # off, they run sequentially as before.
+    # whole_compliance's solve and every gravity stage's go into one batched FemSolve
+    # call; `torch_fem.pcg` retires each row as it converges, so the batch costs no more
+    # row-iterations than solving the rows one at a time would.
     stage_times = [float(ti) for ti in np.linspace(0, 1, nStage + 1)[1:]]
-    if problem.batch_fem_solves:
-        c_t, stage_cs, U_new = compliance.batched_whole_and_gravity_compliance(
-            xPhys,
-            tPhys,
-            problem.KE,
-            problem.edofMat,
-            config.Emin,
-            config.Emax,
-            config.penal,
-            problem.freedofs,
-            problem.F,
-            problem.ndof,
-            problem.C,
-            beta_t,
-            stage_times,
-            x0=state.U,
-        )
-    else:
-        c_t, _ = compliance.whole_compliance(
-            xPhys,
-            problem.KE,
-            problem.edofMat,
-            config.Emin,
-            config.Emax,
-            config.penal,
-            problem.freedofs,
-            problem.F,
-            problem.ndof,
-        )
-        stage_cs = []
-        for ti in stage_times:
-            cg_t, _ = compliance.gravity_compliance(
-                xPhys,
-                tPhys,
-                problem.KE,
-                problem.edofMat,
-                config.Emin,
-                config.Emax,
-                config.penal,
-                ti,
-                problem.C,
-                beta_t,
-                problem.freedofs,
-                problem.ndof,
-            )
-            stage_cs.append(cg_t)
-        U_new = None
+    c_t, stage_cs, U_new = compliance.batched_whole_and_gravity_compliance(
+        xPhys,
+        tPhys,
+        problem.KE,
+        problem.edofMat,
+        config.Emin,
+        config.Emax,
+        config.penal,
+        problem.freedofs,
+        problem.F,
+        problem.ndof,
+        problem.C,
+        beta_t,
+        stage_times,
+        x0=state.U,
+    )
 
     obj_final_only = float(
         c_t.detach()
@@ -608,7 +564,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         # Required: femsolve() asserts its x0 argument arrives already detached (the
         # next iteration passes state.U as x0). Undetached, this leaked ~180 MB/step
         # of multigrid hierarchy across iterations -- see commit 855eb76.
-        U=U_new.detach() if U_new is not None else None,
+        U=U_new.detach(),
     )
     record = IterationRecord(
         obj=obj_final_only,

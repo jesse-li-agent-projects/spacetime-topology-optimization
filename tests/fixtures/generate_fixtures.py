@@ -49,7 +49,7 @@ EMIN, EMAX, PENAL = 1e-9, 1.0, 3
 NU = 0.3
 
 # The rest of RunConfig's hyperparameters (eta, beta_d_max, p, q, r, rouf, a0, mma_c,
-# move, tmove, batch_fem_solves) aren't varied by these fixtures, so they come from
+# move, tmove) aren't varied by these fixtures, so they come from
 # configs/default.json rather than being restated here.
 _DEFAULT_CONFIG = run_config.RunConfig.from_dict(
     json.loads((OUT.parent.parent / "configs" / "default.json").read_text())

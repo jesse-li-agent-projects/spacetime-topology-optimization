@@ -23,6 +23,5 @@
   "a0": 1.0,
   "mma_c": 2500.0,
   "move": 0.01,
-  "tmove": 0.01,
-  "batch_fem_solves": null
+  "tmove": 0.01
 }
