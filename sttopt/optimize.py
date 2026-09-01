@@ -283,26 +283,24 @@ def init_state(problem: Problem, beta_d: float) -> State:
     )
 
 
-def _grad_row(
-    output: Float[Tensor, ""], leaves: tuple[Tensor, Tensor]
-) -> Float[Tensor, " n"]:
-    """Sensitivity of one scalar output w.r.t. both leaves, flattened and concatenated
-    into a single MMA row -- one `torch.autograd.grad` call
-    (`plans/torch_port_part2.md` Phase 3.4). `allow_unused` covers rows that depend on
-    only one leaf (e.g. a density-only constraint never touches `t`): the unused
-    leaf's slice is exactly zero, which is what its hand-derived predecessor returned
-    too.
+def _flatten_pair(density_part: Tensor, time_part: Tensor) -> Float[Tensor, " n"]:
+    """Concatenate a density-half tensor and a time-half tensor into the single `n`-
+    length layout MMA's design/gradient vectors use -- the one place the
+    `[density; time]` ordering is spelled out, so every caller (design variables,
+    bounds, sensitivity rows) shares it rather than repeating the concatenation.
+
+    :param density_part: `(..., nel)` or `(nel,)`, flattened along its last dim.
+    :param time_part: same shape as `density_part`.
+    :return: `density_part` and `time_part` flattened and concatenated along the last
+        dim.
     """
-    grads = torch.autograd.grad(output, leaves, retain_graph=True, allow_unused=True)
     return torch.cat(
-        [
-            (g if g is not None else torch.zeros_like(leaf)).flatten()
-            for g, leaf in zip(grads, leaves)
-        ]
+        [density_part.flatten(start_dim=-1), time_part.flatten(start_dim=-1)],
+        dim=-1,
     )
 
 
-def _grad_rows_batched(
+def _sensitivity_rows(
     outputs: Float[Tensor, " k"],
     xTilde: Float[Tensor, "nely nelx"],
     tPhys: Float[Tensor, "nely nelx"],
@@ -310,36 +308,50 @@ def _grad_rows_batched(
     Hs: Float[Tensor, " nel"],
 ) -> Float[Tensor, "k n"]:
     """Sensitivities of `k` independent scalar outputs (e.g. one per print-start
-    element, or one per stage) w.r.t. both raw leaves, as `(k, n)` -- one
-    `torch.autograd.grad(..., is_grads_batched=True)` call with one-hot seeds instead
-    of `k` separate calls (`plans/torch_port_part2.md` Phase 3.4's Jacobian-assembly
-    requirement).
+    element, or one per stage, or a single row passed as `value[None]`) w.r.t. both
+    raw leaves, as `(k, n)`.
 
     Differentiates down to the *filtered* fields (`xTilde`, `tPhys` -- density's own
     filtered field, pre-Heaviside, since `xPhys = heaviside_projection(xTilde, ...)`
-    is itself an ordinary pointwise op `is_grads_batched`'s vmap handles fine) rather
-    than all the way to the raw `x`/`t` leaves, then finishes the last, linear step --
-    the density/continuity filter `field = H @ raw / Hs` -- by hand as a plain sparse
-    matmul: `is_grads_batched`'s vmap has no batching rule for the sparse CSR matmul's
-    backward (`RuntimeError: expand is unsupported for SparseCsc tensors`, confirmed
-    locally), so batching must stop one step short of it. This is not a reintroduction
-    of a hand-derived *physics* sensitivity -- every nonlinear term (Heaviside,
-    hotspot's pairwise sigmoids, SIMP) is still autograd's -- only the filter's own
-    adjoint is applied explicitly, and because `H` is symmetric by construction
-    (`filters.density_filter`'s weight depends only on distance), that adjoint is `H`
-    itself: exactly `torch.autograd.grad` would have produced had vmap been able to
-    reach the sparse op.
+    is itself an ordinary pointwise op) rather than all the way to the raw `x`/`t`
+    leaves, then finishes the last, linear step -- the density/continuity filter
+    `field = H @ raw / Hs` -- by hand as a plain sparse matmul. This is not a
+    reintroduction of a hand-derived *physics* sensitivity -- every nonlinear term
+    (Heaviside, hotspot's pairwise sigmoids, SIMP) is still autograd's -- only the
+    filter's own adjoint is applied explicitly, and because `H` is symmetric by
+    construction (`filters.density_filter`'s weight depends only on distance), that
+    adjoint is `H` itself: exactly what `torch.autograd.grad` would have produced had
+    it been able to reach the sparse op directly.
+
+    `k == 1` differentiates with a plain (unbatched) `torch.autograd.grad`. `k > 1`
+    uses `torch.autograd.grad(..., is_grads_batched=True)` with one-hot seeds instead
+    of `k` separate calls (`plans/torch_port_part2.md` Phase 3.4's Jacobian-assembly
+    requirement) -- `is_grads_batched`'s vmap has no batching rule for the sparse CSR
+    matmul's backward (`RuntimeError: expand is unsupported for SparseCsc tensors`,
+    confirmed locally), which is why the cut sits at `(xTilde, tPhys)` rather than the
+    raw leaves in both branches. A `k > 1` output must therefore avoid sparse matmuls
+    and `FemSolve` inside its own graph -- true of every current `k > 1` row (start
+    point, stage bounds) but a restriction on future ones, not a guarantee.
+
+    `allow_unused` covers rows that depend on only one field (e.g. a density-only
+    constraint never touches `tPhys`): the unused field's block is exactly zero,
+    which is what a hand-derived predecessor returned too.
     """
     k = outputs.shape[0]
-    seeds = torch.eye(k, dtype=outputs.dtype, device=outputs.device)
-    d_xTilde, d_tPhys = torch.autograd.grad(
-        outputs,
-        (xTilde, tPhys),
-        grad_outputs=seeds,
-        is_grads_batched=True,
-        retain_graph=True,
-        allow_unused=True,
-    )
+    if k == 1:
+        d_xTilde, d_tPhys = torch.autograd.grad(
+            outputs[0], (xTilde, tPhys), retain_graph=True, allow_unused=True
+        )
+    else:
+        seeds = torch.eye(k, dtype=outputs.dtype, device=outputs.device)
+        d_xTilde, d_tPhys = torch.autograd.grad(
+            outputs,
+            (xTilde, tPhys),
+            grad_outputs=seeds,
+            is_grads_batched=True,
+            retain_graph=True,
+            allow_unused=True,
+        )
 
     def _filter_adjoint(d_field: Tensor | None) -> Tensor:
         if d_field is None:
@@ -349,7 +361,7 @@ def _grad_rows_batched(
         flat = d_field.reshape(k, -1)  # (k, nel)
         return (H @ (flat / Hs).T).T  # (k, nel)
 
-    return torch.cat([_filter_adjoint(d_xTilde), _filter_adjoint(d_tPhys)], dim=1)
+    return _flatten_pair(_filter_adjoint(d_xTilde), _filter_adjoint(d_tPhys))
 
 
 def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
@@ -388,7 +400,6 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     # -- Gradient region begins: x/t become autograd leaves. --
     x = state.x.clone().requires_grad_(True)
     t = state.t.clone().requires_grad_(True)
-    leaves = (x, t)
     xTilde = ((problem.H @ x.flatten()) / problem.Hs).reshape(nely, nelx)
     xPhys = filters.heaviside_projection(xTilde, beta_d, config.eta)
     tPhys = ((problem.H @ t.flatten()) / problem.Hs).reshape(nely, nelx)
