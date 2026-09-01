@@ -30,7 +30,8 @@ include = ["sttopt*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = ["-m", "not slow"]
+addopts = ["-m", "not slow", "--ignore=proj_utils"]
+norecursedirs = ["proj_utils"]
 markers = [
     "slow: full-length optimization runs (minutes to hours). Deselected by default; run with `-m slow`.",
 ]

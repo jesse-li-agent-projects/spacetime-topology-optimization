@@ -74,16 +74,24 @@ def _filter_field(problem, raw):
 def _assert_state_fields_are_consistent(problem, state, beta_d):
     """The invariant above, asserted on a `State` from any source."""
     np.testing.assert_allclose(
-        state.xTilde, _filter_field(problem, state.x), rtol=1e-12, atol=1e-14
-    )
-    np.testing.assert_allclose(
-        state.xPhys,
-        filters.heaviside_projection(state.xTilde, beta_d, problem.config.eta),
+        torch_util.to_numpy(state.xTilde),
+        torch_util.to_numpy(_filter_field(problem, state.x)),
         rtol=1e-12,
         atol=1e-14,
     )
     np.testing.assert_allclose(
-        state.tPhys, _filter_field(problem, state.t), rtol=1e-12, atol=1e-14
+        torch_util.to_numpy(state.xPhys),
+        torch_util.to_numpy(
+            filters.heaviside_projection(state.xTilde, beta_d, problem.config.eta)
+        ),
+        rtol=1e-12,
+        atol=1e-14,
+    )
+    np.testing.assert_allclose(
+        torch_util.to_numpy(state.tPhys),
+        torch_util.to_numpy(_filter_field(problem, state.t)),
+        rtol=1e-12,
+        atol=1e-14,
     )
 
 
@@ -116,14 +124,18 @@ def _tensor_fields(obj) -> list[tuple[str, torch.Tensor]]:
 
 
 def test_build_problem_default_device_and_dtype():
-    """`build_problem`'s default (`device="cpu"`, `dtype=torch.float64`) must cost every
-    pre-Phase-3.1 caller nothing: every real-valued tensor field lands on CPU/float64,
-    matching what those fields were (as NumPy arrays) before this phase."""
+    """`build_problem`'s default device (CUDA when available, else CPU) and default
+    `dtype=torch.float64` reach every real-valued tensor field of the returned
+    `Problem`."""
+    # `torch.device("cuda") != torch.device("cuda", 0)`, but every tensor actually
+    # built on CUDA reports the latter -- so this test (and the codebase generally)
+    # compares device *type*, not exact `torch.device` equality.
+    expected_type = "cuda" if torch.cuda.is_available() else "cpu"
     problem = _problem()
-    assert problem.device == torch.device("cpu")
+    assert problem.device.type == expected_type
     assert problem.dtype == torch.float64
     for name, t in _tensor_fields(problem):
-        assert t.device == torch.device("cpu"), name
+        assert t.device.type == expected_type, name
         if t.dtype.is_floating_point:
             assert t.dtype == torch.float64, name
 
@@ -150,12 +162,12 @@ def test_init_state_and_step_output_are_tensors_on_problem_device_and_dtype():
     problem = _problem()
     state = optimize.init_state(problem, BETA_D)
     for name, t in _tensor_fields(state):
-        assert t.device == problem.device, name
+        assert t.device.type == problem.device.type, name
         assert t.dtype == problem.dtype, name
 
     state, _ = optimize.step(problem, state)
     for name, t in _tensor_fields(state):
-        assert t.device == problem.device, name
+        assert t.device.type == problem.device.type, name
         assert t.dtype == problem.dtype, name
 
 
@@ -204,9 +216,9 @@ def test_init_state_seeds_the_raw_fields(tfield):
     problem = _problem(tfield=tfield)
     state = optimize.init_state(problem, BETA_D)
 
-    np.testing.assert_allclose(state.x, VOLFRAC, rtol=1e-14)
+    np.testing.assert_allclose(torch_util.to_numpy(state.x), VOLFRAC, rtol=1e-14)
     np.testing.assert_allclose(
-        state.t,
+        torch_util.to_numpy(state.t),
         timefield.init_timefield(problem.config.nelx, problem.config.nely, tfield),
         rtol=1e-14,
         atol=1e-15,
@@ -223,12 +235,17 @@ def test_init_state_density_half_is_derived_from_its_seed(tfield):
     state = optimize.init_state(problem, BETA_D)
 
     np.testing.assert_allclose(
-        state.xTilde, _filter_field(problem, state.x), rtol=1e-12, atol=1e-14
+        torch_util.to_numpy(state.xTilde),
+        torch_util.to_numpy(_filter_field(problem, state.x)),
+        rtol=1e-12,
+        atol=1e-14,
     )
-    np.testing.assert_allclose(state.xTilde, VOLFRAC, rtol=1e-14)
+    np.testing.assert_allclose(torch_util.to_numpy(state.xTilde), VOLFRAC, rtol=1e-14)
     np.testing.assert_allclose(
-        state.xPhys,
-        filters.heaviside_projection(state.xTilde, BETA_D, problem.config.eta),
+        torch_util.to_numpy(state.xPhys),
+        torch_util.to_numpy(
+            filters.heaviside_projection(state.xTilde, BETA_D, problem.config.eta)
+        ),
         rtol=1e-12,
         atol=1e-14,
     )
@@ -250,12 +267,15 @@ def test_init_state_time_half_is_derived_from_its_seed(tfield):
     state = optimize.init_state(problem, BETA_D)
 
     seed = timefield.init_timefield(problem.config.nelx, problem.config.nely, tfield)
-    assert not np.allclose(_filter_field(problem, seed), seed), (
+    assert not np.allclose(torch_util.to_numpy(_filter_field(problem, seed)), seed), (
         "premise: the seed is not a fixed point of the density filter, so filtering it "
         "is observable"
     )
     np.testing.assert_allclose(
-        state.tPhys, _filter_field(problem, state.t), rtol=1e-12, atol=1e-14
+        torch_util.to_numpy(state.tPhys),
+        torch_util.to_numpy(_filter_field(problem, state.t)),
+        rtol=1e-12,
+        atol=1e-14,
     )
 
 
@@ -522,7 +542,9 @@ def test_step_batched_matches_sequential_fem_solves():
         record_batched.dfdx, record_sequential.dfdx, **solved_tol
     )
     np.testing.assert_allclose(
-        state_batched.xPhys.numpy(), state_sequential.xPhys.numpy(), **solved_tol
+        torch_util.to_numpy(state_batched.xPhys),
+        torch_util.to_numpy(state_sequential.xPhys),
+        **solved_tol,
     )
 
     # Only the batched path carries a stacked U forward, for the next call's warm start.

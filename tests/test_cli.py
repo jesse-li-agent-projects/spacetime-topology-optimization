@@ -83,8 +83,8 @@ def test_cli_prints_full_objective_and_post_update_volume(
         np.testing.assert_allclose(obj, record.f0val, rtol=1e-6)
         # atol matches the printed field's own rounding (%6.3f -> max rounding error
         # 5e-4); rtol=1e-6 alone would be far tighter than the print format supports.
-        np.testing.assert_allclose(vol, state.xPhys.mean(), atol=6e-4, rtol=0)
+        np.testing.assert_allclose(vol, float(state.xPhys.mean()), atol=6e-4, rtol=0)
         # Guard against vacuous passes: f0val/.obj and pre-/post-update volume must
         # actually differ here, or this test wouldn't catch printing the wrong one.
         assert abs(record.f0val - record.obj) > 1e-3
-        assert abs(state.xPhys.mean() - record.vol) > 1e-3
+        assert abs(float(state.xPhys.mean()) - record.vol) > 1e-3
