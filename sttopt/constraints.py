@@ -70,9 +70,11 @@ def stage_volume_bounds(
     build's material at the rate the build advances, via a smooth stage-membership mask
     (`compliance.time_mask`, sharpness `beta_t`) rather than a hard time cutoff.
 
-    The lower bound is an explicit negation of the upper's value and sensitivity, so
-    callers build `fval_lower = -fval_upper - 1.0e-5` and `dfdx_lower = -dfdx_upper`
-    themselves rather than differentiating a second expression.
+    The lower bound is an explicit negation of the upper's *value*, so callers build
+    `fval_lower = -fval_upper - 1.0e-5` themselves rather than evaluating a second
+    expression. The sensitivity is not negated by convention -- a caller differentiating
+    both rows gets `dfdx_lower == -dfdx_upper` to floating-point precision, not by a
+    hand-applied negation.
     """
     nely, nelx = xPhys.shape
     scale = nelx * nely * volfrac

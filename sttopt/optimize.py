@@ -433,7 +433,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     for cg_t in stage_cs:
         f0val_t = f0val_t + config.Theta * cg_t
     f0val = float(f0val_t.detach())
-    df0dx = _grad_row(f0val_t, leaves)
+    df0dx = _sensitivity_rows(f0val_t[None], xTilde, tPhys, problem.H, problem.Hs)[0]
 
     # -- Move-limit bounds on this iteration's raw MMA variables --
     xflat = state.x.flatten()
@@ -442,28 +442,18 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     xmaxx = torch.clamp(xflat + config.move, max=1.0)
     xmint = torch.clamp(tflat - config.tmove, min=0.0)
     xmaxt = torch.clamp(tflat + config.tmove, max=1.0)
-    xmin = torch.cat([xminx, xmint])
-    xmax = torch.cat([xmaxx, xmaxt])
-    xval = torch.cat([xflat, tflat])
+    xmin = _flatten_pair(xminx, xmint)
+    xmax = _flatten_pair(xmaxx, xmaxt)
+    xval = _flatten_pair(xflat, tflat)
 
-    # -- Constraints, stacked in the reference loop's exact order --
-    fval_parts: list[Tensor] = []
-    dfdx_parts: list[Tensor] = []
-
+    # -- Constraints, stacked in the reference loop's exact order. `tests/
+    # matlab_reference_loop.py` is the authority for this row order. --
     fv_vol_t = constraints.global_volume_fraction(xPhys, config.volfrac)
     vol_diag = float(xPhys.detach().sum() / (nelx * nely))
-    fval_parts.append(fv_vol_t[None])
-    dfdx_parts.append(_grad_row(fv_vol_t, leaves)[None, :])
 
     fv_cont_t = constraints.time_field_continuity(tPhys, problem.L)
-    fval_parts.append(fv_cont_t[None])
-    dfdx_parts.append(_grad_row(fv_cont_t, leaves)[None, :])
 
     fv_start_t = constraints.start_point(tPhys, problem.Nei)
-    fval_parts.append(fv_start_t)
-    dfdx_parts.append(
-        _grad_rows_batched(fv_start_t, xTilde, tPhys, problem.H, problem.Hs)
-    )
 
     stage_upper_t = torch.stack(
         [
@@ -473,14 +463,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             for t_stage in stage_times
         ]
     )
-    stage_lower_t = -stage_upper_t - 1.0e-5
-    rows_stage_upper = _grad_rows_batched(
-        stage_upper_t, xTilde, tPhys, problem.H, problem.Hs
-    )
-    rows_stage_lower = -rows_stage_upper
-    for i in range(nStage):
-        fval_parts.append(torch.stack([stage_upper_t[i], stage_lower_t[i]]))
-        dfdx_parts.append(torch.stack([rows_stage_upper[i], rows_stage_lower[i]]))
+    # Reproduces the current upper_0, lower_0, upper_1, lower_1, ... interleaving.
+    stage_rows_t = torch.stack(
+        [stage_upper_t, -stage_upper_t - 1.0e-5], dim=1
+    ).flatten()
 
     # Hotspot constraint, evaluated at this iteration's (possibly stale) `factor`.
     # `factor` is refreshed every 25 iterations from this same call's `numer`/`K_est`
@@ -499,8 +485,19 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         config.rouf,
     )
     fv_hotspot_t = state.factor * numer_t / config.Tcr - 1
-    fval_parts.append(fv_hotspot_t[None])
-    dfdx_parts.append(_grad_row(fv_hotspot_t, leaves)[None, :])
+
+    g_parts: list[Tensor] = [
+        fv_vol_t[None],
+        fv_cont_t[None],
+        fv_start_t,
+        stage_rows_t,
+        fv_hotspot_t[None],
+    ]
+    fval = torch.cat(g_parts)
+    dfdx = torch.cat(
+        [_sensitivity_rows(g, xTilde, tPhys, problem.H, problem.Hs) for g in g_parts],
+        dim=0,
+    )
 
     # -- Periodic state updates, all deferred to take effect starting *next*
     # iteration's step() call, never rescaling this iteration's own fval/dfdx mid-loop. --
@@ -519,9 +516,6 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         beta_d *= 2
     if beta_d > config.beta_d_max:
         beta_d = config.beta_d_max
-
-    fval = torch.cat(fval_parts)
-    dfdx = torch.cat(dfdx_parts, dim=0)
 
     # -- Gradient region ends: mmasub is not part of the autograd graph. df0dx/fval/
     # dfdx are the last gradient-carrying values, detached here on their way in.
