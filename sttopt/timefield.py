@@ -1,4 +1,5 @@
-"""Initial "time" field variants for space-time topology optimization.
+"""The "time" field of space-time topology optimization: its initial variants, and
+scalar measures of the optimized field.
 
 `tPhys` is initialized to one of these fields before the optimization loop starts,
 encoding a spatial ordering of when each element is expected to be "active" (e.g. a
@@ -17,7 +18,9 @@ filter and `build_problem` is where both are first constructed.
 from enum import IntEnum
 
 import numpy as np
+import torch
 from jaxtyping import Float
+from torch import Tensor
 
 
 class TimeField(IntEnum):
@@ -77,3 +80,34 @@ def init_timefield(
         return _corner_distance_grid(nelx, nely, (0, nely))
     else:
         raise ValueError(f"variant must be a TimeField member, got {variant!r}")
+
+
+# Keeps d|grad t|/d(grad t) finite where the gradient vanishes; small enough (relative
+# to the squared gradients themselves, order (1/nelx)^2) to leave the magnitude
+# unchanged to many digits wherever it is nonzero.
+_GRAD_EPS = 1e-12
+
+
+def gradient_magnitude_std(tPhys: Float[Tensor, "nely nelx"]) -> Float[Tensor, ""]:
+    """Spread of the time field's spatial gradient magnitude over the mesh interior.
+
+    The print-time gradient sets the local deposited-layer thickness (thickness goes as
+    the reciprocal of the gradient magnitude), so a field whose gradient magnitude
+    varies across the domain prints layers of uneven thickness. Penalizing the standard
+    deviation of that magnitude -- rather than the magnitude itself -- pushes toward
+    uniform layer thickness without prescribing what that thickness should be.
+
+    Gradients are 2nd-order central differences in element units, so they are defined
+    only on interior elements; the border is excluded rather than one-sided.
+
+    :param tPhys: filtered time field
+    :return: standard deviation of `|grad tPhys|` over interior elements; zero when the
+        interior holds fewer than two elements, since a standard deviation over fewer
+        than two samples has no spread to measure
+    """
+    dt_dx = (tPhys[1:-1, 2:] - tPhys[1:-1, :-2]) / 2
+    dt_dy = (tPhys[2:, 1:-1] - tPhys[:-2, 1:-1]) / 2
+    if dt_dx.numel() < 2:
+        return tPhys.new_zeros(())
+    magnitude = torch.sqrt(dt_dx**2 + dt_dy**2 + _GRAD_EPS)
+    return torch.std(magnitude)

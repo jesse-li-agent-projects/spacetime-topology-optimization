@@ -96,13 +96,14 @@ def _assert_state_fields_are_consistent(problem, state, beta_d):
     )
 
 
-def _problem(nelx=7, nely=5, nStage=3, tfield=3, Theta=1.0, **kwargs):
+def _problem(nelx=7, nely=5, nStage=3, tfield=3, Theta=1.0, Gamma=0.0, **kwargs):
     config = default_run_config(
         nelx=nelx,
         nely=nely,
         nStage=nStage,
         volfrac=VOLFRAC,
         Theta=Theta,
+        Gamma=Gamma,
         Tcr=TCR,
         print_base=timefield.TimeField(tfield).name.lower(),
         rmin=RMIN,
@@ -551,6 +552,66 @@ def test_step_objective_is_theta_weighted_sum_of_stage_compliances():
     stage_sum = f0_1 - f0_0
     assert stage_sum > 1e-3  # non-vacuous: the stage terms actually contribute
     np.testing.assert_allclose(f0_3, f0_0 + 3.0 * stage_sum, rtol=1e-9)
+
+
+def test_step_objective_adds_the_gamma_weighted_gradient_uniformity_penalty():
+    """`IterationRecord.f` is affine in `Gamma` with slope `IterationRecord.grad_std`,
+    the unweighted spread of the time field's gradient magnitude -- which pins both that
+    the penalty is wired into the objective with the right weight and that `grad_std`
+    reports the same quantity the weight multiplies.
+    """
+    nelx, nely, nStage = 10, 8, 3
+    rng = np.random.default_rng(1)
+
+    def f_at(Gamma):
+        problem = _problem(nelx=nelx, nely=nely, nStage=nStage, Gamma=Gamma)
+        state = _state_from_raw(problem, x_raw, t_raw)
+        _, rec = optimize.step(problem, state)
+        return rec.f, rec.grad_std
+
+    base = _problem(nelx=nelx, nely=nely, nStage=nStage)
+    x_raw, t_raw, _ = _draw_well_conditioned_state(base, rng)
+
+    f_0, grad_std = f_at(0.0)
+    f_100, grad_std_100 = f_at(100.0)
+
+    assert grad_std > 1e-4  # non-vacuous: the field is not already uniform
+    np.testing.assert_allclose(grad_std_100, grad_std, rtol=1e-12)
+    np.testing.assert_allclose(f_100, f_0 + 100.0 * grad_std, rtol=1e-9)
+
+
+def test_step_gradient_of_the_penalty_reaches_the_time_half_only():
+    """Raising `Gamma` changes `.df`'s time half and leaves its density half untouched:
+    the penalty reads `tPhys` alone, and the difference of the two gradients must be
+    `Gamma` times the penalty's own sensitivity."""
+    nelx, nely = 10, 8
+    rng = np.random.default_rng(3)
+    nel = nelx * nely
+    base = _problem(nelx=nelx, nely=nely)
+    x_raw, t_raw, _ = _draw_well_conditioned_state(base, rng)
+
+    def df_at(Gamma):
+        problem = _problem(nelx=nelx, nely=nely, Gamma=Gamma)
+        _, rec = optimize.step(problem, _state_from_raw(problem, x_raw, t_raw))
+        return rec.df, problem
+
+    df_0, _ = df_at(0.0)
+    Gamma = 100.0
+    df_g, problem = df_at(Gamma)
+
+    np.testing.assert_allclose(df_g[:nel], df_0[:nel], rtol=1e-9, atol=1e-9)
+
+    # The expected difference, assembled independently: the penalty's autograd
+    # sensitivity w.r.t. tPhys, pushed back through the filter as step() does.
+    t_leaf = torch_util.to_tensor(t_raw, problem.device, problem.dtype).requires_grad_(
+        True
+    )
+    tPhys = ((problem.H @ t_leaf.flatten()) / problem.Hs).reshape(nely, nelx)
+    (d_tPhys,) = torch.autograd.grad(timefield.gradient_magnitude_std(tPhys), t_leaf)
+    expected = Gamma * torch_util.to_numpy(d_tPhys).ravel()
+    np.testing.assert_allclose(
+        df_g[nel:] - df_0[nel:], expected, rtol=1e-7, atol=1e-9 * np.abs(expected).max()
+    )
 
 
 # --- Batched FEM solves inside step() -------------------------------------------------

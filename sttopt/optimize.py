@@ -110,7 +110,8 @@ class IterationRecord:
     obj: float  # whole-structure compliance (doesn't include intermediate structures)
     vol: float  # volume fraction (mean xPhys)
     tru_max: float  # Estimated max hotspot severity (debiased from P-mean)
-    f: float  # objective (weighted sum of whole & per-stage compliances)
+    grad_std: float  # spread of |grad tPhys|, the layer-uniformity penalty, unweighted
+    f: float  # objective (compliance terms plus the Gamma-weighted uniformity penalty)
     df: Float[np.ndarray, " n"]
     xmma: Float[np.ndarray, " n"]
     low: Float[np.ndarray, " n"]
@@ -404,7 +405,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     xPhys = filters.heaviside_projection(xTilde, beta_d, config.eta)
     tPhys = ((problem.H @ t.flatten()) / problem.Hs).reshape(nely, nelx)
 
-    # -- Objective: whole-structure compliance + Theta-weighted per-stage gravity compliance --
+    # -- Objective: whole-structure compliance + Theta-weighted per-stage gravity
+    # compliance + Gamma-weighted time-field gradient-uniformity penalty --
     # whole_compliance's solve and every gravity stage's go into one batched FemSolve
     # call; `torch_fem.pcg` retires each row as it converges, so the batch costs no more
     # row-iterations than solving the rows one at a time would.
@@ -432,6 +434,11 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     f_val_t = c_t
     for cg_t in stage_cs:
         f_val_t = f_val_t + config.Theta * cg_t
+
+    # Layer-thickness-uniformity penalty on the time field (config.Gamma == 0 disables).
+    grad_std_t = timefield.gradient_magnitude_std(tPhys)
+    f_val_t = f_val_t + config.Gamma * grad_std_t
+
     f_val = float(f_val_t.detach())
     df_dx = _sensitivity_rows(f_val_t[None], xTilde, tPhys, problem.H, problem.Hs)[0]
 
@@ -575,6 +582,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         obj=obj_final_only,
         vol=vol_diag,
         tru_max=tru_max,
+        grad_std=float(grad_std_t.detach()),
         f=float(f_val),
         df=torch_util.to_numpy(df_dx),
         xmma=torch_util.to_numpy(xmma),
