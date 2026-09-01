@@ -21,7 +21,7 @@ _DEFAULT_CONFIG = RunConfig.from_dict(
     json.loads((Path(__file__).parent.parent / "configs" / "default.json").read_text())
 )
 _FIXTURE_CONFIG = dataclasses.replace(
-    _DEFAULT_CONFIG, nelx=7, nely=5, nStage=2, rmin=2, lrmin=2, rmin_cond=3
+    _DEFAULT_CONFIG, nelx=7, nely=5, nStage=2, rmin=2, lrmin=2, rmin_cond=3, nloop=2
 )
 
 
@@ -31,8 +31,6 @@ def _argv(tmp_path, tag):
     return [
         "--config",
         str(config_path),
-        "--nloop",
-        "2",
         "--tag",
         tag,
     ]
@@ -78,7 +76,7 @@ def test_cli_prints_full_objective_and_post_update_volume(
     out = capsys.readouterr().out
 
     it_lines = [line for line in out.splitlines() if line.startswith("It.:")]
-    assert len(it_lines) == args.nloop
+    assert len(it_lines) == _FIXTURE_CONFIG.nloop
     for line, record, state in zip(it_lines, records, states):
         obj = float(re.search(r"Obj\.:\s*([\d.-]+)", line).group(1))
         vol = float(re.search(r"Vol\.:\s*([\d.-]+)", line).group(1))

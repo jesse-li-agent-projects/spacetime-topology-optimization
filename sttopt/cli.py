@@ -31,12 +31,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--config",
         type=Path,
         help="path to a RunConfig JSON file (e.g. a previous run's output/<tag>/"
-        "config.json). Fields not listed below "
-        "(nelx, nely, volfrac, nStage, Theta, Tcr, print_base, rmin, lrmin, rmin_cond, "
-        "beta_d_max, and the rest of build_problem's hyperparameters) are settable "
-        "only through this file. CLI flags below override values loaded from it",
+        "config.json). Fields (nelx, nely, nloop, volfrac, nStage, Theta, Tcr, "
+        "print_base, rmin, lrmin, rmin_cond, beta_d_max, and the rest of "
+        "build_problem's hyperparameters) are settable only through this file",
     )
-    parser.add_argument("--nloop", type=int, help="number of MMA iterations")
     parser.add_argument(
         "--tag",
         help="run identifier; artefacts (progress snapshots, final design, "
@@ -59,10 +57,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def resolve_config(args: argparse.Namespace) -> "RunConfig":
     """
-    Build the `RunConfig` for a run: load `--config`, then apply `--nloop` on top if
-    given. `--tag`/`--tag-force`/`--device` are run bookkeeping -- they control where/
-    whether a run's artefacts land, not the optimization itself -- so they're never
-    part of `RunConfig`; read them directly off `args` instead.
+    Build the `RunConfig` for a run: load `--config`. `--tag`/`--tag-force`/`--device`
+    are run bookkeeping -- they control where/whether a run's artefacts land, not the
+    optimization itself -- so they're never part of `RunConfig`; read them directly off
+    `args` instead.
 
     :param args: parsed CLI arguments (`parse_args`'s return value)
     :return: the resolved `RunConfig`
@@ -72,8 +70,6 @@ def resolve_config(args: argparse.Namespace) -> "RunConfig":
     from sttopt.run_config import RunConfig
 
     config = RunConfig.from_dict(json.loads(args.config.read_text()))
-    if args.nloop is not None:
-        config.nloop = args.nloop
     return config
 
 
@@ -87,6 +83,8 @@ def main(args: argparse.Namespace) -> None:
     import sttopt.torch_util as torch_util
 
     config = resolve_config(args)
+
+    assert config.nloop > 0, "Number of iterations must be positive"
 
     # Fail fast on an unwritable/clobbered output dir, before spending nloop
     # iterations of compute.
@@ -105,8 +103,7 @@ def main(args: argparse.Namespace) -> None:
     problem = optimize.build_problem(config, device=args.device)
     state = optimize.init_state(problem, beta_d=1.0)
 
-    record = None  # unset if --nloop 0 (no `step` calls)
-    for _ in range(args.nloop):
+    for _ in range(config.nloop):
         state, record = optimize.step(problem, state)
         print(
             f"It.: {state.loop:4d} Obj.: {record.f0val:10.4f} "
@@ -119,10 +116,6 @@ def main(args: argparse.Namespace) -> None:
                 t=torch_util.to_numpy(state.t),
             )
 
-    # nan if --nloop 0 (no `step` calls, so no IterationRecord to read these from)
-    f0val = record.f0val if record is not None else float("nan")
-    vol = record.vol if record is not None else float("nan")
-    tru_max = record.tru_max if record is not None else float("nan")
     np.savez(
         output_dir / "final_design.npz",
         loop=state.loop,
@@ -131,9 +124,9 @@ def main(args: argparse.Namespace) -> None:
         xPhys=torch_util.to_numpy(state.xPhys),
         t=torch_util.to_numpy(state.t),
         tPhys=torch_util.to_numpy(state.tPhys),
-        f0val=f0val,
-        vol=vol,
-        tru_max=tru_max,
+        f0val=record.f0val,
+        vol=record.vol,
+        tru_max=record.tru_max,
     )
 
 
