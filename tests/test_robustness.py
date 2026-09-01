@@ -76,7 +76,7 @@ def test_e2e_agreement_is_at_machine_precision():
             ("fval", rec.fval, cons["fval_all"][:, k - 1]),
             ("dfdx", rec.dfdx, cons["dfdx_all"][:, :, k - 1]),
         ]:
-            got, want = np.asarray(got, float), np.asarray(want, float)
+            got, want = torch_util.to_numpy(got).astype(float), np.asarray(want, float)
             err = np.abs(got - want).max() / max(np.abs(want).max(), 1e-30)
             assert err < strict, (
                 f"iteration {k} {name}: rel err {err:.2e} exceeds {strict:g} "
