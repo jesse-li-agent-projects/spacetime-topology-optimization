@@ -88,6 +88,24 @@ def init_timefield(
 _GRAD_EPS = 1e-12
 
 
+def gradient_magnitude(
+    tPhys: Float[Tensor, "nely nelx"],
+) -> Float[Tensor, "nely-2 nelx-2"]:
+    """Magnitude of the time field's spatial gradient on the mesh interior.
+
+    Gradients are 2nd-order central differences in element units, so they are defined
+    only on interior elements; the border is excluded rather than one-sided. The
+    magnitude is the reciprocal of the local deposited-layer thickness, so it is a
+    per-element view of what `gradient_magnitude_std` reduces to one number.
+
+    :param tPhys: filtered time field
+    :return: `|grad tPhys|` on the interior elements, i.e. `tPhys[1:-1, 1:-1]`
+    """
+    dt_dx = (tPhys[1:-1, 2:] - tPhys[1:-1, :-2]) / 2
+    dt_dy = (tPhys[2:, 1:-1] - tPhys[:-2, 1:-1]) / 2
+    return torch.sqrt(dt_dx**2 + dt_dy**2 + _GRAD_EPS)
+
+
 def gradient_magnitude_std(tPhys: Float[Tensor, "nely nelx"]) -> Float[Tensor, ""]:
     """Spread of the time field's spatial gradient magnitude over the mesh interior.
 
@@ -97,17 +115,12 @@ def gradient_magnitude_std(tPhys: Float[Tensor, "nely nelx"]) -> Float[Tensor, "
     deviation of that magnitude -- rather than the magnitude itself -- pushes toward
     uniform layer thickness without prescribing what that thickness should be.
 
-    Gradients are 2nd-order central differences in element units, so they are defined
-    only on interior elements; the border is excluded rather than one-sided.
-
     :param tPhys: filtered time field
-    :return: standard deviation of `|grad tPhys|` over interior elements; zero when the
-        interior holds fewer than two elements, since a standard deviation over fewer
-        than two samples has no spread to measure
+    :return: standard deviation of `gradient_magnitude(tPhys)`; zero when the interior
+        holds fewer than two elements, since a standard deviation over fewer than two
+        samples has no spread to measure
     """
-    dt_dx = (tPhys[1:-1, 2:] - tPhys[1:-1, :-2]) / 2
-    dt_dy = (tPhys[2:, 1:-1] - tPhys[:-2, 1:-1]) / 2
-    if dt_dx.numel() < 2:
+    magnitude = gradient_magnitude(tPhys)
+    if magnitude.numel() < 2:
         return tPhys.new_zeros(())
-    magnitude = torch.sqrt(dt_dx**2 + dt_dy**2 + _GRAD_EPS)
     return torch.std(magnitude)

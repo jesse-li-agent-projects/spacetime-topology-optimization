@@ -178,10 +178,17 @@ def hotspot_severity_plot(
     return ax
 
 
+def _timefield_title(compliance: float | None) -> str:
+    if compliance is None:
+        return "Time field"
+    return f"Time field (compliance: {compliance:.4g})"
+
+
 def timefield_plot(
     xPhys: Float[np.ndarray, "nely nelx"],
     tPhys: Float[np.ndarray, "nely nelx"],
     *,
+    compliance: float | None = None,
     ax: Axes | None = None,
 ) -> Axes:
     """`combination_plot` (binarized density, colored by `tPhys`, `viridis` colormap,
@@ -190,13 +197,48 @@ def timefield_plot(
 
     :param xPhys: physical density field (not yet binarized).
     :param tPhys: physical print-time field.
+    :param compliance: whole-structure compliance to report in the title, if known.
     :return: the `Axes` drawn into.
     """
     XPhys = (xPhys > 0.5).astype(xPhys.dtype)
     ax = combination_plot(
         XPhys, tPhys, eps=1.0e-1, cmap="viridis", colorbar_label="Time field", ax=ax
     )
-    ax.set_title("Time field")
+    ax.set_title(_timefield_title(compliance))
+    return ax
+
+
+def timefield_gradient_magnitude_plot(
+    xPhys: Float[np.ndarray, "nely nelx"],
+    gradient_magnitude: Float[np.ndarray, "nely-2 nelx-2"],
+    *,
+    ax: Axes | None = None,
+) -> Axes:
+    """`combination_plot` (binarized density, `magma` colormap) of the time field's
+    gradient magnitude, i.e. the reciprocal of the local deposited-layer thickness: an
+    even color means even layers.
+
+    The magnitude is a central difference, so it exists only on interior elements; the
+    mesh border is left blank rather than filled with a one-sided value.
+
+    :param xPhys: physical density field (not yet binarized), over the full mesh.
+    :param gradient_magnitude: per-element `|grad tPhys|`, e.g. from
+        `timefield.gradient_magnitude`, over the interior elements only.
+    :return: the `Axes` drawn into.
+    """
+    values = np.full(xPhys.shape, np.nan)
+    values[1:-1, 1:-1] = gradient_magnitude
+    interior = np.zeros(xPhys.shape, dtype=xPhys.dtype)
+    interior[1:-1, 1:-1] = xPhys[1:-1, 1:-1] > 0.5
+    ax = combination_plot(
+        interior,
+        values,
+        eps=1.0e-1,
+        cmap="magma",
+        colorbar_label="Time field gradient magnitude",
+        ax=ax,
+    )
+    ax.set_title("Time field gradient magnitude")
     return ax
 
 
@@ -205,6 +247,7 @@ def timefield_contour_plot(
     tPhys: Float[np.ndarray, "nely nelx"],
     nContours: int,
     *,
+    compliance: float | None = None,
     ax: Axes | None = None,
 ) -> Axes:
     """`timefield_plot` with `nContours` thin black contour lines of `tPhys` overlaid,
@@ -213,9 +256,10 @@ def timefield_contour_plot(
     :param xPhys: physical density field (not yet binarized).
     :param tPhys: physical print-time field.
     :param nContours: number of contour lines.
+    :param compliance: whole-structure compliance to report in the title, if known.
     :return: the `Axes` drawn into.
     """
-    ax = timefield_plot(xPhys, tPhys, ax=ax)
+    ax = timefield_plot(xPhys, tPhys, compliance=compliance, ax=ax)
 
     nely, nelx = tPhys.shape
     # Cell centers, in combination_plot's coordinate frame: x in [col, col+1],
@@ -231,6 +275,7 @@ def timefield_filled_contour_plot(
     tPhys: Float[np.ndarray, "nely nelx"],
     nContours: int,
     *,
+    compliance: float | None = None,
     ax: Axes | None = None,
 ) -> Axes:
     """Filled contour plot of `tPhys` with a colorbar and thin black borders between
@@ -244,6 +289,7 @@ def timefield_filled_contour_plot(
     :param xPhys: physical density field (not yet binarized).
     :param tPhys: physical print-time field.
     :param nContours: number of filled contour levels.
+    :param compliance: whole-structure compliance to report in the title, if known.
     :return: the `Axes` drawn into.
     """
     if ax is None:
@@ -267,7 +313,10 @@ def timefield_filled_contour_plot(
 
     ax.set_aspect("equal")
     ax.autoscale_view()
-    ax.set_title("Time field (filled contour)")
+    title = "Time field (filled contour)"
+    if compliance is not None:
+        title += f" (compliance: {compliance:.4g})"
+    ax.set_title(title)
     return ax
 
 
@@ -301,8 +350,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _main(args: argparse.Namespace) -> None:
     import json
 
+    import sttopt.compliance as compliance
     import sttopt.conductivity as conductivity
     import sttopt.optimize as optimize
+    import sttopt.timefield as timefield
     import sttopt.torch_util as torch_util
     from sttopt.run_config import RunConfig
 
@@ -315,9 +366,23 @@ def _main(args: argparse.Namespace) -> None:
     # but build_problem doesn't expose that setup on its own -- see cli.py's post-loop
     # section, which computes hotspot_severity the same way.
     problem = optimize.build_problem(config)
+    xPhys_t = torch_util.to_tensor(xPhys, device=problem.device, dtype=problem.dtype)
+    tPhys_t = torch_util.to_tensor(tPhys, device=problem.device, dtype=problem.dtype)
+    obj, _ = compliance.whole_compliance(
+        xPhys_t,
+        problem.KE,
+        problem.edofMat,
+        config.Emin,
+        config.Emax,
+        config.penal,
+        problem.freedofs,
+        problem.F,
+        problem.ndof,
+    )
+    obj = float(obj)
     K_est = conductivity.estimated_conductivity(
-        torch_util.to_tensor(xPhys, device=problem.device, dtype=problem.dtype),
-        torch_util.to_tensor(tPhys, device=problem.device, dtype=problem.dtype),
+        xPhys_t,
+        tPhys_t,
         problem.e1,
         problem.e2,
         problem.w,
@@ -326,6 +391,7 @@ def _main(args: argparse.Namespace) -> None:
     ).reshape(config.nely, config.nelx)
     K_est = torch_util.to_numpy(K_est)
     hotspot_severity = (1 - K_est) * (xPhys > 0.5)
+    grad_magnitude = torch_util.to_numpy(timefield.gradient_magnitude(tPhys_t))
 
     plot_dir = args.plot_dir / args.tag
     plot_dir.mkdir(parents=True, exist_ok=True)
@@ -334,17 +400,22 @@ def _main(args: argparse.Namespace) -> None:
     ax.figure.savefig(out_path)
     print(f"Saved hotspot severity plot to {out_path}")
 
-    ax = timefield_plot(xPhys, tPhys)
+    ax = timefield_plot(xPhys, tPhys, compliance=obj)
     out_path = plot_dir / "timefield.png"
     ax.figure.savefig(out_path)
     print(f"Saved time field plot to {out_path}")
 
-    ax = timefield_contour_plot(xPhys, tPhys, args.n_contours)
+    ax = timefield_gradient_magnitude_plot(xPhys, grad_magnitude)
+    out_path = plot_dir / "timefield_gradient_magnitude.png"
+    ax.figure.savefig(out_path)
+    print(f"Saved time field gradient magnitude plot to {out_path}")
+
+    ax = timefield_contour_plot(xPhys, tPhys, args.n_contours, compliance=obj)
     out_path = plot_dir / "timefield_contour.png"
     ax.figure.savefig(out_path)
     print(f"Saved time field contour plot to {out_path}")
 
-    ax = timefield_filled_contour_plot(xPhys, tPhys, args.n_contours)
+    ax = timefield_filled_contour_plot(xPhys, tPhys, args.n_contours, compliance=obj)
     out_path = plot_dir / "timefield_filled_contour.png"
     ax.figure.savefig(out_path)
     print(f"Saved time field filled contour plot to {out_path}")
