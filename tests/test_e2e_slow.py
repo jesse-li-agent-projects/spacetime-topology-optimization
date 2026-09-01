@@ -6,7 +6,7 @@ optimize.run() loop at production scale rather than the tiny E2E fixture's nloop
 at 350 -- see optimize.step's docstring), giving the constraint state time to settle
 before the assertions below are checked. It is not run to full convergence: compliance
 is still trending down slowly at 800 iterations (about 3% over the next 400), so the
-`f0val` bound below is a loose regression ceiling, not a tight optimum, per the project's
+`.f` bound below is a loose regression ceiling, not a tight optimum, per the project's
 "a 1% change in performance is often negligible" standard.
 
 tru_max is compared against the thesis's published Tmax=0.80 (p.51: "a critical
@@ -66,8 +66,8 @@ CONFIG = RunConfig(
     tmove=0.01,
 )
 
-F0VAL_CEILING = 195.0
-F0VAL_FLOOR = 185.0
+F_CEILING = 195.0
+F_FLOOR = 185.0
 TRU_MAX_TARGET = 0.8
 TRU_MAX_TOL = 0.008  # 1% of TRU_MAX_TARGET
 
@@ -77,6 +77,6 @@ def test_thesis_4_4_reproduction():
     result = optimize.run(CONFIG, beta_d=BETA_INIT)
     record = result.records[-1]
 
-    assert record.f0val < F0VAL_CEILING
-    assert record.f0val > F0VAL_FLOOR
+    assert record.f < F_CEILING
+    assert record.f > F_FLOOR
     assert abs(record.tru_max - TRU_MAX_TARGET) <= TRU_MAX_TOL

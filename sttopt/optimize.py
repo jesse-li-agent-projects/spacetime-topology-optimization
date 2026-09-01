@@ -110,14 +110,14 @@ class IterationRecord:
     obj: float  # whole-structure compliance (doesn't include intermediate structures)
     vol: float  # volume fraction (mean xPhys)
     tru_max: float  # Estimated max hotspot severity (debiased from P-mean)
-    f0val: float  # objective (weighted sum of whole & per-stage compliances)
-    df0dx: Float[np.ndarray, " n"]
+    f: float  # objective (weighted sum of whole & per-stage compliances)
+    df: Float[np.ndarray, " n"]
     xmma: Float[np.ndarray, " n"]
     low: Float[np.ndarray, " n"]
     upp: Float[np.ndarray, " n"]
     lam: Float[np.ndarray, " m"]
-    fval: Float[np.ndarray, " m"]
-    dfdx: Float[np.ndarray, "m n"]
+    g: Float[np.ndarray, " m"]
+    dg: Float[np.ndarray, "m n"]
 
 
 @dataclass(frozen=True)
@@ -383,7 +383,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     All three periodic state updates (`beta_t += 5` at loop%30==0, `beta_d *= 2` at
     loop%50==0, the hotspot `factor` refresh at loop%25==0) happen at the tail, next to
     each other, and take effect starting the *next* iteration's `step` call rather than
-    rescaling this iteration's own `fval`/`dfdx`/`xPhys` mid-loop -- a deliberate
+    rescaling this iteration's own `g_all`/`dg_dx`/`xPhys` mid-loop -- a deliberate
     simplification, not a fidelity gap. None of the three trigger against the small
     E2E fixture (`nloop=3`) -- unexercised by that fixture, not unimplemented or
     worked around.
@@ -426,14 +426,14 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         x0=state.U,
     )
 
-    obj_final_only = float(
-        c_t.detach()
-    )  # compliance of final structure only, saved for logging
-    f0val_t = c_t
+    # compliance of final structure only, saved for logging
+    obj_final_only = float(c_t.detach())
+
+    f_val_t = c_t
     for cg_t in stage_cs:
-        f0val_t = f0val_t + config.Theta * cg_t
-    f0val = float(f0val_t.detach())
-    df0dx = _sensitivity_rows(f0val_t[None], xTilde, tPhys, problem.H, problem.Hs)[0]
+        f_val_t = f_val_t + config.Theta * cg_t
+    f_val = float(f_val_t.detach())
+    df_dx = _sensitivity_rows(f_val_t[None], xTilde, tPhys, problem.H, problem.Hs)[0]
 
     # -- Move-limit bounds on this iteration's raw MMA variables --
     xflat = state.x.flatten()
@@ -448,23 +448,23 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     # -- Constraints, stacked in the reference loop's exact order. `tests/
     # matlab_reference_loop.py` is the authority for this row order. --
-    fv_vol_t = constraints.global_volume_fraction(xPhys, config.volfrac)
+    g_vol_t = constraints.global_volume_fraction(xPhys, config.volfrac)
     vol_diag = float(xPhys.detach().sum() / (nelx * nely))
 
-    fv_cont_t = constraints.time_field_continuity(tPhys, problem.L)
+    g_cont_t = constraints.time_field_continuity(tPhys, problem.L)
 
-    fv_start_t = constraints.start_point(tPhys, problem.Nei)
+    g_start_t = constraints.start_point(tPhys, problem.Nei)
 
-    stage_upper_t = torch.stack(
-        [
-            constraints.stage_volume_bounds(
-                xPhys, tPhys, float(t_stage), config.volfrac, beta_t
-            )
-            for t_stage in stage_times
-        ]
-    )
-    # Reproduces the current upper_0, lower_0, upper_1, lower_1, ... interleaving.
-    stage_rows_t = torch.stack(
+    stage_upper_t = [  # per-stage volume bounds
+        constraints.stage_volume_bounds(
+            xPhys, tPhys, float(t_stage), config.volfrac, beta_t
+        )
+        for t_stage in stage_times
+    ]
+    stage_upper_t = torch.stack(stage_upper_t)
+
+    # Interleaves upper_0, lower_0, upper_1, lower_1, ...
+    g_stage_rows_t = torch.stack(
         [stage_upper_t, -stage_upper_t - 1.0e-5], dim=1
     ).flatten()
 
@@ -484,23 +484,23 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         config.r,
         config.rouf,
     )
-    fv_hotspot_t = state.factor * numer_t / config.Tcr - 1
+    g_hotspot_t = state.factor * numer_t / config.Tcr - 1
 
     g_parts: list[Tensor] = [
-        fv_vol_t[None],
-        fv_cont_t[None],
-        fv_start_t,
-        stage_rows_t,
-        fv_hotspot_t[None],
+        g_vol_t[None],
+        g_cont_t[None],
+        g_start_t,
+        g_stage_rows_t,
+        g_hotspot_t[None],
     ]
-    fval = torch.cat(g_parts)
-    dfdx = torch.cat(
+    g_all = torch.cat(g_parts)
+    dg_dx = torch.cat(
         [_sensitivity_rows(g, xTilde, tPhys, problem.H, problem.Hs) for g in g_parts],
         dim=0,
     )
 
     # -- Periodic state updates, all deferred to take effect starting *next*
-    # iteration's step() call, never rescaling this iteration's own fval/dfdx mid-loop. --
+    # iteration's step() call, never rescaling this iteration's own g_all/dg_dx mid-loop. --
     numer = float(numer_t.detach())
     factor = state.factor
     if loop % 25 == 0:
@@ -517,8 +517,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     if beta_d > config.beta_d_max:
         beta_d = config.beta_d_max
 
-    # -- Gradient region ends: mmasub is not part of the autograd graph. df0dx/fval/
-    # dfdx are the last gradient-carrying values, detached here on their way in.
+    # -- Gradient region ends: mmasub is not part of the autograd graph. df_dx/g_all/
+    # dg_dx are the last gradient-carrying values, detached here on their way in.
     # xval/xmin/xmax never required grad -- they're built from state.x/state.t, the
     # detached fields, not the x/t leaves above.
     mma_a = torch.zeros(problem.m, device=device, dtype=dtype)
@@ -533,10 +533,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         xmax,
         state.xold1,
         state.xold2,
-        f0val,
-        df0dx.detach(),
-        fval.detach(),
-        dfdx.detach(),
+        f_val,
+        df_dx.detach(),
+        g_all.detach(),
+        dg_dx.detach(),
         state.low,
         state.upp,
         config.a0,
@@ -575,14 +575,14 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         obj=obj_final_only,
         vol=vol_diag,
         tru_max=tru_max,
-        f0val=float(f0val),
-        df0dx=torch_util.to_numpy(df0dx),
+        f=float(f_val),
+        df=torch_util.to_numpy(df_dx),
         xmma=torch_util.to_numpy(xmma),
         low=torch_util.to_numpy(low),
         upp=torch_util.to_numpy(upp),
         lam=torch_util.to_numpy(lam),
-        fval=torch_util.to_numpy(fval),
-        dfdx=torch_util.to_numpy(dfdx),
+        g=torch_util.to_numpy(g_all),
+        dg=torch_util.to_numpy(dg_dx),
     )
     return new_state, record
 

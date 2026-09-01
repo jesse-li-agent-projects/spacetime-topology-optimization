@@ -3,9 +3,9 @@
 not a MATLAB cross-check (see conftest.py, conventions.md).
 
 Split into three layers, ordered from most to least diagnostic on failure:
-  1. `test_iteration1_assembly_matches_fixture` -- iteration 1's assembled f0val/df0dx
-     and fval/dfdx against `mma.npz`'s single-shot snapshot (the only ground truth for
-     the *assembled* objective, since no other fixture covers df0dx). A pass here rules
+  1. `test_iteration1_assembly_matches_fixture` -- iteration 1's assembled `.f`/`.df`
+     and `.g`/`.dg` against `mma.npz`'s single-shot snapshot (the only ground truth for
+     the *assembled* objective, since no other fixture covers `.df`). A pass here rules
      out objective/constraint-stacking bugs before trajectory drift can hide them.
   2. `test_mma_state_threading_matches_fixture` -- per-iteration xmma/low/upp/lam against
      `mma.npz`'s xmma_all/low_all/upp_all/lam_all, validating mmasub's stateful low/upp
@@ -57,8 +57,8 @@ def _run():
 
 
 def test_iteration1_assembly_matches_fixture():
-    """Checks f0val/df0dx and fval/dfdx at iteration 1 against mma.npz's single-shot
-    snapshot. f0val in particular has no other coverage anywhere in this test suite --
+    """Checks .f/.df and .g/.dg at iteration 1 against mma.npz's single-shot
+    snapshot. .f in particular has no other coverage anywhere in this test suite --
     mmasub itself never reads it (see mma.py's docstring), so a wrong Theta-weighting
     or wrong per-stage `ti` in the objective sum would pass every other test here.
     """
@@ -68,11 +68,11 @@ def test_iteration1_assembly_matches_fixture():
 
     _, record = optimize.step(problem, state)
 
-    # f0val/df0dx are downstream of a sparse linear solve (compliance), so "solved" tier.
-    assert_close(record.f0val, fx["f0val_1"], tier="solved")
-    assert_close(record.df0dx, fx["df0dx_1"], tier="solved")
-    assert_close(record.fval, fx["fval_1"], tier="algebraic")
-    assert_close(record.dfdx, fx["dfdx_1"], tier="algebraic")
+    # .f/.df are downstream of a sparse linear solve (compliance), so "solved" tier.
+    assert_close(record.f, fx["f0val_1"], tier="solved")
+    assert_close(record.df, fx["df0dx_1"], tier="solved")
+    assert_close(record.g, fx["fval_1"], tier="algebraic")
+    assert_close(record.dg, fx["dfdx_1"], tier="algebraic")
 
 
 def test_mma_state_threading_matches_fixture():
@@ -90,7 +90,7 @@ def test_mma_state_threading_matches_fixture():
 
 def test_constraints_stacking_matches_fixture():
     """Cheap, order-sensitive check on top of test_constraints.py's per-constraint
-    fixture tests: this validates that optimize.step stacks fval/dfdx rows in the
+    fixture tests: this validates that optimize.step stacks .g/.dg rows in the
     same order the reference loop does, which per-constraint tests can't catch (a
     swapped-but-correctly-shaped row wouldn't fail them).
     """
@@ -100,8 +100,8 @@ def test_constraints_stacking_matches_fixture():
 
     for k in range(NLOOP):
         state, record = optimize.step(problem, state)
-        assert_close(record.fval, fx["fval_all"][:, k], tier="e2e", iteration=k + 1)
-        assert_close(record.dfdx, fx["dfdx_all"][:, :, k], tier="e2e", iteration=k + 1)
+        assert_close(record.g, fx["fval_all"][:, k], tier="e2e", iteration=k + 1)
+        assert_close(record.dg, fx["dfdx_all"][:, :, k], tier="e2e", iteration=k + 1)
 
 
 def test_e2e_trajectory_matches_fixture():
@@ -135,11 +135,11 @@ def test_hotspot_factor_refresh_at_loop_25():
     than fabricating a `loop=24` state directly -- stale `low`/`upp`/`xold1`/`xold2` at an
     unrealistic loop count makes `mmasub`'s inner Newton loop fail to converge, an
     incidental warning unrelated to what this test targets) and checks the 25th call's
-    returned `factor`, `fval`, and `dfdx` against an independent recomputation, rather
+    returned `factor`, `.g`, and `.dg` against an independent recomputation, rather
     than relying on `step`'s internals to be self-consistently correct.
 
     The refresh takes effect starting the *next* iteration, not the one that computes
-    it: loop 25's own `fval`/`dfdx` are evaluated at the old `factor`, and the new
+    it: loop 25's own `.g`/`.dg` are evaluated at the old `factor`, and the new
     `factor` only lands in `new_state.factor` for loop 26 onward.
     """
     problem = optimize.build_problem(CONFIG)
@@ -197,7 +197,7 @@ def test_hotspot_factor_refresh_at_loop_25():
     # a recompute at `expected_factor`. `tru_max`, a pure diagnostic, uses the refreshed
     # factor immediately.
     nel = problem.config.nelx * problem.config.nely
-    assert_close(record.fval[-1], old.fval, tier="algebraic")
-    assert_close(record.dfdx[-1, :nel], old.df1, tier="algebraic")
-    assert_close(record.dfdx[-1, nel:], old.dt1, tier="algebraic")
+    assert_close(record.g[-1], old.fval, tier="algebraic")
+    assert_close(record.dg[-1, :nel], old.df1, tier="algebraic")
+    assert_close(record.dg[-1, nel:], old.dt1, tier="algebraic")
     assert_close(record.tru_max, expected_factor * numer, tier="algebraic")

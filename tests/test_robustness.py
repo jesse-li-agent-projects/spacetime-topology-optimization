@@ -73,8 +73,8 @@ def test_e2e_agreement_is_at_machine_precision():
             ("obj", np.array([rec.obj]), np.array([e2e["objf"][k - 1]])),
             ("vol", np.array([rec.vol]), np.array([e2e["vol"][k - 1]])),
             ("tru_max", np.array([rec.tru_max]), np.array([e2e["tru_max_all"][k - 1]])),
-            ("fval", rec.fval, cons["fval_all"][:, k - 1]),
-            ("dfdx", rec.dfdx, cons["dfdx_all"][:, :, k - 1]),
+            ("fval", rec.g, cons["fval_all"][:, k - 1]),
+            ("dfdx", rec.dg, cons["dfdx_all"][:, :, k - 1]),
         ]:
             got, want = torch_util.to_numpy(got).astype(float), np.asarray(want, float)
             err = np.abs(got - want).max() / max(np.abs(want).max(), 1e-30)
