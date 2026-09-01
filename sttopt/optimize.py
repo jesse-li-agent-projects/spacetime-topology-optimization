@@ -163,10 +163,6 @@ def build_problem(
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
-    if device.type == "cuda" and device.index is None:
-        # Every tensor built below lands on a concrete indexed device (e.g. `cuda:0`),
-        # so an index-less `problem.device` would never compare equal to them.
-        device = torch.device("cuda", torch.cuda.current_device())
     batch_fem_solves = config.batch_fem_solves
     if batch_fem_solves is None:
         # Part 1 (plans/torch_port_part2.md Phase 3.3) measured a 1.3-1.4x win at

@@ -127,16 +127,15 @@ def test_build_problem_default_device_and_dtype():
     """`build_problem`'s default device (CUDA when available, else CPU) and default
     `dtype=torch.float64` reach every real-valued tensor field of the returned
     `Problem`."""
-    expected_device = (
-        torch.device("cuda", torch.cuda.current_device())
-        if torch.cuda.is_available()
-        else torch.device("cpu")
-    )
+    # `torch.device("cuda") != torch.device("cuda", 0)`, but every tensor actually
+    # built on CUDA reports the latter -- so this test (and the codebase generally)
+    # compares device *type*, not exact `torch.device` equality.
+    expected_type = "cuda" if torch.cuda.is_available() else "cpu"
     problem = _problem()
-    assert problem.device == expected_device
+    assert problem.device.type == expected_type
     assert problem.dtype == torch.float64
     for name, t in _tensor_fields(problem):
-        assert t.device == expected_device, name
+        assert t.device.type == expected_type, name
         if t.dtype.is_floating_point:
             assert t.dtype == torch.float64, name
 
@@ -163,12 +162,12 @@ def test_init_state_and_step_output_are_tensors_on_problem_device_and_dtype():
     problem = _problem()
     state = optimize.init_state(problem, BETA_D)
     for name, t in _tensor_fields(state):
-        assert t.device == problem.device, name
+        assert t.device.type == problem.device.type, name
         assert t.dtype == problem.dtype, name
 
     state, _ = optimize.step(problem, state)
     for name, t in _tensor_fields(state):
-        assert t.device == problem.device, name
+        assert t.device.type == problem.device.type, name
         assert t.dtype == problem.dtype, name
 
 
