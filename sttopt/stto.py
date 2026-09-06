@@ -187,15 +187,8 @@ def build_problem(
     C = gravity.gravity_load_matrix(nelx, nely)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, config.rmin_cond)
 
-    # Print-start element(s): the whole first mesh column for tfield != CORNER, the
-    # single origin element for tfield == CORNER (constraints.start_point's own
-    # docstring). Element `row*nelx` is grid position `(row, 0)` per conventions.md's
-    # C-order element enumeration -- i.e. column 0, every row.
-    Nei = (
-        np.array([0])
-        if tfield == timefield.TimeField.CORNER
-        else np.arange(nely) * nelx
-    )
+    # Print-start element(s), per constraints.start_point's own docstring.
+    Nei = timefield.base_elements(nelx, nely, tfield)
 
     n = 2 * nelx * nely
     # MATLAB hardcodes `m = 1 + 1 + nely + 2*nStage + 1` -- only self-consistent when

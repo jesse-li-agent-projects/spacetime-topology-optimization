@@ -20,7 +20,7 @@ import numpy as np
 import torch
 
 import sttopt.fem as fem
-from sttopt.run_config import RunConfig
+from sttopt.run_config import RunConfig, SeqRunConfig
 
 
 def _as_numpy(x) -> np.ndarray:
@@ -46,6 +46,7 @@ def tti(x) -> torch.Tensor:
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "configs" / "default.json"
+DEFAULT_SEQ_CONFIG_PATH = Path(__file__).parent.parent / "configs" / "seq_default.json"
 
 
 def default_run_config(**overrides) -> RunConfig:
@@ -55,6 +56,13 @@ def default_run_config(**overrides) -> RunConfig:
     production default.
     """
     base = RunConfig.from_dict(json.loads(DEFAULT_CONFIG_PATH.read_text()))
+    return dataclasses.replace(base, **overrides)
+
+
+def default_seq_run_config(**overrides) -> SeqRunConfig:
+    """`SeqRunConfig` loaded from `configs/seq_default.json`, `default_run_config`'s
+    counterpart for `seqopt`."""
+    base = SeqRunConfig.from_dict(json.loads(DEFAULT_SEQ_CONFIG_PATH.read_text()))
     return dataclasses.replace(base, **overrides)
 
 
