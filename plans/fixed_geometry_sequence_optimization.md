@@ -86,7 +86,27 @@ changing it is a separate question from adding a new problem. Do not touch it in
 
 ---
 
-## Open question: the time field over void has a spurious optimization direction
+## Accepted: the time field over void stays a free design variable
+
+**Decision: change nothing.** Void elements keep their time variables, and the optimizer and the
+regularizer handle them, exactly as they would in STTO.
+
+The reason is what `seqopt` is *for*. It is a proving ground for the full space-time approach,
+and in that approach there is no fixed void set to special-case — density is a design variable,
+so which elements are "void" changes every iteration. Any mechanism that freezes or slaves void
+times by identity would work here and then fail to transfer, and would make results from the
+proving ground say less about the thing being proved. Maximizing similarity to the eventual full
+method is worth more than removing the artefact below.
+
+What follows: the design vector stays `n = nel`, `build_problem` needs no solid/void
+partitioning, and nothing anywhere keys behaviour off which elements hold material — density
+enters only as a *weight* (as in `GRADIENT_CV`), never as a mask on the design space. Weighting
+transfers to STTO; masking does not.
+
+The rest of this section documents the artefact being accepted, because a known effect that is
+never written down gets rediscovered as a bug.
+
+### The artefact
 
 Measured, not theorized. On a 30x20 L-shape with `rmin_cond=6`, holding the time field over the
 **solid** elements fixed at a bottom-up ramp and changing only the values over **void**:
@@ -112,20 +132,33 @@ build direction, so the denominator is a geometric constant. The space-time port
 `y_j <= y_i` test with the differentiable time-order mask `FT`, and applies it to numerator and
 denominator alike — which is what makes the normalizer design-dependent.
 
-This is not simply a porting bug. Once deposition order *is* the design variable, "restricted to
-what has already been deposited" and "independent of the design" cannot both hold, and the port
-picked one. But the consequence should be chosen deliberately. It affects STTO latently too;
-`seqopt` is where it bites, because with the geometry frozen this is one of the few directions
-left.
+This is not a porting bug, and the `FT` in the denominator is not a port artefact either
+(`conductivity_estimation_stto_main.m` line 388: `Nsum3(i)=sum(ti_e.*w_e)` with
+`ti_e = FT_el{i}`). Once deposition order *is* a design variable, "restricted to what has
+already been deposited" and "independent of the design" cannot both hold. The source picked one.
+STTO carries the same property; `seqopt` is only where it is easiest to see, because with the
+geometry frozen there is less else going on.
 
-Candidate resolutions, none to be adopted without the user deciding:
-1. Take the time field over void out of the design vector and slave it to a smooth extension of
-   the solid field. Closest to the paper: void below the deposition front counts toward the
-   normalizer, void above it does not, and there is nothing to game.
-2. Freeze void times at 0. Void then always counts in the normalizer, preserving
-   "surrounded by void is hot", at the cost of counting void that lies above the front.
-3. Leave it, and rely on the continuity constraint to limit how far void times can drift from
-   their solid neighbours. Cheapest; leaves the direction open.
+Note also what the artefact is *not*. Density weighting is not missing: the numerator has
+`x_j^q`, and Das2025 Eq. (6) has no density in its denominator either. And void elements are
+already all but excluded as *evaluation* points, since `cond_p = T^p * x^(r*p)` with `r*p = 1.25`
+annihilates a void element's own contribution. Void must stay counted as a *neighbour* — drop it
+from the denominator and a thin strut hanging in space reads as perfectly cool, inverting the
+proxy.
+
+### What to watch, since it is not being fixed
+
+The continuity constraint is now the only thing limiting how far void times drift from their
+solid neighbours — the density filter used to do some of that job implicitly, and `seqopt` no
+longer has it. Two consequences for the first real runs:
+
+- If the objective improves markedly while the time field over the *part* barely changes, this
+  artefact is what improved. Compare the time field over solid between iteration 0 and the end
+  before believing a large reduction.
+- This raises the stakes on the still-open question of whether `constraints.time_field_continuity`
+  should be density-weighted. Note that weighting `L` by density *would* transfer to STTO, so it
+  does not fall foul of the reasoning above — unlike freezing or slaving void times, which
+  would.
 
 # Phase 0 — rename `optimize.py` -> `stto.py`, `cli.py` -> `stto_cli.py`
 
@@ -339,15 +372,26 @@ This is a pure move.
    and the build-plate element set, and have `seqopt` select it; do not contort the existing
    signature.
 
-   Implementation: Dijkstra over the 8-connected element graph restricted to solid elements,
-   edge weight `1` or `sqrt(2)` by step, via `scipy.sparse.csgraph.dijkstra` with a multi-source
-   start — scipy is already a dependency, so this needs no new one. Grid-graph metrication error
-   of a few percent is irrelevant for an initialization; do not reach for fast marching.
+   Implementation: a single multi-source Dijkstra over the 8-connected element graph, via
+   `scipy.sparse.csgraph.dijkstra` — scipy is already a dependency, so this needs no new one.
+   Grid-graph metrication error of a few percent is irrelevant for an initialization; do not
+   reach for fast marching.
 
-   Two cases the implementation must handle explicitly rather than by accident: solid elements
-   with no path to the build plate (a disconnected island — infinite distance; decide and
-   document what they get), and what the field holds over **void**, which is not a free choice
-   — see the open question about the spurious void direction above.
+   Edge cost is the step length (`1` or `sqrt(2)`), multiplied by a fixed penalty when the step
+   enters a void element. **One graph over the whole mesh, not a solid-only graph**: the time
+   field is defined over every element (void times are design variables — see above), so the
+   initialization must be too. A penalized traversal gives that in one mechanism, with no
+   infinities to patch, no second field glued on at the material boundary, and no discontinuity
+   there for the continuity constraint to immediately fight. Void ends up later than the solid
+   front beside it, which is the sensible reading of never being deposited.
+
+   The penalty is a named module constant with a comment, not a config field — it shifts an
+   initialization, not a result. Normalize the finished field to `[0, 1]`.
+
+   Handle explicitly rather than by accident: solid elements with no path to the build plate.
+   With a finite void penalty they are reachable rather than infinite, so this degrades
+   gracefully — but say in the docstring that a disconnected island gets a late time by way of
+   the surrounding void, since that is a modelling statement, not an implementation detail.
 
 2. `base_elements(nelx, nely, variant) -> Int[np.ndarray, " k"]` — the candidate print-start
    elements for a variant: `[0]` for `CORNER`, `arange(nely) * nelx` (column 0) for `EDGE` and
@@ -615,6 +659,13 @@ beside `stto.sh`.
 - `sttopt/conventions.md`: record that the two problems treat the time field differently — STTO
   filters it with the density filter, `seqopt` uses it raw — and why (smoothing couples print
   times across void). Keep it to a few lines; the reasoning lives here in the plan.
+- `sttopt/conductivity.py`: two deviations from Das2025 are currently undocumented and should be
+  named where the code implements them. The paper's weight is radial **times angular**, the
+  angular part favouring the build direction; the port keeps only the radial, because the build
+  direction is not fixed when the deposition order is a design variable — a known future
+  direction, not an oversight. And the paper's Eq. (6) weights neighbours by `rho_j` where the
+  port uses `x_j^q` with `q = 3`, a SIMP-style penalization of intermediate density that the
+  paper does not have.
 - A short section in the repo's structure notes describing when to use `stto_cli` versus
   `seqopt_cli`.
 - Move this plan to `plans/archive/` and update `plans/CLAUDE.md`.
