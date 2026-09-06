@@ -79,7 +79,7 @@ import time
 
 import numpy as np
 
-import sttopt.optimize as optimize
+import sttopt.stto as stto
 from sttopt.run_config import RunConfig
 
 # Matches tests/test_e2e_slow.py's reproduction of the thesis Chapter 4.4 experiment.
@@ -245,7 +245,7 @@ def generate(
             rmin_cond=rmin_cond,
             **_EXTRA_CONFIG_FIELDS,
         )
-        result = optimize.run(config, beta_d=BETA_INIT, device=device)
+        result = stto.run(config, beta_d=BETA_INIT, device=device)
         elapsed = time.perf_counter() - t0
         print(
             f"{nelx}x{nely}: {nloop} iterations in {elapsed / 60:.1f} min", flush=True

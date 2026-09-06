@@ -81,7 +81,7 @@ assume uniformity, e.g. volume-fraction constraints) — a larger change than ad
 guard, so no code currently asserts uniformity; this note is the single place that
 assumption is recorded.
 
-`optimize.build_problem` rejects `nelx == nely == 1`, the one mesh that degenerates both
+`stto.build_problem` rejects `nelx == nely == 1`, the one mesh that degenerates both
 the CORNER/OPPOSITE_CORNER time fields (a zero max distance to normalize by) and the
 continuity filter (a zero neighbour count); it guards them together because it is where
 both are first built. A lone-1 mesh (`nelx == 1` xor `nely == 1`) stays legal, but

@@ -1,6 +1,6 @@
-"""First-principles tests for `sttopt.optimize`: the wiring layer.
+"""First-principles tests for `sttopt.stto`: the wiring layer.
 
-Every module `optimize.step` calls owns its own FD/fixture tests, and every one of those
+Every module `stto.step` calls owns its own FD/fixture tests, and every one of those
 passing tells you nothing about whether `step` *assembles* them correctly. The assembly
 is where the `Theta` weighting, the `H @ (... / Hs)` chain rules and the constraint row
 order live, and until now it was covered only by the `.mat` trajectory fixtures and the
@@ -26,7 +26,7 @@ import torch
 
 import sttopt.compliance as compliance
 import sttopt.filters as filters
-import sttopt.optimize as optimize
+import sttopt.stto as stto
 import sttopt.timefield as timefield
 import sttopt.torch_util as torch_util
 import tests.reference.fem as fem_ref
@@ -48,7 +48,7 @@ def _filter_field(problem, raw):
 
     `raw` may be a plain NumPy array (an FD test's perturbed design point) or a
     `State` tensor field; `problem.H`/`.Hs` are always tensors. Returns a tensor,
-    matching what `optimize.step`/`init_state` themselves compute.
+    matching what `stto.step`/`init_state` themselves compute.
     """
     device, dtype = problem.device, problem.dtype
     flat = (problem.H @ torch_util.to_tensor(raw, device, dtype).flatten()) / problem.Hs
@@ -58,7 +58,7 @@ def _filter_field(problem, raw):
 # --- init_state: the initialization invariant ----------------------------------------
 #
 # `State` carries two fields per design variable, and their relationship is the whole
-# point of the split (see optimize.py's module docstring): `x`/`t` are the *raw* design
+# point of the split (see stto.py's module docstring): `x`/`t` are the *raw* design
 # variables MMA reads and writes, and `xTilde`/`xPhys`/`tPhys` are *derived* from them by
 # the density filter (and, for density, the Heaviside projection). Every iteration of
 # `step` maintains exactly that relationship on the state it emits:
@@ -110,7 +110,7 @@ def _problem(nelx=7, nely=5, nStage=3, tfield=3, Theta=1.0, Gamma=0.0, **kwargs)
         lrmin=LRMIN,
         rmin_cond=RMIN_COND,
     )
-    return optimize.build_problem(config, **kwargs)
+    return stto.build_problem(config, **kwargs)
 
 
 # --- Phase 3.1 (plans/torch_port_part2.md): the tensor boundary -----------------------
@@ -162,12 +162,12 @@ def test_init_state_and_step_output_are_tensors_on_problem_device_and_dtype():
     `step` must land back on `problem.device`/`.dtype`, not wherever the (still-NumPy)
     leaf math happened to leave its output."""
     problem = _problem()
-    state = optimize.init_state(problem, BETA_D)
+    state = stto.init_state(problem, BETA_D)
     for name, t in _tensor_fields(state):
         assert t.device.type == problem.device.type, name
         assert t.dtype == problem.dtype, name
 
-    state, _ = optimize.step(problem, state)
+    state, _ = stto.step(problem, state)
     for name, t in _tensor_fields(state):
         assert t.device.type == problem.device.type, name
         assert t.dtype == problem.dtype, name
@@ -216,7 +216,7 @@ def test_init_state_seeds_the_raw_fields(tfield):
     print time. These are the variables MMA's move limits are measured against, so they
     are what "initial design" means."""
     problem = _problem(tfield=tfield)
-    state = optimize.init_state(problem, BETA_D)
+    state = stto.init_state(problem, BETA_D)
 
     np.testing.assert_allclose(torch_util.to_numpy(state.x), VOLFRAC, rtol=1e-14)
     np.testing.assert_allclose(
@@ -234,7 +234,7 @@ def test_init_state_density_half_is_derived_from_its_seed(tfield):
     it pins the intended relationship rather than tolerating it: `xTilde` must equal the
     filtered raw field, and `xPhys` the projection of that."""
     problem = _problem(tfield=tfield)
-    state = optimize.init_state(problem, BETA_D)
+    state = stto.init_state(problem, BETA_D)
 
     np.testing.assert_allclose(
         torch_util.to_numpy(state.xTilde),
@@ -266,7 +266,7 @@ def test_init_state_time_half_is_derived_from_its_seed(tfield):
     The premise assertion below pins exactly that, so the test cannot pass vacuously.
     """
     problem = _problem(tfield=tfield)
-    state = optimize.init_state(problem, BETA_D)
+    state = stto.init_state(problem, BETA_D)
 
     seed = timefield.init_timefield(problem.config.nelx, problem.config.nely, tfield)
     assert not np.allclose(torch_util.to_numpy(_filter_field(problem, seed)), seed), (
@@ -287,9 +287,9 @@ def test_step_output_state_is_self_consistent(tfield):
     iteration. This is the behaviour `init_state` is being specified against above, so
     pinning it here keeps the target from drifting."""
     problem = _problem(tfield=tfield)
-    state = optimize.init_state(problem, BETA_D)
+    state = stto.init_state(problem, BETA_D)
     for _ in range(3):
-        state, _ = optimize.step(problem, state)
+        state, _ = stto.step(problem, state)
         _assert_state_fields_are_consistent(problem, state, state.beta_d)
 
 
@@ -309,7 +309,7 @@ def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, factor=1.0, beta_t=
     nely, nelx = problem.config.nely, problem.config.nelx
     device, dtype = problem.device, problem.dtype
     xTilde = _filter_field(problem, x_raw)
-    return optimize.State(
+    return stto.State(
         x=torch_util.to_tensor(x_raw, device, dtype),
         xTilde=xTilde,
         xPhys=filters.heaviside_projection(xTilde, beta_d, problem.config.eta),
@@ -346,7 +346,7 @@ MAX_COND = 1e10
 
 def _well_conditioned(problem, state, beta_t):
     # tests/reference/fem.py's assemble_stiffness -- the NumPy oracle, unrelated to
-    # optimize.step's own torch/MGCG solve -- is the cheapest way to get a dense
+    # stto.step's own torch/MGCG solve -- is the cheapest way to get a dense
     # `K_free` to condition-number-check, so `problem`'s tensor fields get bridged to
     # NumPy just for this.
     p = problem
@@ -410,15 +410,9 @@ def test_sensitivity_rows_batched_matches_unbatched():
     out_b = torch.sum(xTilde) - torch.sum(tPhys**2)
     outputs = torch.stack([out_a, out_b])
 
-    rows_batched = optimize._sensitivity_rows(
-        outputs, xTilde, tPhys, problem.H, problem.Hs
-    )
-    row_a = optimize._sensitivity_rows(
-        out_a[None], xTilde, tPhys, problem.H, problem.Hs
-    )[0]
-    row_b = optimize._sensitivity_rows(
-        out_b[None], xTilde, tPhys, problem.H, problem.Hs
-    )[0]
+    rows_batched = stto._sensitivity_rows(outputs, xTilde, tPhys, problem.H, problem.Hs)
+    row_a = stto._sensitivity_rows(out_a[None], xTilde, tPhys, problem.H, problem.Hs)[0]
+    row_b = stto._sensitivity_rows(out_b[None], xTilde, tPhys, problem.H, problem.Hs)[0]
 
     torch.testing.assert_close(rows_batched[0], row_a, rtol=1e-10, atol=0.0)
     torch.testing.assert_close(rows_batched[1], row_b, rtol=1e-10, atol=0.0)
@@ -465,7 +459,7 @@ def test_step_assembled_sensitivities_match_finite_differences(nStage, tfield, T
 
     rng = np.random.default_rng(0)
     x_raw, t_raw, state = _draw_well_conditioned_state(problem, rng)
-    _, record = optimize.step(problem, state)
+    _, record = stto.step(problem, state)
 
     # Row count follows from the stack `step` builds: volume, continuity, one row per
     # print-start element, an upper and a lower bound per stage, and the hotspot row.
@@ -479,7 +473,7 @@ def test_step_assembled_sensitivities_match_finite_differences(nStage, tfield, T
     assert np.abs(record.dg).max(axis=1).min() > 1e-3
 
     def values_at(x_raw, t_raw):
-        _, rec = optimize.step(problem, _state_from_raw(problem, x_raw, t_raw))
+        _, rec = stto.step(problem, _state_from_raw(problem, x_raw, t_raw))
         return rec.f, rec.g
 
     fd_f0 = np.zeros(problem.n)
@@ -536,7 +530,7 @@ def test_step_objective_is_theta_weighted_sum_of_stage_compliances():
     def f_at(Theta):
         problem = _problem(nelx=nelx, nely=nely, nStage=nStage, Theta=Theta)
         state = _state_from_raw(problem, x_raw, t_raw)
-        _, rec = optimize.step(problem, state)
+        _, rec = stto.step(problem, state)
         return rec.f, rec.obj
 
     base = _problem(nelx=nelx, nely=nely, nStage=nStage)
@@ -566,7 +560,7 @@ def test_step_objective_adds_the_gamma_weighted_gradient_uniformity_penalty():
     def f_at(Gamma):
         problem = _problem(nelx=nelx, nely=nely, nStage=nStage, Gamma=Gamma)
         state = _state_from_raw(problem, x_raw, t_raw)
-        _, rec = optimize.step(problem, state)
+        _, rec = stto.step(problem, state)
         return rec.f, rec.grad_std
 
     base = _problem(nelx=nelx, nely=nely, nStage=nStage)
@@ -592,7 +586,7 @@ def test_step_gradient_of_the_penalty_reaches_the_time_half_only():
 
     def df_at(Gamma):
         problem = _problem(nelx=nelx, nely=nely, Gamma=Gamma)
-        _, rec = optimize.step(problem, _state_from_raw(problem, x_raw, t_raw))
+        _, rec = stto.step(problem, _state_from_raw(problem, x_raw, t_raw))
         return rec.df, problem
 
     df_0, _ = df_at(0.0)
@@ -624,7 +618,7 @@ def test_step_state_U_does_not_carry_grad_across_iterations():
     should carry gradient across iterations -- storing it undetached lets `FemSolve`'s
     `x0` argument wire one iteration's whole multigrid hierarchy into the next
     iteration's autograd graph, and the next iteration's `U` does the same to the one
-    after that. Confirmed by direct measurement (see `optimize.step`'s comment on `U=`):
+    after that. Confirmed by direct measurement (see `stto.step`'s comment on `U=`):
     left undetached, this chains every iteration's hierarchy into one never-freed graph,
     growing GPU memory ~180 MB/step at 180x60 and OOMing an 8 GB card by iteration ~40;
     detached, memory is flat. Runs a few iterations rather than reproducing the OOM
@@ -633,10 +627,10 @@ def test_step_state_U_does_not_carry_grad_across_iterations():
     guard.
     """
     problem = _problem(nelx=6, nely=4, nStage=3)
-    state = optimize.init_state(problem, BETA_D)
+    state = stto.init_state(problem, BETA_D)
 
     for _ in range(3):
-        state, _ = optimize.step(problem, state)
+        state, _ = stto.step(problem, state)
         assert state.U is not None
         assert not state.U.requires_grad
         assert state.U.grad_fn is None
@@ -650,7 +644,7 @@ def test_step_batched_warm_starts_from_previous_iteration():
     import sttopt.torch_mg as torch_mg
 
     problem = _problem(nelx=10, nely=8, nStage=3)
-    state = optimize.init_state(problem, BETA_D)
+    state = stto.init_state(problem, BETA_D)
 
     counts = []
     orig_pcg = torch_mg.torch_fem.pcg
@@ -662,9 +656,9 @@ def test_step_batched_warm_starts_from_previous_iteration():
 
     torch_mg.torch_fem.pcg = counting_pcg
     try:
-        state1, _ = optimize.step(problem, state)
+        state1, _ = stto.step(problem, state)
         cold_iters = counts[-1]
-        state2, _ = optimize.step(problem, state1)
+        state2, _ = stto.step(problem, state1)
         warm_iters = counts[-1]
     finally:
         torch_mg.torch_fem.pcg = orig_pcg
@@ -677,11 +671,11 @@ def test_step_batched_warm_starts_from_previous_iteration():
 #
 # The test Phase 0a's original bug (and its autograd resurrection) would have caught:
 # a late, near-binary snapshot with exact zeros in xPhys, run through the real
-# optimize.step wiring end to end.
+# stto.step wiring end to end.
 
 
 def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
-    """`optimize.step`'s assembled `IterationRecord.df`/`.dg` must stay finite on a real late-run
+    """`stto.step`'s assembled `IterationRecord.df`/`.dg` must stay finite on a real late-run
     snapshot with exact zeros in `xPhys` (`x_90x30_it0800`, from
     `tests/fixtures/torch_port_designs.npz` -- generated by
     `generate_torch_port_designs.py` at the production filter radii/schedules, not
@@ -709,11 +703,11 @@ def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
         lrmin=2.0,
         rmin_cond=6.0,
     )
-    problem = optimize.build_problem(config)
+    problem = stto.build_problem(config)
     xPhys = torch_util.to_tensor(x, problem.device, problem.dtype)
     tPhys = torch_util.to_tensor(t, problem.device, problem.dtype)
     xval = torch.cat([xPhys.flatten(), tPhys.flatten()])
-    state = optimize.State(
+    state = stto.State(
         x=xPhys,
         xTilde=xPhys,
         xPhys=xPhys,
@@ -730,7 +724,7 @@ def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
         U=None,
     )
 
-    _, record = optimize.step(problem, state)
+    _, record = stto.step(problem, state)
     assert np.all(np.isfinite(record.df))
     assert np.all(np.isfinite(record.dg))
     assert np.all(np.isfinite(record.g))

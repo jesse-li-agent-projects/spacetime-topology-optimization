@@ -11,12 +11,12 @@ places element `(row, col)` at `x in [col, col+1]`, `y in [-(row+1), -row]` (y f
 `stage_boundary_plot` places it at `x in [col+0.5, col+1.5]`, `y in [row+0.5, row+1.5]`
 (no flip, half-cell offset). The two frames are related by `x' = x - 0.5, y' = 0.5 - y`;
 `stage_boundary_plot(..., combination_coords=True)` applies it to compose both plots on
-one `Axes` (as `cli.py` does). See `conventions.md`.
+one `Axes` (as `stto_cli.py` does). See `conventions.md`.
 
 Run as a script (`python -m sttopt.viz <tag>`) to regenerate plots for a saved run from
 its `output/<tag>/` artefacts, without rerunning the optimization. This reads
 `final_design.npz`'s `xPhys`/`tPhys` -- the state *after* the last MMA update -- whereas
-`cli.py`'s own end-of-run plot uses `prev_state` (the state entering that last update).
+`stto_cli.py`'s own end-of-run plot uses `prev_state` (the state entering that last update).
 """
 
 import argparse
@@ -155,7 +155,7 @@ def hotspot_severity_plot(
 ) -> Axes:
     """`combination_plot` (binarized density, colored by `hotspot_severity`, `plasma`
     colormap, labelled horizontal colorbar) with `stage_boundary_plot` overlaid in its
-    `combination_coords` frame -- the plot recipe `cli.py` saves as
+    `combination_coords` frame -- the plot recipe `stto_cli.py` saves as
     `hotspot_severity.png`.
 
     :param xPhys: physical density field (not yet binarized).
@@ -352,7 +352,7 @@ def _main(args: argparse.Namespace) -> None:
 
     import sttopt.compliance as compliance
     import sttopt.conductivity as conductivity
-    import sttopt.optimize as optimize
+    import sttopt.stto as stto
     import sttopt.timefield as timefield
     import sttopt.torch_util as torch_util
     from sttopt.run_config import RunConfig
@@ -363,9 +363,9 @@ def _main(args: argparse.Namespace) -> None:
     xPhys, tPhys = design["xPhys"], design["tPhys"]
 
     # Only e1/e2/w/q/rouf (the conductivity-estimation neighborhood) are needed below,
-    # but build_problem doesn't expose that setup on its own -- see cli.py's post-loop
+    # but build_problem doesn't expose that setup on its own -- see stto_cli.py's post-loop
     # section, which computes hotspot_severity the same way.
-    problem = optimize.build_problem(config)
+    problem = stto.build_problem(config)
     xPhys_t = torch_util.to_tensor(xPhys, device=problem.device, dtype=problem.dtype)
     tPhys_t = torch_util.to_tensor(tPhys, device=problem.device, dtype=problem.dtype)
     obj, _ = compliance.whole_compliance(

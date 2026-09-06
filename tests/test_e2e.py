@@ -1,4 +1,4 @@
-"""End-to-end test for sttopt.optimize against the full small-grid trajectory
+"""End-to-end test for sttopt.stto against the full small-grid trajectory
 (`tests/fixtures/generate_fixtures.py`'s main loop) -- a golden-regression fixture,
 not a MATLAB cross-check (see conftest.py, conventions.md).
 
@@ -12,7 +12,7 @@ Split into three layers, ordered from most to least diagnostic on failure:
      threading across multiple calls (no other test exercises this: test_mma.py only
      covers iteration 1, where low/upp start at 0 and are simply reinitialized).
   3. `test_e2e_trajectory_matches_fixture` -- the primary regression check: xPhys/tPhys
-     trajectory, objf, vol, tru_max_all, via optimize.run().
+     trajectory, objf, vol, tru_max_all, via stto.run().
 """
 
 import numpy as np
@@ -20,7 +20,7 @@ import torch
 
 import sttopt.conductivity as conductivity
 import sttopt.filters as filters
-import sttopt.optimize as optimize
+import sttopt.stto as stto
 import tests.reference.conductivity as conductivity_ref
 from conftest import assert_close, default_run_config, load_fixture_npz
 
@@ -50,10 +50,8 @@ CONFIG = default_run_config(
 
 
 def _run():
-    problem = optimize.build_problem(CONFIG)
-    return optimize.run_from_state(
-        problem, optimize.init_state(problem, BETA_INIT), NLOOP
-    )
+    problem = stto.build_problem(CONFIG)
+    return stto.run_from_state(problem, stto.init_state(problem, BETA_INIT), NLOOP)
 
 
 def test_iteration1_assembly_matches_fixture():
@@ -63,10 +61,10 @@ def test_iteration1_assembly_matches_fixture():
     or wrong per-stage `ti` in the objective sum would pass every other test here.
     """
     fx = load_fixture_npz("mma")
-    problem = optimize.build_problem(CONFIG)
-    state = optimize.init_state(problem, BETA_INIT)
+    problem = stto.build_problem(CONFIG)
+    state = stto.init_state(problem, BETA_INIT)
 
-    _, record = optimize.step(problem, state)
+    _, record = stto.step(problem, state)
 
     # .f/.df are downstream of a sparse linear solve (compliance), so "solved" tier.
     assert_close(record.f, fx["f0val_1"], tier="solved")
@@ -77,11 +75,11 @@ def test_iteration1_assembly_matches_fixture():
 
 def test_mma_state_threading_matches_fixture():
     fx = load_fixture_npz("mma")
-    problem = optimize.build_problem(CONFIG)
-    state = optimize.init_state(problem, BETA_INIT)
+    problem = stto.build_problem(CONFIG)
+    state = stto.init_state(problem, BETA_INIT)
 
     for k in range(NLOOP):
-        state, record = optimize.step(problem, state)
+        state, record = stto.step(problem, state)
         assert_close(record.xmma, fx["xmma_all"][:, k], tier="e2e", iteration=k + 1)
         assert_close(record.low, fx["low_all"][:, k], tier="e2e", iteration=k + 1)
         assert_close(record.upp, fx["upp_all"][:, k], tier="e2e", iteration=k + 1)
@@ -90,16 +88,16 @@ def test_mma_state_threading_matches_fixture():
 
 def test_constraints_stacking_matches_fixture():
     """Cheap, order-sensitive check on top of test_constraints.py's per-constraint
-    fixture tests: this validates that optimize.step stacks .g/.dg rows in the
+    fixture tests: this validates that stto.step stacks .g/.dg rows in the
     same order the reference loop does, which per-constraint tests can't catch (a
     swapped-but-correctly-shaped row wouldn't fail them).
     """
     fx = load_fixture_npz("constraints")
-    problem = optimize.build_problem(CONFIG)
-    state = optimize.init_state(problem, BETA_INIT)
+    problem = stto.build_problem(CONFIG)
+    state = stto.init_state(problem, BETA_INIT)
 
     for k in range(NLOOP):
-        state, record = optimize.step(problem, state)
+        state, record = stto.step(problem, state)
         assert_close(record.g, fx["fval_all"][:, k], tier="e2e", iteration=k + 1)
         assert_close(record.dg, fx["dfdx_all"][:, :, k], tier="e2e", iteration=k + 1)
 
@@ -142,14 +140,14 @@ def test_hotspot_factor_refresh_at_loop_25():
     it: loop 25's own `.g`/`.dg` are evaluated at the old `factor`, and the new
     `factor` only lands in `new_state.factor` for loop 26 onward.
     """
-    problem = optimize.build_problem(CONFIG)
-    state = optimize.init_state(problem, BETA_INIT)
+    problem = stto.build_problem(CONFIG)
+    state = stto.init_state(problem, BETA_INIT)
     for _ in range(24):
-        state, _ = optimize.step(problem, state)
+        state, _ = stto.step(problem, state)
     assert state.loop == 24
     assert state.factor == 1.0  # never refreshed before loop 25
 
-    new_state, record = optimize.step(problem, state)
+    new_state, record = stto.step(problem, state)
     assert new_state.loop == 25
 
     xPhys = state.xPhys

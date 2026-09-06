@@ -24,7 +24,7 @@ import sttopt.conductivity as conductivity
 import sttopt.fem as fem
 import sttopt.filters as filters
 import sttopt.gravity as gravity
-import sttopt.optimize as optimize
+import sttopt.stto as stto
 import sttopt.run_config as run_config
 import sttopt.timefield as timefield
 import tests.reference.compliance as compliance_ref
@@ -77,7 +77,7 @@ def main():
     np.savez(OUT / "fem_setup.npz", KE=KE, edofMat=edofMat, nelx=NELX, nely=NELY)
 
     # -- fem_solve.npz: standalone FE solve at the initial (uniform) density ------
-    problem = optimize.build_problem(CONFIG)
+    problem = stto.build_problem(CONFIG)
     xPhys0 = filters.heaviside_projection(
         np.full((NELY, NELX), VOLFRAC), BETA_D_INIT, problem.config.eta
     )
@@ -148,9 +148,9 @@ def main():
     )
 
     # -- Main loop: run NLOOP iterations from the current (correct) init_state,
-    # recomputing each module's own intermediate outputs alongside optimize.step's
+    # recomputing each module's own intermediate outputs alongside stto.step's
     # so per-module fixtures agree with the trajectory by construction. -------------
-    state = optimize.init_state(problem, BETA_D_INIT)
+    state = stto.init_state(problem, BETA_D_INIT)
 
     xPhys_traj = [state.xPhys.copy()]
     tPhys_traj = [state.tPhys.copy()]
@@ -265,7 +265,7 @@ def main():
         df1_all[:, k] = hotspot.df1
         dt1_all[:, k] = hotspot.dt1
 
-        state, record = optimize.step(problem, state)
+        state, record = stto.step(problem, state)
 
         xPhys_traj.append(state.xPhys.copy())
         tPhys_traj.append(state.tPhys.copy())
