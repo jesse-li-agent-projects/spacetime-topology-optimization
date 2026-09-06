@@ -84,6 +84,47 @@ changing it is a separate question from adding a new problem. Do not touch it in
 
 ---
 
+## Open question: the time field over void has a spurious optimization direction
+
+Measured, not theorized. On a 30x20 L-shape with `rmin_cond=6`, holding the time field over the
+**solid** elements fixed at a bottom-up ramp and changing only the values over **void**:
+
+| time over void | hotspot `numer` | mean `K_est` over solid |
+|---|---|---|
+| follows the ramp | 0.3527 | 0.9712 |
+| 0.0 (printed first) | 0.4862 | 0.8719 |
+| 1.0 (printed last) | 0.2292 | 0.9981 |
+
+A 35% swing in the objective, with no change whatever to the order the actual material is
+deposited in. (One geometry and one radius — illustrative of the mechanism, not a universal
+number.)
+
+Mechanism: `K_est_i = sum_j x_j^q w_ij FT_ij / sum_j w_ij FT_ij`. A void neighbour contributes
+nothing to the numerator but `w*FT` to the denominator, so driving void times late makes
+`FT -> 0`, drops those neighbours out of the normalizer, and lifts `K_est` toward the
+solid-only average. The optimizer is rewarded for relabelling empty space.
+
+Das2025 Eq. (6) has no such freedom: `mu_i = sum_{j in S_i} rho_j w_j / sum_{j in S_i} w_j`,
+where `j in S_i` iff `dist(i,j) <= kappa` **and** `y_j <= y_i`. That domain is fixed by the
+build direction, so the denominator is a geometric constant. The space-time port replaces the
+`y_j <= y_i` test with the differentiable time-order mask `FT`, and applies it to numerator and
+denominator alike — which is what makes the normalizer design-dependent.
+
+This is not simply a porting bug. Once deposition order *is* the design variable, "restricted to
+what has already been deposited" and "independent of the design" cannot both hold, and the port
+picked one. But the consequence should be chosen deliberately. It affects STTO latently too;
+`seqopt` is where it bites, because with the geometry frozen this is one of the few directions
+left.
+
+Candidate resolutions, none to be adopted without the user deciding:
+1. Take the time field over void out of the design vector and slave it to a smooth extension of
+   the solid field. Closest to the paper: void below the deposition front counts toward the
+   normalizer, void above it does not, and there is nothing to game.
+2. Freeze void times at 0. Void then always counts in the normalizer, preserving
+   "surrounded by void is hot", at the cost of counting void that lies above the front.
+3. Leave it, and rely on the continuity constraint to limit how far void times can drift from
+   their solid neighbours. Cheapest; leaves the direction open.
+
 # Phase 0 — rename `optimize.py` -> `stto.py`, `cli.py` -> `stto_cli.py`
 
 Mechanical and self-contained. **Must land before every other phase**, because later phases
@@ -139,8 +180,20 @@ Reads an `.npz` and returns its `xPhys` array. Requirements:
   pointing at the wrong `.npz` should learn what is in it.
 - Validate: 2-D, finite, all values within `[0, 1]`. State the failure in terms of the
   quantity that is wrong (a value out of `[0, 1]` is not a density) rather than the file.
-- Do **not** threshold or binarize. A grey field from a topology optimization is a legitimate
-  input; the conductivity proxy consumes densities, not a binary mask.
+- **Require the field to be binary**, and reject it otherwise. The error must report how many
+  elements are intermediate and their extreme values, so a user can tell three boundary
+  elements from a wholly grey field. `--non-binarized` on the CLI waives the check and takes
+  the field as given.
+- Measured caveat that shapes the design: real STTO outputs are **~35% intermediate** at a
+  `1e-3` tolerance (checked across three runs in `output/`, all `nelx*nely=10800`, min density
+  `5.9e-11`, max `1.0`). The Heaviside projection at `beta_d=128` does not come close to
+  binary. So feeding a topology-optimized layout — the Fig. 3.10 workflow, and the main reason
+  this tool takes a file at all — trips the check every time.
+
+  Therefore also provide **`--binarize THRESHOLD`**, which thresholds on load and is the
+  intended route for a topology-optimized layout. The three states are then: default (assert
+  binary), `--binarize` (make it binary), `--non-binarized` (study a grey field deliberately).
+  Record the threshold used in the run's artefacts, since it changes the part.
 
 ```python
 def base_elements(
@@ -256,7 +309,28 @@ This is a pure move.
    is what every Wu2025 example uses and what none of the existing three variants give. In
    `init_timefield`: `np.tile(np.linspace(1, 0, nely)[:, None], (1, nelx))`, i.e. `t = 0` on the
    bottom row and `1` on the top. Extend the module docstring's note about lone-1 meshes to
-   cover it.
+   cover it. This is the planar-layer reference (Wu2025 Fig. 3.4d), kept as a baseline to
+   compare against, **not** as `seqopt`'s default initialization.
+
+1b. `TimeField.GEODESIC` — `seqopt`'s default: normalized geodesic distance from the build-plate
+   elements, measured **through the material**, so distance respects the part's shape instead of
+   its bounding box. In a C-shape the two arms then start from times that reflect the real path
+   from the plate, which a planar ramp gets wrong.
+
+   Unlike every other variant this one depends on the geometry, so it does not fit
+   `init_timefield(nelx, nely, variant)`'s signature. Give it its own function taking `xPhys`
+   and the build-plate element set, and have `seqopt` select it; do not contort the existing
+   signature.
+
+   Implementation: Dijkstra over the 8-connected element graph restricted to solid elements,
+   edge weight `1` or `sqrt(2)` by step, via `scipy.sparse.csgraph.dijkstra` with a multi-source
+   start — scipy is already a dependency, so this needs no new one. Grid-graph metrication error
+   of a few percent is irrelevant for an initialization; do not reach for fast marching.
+
+   Two cases the implementation must handle explicitly rather than by accident: solid elements
+   with no path to the build plate (a disconnected island — infinite distance; decide and
+   document what they get), and what the field holds over **void**, which is not a free choice
+   — see the open question about the spurious void direction above.
 
 2. `base_elements(nelx, nely, variant) -> Int[np.ndarray, " k"]` — the candidate print-start
    elements for a variant: `[0]` for `CORNER`, `arange(nely) * nelx` (column 0) for `EDGE` and
