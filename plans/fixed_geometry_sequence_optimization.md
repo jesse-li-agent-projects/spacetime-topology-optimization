@@ -29,9 +29,11 @@ density and optimizes time alone.
    sparse mat-vecs plus the pairwise-sigmoid sum. Self-weight compliance is a possible later
    addition; it would require boundary conditions in the geometry file, so it is out of scope.
 2. **The uniformity metric must stay swappable.** Do not write docs, config field names, or
-   variable names that assume the gradient-magnitude standard deviation is *the* uniformity
-   measure. It is *one* measure, selected by name. Prefer `uniformity_*` naming over `Gamma`.
-   (`RunConfig.Gamma` on the STTO side keeps its name; do not touch it.)
+   variable names that assume any particular measure is *the* uniformity measure. There is one
+   today, selected by name. Prefer `uniformity_*` naming over `Gamma`. (`RunConfig.Gamma` on
+   the STTO side keeps its name; do not touch it.)
+6. **Both objective terms are dimensionless and order 1**, so the weights transfer across
+   resolutions and components and no run-time rescaling exists. See `GRADIENT_CV`.
 3. **Geometry input is an `.npz` holding `xPhys`.** This makes the Fig. 3.10 case free: any
    STTO run's `output/<tag>/final_design.npz` is already a valid geometry file. A helper script
    generates the thesis geometries as `.npz`.
@@ -190,10 +192,12 @@ Reads an `.npz` and returns its `xPhys` array. Requirements:
   binary. So feeding a topology-optimized layout — the Fig. 3.10 workflow, and the main reason
   this tool takes a file at all — trips the check every time.
 
-  Therefore also provide **`--binarize THRESHOLD`**, which thresholds on load and is the
-  intended route for a topology-optimized layout. The three states are then: default (assert
-  binary), `--binarize` (make it binary), `--non-binarized` (study a grey field deliberately).
-  Record the threshold used in the run's artefacts, since it changes the part.
+  `seqopt` does **not** binarize. Converting a topology-optimized layout into a printable part
+  is its own step with its own output file, not a hidden transform inside an optimization run —
+  so the thresholded geometry is an artefact you can inspect, plot and reuse, and two runs
+  naming the same geometry file always mean the same part. That conversion lives in the
+  geometry CLI (below). `seqopt` has exactly two states: assert binary, or `--non-binarized` to
+  study a grey field deliberately.
 
 ```python
 def base_elements(
@@ -239,11 +243,24 @@ defaults, so a reader can vary them without editing the body. The aspect ratio f
 `nelx:nely`; make the CLI take one resolution number (elements along the taller side, say) and
 derive the other, so a caller cannot silently distort the component.
 
-CLI, following the repo's light-import pattern (`parse_args` before the heavy imports):
+CLI, following the repo's light-import pattern (`parse_args` before the heavy imports). Two
+subcommands, because there are two ways a geometry comes into existence and both end in the same
+kind of file:
 
 ```
-python -m sttopt.geometry_builders --shape overhang_bracket --resolution 100 --out geometries/overhang_bracket.npz
+python -m sttopt.geometry_builders generate --shape overhang_bracket --resolution 100 \
+    --out geometries/overhang_bracket.npz
+
+python -m sttopt.geometry_builders binarize output/<tag>/final_design.npz \
+    --threshold 0.5 --out geometries/topopt_bracket.npz
 ```
+
+`binarize` is the answer to the ~35% grey measurement above: it takes a topology-optimized
+`xPhys`, thresholds it, and writes a clean binary geometry that `seqopt` then accepts without a
+waiver. Record the threshold and the source path in the output `.npz`, so a geometry file always
+says where it came from. Report the resulting solid fraction and how many elements changed side,
+since a badly chosen threshold can sever a thin member — and print a warning if thresholding
+leaves solid material with no path to the build plate, which is the failure that matters.
 
 Writes an `.npz` with key `xPhys`, plus the shape name and the dimensions used, so a geometry
 file is self-describing. Default output directory: `geometries/` at the repo root (create it,
@@ -344,7 +361,7 @@ This is a pure move.
 
    ```python
    class UniformityMetric(StrEnum):
-       GRADIENT_STD = "gradient_std"
+       GRADIENT_CV = "gradient_cv"
 
    def uniformity_penalty(
        tPhys: Float[Tensor, "nely nelx"],
@@ -364,19 +381,39 @@ This is a pure move.
    direction, not scope here; when it arrives, adding it beside this rather than inside it is
    the expected shape.
 
-4. Density weighting for `GRADIENT_STD`. `weights` is `(nely, nelx)`, cropped to the interior
-   internally to line up with `gradient_magnitude`'s output. Weighted mean and spread:
-   `m = sum(w*g)/sum(w)`, `sqrt(sum(w*(g-m)^2)/sum(w))`.
+4. `GRADIENT_CV` — the density-weighted **coefficient of variation** of `|grad t|` over the
+   mesh interior: `m = sum(w*g)/sum(w)`, `s = sqrt(sum(w*(g-m)^2)/sum(w))`, returning `s/m`.
+   `weights` is `(nely, nelx)`, cropped to the interior internally to line up with
+   `gradient_magnitude`'s output.
 
-   **Do not change the existing `gradient_magnitude_std(tPhys)` signature or its `torch.std`
-   (Bessel-corrected) result** — STTO uses it and its fixtures pin it. The weighted form is a
-   different normalization, so `weights=None` should keep routing to the existing function
-   rather than to a ones-weighted call that would differ by the `n` vs `n-1` factor. Say so in
-   one line in the docstring; a silent mismatch between those two paths is exactly the kind of
-   thing that wastes a day later.
+   Two separate reasons for this shape, both load-bearing:
 
-   Zero total weight (an all-void geometry) returns zero, matching the existing
-   fewer-than-two-samples behaviour.
+   - **Weighted**, so the statistic is taken over the part rather than the bounding box. `t`
+     over void is pinned by nothing physical, so unweighted gradients there are noise that
+     would dominate the spread on any part that does not fill its box.
+   - **Divided by the mean**, so the measure is invariant to mesh resolution. `gradient_
+     magnitude` uses central differences in *element* units, so `|grad t|` scales as `1/nelx`
+     for a field spanning `[0, 1]`; its raw spread does too. The ratio does not. That makes
+     `uniformity_weight` a number that stays valid when the same component is rasterized at a
+     different resolution — which is the whole point, since the geometry file sets the mesh.
+     It is also directly interpretable: 0.1 means layer thickness varies by about 10% of its
+     own mean.
+
+   The hotspot term needs no equivalent treatment: `numer` is already a p-th-power *mean*
+   followed by a p-th root, so it is intensive and lands in `[0, 1]` at any resolution. (The
+   radii being in element units still moves hotspot values with resolution — that is the
+   trade-off recorded under `SeqRunConfig`, and is not something a normalization can fix.)
+
+   With both terms dimensionless and order 1, **there is no `normalize_objective`**: the
+   weights are directly meaningful, no scale has to be latched from the initial field, and the
+   objective stays comparable across runs, resolutions and components.
+
+   **Do not change the existing `gradient_magnitude_std(tPhys)`** — STTO uses it and its
+   fixtures pin it. `GRADIENT_CV` is a new, separate function; it is not a generalization of
+   that one, and `weights=None` should not be made to reproduce it.
+
+   Zero total weight (an all-void geometry), or a zero mean gradient (a constant time field),
+   returns zero rather than dividing by zero.
 
 ## `sttopt/run_config.py` — `SeqRunConfig`
 
@@ -399,7 +436,6 @@ class SeqRunConfig:
     hotspot_weight: float
     uniformity_metric: str   # a UniformityMetric member
     uniformity_weight: float
-    normalize_objective: bool  # scale each term by its value at the initial time field
 
     nStage: int              # per-stage deposition budgets; 0 disables. Also the stage count
                              # the plots draw boundaries for.
@@ -427,7 +463,9 @@ the mesh coming from somewhere else.
 `configs/seq_default.json` holds the defaults. Reuse the STTO values for the shared numerics
 (`p=25, q=3, r=0.05, rouf=100, lrmin=2, rmin_cond=12, a0=1, mma_c=2500, tmove=0.01`),
 with `print_base="bottom_edge"`, `solid_threshold=0.5`, `nStage=8`,
-`uniformity_metric="gradient_std"`, `normalize_objective=true`, and both weights `1.0`.
+`uniformity_metric="gradient_cv"`, and both weights `1.0`. Both objective terms are
+dimensionless and order 1, so those weights mean what they say and carry over to other
+components and resolutions unchanged.
 
 ## Tests
 
@@ -460,23 +498,19 @@ warns against.
 `build_problem(config, xPhys, *, device=None, dtype=torch.float64)` takes the geometry as an
 argument — loading a file is the CLI's job, not the problem builder's.
 
-`State`: `t`, `xold1`, `xold2`, `low`, `upp`, `loop`, `beta_t`, `factor`, and the two objective
-scales. No `beta_d`, no `U`, and **no separate `tPhys`**: with no filter it would be a
+`State`: `t`, `xold1`, `xold2`, `low`, `upp`, `loop`, `beta_t`, `factor`. No `beta_d`, no `U`,
+no objective scales, and **no separate `tPhys`**: with no filter it would be a
 second name for the same tensor, and two names for one field is how they drift apart. Use `t`
 throughout `seqopt`. The physics functions name their own parameter `tPhys`; that is their
 convention, and passing `t` positionally into it is correct.
 
-`init_state`: `t` from `timefield.init_timefield`, used as-is. When
-`config.normalize_objective`, evaluate both objective terms once at this initial `t` and store
-them as `hotspot_scale` / `uniformity_scale`; otherwise store `1.0`. Doing it here rather than
-latching on iteration 1 keeps `State` free of `None`-valued scales and keeps the scales a
-deterministic function of the initial field. Guard against a zero scale.
+`init_state`: the geodesic time field, used as-is. Nothing else to set up — both objective
+terms are already dimensionless and order 1, so no scale is latched from the initial field.
 
 `step`:
 - `t` is the single autograd leaf, and is itself the physical time field. `xPhys` is a
   constant, and must never require grad.
-- Objective: `hotspot_weight * numer/hotspot_scale + uniformity_weight * penalty/uniformity_scale`,
-  where `numer, K_est = conductivity.hotspot_value(xPhys, t, e1, e2, w, p, q, r, rouf)` and
+- Objective: `hotspot_weight * numer + uniformity_weight * penalty`, where `numer, K_est = conductivity.hotspot_value(xPhys, t, e1, e2, w, p, q, r, rouf)` and
   `penalty = timefield.uniformity_penalty(t, metric, weights=xPhys)`.
 - Constraints, in a fixed documented order: `constraints.time_field_continuity(t, L)`, then
   `constraints.start_point(t, Nei)`, then, when `nStage > 0`, the interleaved
@@ -505,8 +539,8 @@ and `tru_max = factor * numer`. It is a smooth, differentiable rescaling of the 
 aggregate, so it stays comparable to `Tcr` and to STTO runs, and it does not introduce the hard
 maximum's kinks into anything downstream. Keep `state.factor` on `State`.
 
-The objective itself minimizes **`numer`**, not `factor * numer`, and lets `normalize_objective`
-handle its scale. Reason: `factor` steps discontinuously every 25 iterations, which is harmless
+The objective itself minimizes **`numer`**, not `factor * numer`. Reason: `factor` steps
+discontinuously every 25 iterations, which is harmless
 in `tru_max` (a reported number) and harmless in STTO (a constraint row MMA re-linearizes
 anyway), but as an objective it would rescale `df/dt` in a jump. If a `Tcr`-comparable objective
 turns out to matter more than a smooth scale, multiplying by `factor` is a one-line change.
@@ -564,8 +598,10 @@ beside `stto.sh`.
     result, following whatever pattern `tests/test_optimize.py` already uses.
   - Over a handful of iterations from a deliberately bad initial field, the hotspot term goes
     down. Keep it small; per the repo rules nothing near production scale runs in tests.
-  - `normalize_objective=True` makes the initial objective equal `hotspot_weight +
-    uniformity_weight`; that is a sharp, cheap assertion on the scaling.
+  - Resolution invariance of the uniformity term: the same component rasterized at two
+    resolutions gives close `GRADIENT_CV` values for the same *shape* of time field. That is
+    the property `uniformity_weight`'s portability rests on, so it is worth pinning even
+    loosely.
 - `tests/test_seqopt_cli.py`: smoke test mirroring `tests/test_stto_cli.py` — 2 iterations on a
   tiny geometry, asserting `final_design.npz`, `seq_config.json` and `geometry.npz` all land and
   that `final_design.npz` carries the `xPhys`/`tPhys` keys `viz.py` needs.
