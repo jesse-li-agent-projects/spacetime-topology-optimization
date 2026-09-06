@@ -1,4 +1,4 @@
-"""Smoke test for sttopt.cli. Calls parse_args/main directly (not via subprocess) with
+"""Smoke test for sttopt.stto_cli. Calls parse_args/main directly (not via subprocess) with
 tiny overrides -- per the repo's sandbox rules, nothing near production scale
 (180x60x800) is run here, and per the plan's Phase 9 guidance this phase gets the
 lightest testing budget of the whole port.
@@ -11,8 +11,8 @@ from pathlib import Path
 
 import numpy as np
 
-import sttopt.cli as cli
-import sttopt.optimize as optimize
+import sttopt.stto_cli as stto_cli
+import sttopt.stto as stto
 from sttopt.run_config import RunConfig
 
 # nelx/nely/nStage/rmin/lrmin/rmin_cond are config-file-only (not CLI flags), so this
@@ -38,9 +38,9 @@ def _argv(tmp_path, tag):
 
 def test_cli_smoke(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    args = cli.parse_args(_argv(tmp_path, "smoke"))
+    args = stto_cli.parse_args(_argv(tmp_path, "smoke"))
 
-    cli.main(args)
+    stto_cli.main(args)
 
     assert (tmp_path / "output" / "smoke" / "final_design.npz").exists()
 
@@ -48,14 +48,14 @@ def test_cli_smoke(tmp_path, monkeypatch):
 def _reference_run(config):
     """Independently drives the same optimize loop main() does, for comparison against
     what main() actually prints -- catches a regression to the wrong MATLAB quantity
-    (see the Phase 9 review: cli.py originally printed IterationRecord.obj/.vol, which
-    are NOT what MATLAB's disp actually prints; see cli.py's module docstring).
+    (see the Phase 9 review: stto_cli.py originally printed IterationRecord.obj/.vol, which
+    are NOT what MATLAB's disp actually prints; see stto_cli.py's module docstring).
     """
-    problem = optimize.build_problem(config)
-    state = optimize.init_state(problem, beta_d=1.0)
+    problem = stto.build_problem(config)
+    state = stto.init_state(problem, beta_d=1.0)
     records, states = [], []
     for _ in range(config.nloop):
-        state, record = optimize.step(problem, state)
+        state, record = stto.step(problem, state)
         records.append(record)
         states.append(state)
     return problem, state, records, states
@@ -70,10 +70,10 @@ def test_cli_prints_full_objective_and_post_update_volume(
     IterationRecord.vol (pre-update).
     """
     monkeypatch.chdir(tmp_path)
-    args = cli.parse_args(_argv(tmp_path, "obj_vol"))
-    _, _, records, states = _reference_run(cli.resolve_config(args))
+    args = stto_cli.parse_args(_argv(tmp_path, "obj_vol"))
+    _, _, records, states = _reference_run(stto_cli.resolve_config(args))
 
-    cli.main(args)
+    stto_cli.main(args)
     out = capsys.readouterr().out
 
     it_lines = [line for line in out.splitlines() if line.startswith("It.:")]

@@ -91,7 +91,7 @@ def to_numpy(x: Tensor | np.ndarray) -> np.ndarray:
 
     For boundary code that stays plain-array by nature and isn't going to be ported:
     fixture writing, `viz`, CLI printing -- and for a SciPy sparse multiplication that
-    needs a real array on its other side. `cli.py`/`viz.py`/fixture writing all need
+    needs a real array on its other side. `stto_cli.py`/`viz.py`/fixture writing all need
     this to stay public.
 
     :param x: dense tensor or NumPy array.

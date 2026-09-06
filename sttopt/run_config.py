@@ -1,13 +1,13 @@
-"""`RunConfig`: the full set of `optimize.build_problem` hyperparameters as a single
+"""`RunConfig`: the full set of `stto.build_problem` hyperparameters as a single
 serializable object -- `Problem.config` holds the exact one a `Problem` was built
 from, and every run directory carries a `config.json` record of exactly what produced
 it.
 
-`nloop` is also exposed as a `cli.py` flag; every other field is reachable only via a
+`nloop` is also exposed as a `stto_cli.py` flag; every other field is reachable only via a
 `--config` JSON file or by constructing `RunConfig` directly in code. Run bookkeeping
-that isn't a `build_problem` hyperparameter (`--tag`, `--device`) lives on `cli.py`'s
+that isn't a `build_problem` hyperparameter (`--tag`, `--device`) lives on `stto_cli.py`'s
 `args`, not here. `RunConfig` itself has no default values -- `configs/default.json`
-(loaded by `cli.py` when `--config` is omitted) is the single source of default
+(loaded by `stto_cli.py` when `--config` is omitted) is the single source of default
 settings.
 """
 
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 class RunConfig:
     """
     Full hyperparameter set for a single optimization run, mirroring
-    `optimize.build_problem`'s parameters.
+    `stto.build_problem`'s parameters.
 
     :param print_base: 3D-printing base/start location, naming a
         `timefield.TimeField` member (case-insensitively) for JSON.
@@ -28,7 +28,7 @@ class RunConfig:
         (`timefield.gradient_magnitude_std`); 0 disables it.
     """
 
-    # Frequently varied -- also exposed as a CLI flag in cli.py.
+    # Frequently varied -- also exposed as a CLI flag in stto_cli.py.
     nloop: int
 
     # Config-file-only.

@@ -37,7 +37,7 @@ import sttopt.conductivity as conductivity
 import sttopt.fem as fem
 import sttopt.filters as filters
 import sttopt.gravity as gravity
-import sttopt.optimize as optimize
+import sttopt.stto as stto
 import sttopt.timefield as timefield
 import sttopt.torch_util as torch_util
 import tests.reference.compliance as compliance_ref
@@ -374,7 +374,7 @@ LOOP_CASES = [
 def test_full_loop_matches_reference(
     nelx, nely, nloop, nStage, volfrac, Theta, Tcr, tfield, rmin, lrmin, rmin_cond
 ):
-    """`optimize.step`'s constraint row order and state threading, against the literal
+    """`stto.step`'s constraint row order and state threading, against the literal
     main-loop transliteration. `tfield=1` matters most here: it is the only variant
     where `Nei` (and so the constraint-row count `m`) collapses from `nely` rows to
     one, and no fixture exercises it.
@@ -395,7 +395,7 @@ def test_full_loop_matches_reference(
         lrmin=lrmin,
         rmin_cond=rmin_cond,
     )
-    result = optimize.run(config)
+    result = stto.run(config)
     for k, (rec, want) in enumerate(zip(result.records, trace), start=1):
         assert len(rec.g) == want["m"], f"iteration {k}: constraint count"
         assert rel([rec.f], [want["f0val"]]) < SOLVED, f"iteration {k}: f0val"
@@ -415,7 +415,7 @@ def test_periodic_schedules_match_reference():
     Past loop 25 the port and this literal MATLAB transliteration intentionally
     disagree: the port applies a refreshed `factor` starting the *next* iteration
     rather than rescaling that same iteration's `.g`/`.dg` mid-loop (see
-    `optimize.step`'s docstring). That one-row `.g` disagreement at loop 25 then
+    `stto.step`'s docstring). That one-row `.g` disagreement at loop 25 then
     feeds MMA and diverges the whole design trajectory downstream, so full trajectory
     comparison stops there; `rou`/`beta` (pure loop-index schedules, independent of
     `factor` or the design) and `factor`-refreshed-at-all are instead checked against
@@ -437,7 +437,7 @@ def test_periodic_schedules_match_reference():
         lrmin=2.0,
         rmin_cond=3.0,
     )
-    result = optimize.run(config)
+    result = stto.run(config)
 
     assert (
         trace[24]["factor"] != 1.0

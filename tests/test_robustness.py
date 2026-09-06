@@ -22,7 +22,7 @@ from conftest import default_run_config, e2e_rtol, load_fixture_npz, tt, tti
 
 import sttopt.conductivity as conductivity
 import sttopt.mma as mma
-import sttopt.optimize as optimize
+import sttopt.stto as stto
 import sttopt.torch_util as torch_util
 import sttopt.viz as viz
 import tests.reference.conductivity as conductivity_ref
@@ -61,8 +61,8 @@ def test_e2e_agreement_is_at_machine_precision():
         lrmin=2.0,
         rmin_cond=3.0,
     )
-    problem = optimize.build_problem(config)
-    result = optimize.run_from_state(problem, optimize.init_state(problem, 1.0), NLOOP)
+    problem = stto.build_problem(config)
+    result = stto.run_from_state(problem, stto.init_state(problem, 1.0), NLOOP)
 
     strict = 1e-12
     for k in range(1, NLOOP + 1):

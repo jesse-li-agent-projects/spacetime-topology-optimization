@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 import sttopt.fem as fem
-import sttopt.optimize as optimize
+import sttopt.stto as stto
 import test_e2e as e2e_mod
 import tests.reference.compliance as compliance_ref
 import tests.reference.fem as fem_ref
@@ -830,12 +830,12 @@ def test_e2e_trajectory_through_mgcg():
     tolerance instead feeds MMA, moves the design, and compounds over iterations.
     """
     fx = load_fixture_npz("e2e")
-    problem = optimize.build_problem(e2e_mod.CONFIG)
+    problem = stto.build_problem(e2e_mod.CONFIG)
     setup = calib.mesh_setup(e2e_mod.NELX, e2e_mod.NELY)
     with calib.mgcg_backend(setup, rtol=calib.RECOMMENDED_RTOL) as iters:
-        result = optimize.run_from_state(
+        result = stto.run_from_state(
             problem,
-            optimize.init_state(problem, e2e_mod.BETA_INIT),
+            stto.init_state(problem, e2e_mod.BETA_INIT),
             e2e_mod.NLOOP,
         )
     assert len(iters) == e2e_mod.NLOOP * (1 + e2e_mod.NSTAGE)

@@ -22,7 +22,7 @@ test = ["pytest"]
 torch = ["torch"]
 
 [project.scripts]
-sttopt = "sttopt.cli:main"
+sttopt = "sttopt.stto_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["sttopt*"]

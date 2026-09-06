@@ -1,9 +1,9 @@
 """Full-length reproduction of the thesis's Chapter 4.4 "different fabrication sequences"
 experiment (Das2023_MScThesis, resources/), used as a regression check on the whole
-optimize.run() loop at production scale rather than the tiny E2E fixture's nloop=3.
+stto.run() loop at production scale rather than the tiny E2E fixture's nloop=3.
 
 800 iterations is past both continuation schedules' saturation points (rou at 240, beta
-at 350 -- see optimize.step's docstring), giving the constraint state time to settle
+at 350 -- see stto.step's docstring), giving the constraint state time to settle
 before the assertions below are checked. It is not run to full convergence: compliance
 is still trending down slowly at 800 iterations (about 3% over the next 400), so the
 `.f` bound below is a loose regression ceiling, not a tight optimum, per the project's
@@ -20,7 +20,7 @@ the run, making a tight bound on it fragile.
 
 import pytest
 
-import sttopt.optimize as optimize
+import sttopt.stto as stto
 from sttopt.run_config import RunConfig
 
 # Matches conductivity_estimation_2d/conductivity_estimation_stto_main.m directly
@@ -75,7 +75,7 @@ TRU_MAX_TOL = 0.008  # 1% of TRU_MAX_TARGET
 
 @pytest.mark.slow
 def test_thesis_4_4_reproduction():
-    result = optimize.run(CONFIG, beta_d=BETA_INIT)
+    result = stto.run(CONFIG, beta_d=BETA_INIT)
     record = result.records[-1]
 
     assert record.f < F_CEILING

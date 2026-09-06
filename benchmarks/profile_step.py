@@ -1,4 +1,4 @@
-"""Profile `optimize.step` at production settings (180x60, nStage=8) on a realistic
+"""Profile `stto.step` at production settings (180x60, nStage=8) on a realistic
 near-binary design.
 
 Ported for `plans/torch_port_part2.md` Phase 3.7 -- the NumPy/SciPy predecessor this
@@ -84,7 +84,7 @@ import sttopt.compliance as compliance
 import sttopt.conductivity as conductivity
 import sttopt.filters as filters
 import sttopt.mma as mma
-import sttopt.optimize as optimize
+import sttopt.stto as stto
 import sttopt.run_config as run_config
 import sttopt.torch_fem as torch_fem
 from tests.fixtures.generate_torch_port_designs import load_design_raw
@@ -98,19 +98,19 @@ CONFIG = run_config.RunConfig.from_dict(
     json.loads((Path(__file__).parent.parent / "configs" / "default.json").read_text())
 )
 
-# beta_t and beta_d as of loop 800, per optimize.step's continuation schedules
+# beta_t and beta_d as of loop 800, per stto.step's continuation schedules
 # (beta_t += 5 every 30 loops while < 50; beta_d *= 2 every 50 loops, capped at
 # beta_d_max=128). Both schedules saturate before loop 800 (beta_t at loop 350,
 # beta_d at loop 350 too since 2**7 == 128 at loop 350) -- confirmed by simulating
-# the exact update in optimize.step against BETA_INIT=1.0/beta_t0=10.0 for 800 loops.
+# the exact update in stto.step against BETA_INIT=1.0/beta_t0=10.0 for 800 loops.
 LOOP = 800
 BETA_T = 50.0
 BETA_D = 128.0
 
 
 def build_realistic_state(
-    problem: optimize.Problem, x_snapshot: np.ndarray, t_snapshot: np.ndarray
-) -> optimize.State:
+    problem: stto.Problem, x_snapshot: np.ndarray, t_snapshot: np.ndarray
+) -> stto.State:
     """Reconstruct a plausible iteration-800 `State` around a saved raw `(x, t)`
     snapshot, for profiling only -- not a claim that this is bit-identical to what a
     real run holds at loop 800. See the NumPy predecessor's identical docstring (git
@@ -132,7 +132,7 @@ def build_realistic_state(
     xPhys = filters.heaviside_projection(xTilde, BETA_D, problem.config.eta)
     tPhys = ((problem.H @ t_t.flatten()) / problem.Hs).reshape(nely, nelx)
     xval = torch.cat([x_t.flatten(), t_t.flatten()])
-    return optimize.State(
+    return stto.State(
         x=x_t.clone(),
         xTilde=xTilde,
         xPhys=xPhys,
@@ -215,7 +215,7 @@ def main():
         print(f"COMPACTION_RATIO = {args.compaction_ratio}")
     nelx, nely = (int(v) for v in args.mesh.split("x"))
     config = dataclasses.replace(CONFIG, nelx=nelx, nely=nely)
-    problem = optimize.build_problem(config, device=device, dtype=torch.float64)
+    problem = stto.build_problem(config, device=device, dtype=torch.float64)
 
     x0, t0 = load_design_raw(args.mesh, LOOP)
     state = build_realistic_state(problem, x0, t0)
@@ -233,14 +233,14 @@ def main():
     # data-dependent iteration count) without timing, per the task's instruction to
     # discard the first iteration(s).
     for _ in range(args.warmup):
-        state, _ = optimize.step(problem, state)
+        state, _ = stto.step(problem, state)
 
     timers, restore = install_timers(device)
     if device.type == "cuda":
         torch.cuda.synchronize()
     t_start = time.perf_counter()
     for _ in range(args.iters):
-        state, _ = optimize.step(problem, state)
+        state, _ = stto.step(problem, state)
     if device.type == "cuda":
         torch.cuda.synchronize()
     t_total = time.perf_counter() - t_start

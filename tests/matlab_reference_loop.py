@@ -1,14 +1,14 @@
 """Literal transliteration of `conductivity_estimation_stto_main.m`'s main while-loop.
 
-The oracle for `optimize.step`/`optimize.run`'s *wiring* -- constraint row order,
+The oracle for `stto.step`/`stto.run`'s *wiring* -- constraint row order,
 per-iteration state threading, and the periodic `rou`/`beta`/`factor` schedules --
 at parameter points the committed `e2e.mat` fixture (one grid, tfield=3, 3
 iterations) never reaches.
 
-Transcribed from the MATLAB main script, not from `optimize.py` and not from
+Transcribed from the MATLAB main script, not from `stto.py` and not from
 `generate_fixtures.m`. It calls `sttopt.mma` for the MMA solve itself (that module is
 separately fixture-validated against `mmasub.m`/`subsolv.m`), so any disagreement
-with `optimize.step` isolates to orchestration rather than to the optimizer. See
+with `stto.step` isolates to orchestration rather than to the optimizer. See
 `matlab_reference.py` for the per-block oracles this builds on.
 """
 

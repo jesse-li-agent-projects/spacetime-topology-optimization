@@ -4,7 +4,7 @@ the top of that script (`nelx`, `nely`, `nloop`, ... through `beta_d_max`), with
 default values (the original *full-scale* script's constants, not the smaller ones the
 fixture harness/tests use for speed).
 
-Drives `optimize.build_problem`/`init_state`/`step` directly (not `optimize.run`) so it
+Drives `stto.build_problem`/`init_state`/`step` directly (not `stto.run`) so it
 can print per-iteration progress, matching the MATLAB source's `disp` line. This is a
 long-running production script (800 iterations at 180x60 is not something to run in
 this sandbox -- see the repo's sandbox rules), so console progress is the useful signal
@@ -79,7 +79,7 @@ def main(args: argparse.Namespace) -> None:
 
     import numpy as np
 
-    import sttopt.optimize as optimize
+    import sttopt.stto as stto
     import sttopt.torch_util as torch_util
 
     config = resolve_config(args)
@@ -100,11 +100,11 @@ def main(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "config.json").write_text(json.dumps(config.to_dict(), indent=2))
 
-    problem = optimize.build_problem(config, device=args.device)
-    state = optimize.init_state(problem, beta_d=1.0)
+    problem = stto.build_problem(config, device=args.device)
+    state = stto.init_state(problem, beta_d=1.0)
 
     for _ in range(config.nloop):
-        state, record = optimize.step(problem, state)
+        state, record = stto.step(problem, state)
         print(
             f"It.: {state.loop:4d} Obj.: {record.f:10.4f} "
             f"Vol.: {state.xPhys.mean():6.3f} Tm.: {record.tru_max:7.3f} "
