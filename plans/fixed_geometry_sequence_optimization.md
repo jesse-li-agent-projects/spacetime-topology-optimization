@@ -37,18 +37,50 @@ density and optimizes time alone.
    generates the thesis geometries as `.npz`.
 4. **Full rename for symmetry**: `sttopt/optimize.py` -> `sttopt/stto.py`, `sttopt/cli.py` ->
    `sttopt/stto_cli.py`, beside the new `sttopt/seqopt.py` / `sttopt/seqopt_cli.py`.
+5. **`seqopt` does not filter the time field: `tPhys = t`.** See below.
 
-## Known limitation to record, not to fix
+## No smoothing of the time field
 
-`tPhys = H @ t / Hs` smooths the time field **across void**. For a topology-optimized component
-two separate branches get their print times coupled purely because they are geometrically near,
-with no material between them. Wu2025 avoids this by solving the heat equation on the part
-alone. Accept it for now and record it in `sttopt/conventions.md`; the fix is a density-weighted
-filter, which is a self-contained follow-up.
+STTO computes `tPhys = H @ t / Hs`, reusing the *density* filter to smooth the time field. That
+smooths **across void**: on a topology-optimized component, two branches separated by a gap get
+their print times mixed purely because they are geometrically near, with no material between
+them to carry heat. Wu2025 avoids this by solving the heat equation on the part alone.
 
-Consequence that must **not** be deferred: `t` outside the part is only weakly pinned (by the
-continuity constraint), so any uniformity measure has to be **weighted by the density**, or
-meaningless void gradients dominate it.
+`seqopt` avoids it by not smoothing the time field at all. `t` is used directly as the physical
+time field.
+
+**This is an educated guess, not a settled decision.** It is the starting point because it
+removes the void coupling at its source, but whether the time field wants some other
+regularization in the filter's place is an open empirical question. Do not write a test that
+asserts the absence of smoothing, and do not build anything that assumes it is permanent.
+
+What follows from it, and must be carried through every phase:
+
+- `seqopt` never builds or uses the density filter. `filters.density_filter`, `H` and `Hs` do
+  not appear in `sttopt/seqopt.py`, and `SeqRunConfig` has no `rmin`.
+- The autograd leaf and the physical field are the same tensor, so there is no filter chain rule
+  and no filter adjoint on the `seqopt` path. Sensitivities are plain gradients with respect to
+  `t`.
+- PR #26's `init_state` concern — that an unfiltered initial `tPhys` disagreed with the
+  filtered map `step` differentiates — cannot arise here, because there is no map. Do not port
+  that reasoning across.
+- Regularization of `t` now rests entirely on the continuity constraint
+  (`constraints.time_field_continuity`, the `L` operator) and the uniformity penalty. Losing the
+  filter's implicit smoothing makes those two load-bearing rather than merely helpful. Watch the
+  first real runs for a noisy or checkerboarded time field; if one appears, that is a signal
+  about `lrmin` and the uniformity weight, not a reason to quietly reintroduce the filter.
+- **Still open, do not decide unilaterally**: the continuity operator `L` is also a local
+  neighbourhood average over the whole grid, so it too couples elements across a void gap,
+  just over the smaller radius `lrmin`. Whether it should be density-weighted is a separate
+  question from the density filter. Raise it with the user rather than changing
+  `constraints.time_field_continuity`, which STTO shares.
+
+Independent of all this, `t` outside the part is pinned only by the continuity constraint, so
+the uniformity measure must still be **weighted by the density**, or meaningless void gradients
+dominate it.
+
+STTO keeps its existing filtered `tPhys` — it is a faithful port of the MATLAB source, and
+changing it is a separate question from adding a new problem. Do not touch it in this work.
 
 ---
 
@@ -183,26 +215,37 @@ is the user's call; do not commit them by default).
 
 Runs in parallel with Phase 1a; the file sets are disjoint.
 
-## `sttopt/sensitivity.py` — extract `_sensitivity_rows`
+## `sttopt/sensitivity.py` — extract the batched-Jacobian helper
 
-Move `stto.py`'s `_sensitivity_rows` into a new module and generalize it from the hard-coded
-`(xTilde, tPhys)` pair to an arbitrary ordered sequence of filtered leaves:
+`seqopt` has no filter on its design variable, so it needs no filter adjoint. What the two
+problems genuinely share is the smaller, subtler half of `stto.py`'s `_sensitivity_rows`: the
+`k == 1` versus `k > 1` split, and the one-hot `is_grads_batched` trick that assembles `k`
+gradient rows in one call. Extract exactly that, and no more:
 
 ```python
-def sensitivity_rows(
-    outputs: Float[Tensor, " k"],
-    leaves: Sequence[Tensor],
-    H: Tensor,
-    Hs: Float[Tensor, " nel"],
-) -> Float[Tensor, "k n"]:
+def jacobian_rows(
+    outputs: Float[Tensor, " k"], leaves: Sequence[Tensor]
+) -> tuple[Float[Tensor, "k nel"], ...]:
 ```
 
-STTO passes `(xTilde, tPhys)` and gets the existing `n = 2*nel` layout; `seqopt` passes
-`(tPhys,)` and gets `n = nel`. Carry the whole existing docstring across — the reasoning about
-why the differentiation cut sits at the *filtered* fields, why `H` is its own adjoint, and the
-restriction on `k > 1` rows (no sparse matmul or `FemSolve` inside their graph) is all still
-load-bearing. Update `stto.py` to call it; `_flatten_pair` stays in `stto.py` unless the
-generalized helper subsumes it naturally.
+One `(k, numel)` block per leaf, in leaf order, zeros for a leaf the outputs do not depend on
+(`allow_unused`). Carry across the load-bearing part of the existing docstring: that
+`is_grads_batched`'s vmap has no batching rule for the sparse CSR matmul backward
+(`RuntimeError: expand is unsupported for SparseCsc tensors`), so a `k > 1` output must not have
+a sparse matmul or a `FemSolve` inside its own graph. That restriction now applies to both
+callers and is the single reason this function is shared rather than written twice.
+
+The filter adjoint stays in `stto.py`: `_sensitivity_rows` becomes `jacobian_rows(outputs,
+(xTilde, tPhys))` followed by its existing `H`/`Hs` adjoint and `_flatten_pair`, and keeps the
+part of its docstring explaining why the differentiation cut sits at the *filtered* fields and
+why `H` is its own adjoint. That reasoning is STTO's, not generic, so it should not move.
+
+`seqopt` calls `jacobian_rows(outputs, (t,))[0]` and is done.
+
+Check the restriction holds for `seqopt`'s own `k > 1` rows before relying on it: `start_point`
+indexes `t` directly and the stage rows go through `compliance.time_mask`, neither of which
+touches a sparse matmul. `time_field_continuity` *does* (`L @ t`), but it is a single row and
+takes the unbatched path.
 
 **Acceptance**: STTO's existing tests pass unchanged, bit-for-bit where they were exact before.
 This is a pure move.
@@ -269,7 +312,6 @@ class SeqRunConfig:
     print_base: str          # a TimeField member name, case-insensitive
     solid_threshold: float   # density above which an element counts as touching the build plate
 
-    rmin: float              # smoothing filter radius for the time field
     lrmin: float             # continuity filter radius
     rmin_cond: float         # conductivity-neighbourhood radius
 
@@ -291,11 +333,12 @@ class SeqRunConfig:
 ```
 
 No `nelx`/`nely`: the geometry file defines the mesh, so a mismatch between config and geometry
-is not merely caught, it is unrepresentable. Note that in the class docstring — it is the reason
-the field is missing.
+is not merely caught, it is unrepresentable. No `rmin` either: the time field is not filtered,
+so there is no radius to set. Note both in the class docstring — a reader comparing against
+`RunConfig` will otherwise assume they were forgotten.
 
 `configs/seq_default.json` holds the defaults. Reuse the STTO values for the shared numerics
-(`p=25, q=3, r=0.05, rouf=100, rmin=4, lrmin=2, rmin_cond=12, a0=1, mma_c=2500, tmove=0.01`),
+(`p=25, q=3, r=0.05, rouf=100, lrmin=2, rmin_cond=12, a0=1, mma_c=2500, tmove=0.01`),
 with `print_base="bottom_edge"`, `solid_threshold=0.5`, `nStage=8`,
 `uniformity_metric="gradient_std"`, `normalize_objective=true`, and both weights `1.0`.
 
@@ -323,30 +366,33 @@ differs, and a merged `step` full of conditionals is the god function the repo's
 warns against.
 
 `Problem`: `config`, `device`, `dtype`, `xPhys` (the fixed geometry, as a tensor), `nelx`,
-`nely` (derived from `xPhys.shape`, since the config has none), `H`, `Hs`, `L`, `e1`, `e2`, `w`,
-`Nei`, `m`, `n`. Note `n = nel`, and `m = 1 (continuity) + len(Nei) + 2*nStage`.
+`nely` (derived from `xPhys.shape`, since the config has none), `L`, `e1`, `e2`, `w`, `Nei`,
+`m`, `n`. **No `H`/`Hs`** — the time field is not filtered. Note `n = nel`, and
+`m = 1 (continuity) + len(Nei) + 2*nStage`.
 
 `build_problem(config, xPhys, *, device=None, dtype=torch.float64)` takes the geometry as an
 argument — loading a file is the CLI's job, not the problem builder's.
 
-`State`: `t`, `tPhys`, `xold1`, `xold2`, `low`, `upp`, `loop`, `beta_t`, and the two objective
-scales. No `beta_d`, no `factor`, no `U`.
+`State`: `t`, `xold1`, `xold2`, `low`, `upp`, `loop`, `beta_t`, `factor`, and the two objective
+scales. No `beta_d`, no `U`, and **no separate `tPhys`**: with no filter it would be a
+second name for the same tensor, and two names for one field is how they drift apart. Use `t`
+throughout `seqopt`. The physics functions name their own parameter `tPhys`; that is their
+convention, and passing `t` positionally into it is correct.
 
-`init_state`: `t` from `timefield.init_timefield`, `tPhys = H t / Hs` (filtered, matching what
-`step` differentiates — see PR #26's reasoning, which applies here identically). When
-`config.normalize_objective`, evaluate both objective terms once at this initial `tPhys` and
-store them as `hotspot_scale` / `uniformity_scale`; otherwise store `1.0`. Doing it here rather
-than latching on iteration 1 keeps `State` free of `None`-valued scales and keeps the scales a
+`init_state`: `t` from `timefield.init_timefield`, used as-is. When
+`config.normalize_objective`, evaluate both objective terms once at this initial `t` and store
+them as `hotspot_scale` / `uniformity_scale`; otherwise store `1.0`. Doing it here rather than
+latching on iteration 1 keeps `State` free of `None`-valued scales and keeps the scales a
 deterministic function of the initial field. Guard against a zero scale.
 
 `step`:
-- `t` is the single autograd leaf; `tPhys = H t / Hs`. `xPhys` is a constant, and must never
-  require grad.
+- `t` is the single autograd leaf, and is itself the physical time field. `xPhys` is a
+  constant, and must never require grad.
 - Objective: `hotspot_weight * numer/hotspot_scale + uniformity_weight * penalty/uniformity_scale`,
-  where `numer, K_est = conductivity.hotspot_value(xPhys, tPhys, e1, e2, w, p, q, r, rouf)` and
-  `penalty = timefield.uniformity_penalty(tPhys, metric, weights=xPhys)`.
-- Constraints, in a fixed documented order: `constraints.time_field_continuity(tPhys, L)`, then
-  `constraints.start_point(tPhys, Nei)`, then, when `nStage > 0`, the interleaved
+  where `numer, K_est = conductivity.hotspot_value(xPhys, t, e1, e2, w, p, q, r, rouf)` and
+  `penalty = timefield.uniformity_penalty(t, metric, weights=xPhys)`.
+- Constraints, in a fixed documented order: `constraints.time_field_continuity(t, L)`, then
+  `constraints.start_point(t, Nei)`, then, when `nStage > 0`, the interleaved
   upper/lower stage rows exactly as `stto.step` builds them.
 
   Reuse `constraints.stage_volume_bounds` unchanged by passing **`volfrac = float(xPhys.mean())`**:
@@ -356,18 +402,27 @@ deterministic function of the initial field. Guard against a zero scale.
   site. Note that Wu2025 §3.2 deliberately omits per-layer volume constraints and discusses the
   consequence, which is why this is optional rather than always on.
 - Move limits: `config.tmove` on `t` only, clamped to `[0, 1]`.
-- Sensitivities via `sensitivity.sensitivity_rows(..., leaves=(tPhys,), ...)`.
+- Sensitivities via `sensitivity.jacobian_rows(outputs, (t,))[0]`. No filter adjoint.
 - `mma.mmasub` with `n = nel`.
-- Periodic update: `beta_t += 5` every 30 iterations, capped at 50, taking effect the *next*
-  iteration — same convention and same rationale as `stto.step`. That is the only periodic
-  update; there is no Heaviside sharpening and no hotspot `factor` refresh.
+- Periodic updates, both deferred to take effect the *next* iteration, same convention and
+  rationale as `stto.step`: `beta_t += 5` every 30 iterations capped at 50, and the hotspot
+  `factor` refresh every 25 iterations. There is no Heaviside sharpening, since there is no
+  density projection.
 
 `IterationRecord`: `f`, `hotspot` (the raw `numer`), `uniformity` (the raw penalty), `tru_max`,
-plus the MMA outputs the STTO record carries. Compute **`tru_max = max((1 - K_est) * xPhys**r)`
-directly** each iteration rather than porting STTO's periodically-refreshed `factor` debiasing:
-with the hotspot as an objective rather than a `Tcr`-scaled constraint there is nothing for
-`factor` to rescale, and the exact maximum costs one reduction. Say so in a comment so nobody
-"restores" the missing `factor`.
+plus the MMA outputs the STTO record carries.
+
+**Port `factor` and `tru_max` exactly as `stto.step` computes them**: `factor` refreshed every
+25 iterations from `max((1 - K_est) * xPhys**r) / numer`, taking effect the following iteration,
+and `tru_max = factor * numer`. It is a smooth, differentiable rescaling of the p-norm
+aggregate, so it stays comparable to `Tcr` and to STTO runs, and it does not introduce the hard
+maximum's kinks into anything downstream. Keep `state.factor` on `State`.
+
+The objective itself minimizes **`numer`**, not `factor * numer`, and lets `normalize_objective`
+handle its scale. Reason: `factor` steps discontinuously every 25 iterations, which is harmless
+in `tru_max` (a reported number) and harmless in STTO (a constraint row MMA re-linearizes
+anyway), but as an objective it would rescale `df/dt` in a jump. If a `Tcr`-comparable objective
+turns out to matter more than a smooth scale, multiplying by `factor` is a one-line change.
 
 ## `sttopt/seqopt_cli.py`
 
@@ -381,9 +436,12 @@ Artefacts under `output/<tag>/`:
   the original file.
 - `design_it####.npz` every 50 iterations, and `final_design.npz`.
 
-`final_design.npz` must carry the keys **`xPhys`, `tPhys`** (plus `t`, `loop`, and the record
+`final_design.npz` must carry the keys **`xPhys`, `tPhys`** (plus `loop` and the record
 scalars), because `viz.py` already reads exactly those two — matching them is what makes the
-whole plotting path work unchanged.
+whole plotting path work unchanged. Here `tPhys` is simply `t`, written under the name the
+plotting code reads; say that in a one-line comment at the `savez` call, so nobody later hunts
+for a filtering step that does not exist. Do not also write a separate `t` key holding the same
+array.
 
 Progress line, one per iteration:
 `It.: %4d f: %10.4f hot: %8.5f unif: %8.5f Tm.: %7.3f`
@@ -409,7 +467,9 @@ beside `stto.sh`.
 ## Tests
 
 - `tests/test_seqopt.py`: a tiny non-square mesh (e.g. 7x5 from a builder or a hand-made mask).
-  - `step` is finite and the state invariant holds: `tPhys` always equals filtering `t`.
+  - `step` returns finite values and a state whose fields are all finite and in bounds. Do
+    **not** assert that the time field passes through unsmoothed: whether to smooth it is an
+    open question, and a test would freeze a guess into a requirement.
   - `xPhys` never acquires a gradient, and `t` is the only design variable — assert the MMA
     vectors have length `nel`, not `2*nel`.
   - Constraint row count matches `problem.m`, for both `nStage=0` and `nStage>0`.
@@ -429,8 +489,9 @@ beside `stto.sh`.
 # Phase 3 — documentation and integration
 
 - `sttopt/__init__.py`: describe both problems, not just STTO.
-- `sttopt/conventions.md`: record the void-smoothing limitation from the top of this plan, and
-  the density-weighting requirement it implies.
+- `sttopt/conventions.md`: record that the two problems treat the time field differently — STTO
+  filters it with the density filter, `seqopt` uses it raw — and why (smoothing couples print
+  times across void). Keep it to a few lines; the reasoning lives here in the plan.
 - A short section in the repo's structure notes describing when to use `stto_cli` versus
   `seqopt_cli`.
 - Move this plan to `plans/archive/` and update `plans/CLAUDE.md`.
