@@ -1029,7 +1029,7 @@ def test_hotspot_constraint_fd_density_near_binary():
 # hotspot_constraint's df1/dt1 are hand-derived; hotspot_value returns only (numer,
 # K_est), differentiable end to end w.r.t. xPhys/tPhys, and its sensitivity is meant to
 # come from autograd instead. These tests build the same H/Hs/dx chain by hand (the
-# density filter's own adjoint, plus the Heaviside chain rule optimize.step's autograd
+# density filter's own adjoint, plus the Heaviside chain rule stto.step's autograd
 # path threads automatically) so the comparison lines up with hotspot_constraint's
 # already-chained df1/dt1.
 

@@ -95,7 +95,7 @@ def point_load_problem(nelx: int, nely: int) -> tuple[np.ndarray, np.ndarray, in
     generated under: unit downward point load on the bottom-right node, left edge
     clamped in both directions. This is the geometry MATLAB's `F(2*(nelx+1)*(nely+1))
     = -1` / `fixeddofs = 1:2*(nely+1)` denote; keeping it here rather than restating
-    those formulas per test file keeps it in step with `optimize.build_problem`.
+    those formulas per test file keeps it in step with `stto.build_problem`.
     """
     nodes = fem.node_grid(nelx, nely)
     ndof = 2 * nodes.size

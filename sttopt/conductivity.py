@@ -6,7 +6,7 @@ constraint bounding its worst-case value.
 overheating risk during additive deposition. `hotspot_value` computes the p-norm of
 `1 - K_est` (weighted toward already-dense, hot regions) that the hotspot constraint
 bounds below a critical threshold `Tcr`, smoothly approximating a hard max via a
-p-norm as `p -> inf`; the caller (`optimize.step`) applies the `factor`/`Tcr` scaling
+p-norm as `p -> inf`; the caller (`stto.step`) applies the `factor`/`Tcr` scaling
 and gets the sensitivity from autograd through this (Phase 3.4,
 `plans/torch_port_part2.md`).
 

@@ -491,14 +491,14 @@ def test_stage_volume_bounds_lower_has_slack_margin():
 # --- Phase 3.4 (plans/torch_port_part2.md): autograd sensitivities against hand-derived --
 #
 # Each `..._value` function takes only `xPhys`/`tPhys`; these tests rebuild the same
-# filter(+Heaviside, for density) chain `optimize.step` threads from raw `x`/`t`
+# filter(+Heaviside, for density) chain `stto.step` threads from raw `x`/`t`
 # leaves, so `torch.autograd.grad` reproduces exactly the `H @ (... * dx / Hs)` rows
 # the hand-derived functions return -- `algebraic` tier throughout (no FE solve).
 
 
 def _filtered_leaves(nelx, nely, H, Hs, rng):
     """Fresh `x`/`t` leaves and their filtered (density: + Heaviside) fields, matching
-    `optimize.step`'s construction."""
+    `stto.step`'s construction."""
     x = tt(rng.uniform(0.1, 0.9, size=(nely, nelx))).requires_grad_(True)
     t = tt(rng.uniform(0.05, 0.95, size=(nely, nelx))).requires_grad_(True)
     xTilde = ((H @ x.flatten()) / Hs).reshape(nely, nelx)

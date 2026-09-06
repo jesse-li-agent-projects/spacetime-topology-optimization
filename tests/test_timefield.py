@@ -27,7 +27,7 @@ def test_timefield_variant_matches_fixture(variant, key):
     assert got.shape == fx[key].shape == (nely, nelx)
     assert_close(got, fx[key], tier="algebraic")
 
-    # A bare int dispatches identically -- optimize.build_problem resolves
+    # A bare int dispatches identically -- stto.build_problem resolves
     # RunConfig.print_base's string to a TimeField member before this point.
     assert np.array_equal(got, timefield.init_timefield(nelx, nely, int(variant)))
 
@@ -69,7 +69,7 @@ def test_timefield_variants_span_0_to_1(nelx, nely):
 def test_lone_one_mesh_is_finite(nelx, nely, variant):
     """A lone-1 mesh is well-defined -- finite everywhere, though not necessarily
     spanning [0, 1] (see the module docstring). Only `nelx == nely == 1` degenerates,
-    and rejecting that one is `optimize.build_problem`'s job, not this module's."""
+    and rejecting that one is `stto.build_problem`'s job, not this module's."""
     assert np.all(np.isfinite(timefield.init_timefield(nelx, nely, variant)))
 
 

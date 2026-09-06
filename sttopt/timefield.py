@@ -11,7 +11,7 @@ A lone-1 mesh (`nelx == 1` xor `nely == 1`) is well-defined but doesn't necessar
 span `[0, 1]`: EDGE is constant at 0 when `nelx == 1`, and OPPOSITE_CORNER never
 reaches 0 when `nely == 1`. At `nelx == nely == 1` the two distance variants are
 undefined (a zero max distance to normalize by, giving `nan`); rejecting that mesh is
-`optimize.build_problem`'s job, since the same mesh also degenerates the continuity
+`stto.build_problem`'s job, since the same mesh also degenerates the continuity
 filter and `build_problem` is where both are first constructed.
 """
 

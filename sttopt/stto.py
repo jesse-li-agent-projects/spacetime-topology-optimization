@@ -39,6 +39,7 @@ import sttopt.filters as filters
 import sttopt.gravity as gravity
 import sttopt.mma as mma
 import sttopt.run_config as run_config
+import sttopt.sensitivity as sensitivity
 import sttopt.timefield as timefield
 import sttopt.torch_fem as torch_fem
 import sttopt.torch_util as torch_util
@@ -324,43 +325,23 @@ def _sensitivity_rows(
     adjoint is `H` itself: exactly what `torch.autograd.grad` would have produced had
     it been able to reach the sparse op directly.
 
-    `k == 1` differentiates with a plain (unbatched) `torch.autograd.grad`. `k > 1`
-    uses `torch.autograd.grad(..., is_grads_batched=True)` with one-hot seeds instead
-    of `k` separate calls (`plans/torch_port_part2.md` Phase 3.4's Jacobian-assembly
-    requirement) -- `is_grads_batched`'s vmap has no batching rule for the sparse CSR
-    matmul's backward (`RuntimeError: expand is unsupported for SparseCsc tensors`,
-    confirmed locally), which is why the cut sits at `(xTilde, tPhys)` rather than the
-    raw leaves in both branches. A `k > 1` output must therefore avoid sparse matmuls
-    and `FemSolve` inside its own graph -- true of every current `k > 1` row (start
-    point, stage bounds) but a restriction on future ones, not a guarantee.
+    The `k == 1` versus `k > 1` split and the one-hot batched-grad trick are shared
+    with `seqopt` via `sensitivity.jacobian_rows`, which is why the cut sits at
+    `(xTilde, tPhys)` rather than the raw leaves: its `is_grads_batched`'s vmap has no
+    batching rule for the sparse CSR matmul's backward (`RuntimeError: expand is
+    unsupported for SparseCsc tensors`, confirmed locally). A `k > 1` output must
+    therefore avoid sparse matmuls and `FemSolve` inside its own graph -- true of every
+    current `k > 1` row (start point, stage bounds) but a restriction on future ones,
+    not a guarantee.
 
     `allow_unused` covers rows that depend on only one field (e.g. a density-only
     constraint never touches `tPhys`): the unused field's block is exactly zero,
     which is what a hand-derived predecessor returned too.
     """
-    k = outputs.shape[0]
-    if k == 1:
-        d_xTilde, d_tPhys = torch.autograd.grad(
-            outputs[0], (xTilde, tPhys), retain_graph=True, allow_unused=True
-        )
-    else:
-        seeds = torch.eye(k, dtype=outputs.dtype, device=outputs.device)
-        d_xTilde, d_tPhys = torch.autograd.grad(
-            outputs,
-            (xTilde, tPhys),
-            grad_outputs=seeds,
-            is_grads_batched=True,
-            retain_graph=True,
-            allow_unused=True,
-        )
+    d_xTilde, d_tPhys = sensitivity.jacobian_rows(outputs, (xTilde, tPhys))
 
-    def _filter_adjoint(d_field: Tensor | None) -> Tensor:
-        if d_field is None:
-            return torch.zeros(
-                k, xTilde.numel(), dtype=xTilde.dtype, device=xTilde.device
-            )
-        flat = d_field.reshape(k, -1)  # (k, nel)
-        return (H @ (flat / Hs).T).T  # (k, nel)
+    def _filter_adjoint(d_field: Tensor) -> Tensor:
+        return (H @ (d_field / Hs).T).T  # (k, nel)
 
     return _flatten_pair(_filter_adjoint(d_xTilde), _filter_adjoint(d_tPhys))
 

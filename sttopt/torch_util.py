@@ -3,7 +3,7 @@ per `plans/torch_port_part2.md`'s Phase 3.1) and the NumPy/SciPy arrays that fix
 writing, `viz`, and CLI printing still speak.
 
 A plain NumPy array and a torch tensor do not mix in an arithmetic expression (`ndarray
-* tensor` raises `TypeError`, it does not silently upcast), so `optimize.step`/
+* tensor` raises `TypeError`, it does not silently upcast), so `stto.step`/
 `init_state` convert once at the boundary rather than relying on implicit interop.
 """
 
