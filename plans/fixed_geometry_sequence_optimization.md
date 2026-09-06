@@ -283,6 +283,13 @@ This is a pure move.
    selected layer-uniformity penalty", never as "the gradient-magnitude standard deviation" —
    that belongs in the individual metric's own docstring.
 
+   Write exactly one metric. Do not add a second one speculatively, and do not build machinery
+   for measures this signature cannot express — a measure that bounds the *range* of the
+   gradient (Wu2025 Eq. 3.26-3.27 in spirit) would be a pair of constraint rows, not a scalar
+   penalty, so it would change `Problem.m` and need its own design. That is a live future
+   direction, not scope here; when it arrives, adding it beside this rather than inside it is
+   the expected shape.
+
 4. Density weighting for `GRADIENT_STD`. `weights` is `(nely, nelx)`, cropped to the interior
    internally to line up with `gradient_magnitude`'s output. Weighted mean and spread:
    `m = sum(w*g)/sum(w)`, `sqrt(sum(w*(g-m)^2)/sum(w))`.
@@ -336,6 +343,12 @@ No `nelx`/`nely`: the geometry file defines the mesh, so a mismatch between conf
 is not merely caught, it is unrepresentable. No `rmin` either: the time field is not filtered,
 so there is no radius to set. Note both in the class docstring — a reader comparing against
 `RunConfig` will otherwise assume they were forgotten.
+
+`lrmin` and `rmin_cond` are counted in **elements**, as in `RunConfig`, not in the geometry's
+physical units. Since the geometry file now sets the mesh, rasterizing the same component at a
+different resolution changes what those radii mean physically, and they have to be rescaled by
+hand to match. State this on both fields — it is the one place a reader can be caught out by
+the mesh coming from somewhere else.
 
 `configs/seq_default.json` holds the defaults. Reuse the STTO values for the shared numerics
 (`p=25, q=3, r=0.05, rouf=100, lrmin=2, rmin_cond=12, a0=1, mma_c=2500, tmove=0.01`),
