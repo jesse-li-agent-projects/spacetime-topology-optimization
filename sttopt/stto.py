@@ -318,14 +318,9 @@ def _sensitivity_rows(
     adjoint is `H` itself: exactly what `torch.autograd.grad` would have produced had
     it been able to reach the sparse op directly.
 
-    The `k == 1` versus `k > 1` split and the one-hot batched-grad trick are shared
-    with `seqopt` via `sensitivity.jacobian_rows`, which is why the cut sits at
-    `(xTilde, tPhys)` rather than the raw leaves: its `is_grads_batched`'s vmap has no
-    batching rule for the sparse CSR matmul's backward (`RuntimeError: expand is
-    unsupported for SparseCsc tensors`, confirmed locally). A `k > 1` output must
-    therefore avoid sparse matmuls and `FemSolve` inside its own graph -- true of every
-    current `k > 1` row (start point, stage bounds) but a restriction on future ones,
-    not a guarantee.
+    The cut sits at `(xTilde, tPhys)` for cost, not capability: autograd's backward for
+    `H @ x` is a CSC matvec, which is very slow on CPU (394 ms vs 0.15 ms at 180x60;
+    roughly neutral on GPU). Applying the adjoint by hand avoids it on both devices.
 
     `allow_unused` covers rows that depend on only one field (e.g. a density-only
     constraint never touches `tPhys`): the unused field's block is exactly zero,
