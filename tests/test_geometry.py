@@ -156,3 +156,53 @@ def test_binarize_reports_solid_fraction(tmp_path, capsys):
     with np.load(out) as data:
         np.testing.assert_array_equal(data["xPhys"], [[0.0, 0.0], [1.0, 1.0]])
         assert float(data["threshold"]) == 0.5
+
+
+# --- neighbor_pairs / drop_disconnected ---------------------------------------------
+
+
+def test_neighbor_pairs_are_symmetric_with_the_right_step_lengths():
+    src, dst, step = geometry.neighbor_pairs(3, 3)
+
+    # The centre element of a 3x3 grid has all 8 neighbours; the corners have 3.
+    assert int(np.count_nonzero(src == 4)) == 8
+    assert int(np.count_nonzero(src == 0)) == 3
+    # Every adjacency appears in both directions, with the same step length.
+    both = set(zip(src.tolist(), dst.tolist()))
+    assert both == {(b, a) for a, b in both}
+    assert set(np.round(step, 6)) == {1.0, round(np.sqrt(2), 6)}
+
+
+def test_drop_disconnected_removes_an_island_and_warns():
+    xPhys = np.zeros((5, 6))
+    xPhys[-1, :] = 1.0  # a base row on the build plate
+    xPhys[1, 3] = 1.0  # an island floating clear of it
+    base = geometry.base_elements(xPhys, np.arange(6) + 4 * 6)
+
+    with pytest.warns(UserWarning, match="no path of material"):
+        cleaned = geometry.drop_disconnected(xPhys, base)
+
+    assert cleaned[1, 3] == 0.0
+    np.testing.assert_array_equal(cleaned[-1, :], 1.0)
+    np.testing.assert_array_equal(xPhys[1, 3], 1.0)  # the input is not mutated
+
+
+def test_drop_disconnected_keeps_material_joined_only_diagonally():
+    """8-connected, matching the step lengths the geodesic initialization uses -- a
+    corner-touching element is connected, not an island."""
+    xPhys = np.zeros((4, 4))
+    xPhys[-1, 0] = 1.0
+    xPhys[-2, 1] = 1.0  # touches the base element at a corner only
+    base = geometry.base_elements(xPhys, np.arange(4) + 3 * 4)
+
+    cleaned = geometry.drop_disconnected(xPhys, base)
+
+    np.testing.assert_array_equal(cleaned, xPhys)
+
+
+def test_drop_disconnected_returns_the_input_when_nothing_is_disconnected():
+    xPhys = np.zeros((3, 3))
+    xPhys[-1, :] = 1.0
+    base = geometry.base_elements(xPhys, np.arange(3) + 2 * 3)
+
+    assert geometry.drop_disconnected(xPhys, base) is xPhys

@@ -192,31 +192,64 @@ def test_geodesic_timefield_zero_at_base_spans_0_to_1():
     assert np.all(np.isfinite(field))
 
 
-def test_geodesic_timefield_prefers_material_path():
-    """A void gap between two solid arms must cost more to cross than an equal-length
-    solid path -- an element reachable only through void ends up later than one at the
-    same Euclidean distance reachable entirely through solid."""
+def test_geodesic_timefield_does_not_tunnel_across_a_void_gap():
+    """The point of measuring through material: two solid arms separated by a void
+    slot must not inherit each other's times across it. The far arm's tip is the last
+    thing printed even though it is one element away from a much earlier arm."""
     nely, nelx = 5, 11
     xPhys = np.zeros((nely, nelx))
     xPhys[-1, :] = 1.0  # solid base row (build plate)
-    xPhys[:, 0] = 1.0  # solid left column, straight up from the plate
-    xPhys[:, -1] = 1.0  # solid right column, straight up from the plate -- via void
-    # xPhys[:, -1]'s only route to the plate along solid material would have to detour
-    # through xPhys[-1, :], same as any point; but there's no solid *horizontal*
-    # connector at mid-height, so the direct route from the base to the top of the
-    # right column risks crossing void depending on 8-connectivity -- here it doesn't,
-    # both columns rise straight from the solid base. Compare instead a genuinely
-    # disconnected island.
+    xPhys[:, 0] = 1.0  # left arm, straight up from the plate
+    xPhys[0, :] = 1.0  # top arm, reachable only the long way round via the left arm
     base = timefield.base_elements(nelx, nely, timefield.TimeField.BOTTOM_EDGE)
 
-    xPhys_island = xPhys.copy()
-    xPhys_island[0, nelx // 2] = 1.0  # an island with no solid path to the plate
-    field_island = timefield.init_geodesic_timefield(xPhys_island, base)
-    field_connected = timefield.init_geodesic_timefield(xPhys, base)
+    field = timefield.init_geodesic_timefield(xPhys, base)
 
-    # The island's own time is later than an equally-far element that has a solid path
-    # (the top of the left column, same row).
-    assert field_island[0, nelx // 2] > field_connected[0, 0]
+    # The top arm's far end is the farthest point along material, so it prints last --
+    # not the ~2 elements' worth of time its vertical neighbours in the base row have.
+    assert field[0, -1] == pytest.approx(1.0)
+    assert field[0, -1] > field[-1, -1] + 0.5
+
+
+def test_geodesic_timefield_void_is_later_than_the_solid_beside_it():
+    nely, nelx = 6, 6
+    xPhys = np.zeros((nely, nelx))
+    xPhys[-1, :] = 1.0
+    base = timefield.base_elements(nelx, nely, timefield.TimeField.BOTTOM_EDGE)
+
+    field = timefield.init_geodesic_timefield(xPhys, base)
+
+    solid_row, void_rows = field[-1, :], field[:-1, :]
+    assert void_rows.min() > solid_row.max()
+
+
+def test_geodesic_timefield_solid_times_ignore_surrounding_void():
+    """Normalization is by the largest *solid* distance, so padding the bounding box
+    with empty space leaves the part's own times unchanged."""
+    xPhys = np.zeros((4, 6))
+    xPhys[-1, :] = 1.0
+    padded = np.zeros((10, 6))
+    padded[-1, :] = 1.0
+
+    base = timefield.base_elements(6, 4, timefield.TimeField.BOTTOM_EDGE)
+    padded_base = timefield.base_elements(6, 10, timefield.TimeField.BOTTOM_EDGE)
+
+    field = timefield.init_geodesic_timefield(xPhys, base)
+    padded_field = timefield.init_geodesic_timefield(padded, padded_base)
+
+    np.testing.assert_allclose(field[-1, :], padded_field[-1, :])
+    assert padded_field.max() <= 1.0
+
+
+def test_geodesic_timefield_rejects_solid_with_no_path_to_the_plate():
+    nely, nelx = 5, 11
+    xPhys = np.zeros((nely, nelx))
+    xPhys[-1, :] = 1.0
+    xPhys[0, nelx // 2] = 1.0  # an island with no solid path to the plate
+    base = timefield.base_elements(nelx, nely, timefield.TimeField.BOTTOM_EDGE)
+
+    with pytest.raises(ValueError, match="no path of material"):
+        timefield.init_geodesic_timefield(xPhys, base)
 
 
 # --- uniformity_penalty -------------------------------------------------------------

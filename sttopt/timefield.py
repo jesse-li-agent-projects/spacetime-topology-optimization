@@ -5,7 +5,8 @@ scalar measures of the optimized field.
 encoding a spatial ordering of when each element is expected to be "active" (e.g. a
 solidification or deposition front sweeping the domain). CORNER/EDGE/OPPOSITE_CORNER/
 BOTTOM_EDGE are normalized Euclidean-distance or linear ramps over the `(nely, nelx)`
-element grid; GEODESIC (below) is the odd one out, since it depends on the geometry.
+element grid; `init_geodesic_timefield` (below) is the odd one out, since it depends
+on the geometry rather than only on the mesh.
 See `conventions.md` for the grid/array-order convention they follow.
 
 A lone-1 mesh (`nelx == 1` xor `nely == 1`) is well-defined but doesn't necessarily
@@ -17,15 +18,16 @@ the same mesh also degenerates the continuity filter and `build_problem` is wher
 are first constructed.
 """
 
-import math
 from enum import IntEnum, StrEnum
 
 import numpy as np
 import scipy.sparse as sp
 import torch
-from jaxtyping import Float, Int
+from jaxtyping import Bool, Float, Int
 from scipy.sparse.csgraph import dijkstra
 from torch import Tensor
+
+import sttopt.geometry as geometry
 
 
 class TimeField(IntEnum):
@@ -121,68 +123,109 @@ def base_elements(nelx: int, nely: int, variant: TimeField) -> Int[np.ndarray, "
         raise ValueError(f"variant must be a TimeField member, got {variant!r}")
 
 
-# Multiplies the step length of any graph edge that enters a void element, in
-# init_geodesic_timefield's Dijkstra traversal. Shifts where the initialization places
-# void elements relative to the solid front beside them, not a result -- a config
-# field would suggest it's meant to be tuned per run, which it isn't.
-_VOID_STEP_PENALTY = 5.0
+def _solid_geodesic(
+    solid: Bool[np.ndarray, " nel"], base: Int[np.ndarray, " k"], nelx: int, nely: int
+) -> Float[np.ndarray, " nel"]:
+    """Geodesic distance from `base` through material alone, in element units.
 
-_NEIGHBOR_OFFSETS_8 = [
-    (di, dj) for di in (-1, 0, 1) for dj in (-1, 0, 1) if (di, dj) != (0, 0)
-]
+    :raises ValueError: if any solid element is unreachable -- an island that cannot be
+        deposited from the build plate, which `geometry.drop_disconnected` removes
+    """
+    src, dst, step = geometry.neighbor_pairs(nelx, nely)
+    within = solid[src] & solid[dst]
+    graph = sp.csr_matrix(
+        (step[within], (src[within], dst[within])), shape=(solid.size, solid.size)
+    )
+    dist = dijkstra(graph, directed=False, indices=base, min_only=True)
+
+    unreachable = solid & ~np.isfinite(dist)
+    if unreachable.any():
+        raise ValueError(
+            f"{int(unreachable.sum())} solid element(s) have no path of material back to the build plate, so their print time is undefined; call geometry.drop_disconnected first"
+        )
+    return dist
+
+
+def _void_geodesic(
+    solid: Bool[np.ndarray, " nel"],
+    d_solid: Float[np.ndarray, " nel"],
+    nelx: int,
+    nely: int,
+) -> Float[np.ndarray, " nel"]:
+    """Distance to each void element, continuing `_solid_geodesic`'s metric outward
+    from the material boundary -- same element units, so the two concatenate without a
+    conversion factor.
+
+    Every solid element seeds the traversal at its own print time, via one virtual
+    super-source node joined to each by an edge of that length. Only `solid -> void`
+    and `void -> void` edges exist, so a path leaves the material once and cannot
+    re-enter it to take a shortcut along the part at step cost instead of at the
+    part's own print times.
+    """
+    nel = solid.size
+    src, dst, step = geometry.neighbor_pairs(nelx, nely)
+    leaving = ~solid[dst]
+
+    solid_idx = np.flatnonzero(solid)
+    rows = np.concatenate([src[leaving], np.full(solid_idx.size, nel)])
+    cols = np.concatenate([dst[leaving], solid_idx])
+    weights = np.concatenate([step[leaving], d_solid[solid_idx]])
+
+    graph = sp.csr_matrix((weights, (rows, cols)), shape=(nel + 1, nel + 1))
+    return dijkstra(graph, directed=True, indices=nel)[:nel]
 
 
 def init_geodesic_timefield(
     xPhys: Float[np.ndarray, "nely nelx"], base: Int[np.ndarray, " k"]
 ) -> Float[np.ndarray, "nely nelx"]:
     """
-    Normalized geodesic distance from `base`, measured through the material, via
-    multi-source Dijkstra over the 8-connected element graph.
+    Normalized geodesic distance from `base`, measured through the material, in two
+    passes: the solid field first, then the void field continuing outward from it.
 
     Unlike the bounding-box ramps above, this depends on the geometry -- on a C-shape
     the two arms then start from times that reflect the real path back to the build
-    plate, which a planar ramp gets wrong. `seqopt`'s time field is a free design
-    variable over every element, including void (see
-    `plans/fixed_geometry_sequence_optimization.md`), so this builds one graph over the
-    whole mesh rather than a solid-only graph: every edge that steps into a void
-    element (destination density `<= 0.5`) is penalized by `_VOID_STEP_PENALTY`, which
-    makes void reachable (not infinite) while keeping it later than the solid front
-    beside it. A solid element with no path to the build plate through other solid
-    elements is not a special case either -- it is simply reached the long way, through
-    the penalized void around it, which is the sensible reading of an island that is
-    never actually deposited from the plate.
+    plate, which a planar ramp gets wrong. Both passes matter for that: measuring
+    solid and void in one traversal lets a path cross a narrow gap instead of following
+    the material, so on that same C-shape the far arm's tip inherits its near
+    neighbour's time across the slot rather than its own long way round. Solid
+    distances here never leave the material, so no such shortcut exists.
+
+    `seqopt`'s time field is a free design variable over every element, including void
+    (see `plans/archive/fixed_geometry_sequence_optimization.md`), so void gets a real
+    initialization rather than a fill value: the second pass seeds every solid element
+    at its own time and spreads outward, which keeps void later than the solid beside
+    it and leaves no discontinuity at the material boundary for the continuity
+    constraint to fight.
+
+    Normalization is by the largest *solid* distance, so the part's own times do not
+    depend on how much empty space surrounds it -- padding a geometry file, or
+    rasterizing a component into a roomier box, leaves them unchanged. Void beyond that
+    distance clips to 1.
 
     Grid-graph metrication error (a few percent, from the 8-connected approximation to
     true Euclidean distance) is irrelevant for an initialization; this deliberately
     does not reach for fast marching.
 
-    :param xPhys: density field, shape `(nely, nelx)`
+    :param xPhys: density field, shape `(nely, nelx)`; every solid element must connect
+        to `base` through material (`geometry.drop_disconnected`)
     :param base: 0-indexed element numbers to measure distance from
-    :return: normalized geodesic distance, shape `(nely, nelx)`, spanning `[0, 1]`
+    :return: normalized distance, shape `(nely, nelx)`, in `[0, 1]`
+    :raises ValueError: if any solid element has no path of material back to `base`
     """
     nely, nelx = xPhys.shape
-    nel = nelx * nely
-    flat_x = xPhys.flatten()
-    e = np.arange(nel)
-    i, j = e % nelx, e // nelx
+    solid = geometry.solid_mask(xPhys)
 
-    rows, cols, weights = [], [], []
-    for di, dj in _NEIGHBOR_OFFSETS_8:
-        i2, j2 = i + di, j + dj
-        valid = (i2 >= 0) & (i2 < nelx) & (j2 >= 0) & (j2 < nely)
-        e2 = (j2 * nelx + i2)[valid]
-        step = math.hypot(di, dj)
-        penalty = np.where(flat_x[e2] > 0.5, 1.0, _VOID_STEP_PENALTY)
-        rows.append(e[valid])
-        cols.append(e2)
-        weights.append(step * penalty)
+    d_solid = _solid_geodesic(solid, base, nelx, nely)
+    d_void = _void_geodesic(solid, d_solid, nelx, nely)
+    dist = np.where(solid, d_solid, d_void)
 
-    graph = sp.csr_matrix(
-        (np.concatenate(weights), (np.concatenate(rows), np.concatenate(cols))),
-        shape=(nel, nel),
-    )
-    dist = dijkstra(graph, directed=True, indices=base, min_only=True)
-    return (dist / dist.max()).reshape(nely, nelx)
+    scale = d_solid[solid].max()
+    if scale == 0:
+        # Every solid element is a print-start element, so the part has no time extent
+        # to set the scale; let the void distances set it, and stay at 0 if there is
+        # no void either.
+        scale = max(float(dist.max()), 1.0)
+    return np.minimum(dist / scale, 1.0).reshape(nely, nelx)
 
 
 # Keeps d|grad t|/d(grad t) finite where the gradient vanishes; small enough (relative

@@ -86,9 +86,12 @@ def main(args: argparse.Namespace) -> None:
             )
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "seq_config.json").write_text(json.dumps(config.to_dict(), indent=2))
-    np.savez(output_dir / "geometry.npz", xPhys=xPhys)
 
     problem = seqopt.build_problem(config, xPhys, device=args.device)
+    # build_problem may have dropped solid that can't reach the build plate, so save
+    # its geometry rather than the loaded one: the artefact should be what ran.
+    xPhys = torch_util.to_numpy(problem.xPhys)
+    np.savez(output_dir / "geometry.npz", xPhys=xPhys)
     state = seqopt.init_state(problem)
 
     for _ in range(config.nloop):

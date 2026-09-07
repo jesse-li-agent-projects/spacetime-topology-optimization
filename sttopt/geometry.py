@@ -6,14 +6,29 @@ Deliberately NumPy-only, no torch: this is CPU-side setup at the same boundary
 `timefield.init_timefield` sits at, not part of the autograd graph.
 """
 
+import math
+import warnings
 from pathlib import Path
 
 import numpy as np
-from jaxtyping import Float, Int
+import scipy.sparse as sp
+from jaxtyping import Bool, Float, Int
+from scipy.sparse.csgraph import connected_components
 
 # Elements within this of 0 or 1 count as solid/void; anything strictly between is
 # "intermediate" and trips load_geometry's binary check.
 _BINARY_TOL = 1e-3
+
+# Density above which an element counts as solid. The one cutoff every solid/void
+# decision outside the physics uses -- the physics itself never thresholds, taking
+# density continuously (`conductivity`'s `x**q`, the uniformity weights). On the
+# intended path `load_geometry` has already required a binary field, so any cutoff in
+# `(0, 1)` would agree with this one; it matters only under `--non-binarized`.
+SOLID_THRESHOLD = 0.5
+
+_NEIGHBOR_OFFSETS_8 = [
+    (di, dj) for di in (-1, 0, 1) for dj in (-1, 0, 1) if (di, dj) != (0, 0)
+]
 
 
 def load_geometry(path: Path, *, binary: bool = True) -> Float[np.ndarray, "nely nelx"]:
@@ -94,3 +109,82 @@ def base_elements(
             f"(solid_threshold={solid_threshold}): the geometry is lifted clear of it"
         )
     return solid
+
+
+def neighbor_pairs(
+    nelx: int, nely: int
+) -> tuple[
+    Int[np.ndarray, " npairs"], Int[np.ndarray, " npairs"], Float[np.ndarray, " npairs"]
+]:
+    """
+    Every ordered 8-connected element adjacency on the `(nely, nelx)` grid.
+
+    The shared grid-graph backbone: callers select the subset of pairs they want (both
+    ends solid, destination void, ...) and attach their own edge costs, so connectivity
+    and distance stay one adjacency rather than two that can disagree.
+
+    :param nelx: element count in x
+    :param nely: element count in y
+    :return: `(src, dst, step)` -- 0-indexed element numbers and the Euclidean step
+        length between them (`1` or `sqrt(2)`)
+    """
+    e = np.arange(nelx * nely)
+    i, j = e % nelx, e // nelx
+
+    src, dst, step = [], [], []
+    for di, dj in _NEIGHBOR_OFFSETS_8:
+        i2, j2 = i + di, j + dj
+        valid = (i2 >= 0) & (i2 < nelx) & (j2 >= 0) & (j2 < nely)
+        src.append(e[valid])
+        dst.append((j2 * nelx + i2)[valid])
+        step.append(np.full(int(valid.sum()), math.hypot(di, dj)))
+    return np.concatenate(src), np.concatenate(dst), np.concatenate(step)
+
+
+def solid_mask(xPhys: Float[np.ndarray, "nely nelx"]) -> Bool[np.ndarray, " nel"]:
+    """Flat boolean "this element holds material" mask, at `SOLID_THRESHOLD`."""
+    return xPhys.flatten() > SOLID_THRESHOLD
+
+
+def drop_disconnected(
+    xPhys: Float[np.ndarray, "nely nelx"], base: Int[np.ndarray, " k"]
+) -> Float[np.ndarray, "nely nelx"]:
+    """
+    Void out every solid element with no 8-connected path of material back to `base`.
+
+    Material that does not connect to the build plate cannot be deposited from it, so
+    it is not part of the component being printed; carrying it would let it contribute
+    to the hotspot objective and to the volume the stage budgets normalize by. Removing
+    it here means the geometry a run optimizes is one that can actually be built --
+    which also lets `timefield.init_geodesic_timefield` treat an infinite geodesic
+    distance as a contradiction rather than a case to smooth over.
+
+    :param xPhys: density field, shape `(nely, nelx)`
+    :param base: 0-indexed print-start elements (`base_elements`); their own components
+        are the ones kept
+    :return: `xPhys` with disconnected solid set to 0, or `xPhys` itself when nothing
+        is disconnected
+    :warns UserWarning: naming how many elements were dropped, since this silently
+        changes the component being optimized
+    """
+    nely, nelx = xPhys.shape
+    solid = solid_mask(xPhys)
+    src, dst, _ = neighbor_pairs(nelx, nely)
+
+    within = solid[src] & solid[dst]
+    graph = sp.csr_matrix(
+        (np.ones(int(within.sum())), (src[within], dst[within])),
+        shape=(solid.size, solid.size),
+    )
+    _, labels = connected_components(graph, directed=False)
+
+    dropped = solid & ~np.isin(labels, labels[base])
+    if not dropped.any():
+        return xPhys
+
+    warnings.warn(
+        f"dropping {int(dropped.sum())} solid element(s) with no path of material back to the build plate: they cannot be deposited, so they are not part of the component being optimized"
+    )
+    cleaned = xPhys.copy()
+    cleaned.reshape(-1)[dropped] = 0.0
+    return cleaned

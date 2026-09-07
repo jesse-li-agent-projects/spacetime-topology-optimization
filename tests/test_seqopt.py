@@ -54,6 +54,19 @@ def test_init_state_is_geodesic_and_finite():
     np.testing.assert_allclose(torch_util.to_numpy(state.t), expected)
 
 
+def test_build_problem_drops_solid_that_cannot_reach_the_plate():
+    """`Problem.xPhys` is the geometry that can actually be built, so an island is not
+    left to contribute to the objective or to the volume the stage budgets use."""
+    xPhys = _geometry()
+    xPhys[0, -1] = 1.0  # an island in the top-right corner, clear of everything solid
+    config = default_seq_run_config(lrmin=1.5, rmin_cond=2.5, tmove=0.05)
+
+    with pytest.warns(UserWarning, match="no path of material"):
+        problem = seqopt.build_problem(config, xPhys, device="cpu")
+
+    np.testing.assert_allclose(torch_util.to_numpy(problem.xPhys), _geometry())
+
+
 # --- step: shapes, finiteness, xPhys never a design variable --------------------
 
 

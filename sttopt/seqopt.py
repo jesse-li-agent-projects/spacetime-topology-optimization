@@ -121,7 +121,9 @@ def build_problem(
     one directly.
 
     :param config: the run's hyperparameters
-    :param xPhys: fixed density field, shape `(nely, nelx)`
+    :param xPhys: fixed density field, shape `(nely, nelx)`; solid that does not
+        connect to the build plate is dropped (`geometry.drop_disconnected`), so
+        `Problem.xPhys` is what the run actually optimizes and is not always this
     :param device: device every tensor field lives on; defaults to CUDA if available
     :param dtype: floating dtype every real-valued tensor field is cast to
     """
@@ -134,6 +136,7 @@ def build_problem(
     tfield = timefield.TimeField[config.print_base.upper()]
     candidates = timefield.base_elements(nelx, nely, tfield)
     Nei = geometry.base_elements(xPhys, candidates, config.solid_threshold)
+    xPhys = geometry.drop_disconnected(xPhys, Nei)
 
     L = filters.continuity_filter(nelx, nely, config.lrmin)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, config.rmin_cond)
