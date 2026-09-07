@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 import torch
 
+import sttopt.geometry as geometry
 import sttopt.timefield as timefield
 import sttopt.torch_util as torch_util
 from conftest import assert_close, load_fixture_npz
@@ -211,34 +212,62 @@ def test_geodesic_timefield_does_not_tunnel_across_a_void_gap():
     assert field[0, -1] > field[-1, -1] + 0.5
 
 
-def test_geodesic_timefield_void_is_later_than_the_solid_beside_it():
-    nely, nelx = 6, 6
+def test_geodesic_timefield_void_grows_outward_from_the_material():
+    """Every void element prints after the solid it grows from -- the nearest one in
+    the traversal, not every solid it happens to touch: a void pocket beside both an
+    early and a late arm follows the early one.
+    """
+    nely, nelx = 8, 6
     xPhys = np.zeros((nely, nelx))
-    xPhys[-1, :] = 1.0
+    xPhys[-1, :] = 1.0  # build-plate row
+    xPhys[:, 0] = 1.0  # a tall column, so the part has extent to normalize by
     base = timefield.base_elements(nelx, nely, timefield.TimeField.BOTTOM_EDGE)
 
-    field = timefield.init_geodesic_timefield(xPhys, base)
+    field = timefield.init_geodesic_timefield(xPhys, base).flatten()
+    solid = geometry.solid_mask(xPhys)
+    src, dst, _ = geometry.neighbor_pairs(nelx, nely)
 
-    solid_row, void_rows = field[-1, :], field[:-1, :]
-    assert void_rows.min() > solid_row.max()
+    touching_solid = solid[src] & ~solid[dst]
+    for void in np.unique(dst[touching_solid]):
+        neighbors = src[touching_solid & (dst == void)]
+        assert field[void] > field[neighbors].min()
+
+    assert field.max() <= 1.0
 
 
 def test_geodesic_timefield_solid_times_ignore_surrounding_void():
     """Normalization is by the largest *solid* distance, so padding the bounding box
     with empty space leaves the part's own times unchanged."""
-    xPhys = np.zeros((4, 6))
-    xPhys[-1, :] = 1.0
-    padded = np.zeros((10, 6))
-    padded[-1, :] = 1.0
 
-    base = timefield.base_elements(6, 4, timefield.TimeField.BOTTOM_EDGE)
-    padded_base = timefield.base_elements(6, 10, timefield.TimeField.BOTTOM_EDGE)
+    def bottom_anchored(nely: int) -> np.ndarray:
+        xPhys = np.zeros((nely, 6))
+        xPhys[-1, :] = 1.0
+        xPhys[-3:, 0] = 1.0
+        return xPhys
 
-    field = timefield.init_geodesic_timefield(xPhys, base)
-    padded_field = timefield.init_geodesic_timefield(padded, padded_base)
+    field = timefield.init_geodesic_timefield(
+        bottom_anchored(4),
+        timefield.base_elements(6, 4, timefield.TimeField.BOTTOM_EDGE),
+    )
+    padded = timefield.init_geodesic_timefield(
+        bottom_anchored(10),
+        timefield.base_elements(6, 10, timefield.TimeField.BOTTOM_EDGE),
+    )
 
-    np.testing.assert_allclose(field[-1, :], padded_field[-1, :])
-    assert padded_field.max() <= 1.0
+    solid = bottom_anchored(4) > 0.5
+    np.testing.assert_allclose(field[-3:][solid[-3:]], padded[-3:][solid[-3:]])
+    assert padded.max() <= 1.0
+
+
+def test_geodesic_timefield_rejects_a_part_with_no_geodesic_extent():
+    """A part that is nothing but its own print-start elements deposits entirely at
+    t=0: there is no sequence to optimize, and no scale to normalize by."""
+    xPhys = np.zeros((4, 5))
+    xPhys[-1, :] = 1.0  # solid exactly on the build plate, nowhere else
+    base = timefield.base_elements(5, 4, timefield.TimeField.BOTTOM_EDGE)
+
+    with pytest.raises(ValueError, match="no geodesic extent"):
+        timefield.init_geodesic_timefield(xPhys, base)
 
 
 def test_geodesic_timefield_rejects_solid_with_no_path_to_the_plate():

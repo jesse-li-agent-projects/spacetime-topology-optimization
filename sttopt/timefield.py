@@ -193,9 +193,11 @@ def init_geodesic_timefield(
     `seqopt`'s time field is a free design variable over every element, including void
     (see `plans/archive/fixed_geometry_sequence_optimization.md`), so void gets a real
     initialization rather than a fill value: the second pass seeds every solid element
-    at its own time and spreads outward, which keeps void later than the solid beside
-    it and leaves no discontinuity at the material boundary for the continuity
-    constraint to fight.
+    at its own time and spreads outward, so a void element prints after the solid it
+    grows from and there is no discontinuity at the material boundary for the
+    continuity constraint to fight. Note "grows from", not "touches" -- void between an
+    early arm and a late one follows the early arm, and so can print before the late
+    arm it also sits against.
 
     Normalization is by the largest *solid* distance, so the part's own times do not
     depend on how much empty space surrounds it -- padding a geometry file, or
@@ -210,7 +212,8 @@ def init_geodesic_timefield(
         to `base` through material (`geometry.drop_disconnected`)
     :param base: 0-indexed element numbers to measure distance from
     :return: normalized distance, shape `(nely, nelx)`, in `[0, 1]`
-    :raises ValueError: if any solid element has no path of material back to `base`
+    :raises ValueError: if any solid element has no path of material back to `base`, or
+        if the material has no geodesic extent to normalize by
     """
     nely, nelx = xPhys.shape
     solid = geometry.solid_mask(xPhys)
@@ -219,12 +222,11 @@ def init_geodesic_timefield(
     d_void = _void_geodesic(solid, d_solid, nelx, nely)
     dist = np.where(solid, d_solid, d_void)
 
-    scale = d_solid[solid].max()
+    scale = float(d_solid[solid].max())
     if scale == 0:
-        # Every solid element is a print-start element, so the part has no time extent
-        # to set the scale; let the void distances set it, and stay at 0 if there is
-        # no void either.
-        scale = max(float(dist.max()), 1.0)
+        raise ValueError(
+            "the geometry has no geodesic extent: every solid element is a print-start element, so the whole part deposits at t=0 and there is no print sequence to optimize"
+        )
     return np.minimum(dist / scale, 1.0).reshape(nely, nelx)
 
 
