@@ -270,7 +270,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     factor = state.factor
     if loop % 25 == 0:
         max_g = float(torch.max((1 - K_est_t.detach()) * xPhys.flatten() ** config.r))
-        factor = max_g / numer
+        if max_g != 0 or numer != 0:  # both zero implies no hotspots anywhere
+            factor = max_g / numer
     tru_max = factor * numer
 
     if loop % 30 == 0 and beta_t < 50:
