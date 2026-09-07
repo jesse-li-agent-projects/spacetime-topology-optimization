@@ -77,6 +77,14 @@ def c_shape(
     return _rasterize(vertices, nelx, nely, width, height)
 
 
+def filled_square(
+    nelx: int, nely: int, *, width: float = 100.0, height: float = 100.0
+) -> Float[np.ndarray, "nely nelx"]:
+    """The simplest possible geometry: a fully solid square, no cutouts."""
+    vertices = [(0, 0), (width, 0), (width, height), (0, height)]
+    return _rasterize(vertices, nelx, nely, width, height)
+
+
 def l_shape(
     nelx: int, nely: int, *, width: float = 200.0, height: float = 200.0
 ) -> Float[np.ndarray, "nely nelx"]:
@@ -101,6 +109,7 @@ SHAPES = {
     "overhang_bracket": (overhang_bracket, 100.0, 100.0),
     "c_shape": (c_shape, 200.0, 240.0),
     "l_shape": (l_shape, 200.0, 200.0),
+    "filled_square": (filled_square, 100.0, 100.0),
 }
 
 
