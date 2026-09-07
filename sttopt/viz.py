@@ -344,12 +344,25 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=30,
         help="number of time field contour lines (default: 10)",
     )
+    parser.add_argument(
+        "--design-file",
+        default="final_design.npz",
+        help="which output/<tag>/ artefact to plot (default: final_design.npz); pass "
+        "e.g. design_it0200.npz to inspect an intermediate checkpoint",
+    )
     return parser.parse_args(argv)
 
 
-def _load_stto_run(run_dir: Path) -> tuple:
+def _load_stto_run(run_dir: Path, design_file: str = "final_design.npz") -> tuple:
     """Loads an `stto` run directory's plotting inputs: `xPhys`, `tPhys`, whole-
-    structure compliance, hotspot severity, `|grad tPhys|`, and `nStage`."""
+    structure compliance, hotspot severity, `|grad tPhys|`, and `nStage`.
+
+    :param design_file: an artefact under `run_dir` holding `xPhys`/`tPhys`, e.g.
+        `final_design.npz`. The periodic `design_it*.npz` checkpoints save only the raw
+        `x`/`t` design variables (no filtering/projection), so they can't be plotted
+        this way -- rerunning with denser checkpointing of `xPhys`/`tPhys` is the fix
+        if an intermediate `stto` frame is needed.
+    """
     import json
 
     import sttopt.compliance as compliance
@@ -360,7 +373,13 @@ def _load_stto_run(run_dir: Path) -> tuple:
     from sttopt.run_config import RunConfig
 
     config = RunConfig.from_dict(json.loads((run_dir / "config.json").read_text()))
-    design = np.load(run_dir / "final_design.npz")
+    design = np.load(run_dir / design_file)
+    if "xPhys" not in design or "tPhys" not in design:
+        raise SystemExit(
+            f"{run_dir / design_file}: no xPhys/tPhys (checkpoints only save raw "
+            "x/t) -- pass an artefact with filtered/projected fields, e.g. "
+            "final_design.npz"
+        )
     xPhys, tPhys = design["xPhys"], design["tPhys"]
 
     # Only e1/e2/w/q/rouf (the conductivity-estimation neighborhood) are needed below,
@@ -396,10 +415,15 @@ def _load_stto_run(run_dir: Path) -> tuple:
     return xPhys, tPhys, obj, hotspot_severity, grad_magnitude, config.nStage
 
 
-def _load_seqopt_run(run_dir: Path) -> tuple:
+def _load_seqopt_run(run_dir: Path, design_file: str = "final_design.npz") -> tuple:
     """`_load_stto_run`'s counterpart for a `seqopt` run directory: no FEM, so
     compliance is `None`, and the conductivity neighborhood is built directly from
     the saved geometry rather than through a full `Problem`.
+
+    :param design_file: an artefact under `run_dir` holding a time field, either
+        `final_design.npz` (`xPhys`/`tPhys`) or a periodic `design_it*.npz` checkpoint
+        (`t` alone -- `seqopt` never filters the time field, so `t` doubles as `tPhys`;
+        the fixed geometry comes from `run_dir/geometry.npz` instead).
     """
     import json
 
@@ -413,8 +437,13 @@ def _load_seqopt_run(run_dir: Path) -> tuple:
     config = SeqRunConfig.from_dict(
         json.loads((run_dir / "seq_config.json").read_text())
     )
-    design = np.load(run_dir / "final_design.npz")
-    xPhys, tPhys = design["xPhys"], design["tPhys"]
+    design = np.load(run_dir / design_file)
+    xPhys = (
+        design["xPhys"]
+        if "xPhys" in design
+        else np.load(run_dir / "geometry.npz")["xPhys"]
+    )
+    tPhys = design["tPhys"] if "tPhys" in design else design["t"]
     nely, nelx = xPhys.shape
 
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, config.rmin_cond)
@@ -439,14 +468,19 @@ def _main(args: argparse.Namespace) -> None:
     run_dir = args.output_dir / args.tag
     if (run_dir / "seq_config.json").exists():
         xPhys, tPhys, obj, hotspot_severity, grad_magnitude, nStage = _load_seqopt_run(
-            run_dir
+            run_dir, args.design_file
         )
     else:
         xPhys, tPhys, obj, hotspot_severity, grad_magnitude, nStage = _load_stto_run(
-            run_dir
+            run_dir, args.design_file
         )
 
+    # Nest non-default design files under their own subdirectory so an intermediate
+    # checkpoint's plots don't overwrite the final design's.
+    design_stem = Path(args.design_file).stem
     plot_dir = args.plot_dir / args.tag
+    if design_stem != "final_design":
+        plot_dir /= design_stem
     plot_dir.mkdir(parents=True, exist_ok=True)
     ax = hotspot_severity_plot(xPhys, hotspot_severity, tPhys, nStage)
     out_path = plot_dir / "hotspot_severity.png"
