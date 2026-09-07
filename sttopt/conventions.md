@@ -99,9 +99,11 @@ That's only correct for `a == b` self-pairs, where `FT(t[a], t[a])` is constant 
 `t[a]` so the true derivative is 0 — a genuine tie between two *distinct* elements has
 the ordinary `rouf/4` derivative, since `FT` is smooth there. This was a bug in the
 original MATLAB, not a deliberate design choice, so this port fixed it
-(`_pairwise_sigmoid_terms` in `conductivity.py` now checks `a == b` by index rather
-than `t[a] == t[b]` by value) rather than reproducing it — correctness of the port
-takes priority over bug-for-bug fidelity to the source.
+(`_pairwise_sigmoid_deriv` in `tests/reference/conductivity.py` now checks `a == b` by
+index rather than `t[a] == t[b]` by value) rather than reproducing it — correctness of
+the port takes priority over bug-for-bug fidelity to the source. The rule only has to be
+stated explicitly on that hand-derived path; `sttopt/` differentiates the sigmoid with
+autograd, which gets the self-pair case right on its own.
 
 Not a measure-zero edge case, either: a time field with exact repeated values along a
 grid axis (e.g. a linear ramp) produces structural off-diagonal ties on a nontrivial

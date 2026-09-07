@@ -64,41 +64,35 @@ def neighbor_weights(
     return np.concatenate(e1s), np.concatenate(e2s), np.concatenate(ws)
 
 
-def _pairwise_sigmoid_terms(
+def _pairwise_sigmoid(
     t: Float[Tensor, " nel"],
     a: Int[Tensor, " npairs"],
     b: Int[Tensor, " npairs"],
     rouf: float,
-) -> tuple[Float[Tensor, " npairs"], Float[Tensor, " npairs"]]:
+) -> Float[Tensor, " npairs"]:
     """
-    `FT_el{a}[b]`/`DFT_el{a}[b]`: a neighbor-sigmoid weight and its t-derivative, for a
-    COO pair array.
+    `FT_el{a}[b]`: the neighbor-sigmoid weight of a COO pair array, a smooth mask on
+    whether `b` was printed before `a`.
 
-    Deviates from the MATLAB source in two ways -- see `conventions.md`'s "Known
-    deviations" for why: `DFT` is zeroed only at `a == b` self-pairs rather than on any
-    value tie, and both terms are evaluated through the overflow-safe `exp(-|z|)`
-    instead of the source's literal (and, for large `rouf*dt`, NaN-producing) forms.
+    Evaluated through the overflow-safe `exp(-|z|)` rather than the MATLAB source's
+    literal `1/(1+exp(z))`, which for large `rouf*dt` overflows -- see
+    `conventions.md`'s "Known deviations".
 
     :param t: per-element time field, `tPhys.flatten()`
     :param a: first index of each COO pair
     :param b: second index of each COO pair
     :param rouf: sigmoid sharpness
-    :return: `(FT, DFT)`, one value per pair
+    :return: `FT`, one value per pair
     """
-    ta, tb = t[a], t[b]
-    z = rouf * (tb - ta)
+    z = rouf * (t[b] - t[a])
     ez = torch.exp(-torch.abs(z))
-    FT = torch.where(z >= 0, ez / (1.0 + ez), 1.0 / (1.0 + ez))
-    # d/d(t[a]) of FT, which is even in z: exp(z)/(1+exp(z))^2 == exp(-|z|)/(1+exp(-|z|))^2.
-    DFT = torch.where(a == b, torch.zeros_like(ez), rouf * ez / (1.0 + ez) ** 2)
-    return FT, DFT
+    return torch.where(z >= 0, ez / (1.0 + ez), 1.0 / (1.0 + ez))
 
 
 class _ConductivityCore(NamedTuple):
     K_est: Float[Tensor, " nel"]
     Nsum3: Float[Tensor, " nel"]
     FT_ab: Float[Tensor, " npairs"]
-    DFT_ab: Float[Tensor, " npairs"]
     xb_q: Float[Tensor, " npairs"]
 
 
@@ -112,19 +106,19 @@ def _conductivity_core(
     rouf: float,
 ) -> _ConductivityCore:
     """`K_est`/`Nsum3` (its row-sum denominator), plus the `a->b` pair terms
-    (`FT_ab`/`DFT_ab`/`xb_q`) shared by `estimated_conductivity` and
+    (`FT_ab`/`xb_q`) shared by `estimated_conductivity` and
     `tests/reference/conductivity.py`'s `_conductivity_terms` -- computed once here
     rather than redone by each.
     """
     nel = x.shape[0]
-    FT_ab, DFT_ab = _pairwise_sigmoid_terms(t, e1, e2, rouf)
+    FT_ab = _pairwise_sigmoid(t, e1, e2, rouf)
     xb_q = x[e2] ** q
     Nsum3 = torch.zeros(nel, dtype=x.dtype, device=x.device)
     Nsum3.index_add_(0, e1, w * FT_ab)
     num = torch.zeros(nel, dtype=x.dtype, device=x.device)
     num.index_add_(0, e1, xb_q * w * FT_ab)
     K_est = num / Nsum3
-    return _ConductivityCore(K_est, Nsum3, FT_ab, DFT_ab, xb_q)
+    return _ConductivityCore(K_est, Nsum3, FT_ab, xb_q)
 
 
 def _safe_pmean(u: Float[Tensor, ""], p: float) -> Float[Tensor, ""]:

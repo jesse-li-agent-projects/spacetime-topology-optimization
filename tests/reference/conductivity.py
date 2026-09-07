@@ -21,6 +21,34 @@ from torch import Tensor
 import sttopt.conductivity as conductivity
 
 
+def _pairwise_sigmoid_deriv(
+    t: Float[Tensor, " nel"],
+    a: Int[Tensor, " npairs"],
+    b: Int[Tensor, " npairs"],
+    rouf: float,
+) -> Float[Tensor, " npairs"]:
+    """
+    `DFT_el{a}[b]`: the `t[a]`-derivative of `conductivity._pairwise_sigmoid`'s weight,
+    for a COO pair array. Only the hand-derived sensitivities below need it; the
+    autograd path in `sttopt/` differentiates the weight itself.
+
+    Deviates from the MATLAB source in two ways -- see `conventions.md`'s "Known
+    deviations" for why: zeroed only at `a == b` self-pairs rather than on any value
+    tie, and evaluated through the overflow-safe `exp(-|z|)` instead of the source's
+    literal (and, for large `rouf*dt`, NaN-producing) form.
+
+    :param t: per-element time field, `tPhys.flatten()`
+    :param a: first index of each COO pair
+    :param b: second index of each COO pair
+    :param rouf: sigmoid sharpness
+    :return: `DFT`, one value per pair
+    """
+    z = rouf * (t[b] - t[a])
+    ez = torch.exp(-torch.abs(z))
+    # FT's derivative is even in z: exp(z)/(1+exp(z))^2 == exp(-|z|)/(1+exp(-|z|))^2.
+    return torch.where(a == b, torch.zeros_like(ez), rouf * ez / (1.0 + ez) ** 2)
+
+
 class _ConductivityTerms(NamedTuple):
     K_est: Float[Tensor, " nel"]
     Nsum3: Float[Tensor, " nel"]
@@ -49,12 +77,14 @@ def _conductivity_terms(
     """
     nel = x.shape[0]
     core = conductivity._conductivity_core(x, t, e1, e2, w, q, rouf)
-    FT_ba, DFT_ba = conductivity._pairwise_sigmoid_terms(t, e2, e1, rouf)
+    FT_ba = conductivity._pairwise_sigmoid(t, e2, e1, rouf)
+    DFT_ab = _pairwise_sigmoid_deriv(t, e1, e2, rouf)
+    DFT_ba = _pairwise_sigmoid_deriv(t, e2, e1, rouf)
 
     S1 = torch.zeros(nel, dtype=x.dtype, device=x.device)
-    S1.index_add_(0, e1, w * core.DFT_ab)
+    S1.index_add_(0, e1, w * DFT_ab)
     S2 = torch.zeros(nel, dtype=x.dtype, device=x.device)
-    S2.index_add_(0, e1, core.xb_q * w * core.DFT_ab)
+    S2.index_add_(0, e1, core.xb_q * w * DFT_ab)
 
     return _ConductivityTerms(core.K_est, core.Nsum3, FT_ba, DFT_ba, S1, S2)
 

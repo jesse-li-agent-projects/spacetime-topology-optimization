@@ -825,7 +825,7 @@ def test_hotspot_constraint_fd_time_generic(factor):
     near-tie that a perturbation could shift) -- so `DFT_aa=0` there isn't an
     approximation, and FD matches analytic tightly, everywhere, for a field like this.
     See `test_hotspot_constraint_fd_time_at_ties` for the genuine (distinct-element)
-    tie case, which -- since the `a == b` fix in `_pairwise_sigmoid_terms` -- now
+    tie case, which -- since the `a == b` fix in `_pairwise_sigmoid_deriv` -- now
     matches FD here too, rather than exhibiting the bounded discrepancy it used to.
     """
     nelx, nely = 6, 4
@@ -885,7 +885,7 @@ def test_hotspot_constraint_fd_time_at_ties():
     accumulation order and Hs's row-sum reduction can round differently in the last ULP
     -- so this test sidesteps the filter rather than relying on that).
 
-    `_pairwise_sigmoid_terms` used to zero `DFT` on any value-tie `t[a] == t[b]`,
+    The neighbour sigmoid's derivative used to be zeroed on any value-tie `t[a] == t[b]`,
     ported verbatim from a MATLAB bug (`if TPhys(N_ele(o))==ti`, conflating "value tie"
     with "self-pair"; see conventions.md). That's now fixed to check `a == b` by index,
     so a genuine tie between distinct elements gets the ordinary `rouf/4` derivative
