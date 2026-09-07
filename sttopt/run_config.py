@@ -103,6 +103,9 @@ class SeqRunConfig(_ConfigMixin):
 
     :param print_base: print-start location, naming a `timefield.TimeField` member
         (case-insensitively) for JSON.
+    :param enable_continuity: whether the print-time continuity constraint
+        (`constraints.time_field_continuity`) is included at all; ``False`` drops it
+        from the MMA constraint stack entirely, rather than relaxing it via `lrmin`.
     :param lrmin: continuity-filter radius, in **elements**, as in `RunConfig`. Since
         the geometry file sets the mesh, rasterizing the same component at a different
         resolution changes what this radius means physically; rescale it by hand to
@@ -118,6 +121,7 @@ class SeqRunConfig(_ConfigMixin):
 
     print_base: str
 
+    enable_continuity: bool
     lrmin: float
     rmin_cond: float
 

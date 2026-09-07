@@ -86,7 +86,20 @@ def test_step_finite_and_design_vector_is_t_only(nStage):
     assert record.xmma.shape == (nel,)
     assert record.df.shape == (nel,)
 
-    assert problem.m == 1 + len(problem.Nei) + 2 * nStage
+    assert problem.m == (
+        (1 if problem.config.enable_continuity else 0) + len(problem.Nei) + 2 * nStage
+    )
+    assert record.g.shape == (problem.m,)
+    assert record.dg.shape == (problem.m, nel)
+
+
+def test_enable_continuity_false_drops_the_continuity_constraint_row():
+    problem = _problem(nStage=0, enable_continuity=False)
+    nel = NELX * NELY
+    assert problem.m == len(problem.Nei)
+
+    state = seqopt.init_state(problem)
+    _, record = seqopt.step(problem, state)
     assert record.g.shape == (problem.m,)
     assert record.dg.shape == (problem.m, nel)
 

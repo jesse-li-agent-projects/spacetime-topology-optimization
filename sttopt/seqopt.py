@@ -142,7 +142,7 @@ def build_problem(
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, config.rmin_cond)
 
     n = nelx * nely
-    m = 1 + len(Nei) + 2 * nStage
+    m = (1 if config.enable_continuity else 0) + len(Nei) + 2 * nStage
 
     xPhys_t = torch_util.to_tensor(xPhys, device, dtype)
     int_fields = torch_util.to_tensors(
@@ -193,9 +193,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     value, differentiate by autograd (`t` is the sole leaf), call `mma.mmasub`, and
     unpack the result into the next state.
 
-    Constraints are stacked in a fixed order: `constraints.time_field_continuity`,
-    then `constraints.start_point`, then (when `config.nStage > 0`) the interleaved
-    upper/lower stage-volume rows. `constraints.stage_volume_bounds` is called with
+    Constraints are stacked in a fixed order: `constraints.time_field_continuity`
+    (when `config.enable_continuity`), then `constraints.start_point`, then (when
+    `config.nStage > 0`) the interleaved upper/lower stage-volume rows.
+    `constraints.stage_volume_bounds` is called with
     `volfrac = xPhys.mean()`, which makes its scale factor `nelx*nely*volfrac ==
     xPhys.sum()` -- the row becomes "fraction *of the part* deposited by `t_stage`,
     versus `t_stage`", the right statement once density is fixed rather than a design
@@ -242,9 +243,11 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     xval = tflat
 
     # -- Constraints, in the fixed documented order above. --
-    g_cont_t = constraints.time_field_continuity(t, problem.L)
     g_start_t = constraints.start_point(t, problem.Nei)
-    g_parts = [g_cont_t[None], g_start_t]
+    g_parts = [g_start_t]
+    if config.enable_continuity:
+        g_cont_t = constraints.time_field_continuity(t, problem.L)
+        g_parts.insert(0, g_cont_t[None])
 
     if nStage > 0:
         stage_times = [float(ti) for ti in np.linspace(0, 1, nStage + 1)[1:]]

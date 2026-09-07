@@ -1,6 +1,7 @@
 {
   "nloop": 800,
   "print_base": "bottom_edge",
+  "enable_continuity": true,
   "lrmin": 2.0,
   "rmin_cond": 12.0,
   "hotspot_weight": 1.0,
