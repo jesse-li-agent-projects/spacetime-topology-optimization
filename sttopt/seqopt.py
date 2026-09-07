@@ -135,7 +135,7 @@ def build_problem(
 
     tfield = timefield.TimeField[config.print_base.upper()]
     candidates = timefield.base_elements(nelx, nely, tfield)
-    Nei = geometry.base_elements(xPhys, candidates, config.solid_threshold)
+    Nei = geometry.base_elements(xPhys, candidates)
     xPhys = geometry.drop_disconnected(xPhys, Nei)
 
     L = filters.continuity_filter(nelx, nely, config.lrmin)

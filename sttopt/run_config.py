@@ -95,12 +95,14 @@ class SeqRunConfig(_ConfigMixin):
     No `nelx`/`nely`: the geometry file (`--geometry`) defines the mesh, so a mismatch
     between config and geometry is unrepresentable rather than merely caught. No
     `rmin` either: `seqopt` does not filter the time field (see
-    `plans/fixed_geometry_sequence_optimization.md`), so there is no such radius to set.
+    `plans/archive/fixed_geometry_sequence_optimization.md`), so there is no such
+    radius to set. No solid/void cutoff either: it would be inert on a binary geometry,
+    which `geometry.load_geometry` requires by default, so `geometry.SOLID_THRESHOLD`
+    is one constant rather than a setting that can disagree with itself between the
+    print-start set and the time-field initialization.
 
     :param print_base: print-start location, naming a `timefield.TimeField` member
         (case-insensitively) for JSON.
-    :param solid_threshold: density above which an element counts as touching the
-        build plate (`geometry.base_elements`).
     :param lrmin: continuity-filter radius, in **elements**, as in `RunConfig`. Since
         the geometry file sets the mesh, rasterizing the same component at a different
         resolution changes what this radius means physically; rescale it by hand to
@@ -115,7 +117,6 @@ class SeqRunConfig(_ConfigMixin):
     nloop: int
 
     print_base: str
-    solid_threshold: float
 
     lrmin: float
     rmin_cond: float

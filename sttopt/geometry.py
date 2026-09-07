@@ -81,7 +81,6 @@ def load_geometry(path: Path, *, binary: bool = True) -> Float[np.ndarray, "nely
 def base_elements(
     xPhys: Float[np.ndarray, "nely nelx"],
     candidates: Int[np.ndarray, " k"],
-    solid_threshold: float = 0.5,
 ) -> Int[np.ndarray, " j"]:
     """
     Filter a set of candidate print-start elements (e.g. `timefield.base_elements`)
@@ -94,19 +93,14 @@ def base_elements(
 
     :param xPhys: density field, shape `(nely, nelx)`
     :param candidates: 0-indexed element numbers of the candidate print-start set
-    :param solid_threshold: density above which an element counts as touching the
-        build plate; a grey topology-optimized field and a hand-drawn binary mask
-        don't want the same cutoff
-    :return: the subset of `candidates` whose density exceeds `solid_threshold`
+    :return: the subset of `candidates` that hold material, at `SOLID_THRESHOLD`
     :raises ValueError: if no candidate touches the build plate -- a geometry that
         does not touch its build plate cannot be printed from it
     """
-    flat = xPhys.flatten()
-    solid = candidates[flat[candidates] > solid_threshold]
+    solid = candidates[solid_mask(xPhys)[candidates]]
     if solid.size == 0:
         raise ValueError(
-            f"no candidate print-start element touches the build plate "
-            f"(solid_threshold={solid_threshold}): the geometry is lifted clear of it"
+            "no candidate print-start element holds material: the geometry is lifted clear of its build plate"
         )
     return solid
 
