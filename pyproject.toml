@@ -23,6 +23,7 @@ torch = ["torch"]
 
 [project.scripts]
 sttopt = "sttopt.stto_cli:main"
+sttopt-seq = "sttopt.seqopt_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["sttopt*"]

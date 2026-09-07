@@ -20,7 +20,7 @@ import numpy as np
 import torch
 
 import sttopt.fem as fem
-from sttopt.run_config import RunConfig
+from sttopt.run_config import RunConfig, SeqRunConfig
 
 
 def _as_numpy(x) -> np.ndarray:
@@ -46,6 +46,7 @@ def tti(x) -> torch.Tensor:
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "configs" / "default.json"
+DEFAULT_SEQ_CONFIG_PATH = Path(__file__).parent.parent / "configs" / "seq_default.json"
 
 
 def default_run_config(**overrides) -> RunConfig:
@@ -55,6 +56,13 @@ def default_run_config(**overrides) -> RunConfig:
     production default.
     """
     base = RunConfig.from_dict(json.loads(DEFAULT_CONFIG_PATH.read_text()))
+    return dataclasses.replace(base, **overrides)
+
+
+def default_seq_run_config(**overrides) -> SeqRunConfig:
+    """`SeqRunConfig` loaded from `configs/seq_default.json`, `default_run_config`'s
+    counterpart for `seqopt`."""
+    base = SeqRunConfig.from_dict(json.loads(DEFAULT_SEQ_CONFIG_PATH.read_text()))
     return dataclasses.replace(base, **overrides)
 
 
@@ -95,7 +103,7 @@ def point_load_problem(nelx: int, nely: int) -> tuple[np.ndarray, np.ndarray, in
     generated under: unit downward point load on the bottom-right node, left edge
     clamped in both directions. This is the geometry MATLAB's `F(2*(nelx+1)*(nely+1))
     = -1` / `fixeddofs = 1:2*(nely+1)` denote; keeping it here rather than restating
-    those formulas per test file keeps it in step with `optimize.build_problem`.
+    those formulas per test file keeps it in step with `stto.build_problem`.
     """
     nodes = fem.node_grid(nelx, nely)
     ndof = 2 * nodes.size

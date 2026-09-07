@@ -111,3 +111,17 @@ bug was also worse than "wrong on a small set": `DFT`
 was ~`rouf/4` approaching a tie and exactly `0` at one, so `dt1` was discontinuous in
 `t` — a hole in the gradient field that an optimizer driving a symmetric design toward
 equal print times would walk straight into.
+
+## Time-field treatment: `stto` vs. `seqopt`
+
+`stto` filters the time field exactly like density: `tPhys = H @ t / Hs`, reusing the
+density filter. `seqopt` does not filter it at all -- `tPhys` is simply `t`. This is a
+real difference in what the two problems optimize, not an oversight: the density
+filter smooths *across void*, mixing two geometrically-close but materially
+disconnected regions' print times purely because nothing in the filter knows there is
+no material between them. `stto` accepts that because density is itself a design
+variable there, so "void" is provisional and changes every iteration. `seqopt` fixes
+the geometry, so a real, permanent void gap exists to get this wrong on -- avoiding the
+filter removes the coupling at its source instead. See
+`plans/archive/fixed_geometry_sequence_optimization.md` for the fuller reasoning,
+including that this is a starting point rather than a settled design.

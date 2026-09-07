@@ -4,6 +4,8 @@ correctness-risk phase (visual output, not numerical), so testing here is limite
 not pixel-level MATLAB fixture comparison (no fixture exists for these two functions).
 """
 
+import json
+
 import numpy as np
 
 import sttopt.viz as viz
@@ -95,3 +97,47 @@ def test_combination_coords_align_boundary_segments_with_combination_frame():
 
     assert x0 <= bx0 and bx1 <= x1
     assert y0 <= by0 and by1 <= y1
+
+
+def test_main_regenerates_plots_from_a_seqopt_run_directory(tmp_path, monkeypatch):
+    """`_main` must detect a seqopt run directory (by seq_config.json) and regenerate
+    its plots without a Problem/FEM, per the plan's Phase 2 viz.py section."""
+    import sttopt.seqopt_cli as seqopt_cli
+    from conftest import default_seq_run_config
+
+    monkeypatch.chdir(tmp_path)
+    config = default_seq_run_config(
+        lrmin=1.5, rmin_cond=2.5, nStage=2, nloop=2, tmove=0.05
+    )
+    xPhys = np.zeros((NELY, NELX))
+    xPhys[-2:, :] = 1.0
+    xPhys[:, 0] = 1.0
+    geometry_path = tmp_path / "geometry.npz"
+    np.savez(geometry_path, xPhys=xPhys)
+    config_path = tmp_path / "seq_config.json"
+    config_path.write_text(json.dumps(config.to_dict()))
+
+    seqopt_cli.main(
+        seqopt_cli.parse_args(
+            [
+                "--geometry",
+                str(geometry_path),
+                "--config",
+                str(config_path),
+                "--tag",
+                "seqviz",
+            ]
+        )
+    )
+
+    viz._main(viz._parse_args(["seqviz"]))
+
+    plot_dir = tmp_path / "plot" / "seqviz"
+    for name in [
+        "hotspot_severity.png",
+        "timefield.png",
+        "timefield_gradient_magnitude.png",
+        "timefield_contour.png",
+        "timefield_filled_contour.png",
+    ]:
+        assert (plot_dir / name).exists()

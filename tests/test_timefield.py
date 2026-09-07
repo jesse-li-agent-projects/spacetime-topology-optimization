@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 import torch
 
+import sttopt.geometry as geometry
 import sttopt.timefield as timefield
 import sttopt.torch_util as torch_util
 from conftest import assert_close, load_fixture_npz
@@ -27,14 +28,14 @@ def test_timefield_variant_matches_fixture(variant, key):
     assert got.shape == fx[key].shape == (nely, nelx)
     assert_close(got, fx[key], tier="algebraic")
 
-    # A bare int dispatches identically -- optimize.build_problem resolves
+    # A bare int dispatches identically -- stto.build_problem resolves
     # RunConfig.print_base's string to a TimeField member before this point.
     assert np.array_equal(got, timefield.init_timefield(nelx, nely, int(variant)))
 
 
 def test_unknown_variant_rejected():
     with pytest.raises(ValueError):
-        timefield.init_timefield(7, 5, 4)
+        timefield.init_timefield(7, 5, 5)
 
 
 @pytest.mark.parametrize("nelx,nely", [(7, 5), (5, 7), (4, 4), (2, 3)])
@@ -69,13 +70,14 @@ def test_timefield_variants_span_0_to_1(nelx, nely):
 def test_lone_one_mesh_is_finite(nelx, nely, variant):
     """A lone-1 mesh is well-defined -- finite everywhere, though not necessarily
     spanning [0, 1] (see the module docstring). Only `nelx == nely == 1` degenerates,
-    and rejecting that one is `optimize.build_problem`'s job, not this module's."""
+    and rejecting that one is `stto.build_problem`'s job, not this module's."""
     assert np.all(np.isfinite(timefield.init_timefield(nelx, nely, variant)))
 
 
 def test_uniform_ramp_has_zero_gradient_spread():
     """A linear ramp has the same gradient magnitude everywhere -- the ideal the penalty
-    drives toward -- so its spread is zero regardless of the ramp's direction or slope."""
+    drives toward -- so its spread is zero regardless of the ramp's direction or slope.
+    """
     ny, nx = 9, 11
     ys, xs = torch.meshgrid(
         torch.arange(ny, dtype=torch.float64),
@@ -140,3 +142,207 @@ def test_gradient_magnitude_std_sensitivity_matches_finite_differences():
     # gradient: a border element still enters an interior element's stencil.
     assert np.abs(fd).max() > 1e-3
     assert np.abs(fd[0]).max() > 1e-3
+
+
+# --- BOTTOM_EDGE -----------------------------------------------------------------
+
+
+def test_bottom_edge_range_and_orientation():
+    nelx, nely = 6, 9
+    field = timefield.init_timefield(nelx, nely, timefield.TimeField.BOTTOM_EDGE)
+    assert field.shape == (nely, nelx)
+    np.testing.assert_allclose(field[-1], 0.0)  # bottom row: t=0
+    np.testing.assert_allclose(field[0], 1.0)  # top row: t=1
+    # Monotonically decreasing bottom-to-top, constant across each row.
+    assert np.all(np.diff(field[:, 0]) < 0)
+    for row in field:
+        np.testing.assert_allclose(row, row[0])
+
+
+# --- base_elements -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "variant,expected",
+    [
+        (timefield.TimeField.CORNER, np.array([0])),
+        (timefield.TimeField.EDGE, np.arange(5) * 7),
+        (timefield.TimeField.OPPOSITE_CORNER, np.arange(5) * 7),
+        (timefield.TimeField.BOTTOM_EDGE, 4 * 7 + np.arange(7)),
+    ],
+)
+def test_base_elements_all_variants(variant, expected):
+    np.testing.assert_array_equal(timefield.base_elements(7, 5, variant), expected)
+
+
+def test_base_elements_unknown_variant_rejected():
+    with pytest.raises(ValueError):
+        timefield.base_elements(7, 5, 5)
+
+
+# --- init_geodesic_timefield -------------------------------------------------------
+
+
+def test_geodesic_timefield_zero_at_base_spans_0_to_1():
+    xPhys = np.ones((6, 8))
+    base = timefield.base_elements(8, 6, timefield.TimeField.BOTTOM_EDGE)
+    field = timefield.init_geodesic_timefield(xPhys, base)
+    assert field.shape == (6, 8)
+    np.testing.assert_allclose(field.flatten()[base], 0.0)
+    assert field.max() == pytest.approx(1.0)
+    assert np.all(np.isfinite(field))
+
+
+def test_geodesic_timefield_does_not_tunnel_across_a_void_gap():
+    """The point of measuring through material: two solid arms separated by a void
+    slot must not inherit each other's times across it. The far arm's tip is the last
+    thing printed even though it is one element away from a much earlier arm."""
+    nely, nelx = 5, 11
+    xPhys = np.zeros((nely, nelx))
+    xPhys[-1, :] = 1.0  # solid base row (build plate)
+    xPhys[:, 0] = 1.0  # left arm, straight up from the plate
+    xPhys[0, :] = 1.0  # top arm, reachable only the long way round via the left arm
+    base = timefield.base_elements(nelx, nely, timefield.TimeField.BOTTOM_EDGE)
+
+    field = timefield.init_geodesic_timefield(xPhys, base)
+
+    # The top arm's far end is the farthest point along material, so it prints last --
+    # not the ~2 elements' worth of time its vertical neighbours in the base row have.
+    assert field[0, -1] == pytest.approx(1.0)
+    assert field[0, -1] > field[-1, -1] + 0.5
+
+
+def test_geodesic_timefield_void_grows_outward_from_the_material():
+    """Every void element prints after the solid it grows from -- the nearest one in
+    the traversal, not every solid it happens to touch: a void pocket beside both an
+    early and a late arm follows the early one.
+    """
+    nely, nelx = 8, 6
+    xPhys = np.zeros((nely, nelx))
+    xPhys[-1, :] = 1.0  # build-plate row
+    xPhys[:, 0] = 1.0  # a tall column, so the part has extent to normalize by
+    base = timefield.base_elements(nelx, nely, timefield.TimeField.BOTTOM_EDGE)
+
+    field = timefield.init_geodesic_timefield(xPhys, base).flatten()
+    solid = geometry.solid_mask(xPhys)
+    src, dst, _ = geometry.neighbor_pairs(nelx, nely)
+
+    touching_solid = solid[src] & ~solid[dst]
+    for void in np.unique(dst[touching_solid]):
+        neighbors = src[touching_solid & (dst == void)]
+        assert field[void] > field[neighbors].min()
+
+    assert field.max() <= 1.0
+
+
+def test_geodesic_timefield_solid_times_ignore_surrounding_void():
+    """Normalization is by the largest *solid* distance, so padding the bounding box
+    with empty space leaves the part's own times unchanged."""
+
+    def bottom_anchored(nely: int) -> np.ndarray:
+        xPhys = np.zeros((nely, 6))
+        xPhys[-1, :] = 1.0
+        xPhys[-3:, 0] = 1.0
+        return xPhys
+
+    field = timefield.init_geodesic_timefield(
+        bottom_anchored(4),
+        timefield.base_elements(6, 4, timefield.TimeField.BOTTOM_EDGE),
+    )
+    padded = timefield.init_geodesic_timefield(
+        bottom_anchored(10),
+        timefield.base_elements(6, 10, timefield.TimeField.BOTTOM_EDGE),
+    )
+
+    solid = bottom_anchored(4) > 0.5
+    np.testing.assert_allclose(field[-3:][solid[-3:]], padded[-3:][solid[-3:]])
+    assert padded.max() <= 1.0
+
+
+def test_geodesic_timefield_rejects_a_part_with_no_geodesic_extent():
+    """A part that is nothing but its own print-start elements deposits entirely at
+    t=0: there is no sequence to optimize, and no scale to normalize by."""
+    xPhys = np.zeros((4, 5))
+    xPhys[-1, :] = 1.0  # solid exactly on the build plate, nowhere else
+    base = timefield.base_elements(5, 4, timefield.TimeField.BOTTOM_EDGE)
+
+    with pytest.raises(ValueError, match="no geodesic extent"):
+        timefield.init_geodesic_timefield(xPhys, base)
+
+
+def test_geodesic_timefield_rejects_solid_with_no_path_to_the_plate():
+    nely, nelx = 5, 11
+    xPhys = np.zeros((nely, nelx))
+    xPhys[-1, :] = 1.0
+    xPhys[0, nelx // 2] = 1.0  # an island with no solid path to the plate
+    base = timefield.base_elements(nelx, nely, timefield.TimeField.BOTTOM_EDGE)
+
+    with pytest.raises(ValueError, match="no path of material"):
+        timefield.init_geodesic_timefield(xPhys, base)
+
+
+# --- uniformity_penalty -------------------------------------------------------------
+
+
+def test_uniformity_penalty_dispatches_to_gradient_cv():
+    field = torch.rand((7, 6), dtype=torch.float64)
+    direct = timefield._gradient_cv(field, None)
+    via_dispatch = timefield.uniformity_penalty(
+        field, timefield.UniformityMetric.GRADIENT_CV
+    )
+    assert float(direct) == pytest.approx(float(via_dispatch))
+
+
+def test_uniformity_penalty_unknown_metric_rejected():
+    field = torch.rand((5, 5), dtype=torch.float64)
+    with pytest.raises(ValueError):
+        timefield.uniformity_penalty(field, "not_a_real_metric")
+
+
+def test_gradient_cv_weighting_changes_the_answer():
+    """A masked-off region with a deliberately different gradient must be excluded by
+    the weighting, not merely down-weighted to irrelevance -- so weighted and
+    unweighted spreads differ."""
+    ny, nx = 10, 10
+    ys, xs = torch.meshgrid(
+        torch.arange(ny, dtype=torch.float64),
+        torch.arange(nx, dtype=torch.float64),
+        indexing="ij",
+    )
+    field = 0.05 * xs  # uniform gradient over the left region
+    field[:, nx // 2 :] = 0.05 * (nx // 2) + 0.5 * (xs[:, nx // 2 :] - nx // 2)  # steep
+
+    weights = torch.zeros((ny, nx), dtype=torch.float64)
+    weights[:, : nx // 2] = 1.0  # "part" is only the uniform-gradient half
+
+    unweighted = timefield.uniformity_penalty(
+        field, timefield.UniformityMetric.GRADIENT_CV
+    )
+    weighted = timefield.uniformity_penalty(
+        field, timefield.UniformityMetric.GRADIENT_CV, weights=weights
+    )
+    assert float(weighted) < float(unweighted)
+    assert float(weighted) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_gradient_cv_zero_weight_returns_zero():
+    field = torch.rand((6, 6), dtype=torch.float64)
+    weights = torch.zeros((6, 6), dtype=torch.float64)
+    assert (
+        float(
+            timefield.uniformity_penalty(
+                field, timefield.UniformityMetric.GRADIENT_CV, weights=weights
+            )
+        )
+        == 0.0
+    )
+
+
+def test_gradient_cv_zero_mean_gradient_returns_zero():
+    field = torch.full((6, 6), 0.3, dtype=torch.float64)  # constant -> zero gradient
+    assert (
+        float(
+            timefield.uniformity_penalty(field, timefield.UniformityMetric.GRADIENT_CV)
+        )
+        == 0.0
+    )

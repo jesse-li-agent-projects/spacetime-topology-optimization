@@ -6,7 +6,7 @@ constraint bounding its worst-case value.
 overheating risk during additive deposition. `hotspot_value` computes the p-norm of
 `1 - K_est` (weighted toward already-dense, hot regions) that the hotspot constraint
 bounds below a critical threshold `Tcr`, smoothly approximating a hard max via a
-p-norm as `p -> inf`; the caller (`optimize.step`) applies the `factor`/`Tcr` scaling
+p-norm as `p -> inf`; the caller (`stto.step`) applies the `factor`/`Tcr` scaling
 and gets the sensitivity from autograd through this (Phase 3.4,
 `plans/torch_port_part2.md`).
 
@@ -16,6 +16,15 @@ predecessor that folds the `factor`/`Tcr` scaling and the density-filter chain r
 (`tests/test_reference_sweep.py`) and timing baseline
 (`benchmarks/bench_sensitivities.py`). See `conventions.md` for array-order/tolerance
 conventions.
+
+Two deliberate deviations from Das2025 Eq. (6), both load-bearing for this port and
+neither a bug: the paper's neighbor weight is radial *times angular*, the angular part
+favoring the build direction, but `neighbor_weights` below keeps only the radial
+factor -- the build direction is not fixed once deposition order is itself a design
+variable (`plans/archive/fixed_geometry_sequence_optimization.md`), so this is a known
+future direction rather than an oversight. And the paper's Eq. (6) numerator weights a
+neighbor by its raw density `rho_j`, where `_conductivity_core` uses `x_j**q` with
+`q = 3` -- a SIMP-style penalization of intermediate density the paper does not have.
 """
 
 from typing import NamedTuple
