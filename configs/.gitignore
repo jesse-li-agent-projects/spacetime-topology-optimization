@@ -1,4 +1,5 @@
 # Track only example configs, not the transient ones
 *
 !default.json
+!seq_default.json
 !.gitignore
