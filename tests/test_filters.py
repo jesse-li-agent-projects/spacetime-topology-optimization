@@ -6,6 +6,8 @@ import pytest
 import torch
 from conftest import assert_close, load_fixture_npz
 
+from sttopt import filters, torch_util
+
 from sttopt.filters import (
     continuity_filter,
     density_filter,
@@ -221,9 +223,9 @@ def test_heaviside_projection_interior_values(x, beta, eta, expected):
     # the projection's own output at interior points -- the FD tests above only check
     # consistency between the projection and its derivative, so a bug shared by both
     # (e.g. a sign error) wouldn't be caught there.
-    assert heaviside_projection(torch.tensor(x, dtype=torch.float64), beta, eta).item() == pytest.approx(
-        expected, rel=1e-12
-    )
+    assert heaviside_projection(
+        torch.tensor(x, dtype=torch.float64), beta, eta
+    ).item() == pytest.approx(expected, rel=1e-12)
 
 
 def test_heaviside_projection_endpoints():
@@ -235,3 +237,44 @@ def test_heaviside_projection_endpoints():
         assert heaviside_projection(
             torch.tensor(1.0, dtype=torch.float64), beta, eta
         ).item() == pytest.approx(1.0, abs=1e-12)
+
+
+def test_symmetric_matmul_matches_plain_matmul():
+    """`torch_util.symmetric_matmul` replaces `H @ v` for speed, not for a different
+    answer: its hand-written backward has to agree with autograd's own, which is what
+    makes exploiting the symmetry legal rather than an approximation.
+    """
+    H, _ = density_filter(4, 3, 1.5)
+    H_t = torch_util.symmetric_csr_to_tensor(H, "cpu", torch.float64)
+    v = torch.rand(H_t.shape[0], dtype=torch.float64)
+
+    def value_and_grad(matmul):
+        leaf = v.clone().requires_grad_(True)
+        y = matmul(H_t, leaf)
+        return y, torch.autograd.grad((y**2).sum(), leaf)[0]
+
+    y_ref, grad_ref = value_and_grad(torch.matmul)
+    y, grad = value_and_grad(torch_util.symmetric_matmul)
+
+    torch.testing.assert_close(y, y_ref)
+    torch.testing.assert_close(grad, grad_ref)
+
+
+def test_apply_density_filter_matches_explicit_expression():
+    H, Hs = density_filter(NELX, NELY, RMIN)
+    H_t = torch_util.symmetric_csr_to_tensor(H, "cpu", torch.float64)
+    Hs_t = torch.as_tensor(Hs, dtype=torch.float64)
+    field = torch.rand(NELY, NELX, dtype=torch.float64)
+
+    expected = ((H_t @ field.flatten()) / Hs_t).reshape(NELY, NELX)
+    torch.testing.assert_close(filters.apply_density_filter(field, H_t, Hs_t), expected)
+
+
+def test_symmetric_csr_to_tensor_rejects_asymmetric():
+    """`symmetric_matmul`'s backward is silently wrong on an asymmetric matrix, so the
+    check has to bite at construction -- `continuity_filter`'s row-normalized `L` is the
+    real asymmetric matrix in this codebase.
+    """
+    L = continuity_filter(4, 3, 1.5)
+    with pytest.raises(ValueError, match="not symmetric"):
+        torch_util.symmetric_csr_to_tensor(L, "cpu", torch.float64)

@@ -1,9 +1,8 @@
 """Jacobian-row assembly shared by `stto.step` and `seqopt.step`.
 
-`stto._sensitivity_rows` finishes with a hand-applied filter adjoint that is specific
-to STTO's density/continuity filter chain and stays there; this module holds only the
-smaller part both problems need regardless of what sits downstream of the autograd
-leaves: turning `k` scalar outputs into one `(k, numel)` block per leaf.
+Both callers differentiate `k` scalar outputs down to their own raw leaves; this module
+holds only the part that is the same either way: turning those `k` outputs into one
+`(k, numel)` block per leaf.
 """
 
 from typing import Sequence
