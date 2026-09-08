@@ -1,10 +1,9 @@
 """Batched-Jacobian assembly shared by `stto.step` and `seqopt.step`.
 
-`stto._sensitivity_rows` finishes with a hand-applied filter adjoint that is specific
-to STTO's density/continuity filter chain and stays there; this module holds only the
-smaller, subtler part both problems need regardless of what sits downstream of the
-autograd leaves: the `k == 1` versus `k > 1` split, and the one-hot
-`is_grads_batched` trick that assembles `k` gradient rows in one call.
+Both problems differentiate `k` independent scalar rows w.r.t. their own raw leaves;
+this module holds the part that is the same either way: the `k == 1` versus `k > 1`
+split, and the one-hot `is_grads_batched` trick that assembles `k` gradient rows in one
+call.
 """
 
 from typing import Sequence
@@ -23,11 +22,12 @@ def jacobian_rows(
 
     `k == 1` differentiates with a plain (unbatched) `torch.autograd.grad`. `k > 1`
     uses `torch.autograd.grad(..., is_grads_batched=True)` with one-hot seeds instead
-    of `k` separate calls -- `is_grads_batched`'s vmap has no batching rule for the
-    sparse CSR matmul's backward (`RuntimeError: expand is unsupported for SparseCsc
-    tensors`, confirmed locally). A `k > 1` output must therefore avoid a sparse matmul
-    or a `FemSolve` inside its own graph; true of every current `k > 1` row in both
-    callers, but a restriction on future ones, not a guarantee.
+    of `k` separate calls -- but `is_grads_batched`'s vmap has no batching rule for
+    `FemSolve`'s backward, so a `k > 1` output must avoid a `FemSolve` inside its own
+    graph; true of every current `k > 1` row in both callers, but a restriction on
+    future ones, not a guarantee. A plain sparse CSR matmul is likewise unbatchable
+    (`RuntimeError: expand is unsupported for SparseCsc tensors`, from the transpose in
+    its backward); `torch_util.symmetric_matmul` is the way around that.
 
     `allow_unused` covers a leaf an output does not depend on: its block is exactly
     zero, matching what a hand-derived predecessor would return.

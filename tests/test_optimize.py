@@ -401,8 +401,8 @@ def test_sensitivity_rows_batched_matches_unbatched():
     t = torch.tensor(
         rng.uniform(0.05, 0.95, size=(nely, nelx)), device=device, dtype=dtype
     ).requires_grad_(True)
-    xTilde = ((problem.H @ x.flatten()) / problem.Hs).reshape(nely, nelx)
-    tPhys = ((problem.H @ t.flatten()) / problem.Hs).reshape(nely, nelx)
+    xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
+    tPhys = filters.apply_density_filter(t, problem.H, problem.Hs)
 
     # Two arbitrary, distinct scalar outputs of (xTilde, tPhys), so the two rows of the
     # batched call have genuinely different sensitivities.
@@ -410,9 +410,9 @@ def test_sensitivity_rows_batched_matches_unbatched():
     out_b = torch.sum(xTilde) - torch.sum(tPhys**2)
     outputs = torch.stack([out_a, out_b])
 
-    rows_batched = stto._sensitivity_rows(outputs, xTilde, tPhys, problem.H, problem.Hs)
-    row_a = stto._sensitivity_rows(out_a[None], xTilde, tPhys, problem.H, problem.Hs)[0]
-    row_b = stto._sensitivity_rows(out_b[None], xTilde, tPhys, problem.H, problem.Hs)[0]
+    rows_batched = stto._sensitivity_rows(outputs, x, t)
+    row_a = stto._sensitivity_rows(out_a[None], x, t)[0]
+    row_b = stto._sensitivity_rows(out_b[None], x, t)[0]
 
     torch.testing.assert_close(rows_batched[0], row_a, rtol=1e-10, atol=0.0)
     torch.testing.assert_close(rows_batched[1], row_b, rtol=1e-10, atol=0.0)

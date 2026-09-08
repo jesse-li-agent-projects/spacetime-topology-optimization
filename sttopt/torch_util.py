@@ -117,3 +117,67 @@ def csr_to_scipy(x: Tensor) -> sp.csr_matrix:
         ),
         shape=tuple(x.shape),
     )
+
+
+def symmetric_csr_to_tensor(
+    matrix: sp.spmatrix | sp.sparray, device: torch.device | str, dtype: torch.dtype
+) -> Tensor:
+    """
+    `csr_to_tensor` for a matrix that is meant to be symmetric, checked once here.
+
+    `symmetric_matmul` silently returns wrong gradients on a non-symmetric matrix, so
+    the invariant is enforced at the one place the tensor is built rather than on every
+    multiply.
+
+    :param matrix: any SciPy sparse matrix; must equal its own transpose exactly.
+    :param device: target device.
+    :param dtype: target dtype for the matrix's values.
+    :return: equivalent `torch.sparse_csr_tensor`, on `device`.
+    :raises ValueError: if `matrix` is not symmetric.
+    """
+    csr = matrix.tocsr()
+    if (csr != csr.T).nnz != 0:
+        raise ValueError("matrix is not symmetric")
+    return csr_to_tensor(csr, device, dtype)
+
+
+class _SymmetricMatmul(torch.autograd.Function):
+    """`matrix @ dense` for a symmetric sparse `matrix`, with a hand-written backward.
+
+    Autograd's own backward for a sparse matmul is `matrix.T @ grad`, and transposing a
+    sparse CSR tensor yields a CSC one, which `torch.vmap` has no batching rule for
+    (`RuntimeError: expand is unsupported for SparseCsc tensors`). Stating the symmetry
+    -- so the backward is `matrix @ grad`, still CSR -- is what makes a sparse matmul
+    usable inside a graph differentiated with `is_grads_batched=True`.
+
+    `matrix` is deliberately not differentiable: it is a fixed operator, never a leaf.
+    """
+
+    generate_vmap_rule = True
+
+    @staticmethod
+    def forward(matrix: Tensor, dense: Tensor) -> Tensor:
+        return matrix @ dense
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        ctx.matrix = inputs[0]
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> tuple[None, Tensor]:
+        return None, ctx.matrix @ grad_output
+
+
+def symmetric_matmul(matrix: Tensor, dense: Tensor) -> Tensor:
+    """
+    Multiply a symmetric sparse matrix by a dense vector or matrix, differentiably.
+
+    Equivalent to `matrix @ dense` in value, but its backward exploits the symmetry and
+    so stays batchable under `torch.vmap`/`is_grads_batched`. Build `matrix` with
+    `symmetric_csr_to_tensor`, which is where the symmetry is checked.
+
+    :param matrix: symmetric sparse matrix, `(n, n)`.
+    :param dense: dense `(n,)` or `(n, k)` operand.
+    :return: `matrix @ dense`.
+    """
+    return _SymmetricMatmul.apply(matrix, dense)
