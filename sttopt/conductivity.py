@@ -74,9 +74,9 @@ def _pairwise_sigmoid(
     `FT_el{a}[b]`: the neighbor-sigmoid weight of a COO pair array, a smooth mask on
     whether `b` was printed before `a`.
 
-    Evaluated through the overflow-safe `exp(-|z|)` rather than the MATLAB source's
-    literal `1/(1+exp(z))`, which for large `rouf*dt` overflows -- see
-    `conventions.md`'s "Known deviations".
+    `1/(1+exp(z))` is exactly `sigmoid(-z)`; `torch.sigmoid` evaluates it through its
+    own overflow-safe form rather than the MATLAB source's literal expression, which
+    for large `rouf*dt` overflows -- see `conventions.md`'s "Known deviations".
 
     :param t: per-element time field, `tPhys.flatten()`
     :param a: first index of each COO pair
@@ -84,9 +84,7 @@ def _pairwise_sigmoid(
     :param rouf: sigmoid sharpness
     :return: `FT`, one value per pair
     """
-    z = rouf * (t[b] - t[a])
-    ez = torch.exp(-torch.abs(z))
-    return torch.where(z >= 0, ez / (1.0 + ez), 1.0 / (1.0 + ez))
+    return torch.sigmoid(rouf * (t[a] - t[b]))
 
 
 class _ConductivityCore(NamedTuple):

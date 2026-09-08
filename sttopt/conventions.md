@@ -49,9 +49,10 @@ arrays, 0-indexed and C-order throughout, matching `sttopt`'s own conventions ex
 ## Tolerance policy
 
 Not bit-exactness — the port intentionally changes some implementations for numerical
-stability or performance (the neighbour sigmoid and its derivative evaluated through
-`exp(-|z|)`, which cannot overflow, instead of the source's `(1+exp(z))^-1` and
-`FT^2*rouf*exp(z)`, which reach `0*inf = NaN` for `rouf*dt > ~709`; `eye(n) - L./M` as
+stability or performance (the neighbour sigmoid evaluated through `torch.sigmoid`'s
+own overflow-safe form, and its derivative through the equivalent hand-written
+`exp(-|z|)`, instead of the source's `(1+exp(z))^-1` and `FT^2*rouf*exp(z)`, which
+reach `0*inf = NaN` for `rouf*dt > ~709`; `eye(n) - L./M` as
 sparse ops instead of a dense `eye(10800)`, ~933 MB). `test_reference_sweep.py`'s
 comparisons against the MATLAB transliteration oracle are where this mostly bites —
 solver implementation differences (the oracle's dense `numpy.linalg.solve` vs

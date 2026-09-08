@@ -37,6 +37,11 @@ def _pairwise_sigmoid_deriv(
     tie, and evaluated through the overflow-safe `exp(-|z|)` instead of the source's
     literal (and, for large `rouf*dt`, NaN-producing) form.
 
+    Kept as a direct `exp(-|z|)` formula rather than `FT * (1 - FT)` built from two
+    `torch.sigmoid` calls: the latter loses the tail entirely once `FT` itself rounds
+    to `0` or `1`, right where `test_stable_sigmoid_matches_the_matlab_expression`
+    pins a representable-but-tiny nonzero value.
+
     :param t: per-element time field, `tPhys.flatten()`
     :param a: first index of each COO pair
     :param b: second index of each COO pair
