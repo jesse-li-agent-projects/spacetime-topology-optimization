@@ -36,6 +36,14 @@ def mmasub(
     a: Float[Tensor, " m"],
     c: Float[Tensor, " m"],
     d: Float[Tensor, " m"],
+    asyinit: float | Float[Tensor, " n"] = 0.5,
+    asyclamp_min: float = 0.01,
+    asyclamp_max: float = 10.0,
+    move: float | Float[Tensor, " n"] = 0.5,
+    raa0: float = 1e-5,
+    albefa: float = 0.1,
+    asyincr: float = 1.2,
+    asydecr: float = 0.7,
 ):
     """One MMA iteration: update the moving asymptotes and solve the resulting subproblem.
 
@@ -48,27 +56,45 @@ def mmasub(
     `xold1`/`xold2`/`low`/`upp` carry state from previous calls (unused when
     `iteration < 2.5`, which re-initializes the asymptotes from scratch). `f0val` is
     unused by the algorithm itself (kept for signature fidelity with the MATLAB source,
-    which also never reads it). Returns
-    `(xmma, ymma, zmma, lam, xsi, eta, mu, zet, s, low, upp)` -- the subproblem's
-    primal optimum, its Lagrange multipliers/slacks, and the asymptotes to pass into
-    the next call.
+    which also never reads it).
+
+    `xmin`/`xmax` are the problem's own bounds on x -- Svanberg's 'technological
+    constraints', which are properties of the design space and so do not move between
+    iterations. Every tuning constant that scales with `xmax - xmin` is a keyword
+    argument defaulting to the value in the MATLAB source, so omitting them all
+    reproduces `mmasub.m` exactly. Pass `asyinit`/`move` as vectors to give blocks of
+    variables different trust regions.
+
+    :param asyinit: initial asymptote distance, as a fraction of `xmax - xmin`
+    :param asyclamp_min: floor on the asymptote distance, same units as `asyinit`
+    :param asyclamp_max: ceiling on the asymptote distance, same units as `asyinit`
+    :param move: hard per-iteration move limit, as a fraction of `xmax - xmin`
+    :param raa0: numerator of the curvature floor added to the separable approximations,
+        which keeps a variable with a vanishing gradient from getting a degenerate
+        (curvature-free) approximation. Divided by `xmax - xmin`, so it is the one
+        constant here that scales *inversely* with the variable range.
+    :param albefa: fraction of the asymptote distance kept clear of each asymptote when
+        forming the subproblem bounds, to keep the subproblem away from its poles
+    :param asyincr: factor to relax the asymptotes by when a variable moves monotonically
+    :param asydecr: factor to tighten them by when a variable oscillates
+    :return: `(xmma, ymma, zmma, lam, xsi, eta, mu, zet, s, low, upp)` -- the subproblem's
+        primal optimum, its Lagrange multipliers/slacks, and the asymptotes to pass into
+        the next call.
     """
     epsimin = 1e-7
-    raa0 = 1e-5
-    move = 0.5
-    albefa = 0.1
-    asyinit = 0.5
-    asyincr = 1.2
-    asydecr = 0.7
 
     device, dtype = xval.device, xval.dtype
+    # The length scale every tuning constant below is expressed in. `xmami` is the same
+    # quantity guarded against a degenerate (zero-width) range; the source only applies
+    # that guard to the raa0 term, which is the only one that divides by it.
+    xrange = xmax - xmin
 
     # Asymptotes: re-initialized on the first two iterations, then adapted based on
     # whether xval is oscillating (zzz < 0) or moving monotonically (zzz > 0) relative
     # to the last two iterates.
     if iteration < 2.5:
-        low = xval - asyinit * (xmax - xmin)
-        upp = xval + asyinit * (xmax - xmin)
+        low = xval - asyinit * xrange
+        upp = xval + asyinit * xrange
     else:
         zzz = (xval - xold1) * (xold1 - xold2)
         factor = torch.ones(n, device=device, dtype=dtype)
@@ -76,10 +102,10 @@ def mmasub(
         factor[zzz < 0] = asydecr
         low = xval - factor * (xold1 - low)
         upp = xval + factor * (upp - xold1)
-        lowmin = xval - 10 * (xmax - xmin)
-        lowmax = xval - 0.01 * (xmax - xmin)
-        uppmin = xval + 0.01 * (xmax - xmin)
-        uppmax = xval + 10 * (xmax - xmin)
+        lowmin = xval - asyclamp_max * xrange
+        lowmax = xval - asyclamp_min * xrange
+        uppmin = xval + asyclamp_min * xrange
+        uppmax = xval + asyclamp_max * xrange
         low = torch.maximum(low, lowmin)
         low = torch.minimum(low, lowmax)
         upp = torch.minimum(upp, uppmax)
@@ -87,15 +113,15 @@ def mmasub(
 
     # Move-limited bounds alfa, beta for x within this subproblem.
     zzz1 = low + albefa * (xval - low)
-    zzz2 = xval - move * (xmax - xmin)
+    zzz2 = xval - move * xrange
     alfa = torch.maximum(torch.maximum(zzz1, zzz2), xmin)
     zzz1 = upp - albefa * (upp - xval)
-    zzz2 = xval + move * (xmax - xmin)
+    zzz2 = xval + move * xrange
     beta = torch.minimum(torch.minimum(zzz1, zzz2), xmax)
 
     # Separable convex approximations p0/q0 (objective) and P/Q (constraints) of the
     # reciprocal-asymptote form used by MMA, plus the constraint constant term b.
-    xmami = torch.clamp(xmax - xmin, min=1e-5)
+    xmami = torch.clamp(xrange, min=1e-5)
     xmamiinv = 1.0 / xmami
     ux1 = upp - xval
     ux2 = ux1 * ux1
