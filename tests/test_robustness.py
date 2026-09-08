@@ -229,7 +229,7 @@ def test_viz_still_honours_a_caller_supplied_axes():
 
 
 def test_hotspot_gradients_finite_for_large_rouf():
-    """Regression: `_pairwise_sigmoid_terms` used to compute `FT = 1/(1+exp(z))` and
+    """Regression: the neighbour sigmoid used to compute `FT = 1/(1+exp(z))` and
     `DFT = FT**2 * rouf * exp(z)` with `z = rouf*(t_b - t_a)`, exactly as the MATLAB
     source does. For `z > ~709` the `exp(z)` overflows to `inf`, `FT` underflows to `0`,
     and `DFT` became `0*inf = NaN` -- silently poisoning `dt1` and, through it, the MMA
@@ -311,8 +311,10 @@ def test_stable_sigmoid_matches_the_matlab_expression():
     t = np.concatenate([np.zeros(z.size), z / rouf])  # so t[b] - t[a] == z / rouf
     a = np.arange(z.size)
     b = a + z.size
-    FT, DFT = conductivity._pairwise_sigmoid_terms(tt(t), tti(a), tti(b), rouf)
-    FT, DFT = FT.numpy(), DFT.numpy()
+    FT = conductivity._pairwise_sigmoid(tt(t), tti(a), tti(b), rouf).numpy()
+    DFT = conductivity_ref._pairwise_sigmoid_deriv(
+        tt(t), tti(a), tti(b), rouf
+    ).numpy()
 
     with np.errstate(over="ignore", invalid="ignore"):
         FT_matlab = 1.0 / (1.0 + np.exp(z))
@@ -340,7 +342,7 @@ def test_stable_sigmoid_matches_the_matlab_expression():
 
 
 def test_dft_zero_only_at_self_pairs():
-    """Direct unit-level pin of the `a == b` branch in `_pairwise_sigmoid_terms`,
+    """Direct unit-level pin of the `a == b` branch in `_pairwise_sigmoid_deriv`,
     separate from the aggregate FD checks in test_conductivity.py: `DFT` must be
     exactly 0 at every self-pair (`a == b`, where `FT(t_a, t_a)` is the constant 0.5
     regardless of `t_a`, so its true derivative really is 0) and must be the ordinary
@@ -359,7 +361,8 @@ def test_dft_zero_only_at_self_pairs():
     # of t_a, so its true derivative is 0) -- pinned alongside DFT so the self-pair
     # branch is self-justifying, not just asserted.
     idx = np.arange(n)
-    FT_self, DFT_self = conductivity._pairwise_sigmoid_terms(
+    FT_self = conductivity._pairwise_sigmoid(tt(t), tti(idx), tti(idx), rouf)
+    DFT_self = conductivity_ref._pairwise_sigmoid_deriv(
         tt(t), tti(idx), tti(idx), rouf
     )
     assert torch.all(FT_self == 0.5)
@@ -370,5 +373,7 @@ def test_dft_zero_only_at_self_pairs():
     t_dup = np.concatenate([t, t])
     a = np.arange(n)
     b = a + n
-    _, DFT_tied = conductivity._pairwise_sigmoid_terms(tt(t_dup), tti(a), tti(b), rouf)
+    DFT_tied = conductivity_ref._pairwise_sigmoid_deriv(
+        tt(t_dup), tti(a), tti(b), rouf
+    )
     np.testing.assert_allclose(DFT_tied, rouf / 4.0, rtol=1e-14, atol=0)

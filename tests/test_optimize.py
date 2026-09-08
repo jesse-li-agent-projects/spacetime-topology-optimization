@@ -384,11 +384,10 @@ def _draw_well_conditioned_state(problem, rng, *, beta_t=10.0, max_tries=50):
     raise AssertionError(f"no well-conditioned draw in {max_tries} tries")
 
 
-def test_sensitivity_rows_batched_matches_unbatched():
-    """`_sensitivity_rows`' `k == 1` and `k > 1` branches are two implementations of
-    the same math -- the dispatch on `k` is a performance choice (plain grad vs.
-    `is_grads_batched`), not a semantic one. Pin that by feeding a 2-row output through
-    the batched path and comparing against two independent single-row calls.
+def test_sensitivity_rows_multi_row_matches_single_row_calls():
+    """A `k`-row `_sensitivity_rows` call must agree with `k` independent single-row
+    calls: the rows are independent, so assembling them together must not couple them.
+    Pin that by feeding a 2-row output through and comparing against two separate calls.
     """
     nelx, nely = 6, 4
     problem = _problem(nelx=nelx, nely=nely)
@@ -401,21 +400,21 @@ def test_sensitivity_rows_batched_matches_unbatched():
     t = torch.tensor(
         rng.uniform(0.05, 0.95, size=(nely, nelx)), device=device, dtype=dtype
     ).requires_grad_(True)
-    xTilde = ((problem.H @ x.flatten()) / problem.Hs).reshape(nely, nelx)
-    tPhys = ((problem.H @ t.flatten()) / problem.Hs).reshape(nely, nelx)
+    xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
+    tPhys = filters.apply_density_filter(t, problem.H, problem.Hs)
 
     # Two arbitrary, distinct scalar outputs of (xTilde, tPhys), so the two rows of the
-    # batched call have genuinely different sensitivities.
+    # multi-row call have genuinely different sensitivities.
     out_a = torch.sum(xTilde**2) + torch.sum(tPhys)
     out_b = torch.sum(xTilde) - torch.sum(tPhys**2)
     outputs = torch.stack([out_a, out_b])
 
-    rows_batched = stto._sensitivity_rows(outputs, xTilde, tPhys, problem.H, problem.Hs)
-    row_a = stto._sensitivity_rows(out_a[None], xTilde, tPhys, problem.H, problem.Hs)[0]
-    row_b = stto._sensitivity_rows(out_b[None], xTilde, tPhys, problem.H, problem.Hs)[0]
+    rows = stto._sensitivity_rows(outputs, x, t)
+    row_a = stto._sensitivity_rows(out_a[None], x, t)[0]
+    row_b = stto._sensitivity_rows(out_b[None], x, t)[0]
 
-    torch.testing.assert_close(rows_batched[0], row_a, rtol=1e-10, atol=0.0)
-    torch.testing.assert_close(rows_batched[1], row_b, rtol=1e-10, atol=0.0)
+    torch.testing.assert_close(rows[0], row_a, rtol=1e-10, atol=0.0)
+    torch.testing.assert_close(rows[1], row_b, rtol=1e-10, atol=0.0)
 
 
 @pytest.mark.parametrize(

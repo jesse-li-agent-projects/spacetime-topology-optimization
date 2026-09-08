@@ -37,10 +37,9 @@ sparse `H @ (... / Hs)` matmul(s) the hand side spends time on.
 This benchmark closes that gap by finishing the chain explicitly after every autograd
 backward call, timed as part of the same forward+backward region (`_finish_density_chain`/
 `_finish_time_chain` below) -- matching what `optimize.step` actually computes for
-these rows (`_sensitivity_rows` differentiates to the filtered `(xTilde, tPhys)` cut
-and always finishes the density/continuity filter's `H @ (.../Hs)` by hand, whether the
-row is a single output or a batch). So both sides here report the cost of one thing: a
-`dfdx` row in raw `x`/`t` space.
+these rows (`stto._sensitivity_rows` differentiates all the way to the raw `x`/`t`
+leaves, so the filter's `H @ (.../Hs)` is inside the timed region there too). So both
+sides here report the cost of one thing: a `dfdx` row in raw `x`/`t` space.
 
 `whole_compliance`/`gravity_compliance` are the deliberate exception: `compliance.py`'s
 hand-derived `dcx`/`dct` are *not* finished rows either -- they stop at `d(.)/d(xPhys)`

@@ -65,7 +65,7 @@ class Problem:
     free_mask: Bool[Tensor, " ndof"]  # True at free dofs; the matrix-free path's mask
     F: Float[Tensor, " ndof"]
     ndof: int
-    H: Tensor  # sparse CSR, shape (nel, nel)
+    H: torch_util.SymmetricCsr  # shape (nel, nel)
     Hs: Float[Tensor, " nel"]
     L: Tensor  # sparse CSR, shape (nel, nel)
     C: Tensor  # sparse CSR, shape ((nelx+1)*(nely+1), nel)
@@ -212,7 +212,7 @@ def build_problem(
         dtype=dtype,
         free_mask=torch_fem.free_mask(ndof, int_fields["freedofs"], device=device),
         ndof=ndof,
-        H=torch_util.csr_to_tensor(H, device, dtype),
+        H=torch_util.symmetric_csr_to_tensor(H, device, dtype),
         L=torch_util.csr_to_tensor(L, device, dtype),
         C=torch_util.csr_to_tensor(C, device, dtype),
         m=m,
@@ -238,11 +238,8 @@ def init_state(problem: Problem, beta_d: float) -> State:
     nel = nelx * nely
     device, dtype = problem.device, problem.dtype
 
-    def filtered(field: Tensor) -> Tensor:
-        return ((problem.H @ field.flatten()) / problem.Hs).reshape(nely, nelx)
-
     x = torch.full((nely, nelx), config.volfrac, device=device, dtype=dtype)
-    xTilde = filtered(x)
+    xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
     xPhys = filters.heaviside_projection(xTilde, beta_d, config.eta)
 
     # init_timefield is a NumPy builder (plans/torch_port_part2.md Phase 3.2 item 2);
@@ -254,7 +251,7 @@ def init_state(problem: Problem, beta_d: float) -> State:
         device,
         dtype,
     )
-    tPhys = filtered(t)
+    tPhys = filters.apply_density_filter(t, problem.H, problem.Hs)
 
     # MATLAB's xold1=xold2=[x(:); zeros(nel,1)] -- provably unread (iterations 1 and 2
     # both take mmasub's `iteration < 2.5` reinit branch), reproduced anyway for fidelity.
@@ -297,46 +294,32 @@ def _flatten_pair(density_part: Tensor, time_part: Tensor) -> Float[Tensor, " n"
 
 def _sensitivity_rows(
     outputs: Float[Tensor, " k"],
-    xTilde: Float[Tensor, "nely nelx"],
-    tPhys: Float[Tensor, "nely nelx"],
-    H: Tensor,
-    Hs: Float[Tensor, " nel"],
+    x: Float[Tensor, "nely nelx"],
+    t: Float[Tensor, "nely nelx"],
 ) -> Float[Tensor, "k n"]:
     """Sensitivities of `k` independent scalar outputs (e.g. one per print-start
-    element, or one per stage, or a single row passed as `value[None]`) w.r.t. both
-    raw leaves, as `(k, n)`.
+    element, or one per stage, or a single row passed as `value[None]`) w.r.t. both raw
+    leaves, as `(k, n)` in MMA's `[density; time]` layout.
 
-    Differentiates down to the *filtered* fields (`xTilde`, `tPhys` -- density's own
-    filtered field, pre-Heaviside, since `xPhys = heaviside_projection(xTilde, ...)`
-    is itself an ordinary pointwise op) rather than all the way to the raw `x`/`t`
-    leaves, then finishes the last, linear step -- the density/continuity filter
-    `field = H @ raw / Hs` -- by hand as a plain sparse matmul. This is not a
-    reintroduction of a hand-derived *physics* sensitivity -- every nonlinear term
-    (Heaviside, hotspot's pairwise sigmoids, SIMP) is still autograd's -- only the
-    filter's own adjoint is applied explicitly, and because `H` is symmetric by
-    construction (`filters.density_filter`'s weight depends only on distance), that
-    adjoint is `H` itself: exactly what `torch.autograd.grad` would have produced had
-    it been able to reach the sparse op directly.
-
-    The `k == 1` versus `k > 1` split and the one-hot batched-grad trick are shared
-    with `seqopt` via `sensitivity.jacobian_rows`, which is why the cut sits at
-    `(xTilde, tPhys)` rather than the raw leaves: its `is_grads_batched`'s vmap has no
-    batching rule for the sparse CSR matmul's backward (`RuntimeError: expand is
-    unsupported for SparseCsc tensors`, confirmed locally). A `k > 1` output must
-    therefore avoid sparse matmuls and `FemSolve` inside its own graph -- true of every
-    current `k > 1` row (start point, stage bounds) but a restriction on future ones,
-    not a guarantee.
+    Every step of the chain is autograd's, the density filter included. That is only
+    affordable because `filters.apply_density_filter` multiplies through
+    `torch_util.symmetric_matmul`: autograd's backward for a plain `H @ x` transposes to
+    CSC, which is catastrophically slow to multiply on CPU, while the symmetric backward
+    costs the same as the forward. What remains is that the graph applies the adjoint
+    once per row where a hand-applied one would batch all `k` into a single
+    sparse-times-dense product -- ~1 ms per row block at 180x60, which is not worth
+    keeping a hand-derived step for. See PR #89 for the measurements.
 
     `allow_unused` covers rows that depend on only one field (e.g. a density-only
-    constraint never touches `tPhys`): the unused field's block is exactly zero,
-    which is what a hand-derived predecessor returned too.
+    constraint never touches `t`): the unused field's block is exactly zero, which is
+    what a hand-derived predecessor returned too.
+
+    :param outputs: `k` independent scalars sharing one autograd graph.
+    :param x: raw density leaf.
+    :param t: raw time-field leaf.
+    :return: `(k, n)` sensitivity rows.
     """
-    d_xTilde, d_tPhys = sensitivity.jacobian_rows(outputs, (xTilde, tPhys))
-
-    def _filter_adjoint(d_field: Tensor) -> Tensor:
-        return (H @ (d_field / Hs).T).T  # (k, nel)
-
-    return _flatten_pair(_filter_adjoint(d_xTilde), _filter_adjoint(d_tPhys))
+    return _flatten_pair(*sensitivity.jacobian_rows(outputs, (x, t)))
 
 
 def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
@@ -375,9 +358,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     # -- Gradient region begins: x/t become autograd leaves. --
     x = state.x.clone().requires_grad_(True)
     t = state.t.clone().requires_grad_(True)
-    xTilde = ((problem.H @ x.flatten()) / problem.Hs).reshape(nely, nelx)
+    xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
     xPhys = filters.heaviside_projection(xTilde, beta_d, config.eta)
-    tPhys = ((problem.H @ t.flatten()) / problem.Hs).reshape(nely, nelx)
+    tPhys = filters.apply_density_filter(t, problem.H, problem.Hs)
 
     # -- Objective: whole-structure compliance + Theta-weighted per-stage gravity
     # compliance + Gamma-weighted time-field gradient-uniformity penalty --
@@ -414,7 +397,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     f_val_t = f_val_t + config.Gamma * grad_std_t
 
     f_val = float(f_val_t.detach())
-    df_dx = _sensitivity_rows(f_val_t[None], xTilde, tPhys, problem.H, problem.Hs)[0]
+    df_dx = _sensitivity_rows(f_val_t[None], x, t)[0]
 
     # -- Move-limit bounds on this iteration's raw MMA variables --
     xflat = state.x.flatten()
@@ -476,7 +459,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     ]
     g_all = torch.cat(g_parts)
     dg_dx = torch.cat(
-        [_sensitivity_rows(g, xTilde, tPhys, problem.H, problem.Hs) for g in g_parts],
+        [_sensitivity_rows(g, x, t) for g in g_parts],
         dim=0,
     )
 
@@ -530,9 +513,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     x_new = xmma[:nel].reshape(nely, nelx)
     t_new = xmma[nel:].reshape(nely, nelx)
 
-    xTilde_new = ((problem.H @ x_new.flatten()) / problem.Hs).reshape(nely, nelx)
+    xTilde_new = filters.apply_density_filter(x_new, problem.H, problem.Hs)
     xPhys_new = filters.heaviside_projection(xTilde_new, beta_d, config.eta)
-    tPhys_new = ((problem.H @ t_new.flatten()) / problem.Hs).reshape(nely, nelx)
+    tPhys_new = filters.apply_density_filter(t_new, problem.H, problem.Hs)
 
     new_state = State(
         x=x_new,

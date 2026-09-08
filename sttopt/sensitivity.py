@@ -1,10 +1,8 @@
-"""Batched-Jacobian assembly shared by `stto.step` and `seqopt.step`.
+"""Jacobian-row assembly shared by `stto.step` and `seqopt.step`.
 
-`stto._sensitivity_rows` finishes with a hand-applied filter adjoint that is specific
-to STTO's density/continuity filter chain and stays there; this module holds only the
-smaller, subtler part both problems need regardless of what sits downstream of the
-autograd leaves: the `k == 1` versus `k > 1` split, and the one-hot
-`is_grads_batched` trick that assembles `k` gradient rows in one call.
+Both callers differentiate `k` scalar outputs down to their own raw leaves; this module
+holds only the part that is the same either way: turning those `k` outputs into one
+`(k, numel)` block per leaf.
 """
 
 from typing import Sequence
@@ -21,13 +19,12 @@ def jacobian_rows(
     element, or one per stage) w.r.t. each of `leaves`, as one `(k, numel)` block per
     leaf, in leaf order.
 
-    `k == 1` differentiates with a plain (unbatched) `torch.autograd.grad`. `k > 1`
-    uses `torch.autograd.grad(..., is_grads_batched=True)` with one-hot seeds instead
-    of `k` separate calls -- `is_grads_batched`'s vmap has no batching rule for the
-    sparse CSR matmul's backward (`RuntimeError: expand is unsupported for SparseCsc
-    tensors`, confirmed locally). A `k > 1` output must therefore avoid a sparse matmul
-    or a `FemSolve` inside its own graph; true of every current `k > 1` row in both
-    callers, but a restriction on future ones, not a guarantee.
+    One `torch.autograd.grad` per row. The alternative -- a single
+    `is_grads_batched=True` call with one-hot seeds -- is faster per call but only by a
+    few ms, which is ~1% of a `step` (PR #86); it also cannot differentiate through a
+    sparse matmul or `FemSolve`, because its vmap has no batching rule for either, so it
+    constrained what a `k > 1` row was allowed to contain. The loop has no such
+    restriction: any row that is differentiable at all can go through it.
 
     `allow_unused` covers a leaf an output does not depend on: its block is exactly
     zero, matching what a hand-derived predecessor would return.
@@ -36,27 +33,21 @@ def jacobian_rows(
     :param leaves: tensors to differentiate w.r.t.
     :return: one `(k, leaf.numel())` tensor per leaf, in `leaves`' order
     """
-    k = outputs.shape[0]
-    if k == 1:
-        grads = torch.autograd.grad(
-            outputs[0], tuple(leaves), retain_graph=True, allow_unused=True
-        )
-    else:
-        seeds = torch.eye(k, dtype=outputs.dtype, device=outputs.device)
-        grads = torch.autograd.grad(
-            outputs,
-            tuple(leaves),
-            grad_outputs=seeds,
-            is_grads_batched=True,
-            retain_graph=True,
-            allow_unused=True,
-        )
+    rows = [
+        torch.autograd.grad(output, tuple(leaves), retain_graph=True, allow_unused=True)
+        for output in outputs
+    ]
 
     return tuple(
-        (
-            torch.zeros(k, leaf.numel(), dtype=leaf.dtype, device=leaf.device)
-            if grad is None
-            else grad.reshape(k, -1)
+        torch.stack(
+            [
+                (
+                    torch.zeros(leaf.numel(), dtype=leaf.dtype, device=leaf.device)
+                    if grad is None
+                    else grad.reshape(-1)
+                )
+                for grad in grads
+            ]
         )
-        for leaf, grad in zip(leaves, grads)
+        for leaf, grads in zip(leaves, zip(*rows))
     )

@@ -16,6 +16,8 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
+from sttopt import torch_util
+
 
 def _neighbor_offsets(radius: float) -> list[tuple[int, int]]:
     """Integer (di, dj) offsets covering the square neighborhood the MATLAB source loops over."""
@@ -60,6 +62,18 @@ def density_filter(
     ).tocsr()
     Hs = np.asarray(H.sum(axis=1)).flatten()
     return H, Hs
+
+
+def apply_density_filter(
+    field: Float[Tensor, "nely nelx"],
+    H: torch_util.SymmetricCsr,
+    Hs: Float[Tensor, " nel"],
+) -> Float[Tensor, "nely nelx"]:
+    """Apply the density filter to a field: `H @ field / Hs`, shape-preserving.
+
+    Multiplies via `symmetric_matmul`, not `H @ ...`, whose backward transposes to CSC.
+    """
+    return (torch_util.symmetric_matmul(H, field.flatten()) / Hs).reshape(field.shape)
 
 
 def continuity_filter(nelx: int, nely: int, lrmin: float) -> sp.csr_matrix:
