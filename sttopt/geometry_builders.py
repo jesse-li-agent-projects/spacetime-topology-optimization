@@ -103,12 +103,85 @@ def l_shape(
     return _rasterize(vertices, nelx, nely, width, height)
 
 
+def i_shape(
+    nelx: int,
+    nely: int,
+    *,
+    width: float = 200.0,
+    height: float = 200.0,
+    flange: float = 50.0,
+    web: float = 60.0,
+) -> Float[np.ndarray, "nely nelx"]:
+    """An I-beam cross-section: full-width flanges `flange` tall at the top and bottom,
+    joined by a centered web `web` wide.
+
+    Two re-entrant corners on each side, and a deposition front that must cross from a
+    wide flange into a narrow web and back out -- a print sequence cannot keep both a
+    uniform layer thickness and a single coherent front through that transition, so the
+    layer-uniformity objective has something to trade off against. `c_shape` has one
+    such transition; this has two, in opposite directions.
+    """
+    web_x0, web_x1 = (width - web) / 2, (width + web) / 2
+    vertices = [
+        (0, 0),
+        (width, 0),
+        (width, flange),
+        (web_x1, flange),
+        (web_x1, height - flange),
+        (width, height - flange),
+        (width, height),
+        (0, height),
+        (0, height - flange),
+        (web_x0, height - flange),
+        (web_x0, flange),
+        (0, flange),
+    ]
+    return _rasterize(vertices, nelx, nely, width, height)
+
+
+def h_shape(
+    nelx: int,
+    nely: int,
+    *,
+    width: float = 200.0,
+    height: float = 200.0,
+    leg: float = 50.0,
+    bar: float = 60.0,
+) -> Float[np.ndarray, "nely nelx"]:
+    """An H: two full-height legs `leg` wide joined by a centered horizontal bar `bar`
+    tall.
+
+    `i_shape` rotated a quarter turn, which is not the same problem: the build plate is
+    at the bottom, so here the front starts on two disconnected footprints that must
+    merge at the bar and split again above it, rather than starting on one wide flange.
+    The merge is the case a single-source geodesic initialization gets wrong.
+    """
+    bar_y0, bar_y1 = (height - bar) / 2, (height + bar) / 2
+    vertices = [
+        (0, 0),
+        (leg, 0),
+        (leg, bar_y0),
+        (width - leg, bar_y0),
+        (width - leg, 0),
+        (width, 0),
+        (width, height),
+        (width - leg, height),
+        (width - leg, bar_y1),
+        (leg, bar_y1),
+        (leg, height),
+        (0, height),
+    ]
+    return _rasterize(vertices, nelx, nely, width, height)
+
+
 # name -> (builder, default width mm, default height mm). The default dimensions fix
 # the natural aspect ratio `generate` derives the un-specified resolution axis from.
 SHAPES = {
     "overhang_bracket": (overhang_bracket, 100.0, 100.0),
     "c_shape": (c_shape, 200.0, 240.0),
     "l_shape": (l_shape, 200.0, 200.0),
+    "i_shape": (i_shape, 200.0, 200.0),
+    "h_shape": (h_shape, 200.0, 200.0),
     "filled_square": (filled_square, 100.0, 100.0),
 }
 
