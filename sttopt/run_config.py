@@ -115,6 +115,17 @@ class SeqRunConfig(_ConfigMixin):
     :param uniformity_metric: a `timefield.UniformityMetric` member name.
     :param nStage: per-stage deposition budget count; 0 disables the stage-volume
         constraints. Also the stage count the plots draw boundaries for.
+    :param tmove: per-iteration trust-region half-width, in `t` units.
+    :param asyclamp_min_ratio: MMA asymptote floor, as a fraction of the initial
+        asymptote distance; tightens how far oscillation damping can pull in.
+    :param asyclamp_max_ratio: MMA asymptote ceiling, as a multiple of the initial
+        distance. A monotonically-improving run relaxes onto this ceiling within a
+        hundred-odd iterations and is then limited by it rather than by `tmove`, so it
+        is the more direct of the two knobs on step size. See
+        `mma.trust_region_params`.
+    :param asyincr: factor the asymptotes relax by per iteration when a variable moves
+        monotonically.
+    :param asydecr: factor they tighten by when a variable oscillates.
     """
 
     nloop: int
@@ -138,3 +149,7 @@ class SeqRunConfig(_ConfigMixin):
     a0: float
     mma_c: float
     tmove: float
+    asyclamp_min_ratio: float
+    asyclamp_max_ratio: float
+    asyincr: float
+    asydecr: float

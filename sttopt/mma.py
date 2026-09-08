@@ -18,7 +18,11 @@ from torch import Tensor
 
 
 def trust_region_params(
-    move_limit: Float[Tensor, " n"], xrange: Float[Tensor, " n"]
+    move_limit: Float[Tensor, " n"],
+    xrange: Float[Tensor, " n"],
+    *,
+    asyclamp_min_ratio: float = 0.02,
+    asyclamp_max_ratio: float = 20.0,
 ) -> dict[str, Float[Tensor, " n"]]:
     """Size `mmasub`'s asymptotes to give a trust region of half-width `move_limit`.
 
@@ -32,15 +36,21 @@ def trust_region_params(
     variable range: keying them to the range instead silently disables the oscillation
     damping whenever the trust region is much smaller than the range (PR #90).
 
+    `asyclamp_max_ratio` is the more direct knob on step size than `move_limit`: a run
+    whose variables move monotonically relaxes onto that ceiling and is limited by it
+    thereafter, reaching `move_limit` only through this multiple of it (PR #91).
+
     :param move_limit: per-variable trust-region half-width, in x units
     :param xrange: `xmax - xmin`, the range the returned fractions are relative to
+    :param asyclamp_min_ratio: asymptote floor, as a fraction of `asyinit`
+    :param asyclamp_max_ratio: asymptote ceiling, as a multiple of `asyinit`
     :return: keyword arguments for `mmasub`
     """
     asyinit = move_limit / xrange
     return {
         "asyinit": asyinit,
-        "asyclamp_min": 0.02 * asyinit,
-        "asyclamp_max": 20.0 * asyinit,
+        "asyclamp_min": asyclamp_min_ratio * asyinit,
+        "asyclamp_max": asyclamp_max_ratio * asyinit,
         "move": asyinit,
     }
 

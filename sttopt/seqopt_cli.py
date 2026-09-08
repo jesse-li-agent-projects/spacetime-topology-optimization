@@ -116,6 +116,10 @@ def iteration_diagnostics(
         "asymptote_width_min": float(width.min()),
         "asymptote_width_median": float(np.median(width)),
         "asymptote_width_max": float(width.max()),
+        # `mma.trust_region_params` lets the asymptotes relax to 20x their initial
+        # distance, so this ceiling -- not `tmove` -- is what a monotonically-moving
+        # run actually ends up limited by.
+        "asymptote_at_ceiling": float((width >= 0.999 * 2 * 20 * tmove).mean()),
         "grad_absmax": float(np.abs(record.df).max()),
         "g_max": float(record.g.max()),
         "lam_max": float(record.lam.max()),

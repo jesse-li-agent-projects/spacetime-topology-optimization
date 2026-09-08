@@ -241,7 +241,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     xmin = torch.zeros_like(tflat)
     xmax = torch.ones_like(tflat)
     mma_trust = mma.trust_region_params(
-        torch.full_like(tflat, config.tmove), xmax - xmin
+        torch.full_like(tflat, config.tmove),
+        xmax - xmin,
+        asyclamp_min_ratio=config.asyclamp_min_ratio,
+        asyclamp_max_ratio=config.asyclamp_max_ratio,
     )
     xval = tflat
 
@@ -305,6 +308,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         mma_a,
         mma_c,
         mma_d,
+        asyincr=config.asyincr,
+        asydecr=config.asydecr,
         **mma_trust,
     )
 
