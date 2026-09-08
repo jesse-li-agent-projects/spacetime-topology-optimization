@@ -73,58 +73,25 @@ def test_iteration1_assembly_matches_fixture():
     assert_close(record.dg, fx["dfdx_1"], tier="algebraic")
 
 
-def test_mma_state_threading_matches_fixture():
-    fx = load_fixture_npz("mma")
-    problem = stto.build_problem(CONFIG)
-    state = stto.init_state(problem, BETA_INIT)
-
-    for k in range(NLOOP):
-        state, record = stto.step(problem, state)
-        assert_close(record.xmma, fx["xmma_all"][:, k], tier="e2e", iteration=k + 1)
-        assert_close(record.low, fx["low_all"][:, k], tier="e2e", iteration=k + 1)
-        assert_close(record.upp, fx["upp_all"][:, k], tier="e2e", iteration=k + 1)
-        assert_close(record.lam, fx["lam_all"][:, k], tier="e2e", iteration=k + 1)
-
-
 def test_constraints_stacking_matches_fixture():
     """Cheap, order-sensitive check on top of test_constraints.py's per-constraint
     fixture tests: this validates that stto.step stacks .g/.dg rows in the
     same order the reference loop does, which per-constraint tests can't catch (a
     swapped-but-correctly-shaped row wouldn't fail them).
+
+    Only the first iteration is compared. `.g`/`.dg` are built before `mmasub` runs, so
+    at iteration 1 -- where both implementations sit on the same initial design -- they
+    still agree exactly. From iteration 2 the designs diverge, because `sttopt` no
+    longer uses the MATLAB source's trust-region parameterization (see
+    `mma.trust_region_params`), and the comparison would say nothing about row order.
     """
     fx = load_fixture_npz("constraints")
     problem = stto.build_problem(CONFIG)
     state = stto.init_state(problem, BETA_INIT)
 
-    for k in range(NLOOP):
-        state, record = stto.step(problem, state)
-        assert_close(record.g, fx["fval_all"][:, k], tier="e2e", iteration=k + 1)
-        assert_close(record.dg, fx["dfdx_all"][:, :, k], tier="e2e", iteration=k + 1)
-
-
-def test_e2e_trajectory_matches_fixture():
-    fx = load_fixture_npz("e2e")
-    result = _run()
-
-    for k in range(1, NLOOP + 1):
-        assert_close(
-            result.xPhys_traj[k], fx["xPhys_traj"][:, :, k], tier="e2e", iteration=k
-        )
-        assert_close(
-            result.tPhys_traj[k], fx["tPhys_traj"][:, :, k], tier="e2e", iteration=k
-        )
-        assert_close(
-            result.records[k - 1].obj, fx["objf"][k - 1], tier="e2e", iteration=k
-        )
-        assert_close(
-            result.records[k - 1].vol, fx["vol"][k - 1], tier="e2e", iteration=k
-        )
-        assert_close(
-            result.records[k - 1].tru_max,
-            fx["tru_max_all"][k - 1],
-            tier="e2e",
-            iteration=k,
-        )
+    _, record = stto.step(problem, state)
+    assert_close(record.g, fx["fval_all"][:, 0], tier="e2e", iteration=1)
+    assert_close(record.dg, fx["dfdx_all"][:, :, 0], tier="e2e", iteration=1)
 
 
 def test_hotspot_factor_refresh_at_loop_25():
