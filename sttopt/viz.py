@@ -33,6 +33,8 @@ matplotlib.rcParams["savefig.bbox"] = "tight"
 matplotlib.rcParams["savefig.dpi"] = "300"
 
 _BOUNDARY_LINEWIDTH = 1.5
+_VOID_GRAY = "0.5"
+_VOID_ALPHA = 0.65
 
 
 def _new_axes() -> Axes:
@@ -276,6 +278,7 @@ def timefield_filled_contour_plot(
     nContours: int,
     *,
     compliance: float | None = None,
+    show_void: bool = False,
     ax: Axes | None = None,
 ) -> Axes:
     """Filled contour plot of `tPhys` with a colorbar and thin black borders between
@@ -283,13 +286,15 @@ def timefield_filled_contour_plot(
 
     Unlike `timefield_contour_plot`, this doesn't mask `tPhys` to `xPhys > 0.5` before
     contouring (which would clip segments to a jagged element boundary); instead it
-    contours the full field, then paints elements without material white in a layer
-    above the contour, hiding the fill and borders outside the printed region.
+    contours the full field, then paints over the elements without material in a layer
+    above the contour.
 
     :param xPhys: physical density field (not yet binarized).
     :param tPhys: physical print-time field.
     :param nContours: number of filled contour levels.
     :param compliance: whole-structure compliance to report in the title, if known.
+    :param show_void: cover the void with translucent gray instead of opaque white, so
+        the time field there stays readable while still reading as "not printed".
     :return: the `Axes` drawn into.
     """
     if ax is None:
@@ -307,13 +312,18 @@ def timefield_filled_contour_plot(
 
     rows, cols = np.nonzero(xPhys <= 0.5)
     empty = PolyCollection(
-        _cell_verts(rows, cols), facecolors="white", edgecolors="none", zorder=10
+        _cell_verts(rows, cols),
+        facecolors=_VOID_GRAY if show_void else "white",
+        alpha=_VOID_ALPHA if show_void else 1.0,
+        edgecolors="none",
+        zorder=10,
     )
     ax.add_collection(empty)
 
     ax.set_aspect("equal")
     ax.autoscale_view()
-    title = "Time field (filled contour)"
+    title = "Time field (filled contour"
+    title += ", void shown)" if show_void else ")"
     if compliance is not None:
         title += f" (compliance: {compliance:.4g})"
     ax.set_title(title)
@@ -506,6 +516,13 @@ def _main(args: argparse.Namespace) -> None:
     out_path = plot_dir / "timefield_filled_contour.png"
     ax.figure.savefig(out_path)
     print(f"Saved time field filled contour plot to {out_path}")
+
+    ax = timefield_filled_contour_plot(
+        xPhys, tPhys, args.n_contours, compliance=obj, show_void=True
+    )
+    out_path = plot_dir / "timefield_filled_contour_with_void.png"
+    ax.figure.savefig(out_path)
+    print(f"Saved time field filled contour (void shown) plot to {out_path}")
 
 
 if __name__ == "__main__":
