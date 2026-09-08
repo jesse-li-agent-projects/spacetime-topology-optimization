@@ -236,10 +236,13 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     f_val = float(f_val_t.detach())
     (df_dt,) = sensitivity.jacobian_rows(f_val_t[None], (t,))
 
-    # -- Move-limit bounds on this iteration's raw MMA variable --
+    # -- Bounds and trust region for this iteration's raw MMA variable --
     tflat = state.t.flatten()
-    xmin = torch.clamp(tflat - config.tmove, min=0.0)
-    xmax = torch.clamp(tflat + config.tmove, max=1.0)
+    xmin = torch.zeros_like(tflat)
+    xmax = torch.ones_like(tflat)
+    mma_trust = mma.trust_region_params(
+        torch.full_like(tflat, config.tmove), xmax - xmin
+    )
     xval = tflat
 
     # -- Constraints, in the fixed documented order above. --
@@ -302,6 +305,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         mma_a,
         mma_c,
         mma_d,
+        **mma_trust,
     )
 
     t_new = xmma.reshape(nely, nelx)

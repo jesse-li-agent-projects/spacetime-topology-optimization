@@ -17,6 +17,37 @@ from jaxtyping import Float
 from torch import Tensor
 
 
+def trust_region_params(
+    move_limit: Float[Tensor, " n"], xrange: Float[Tensor, " n"]
+) -> dict[str, Float[Tensor, " n"]]:
+    """Size `mmasub`'s asymptotes to give a trust region of half-width `move_limit`.
+
+    MMA's real step control is the asymptote distance, not the `move` box: the
+    approximation's curvature at the current point is `2*|df/dx| / asymptote_distance`,
+    so pulling the asymptotes in is what makes a step conservative. Svanberg (1987, s.3)
+    describes the box itself as 'probably not very crucial', present mainly to keep the
+    subproblem away from its poles. Sizing a trust region therefore means sizing the
+    asymptotes, not just tightening the box.
+
+    The clamps are returned as ratios to `asyinit` (Svanberg's own 1/50 and 20x,
+    recovered from his `0.01`/`10` against `asyinit=0.5`) rather than to the variable
+    range. Keying them to the range instead would put the floor on top of `asyinit`
+    whenever the trust region is much smaller than the range, pinning the asymptotes at
+    their initial distance and silently disabling the oscillation damping.
+
+    :param move_limit: per-variable trust-region half-width, in x units
+    :param xrange: `xmax - xmin`, the range the returned fractions are relative to
+    :return: keyword arguments for `mmasub`
+    """
+    asyinit = move_limit / xrange
+    return {
+        "asyinit": asyinit,
+        "asyclamp_min": 0.02 * asyinit,
+        "asyclamp_max": 20.0 * asyinit,
+        "move": asyinit,
+    }
+
+
 def mmasub(
     m: int,
     n: int,
@@ -37,8 +68,8 @@ def mmasub(
     c: Float[Tensor, " m"],
     d: Float[Tensor, " m"],
     asyinit: float | Float[Tensor, " n"] = 0.5,
-    asyclamp_min: float = 0.01,
-    asyclamp_max: float = 10.0,
+    asyclamp_min: float | Float[Tensor, " n"] = 0.01,
+    asyclamp_max: float | Float[Tensor, " n"] = 10.0,
     move: float | Float[Tensor, " n"] = 0.5,
     raa0: float = 1e-5,
     albefa: float = 0.1,
