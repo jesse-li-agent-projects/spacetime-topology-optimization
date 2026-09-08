@@ -136,9 +136,8 @@ def symmetric_csr_to_tensor(
     """
     `csr_to_tensor` for a matrix that is meant to be symmetric, checked once here.
 
-    `symmetric_matmul` silently returns wrong gradients on a non-symmetric matrix, so
-    the invariant is enforced at the one place the tensor is built rather than on every
-    multiply.
+    A non-symmetric matrix makes `symmetric_matmul`'s gradients silently wrong, so the
+    invariant is checked here rather than on every multiply.
 
     :param matrix: any SciPy sparse matrix; must equal its own transpose exactly.
     :param device: target device.
@@ -153,15 +152,7 @@ def symmetric_csr_to_tensor(
 
 
 class _SymmetricMatmul(torch.autograd.Function):
-    """`matrix @ dense` for a symmetric sparse `matrix`, with a hand-written backward.
-
-    Autograd's own backward for a sparse CSR matmul is `matrix.T @ grad`, and a
-    transposed CSR tensor is a CSC one -- which is orders of magnitude slower to
-    multiply on CPU, and which `torch.vmap` has no batching rule for at all. Stating the
-    symmetry keeps the backward in CSR, so it costs the same as the forward.
-
-    `matrix` is deliberately not differentiable: it is a fixed operator, never a leaf.
-    """
+    """Implementation of `symmetric_matmul`; `matrix` is a fixed operator, never a leaf."""
 
     generate_vmap_rule = True
 
@@ -182,9 +173,10 @@ def symmetric_matmul(matrix: SymmetricCsr, dense: Tensor) -> Tensor:
     """
     Multiply a symmetric sparse matrix by a dense vector or matrix, differentiably.
 
-    Equivalent to `matrix @ dense` in value, but its backward exploits the symmetry
-    rather than transposing to CSC, which makes differentiating through it as cheap as
-    the forward.
+    Equal to `matrix @ dense`, but where autograd would differentiate that as
+    `matrix.T @ grad` -- a CSC product, orders of magnitude slower on CPU and with no
+    `torch.vmap` batching rule at all -- the symmetry makes the backward `matrix @ grad`,
+    as cheap as the forward.
 
     :param matrix: symmetric sparse matrix, `(n, n)`, from `symmetric_csr_to_tensor`.
     :param dense: dense `(n,)` or `(n, k)` operand.

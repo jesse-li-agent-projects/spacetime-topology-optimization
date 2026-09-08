@@ -71,14 +71,7 @@ def apply_density_filter(
 ) -> Float[Tensor, "nely nelx"]:
     """Apply the density filter to a field: `H @ field / Hs`, shape-preserving.
 
-    Multiplies through `torch_util.symmetric_matmul` rather than a plain `H @ ...`, so
-    that differentiating a caller's output back through the filter costs the same as the
-    forward instead of going through a CSC transpose.
-
-    :param field: raw (unfiltered) field, `(nely, nelx)`.
-    :param H: density filter, as built by `density_filter`.
-    :param Hs: `H`'s per-element row sums.
-    :return: filtered field, same shape as `field`.
+    Multiplies via `symmetric_matmul`, not `H @ ...`, whose backward transposes to CSC.
     """
     return (torch_util.symmetric_matmul(H, field.flatten()) / Hs).reshape(field.shape)
 
