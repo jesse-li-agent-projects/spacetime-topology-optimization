@@ -88,16 +88,88 @@ def test_uniform_ramp_has_zero_gradient_spread():
         assert timefield.gradient_magnitude_std(ramp) == pytest.approx(0.0, abs=1e-6)
 
 
-def test_gradient_magnitude_std_matches_numpy_interior_reference():
-    """Value check against an independent NumPy computation over the interior, pinning
-    both the central-difference stencil and which elements are counted."""
+def test_gradient_magnitude_std_matches_numpy_gauss_reference():
+    """Value check against an independent NumPy computation, pinning both the Q4
+    Gauss-point stencil and which samples are counted."""
     rng = np.random.default_rng(0)
     field = rng.random((8, 6))
-    gy, gx = np.gradient(field)  # 2nd-order central in the interior
-    magnitude = np.sqrt(gx[1:-1, 1:-1] ** 2 + gy[1:-1, 1:-1] ** 2)
+    a = 3.0**-0.5
+    lo_lo, lo_hi, hi_lo, hi_hi = (
+        field[:-1, :-1],
+        field[:-1, 1:],
+        field[1:, :-1],
+        field[1:, 1:],
+    )
+    samples = []
+    for eta in (-a, a):
+        for xi in (-a, a):
+            gx = (1 - eta) / 2 * (lo_hi - lo_lo) + (1 + eta) / 2 * (hi_hi - hi_lo)
+            gy = (1 - xi) / 2 * (hi_lo - lo_lo) + (1 + xi) / 2 * (hi_hi - lo_hi)
+            samples.append(np.sqrt(gx**2 + gy**2))
+    magnitude = np.stack(samples)
 
     value = timefield.gradient_magnitude_std(torch.from_numpy(field))
     assert float(value) == pytest.approx(magnitude.std(ddof=1), rel=1e-9)
+
+
+def test_gradient_stencil_only_null_space_is_the_constant_field():
+    """The stencil must see every high-frequency mode. The collocated central difference
+    this replaced was blind to all three checkerboards at any amplitude, so an
+    arbitrarily jagged field scored as well as a smooth one (PR #90); full 2x2
+    quadrature is also what keeps the `(-1)^(i+j)` hourglass mode visible, which a
+    single evaluation at the cell centre would miss.
+    """
+    ny, nx = 8, 9
+    i, j = np.indices((ny, nx))
+    checkerboards = {
+        "(-1)^j": (-1.0) ** j,
+        "(-1)^i": (-1.0) ** i,
+        "(-1)^(i+j)": (-1.0) ** (i + j),
+    }
+    for name, mode in checkerboards.items():
+        dt_dx, dt_dy = timefield._q4_gauss_gradient(torch.from_numpy(mode))
+        largest = max(float(dt_dx.abs().max()), float(dt_dy.abs().max()))
+        assert largest > 1.0, f"{name} is invisible to the stencil"
+
+    constant = torch.ones((ny, nx), dtype=torch.float64)
+    dt_dx, dt_dy = timefield._q4_gauss_gradient(constant)
+    assert float(dt_dx.abs().max()) == 0.0
+    assert float(dt_dy.abs().max()) == 0.0
+
+
+def test_gradient_stencil_is_exact_on_a_linear_field():
+    """A Q4 gradient reproduces a linear field's gradient exactly at every Gauss point,
+    so a constant-thickness sweep scores zero spread however it is oriented."""
+    ny, nx = 6, 7
+    i, j = np.indices((ny, nx))
+    field = torch.from_numpy(3.0 * j - 2.0 * i)
+    dt_dx, dt_dy = timefield._q4_gauss_gradient(field)
+    assert float(dt_dx.min()) == pytest.approx(3.0, abs=1e-12)
+    assert float(dt_dx.max()) == pytest.approx(3.0, abs=1e-12)
+    assert float(dt_dy.min()) == pytest.approx(-2.0, abs=1e-12)
+    assert float(dt_dy.max()) == pytest.approx(-2.0, abs=1e-12)
+
+
+def test_interpolate_to_gauss_is_a_partition_of_unity():
+    """The weights are the same shape functions as the gradient, so a uniform field
+    interpolates to itself -- otherwise a weight would not match the sample it
+    weights."""
+    ones = torch.ones((5, 6), dtype=torch.float64)
+    assert float((timefield.interpolate_to_gauss(ones) - 1.0).abs().max()) == 0.0
+
+
+def test_gradient_magnitude_elements_covers_every_element():
+    """Unlike the central difference this replaced, the scattered plotting field has no
+    blank border: every element sits at some cell's corner."""
+    ny, nx = 5, 6
+    i, j = np.indices((ny, nx))
+    per_element = timefield.gradient_magnitude_elements(
+        torch.from_numpy(3.0 * j + 0.0 * i)
+    )
+    assert per_element.shape == (ny, nx)
+    assert torch.all(torch.isfinite(per_element))
+    # A linear field has one gradient magnitude everywhere, border included.
+    assert float((per_element - 3.0).abs().max()) == pytest.approx(0.0, abs=1e-12)
 
 
 def test_gradient_magnitude_std_is_differentiable_at_a_flat_field():
@@ -108,9 +180,11 @@ def test_gradient_magnitude_std_is_differentiable_at_a_flat_field():
     assert torch.all(torch.isfinite(grad))
 
 
-@pytest.mark.parametrize("nelx,nely", [(2, 9), (9, 2), (3, 3)])
-def test_gradient_magnitude_std_degenerate_interior(nelx, nely):
-    """Fewer than two interior elements leaves no spread to measure: zero, not NaN."""
+@pytest.mark.parametrize("nelx,nely", [(1, 9), (9, 1), (1, 1)])
+def test_gradient_magnitude_std_degenerate_mesh(nelx, nely):
+    """A lone-1 mesh has no cell to put Gauss points in, leaving no spread to measure:
+    zero, not NaN. Every mesh with two elements in each direction does have cells, so
+    unlike the central difference this replaced the 3x3 case is no longer degenerate."""
     field = torch.rand((nely, nelx), dtype=torch.float64)
     assert float(timefield.gradient_magnitude_std(field)) == 0.0
 
