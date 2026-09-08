@@ -304,11 +304,11 @@ def _sensitivity_rows(
     Every step of the chain is autograd's, the density filter included. That is only
     affordable because `filters.apply_density_filter` multiplies through
     `torch_util.symmetric_matmul`: autograd's backward for a plain `H @ x` transposes to
-    CSC, which is catastrophically slow to multiply on CPU (PR #87), while the symmetric
-    backward costs the same as the forward. What remains is that the graph applies the
-    adjoint once per row where a hand-applied one would batch all `k` into a single
+    CSC, which is catastrophically slow to multiply on CPU, while the symmetric backward
+    costs the same as the forward. What remains is that the graph applies the adjoint
+    once per row where a hand-applied one would batch all `k` into a single
     sparse-times-dense product -- ~1 ms per row block at 180x60, which is not worth
-    keeping a hand-derived step for.
+    keeping a hand-derived step for. See PR #89 for the measurements.
 
     `allow_unused` covers rows that depend on only one field (e.g. a density-only
     constraint never touches `t`): the unused field's block is exactly zero, which is
