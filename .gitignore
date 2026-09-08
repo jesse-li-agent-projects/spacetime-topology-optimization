@@ -32,3 +32,6 @@ __pycache__/
 .ripgreprc
 .zshrc
 .zprofile
+
+# direnv
+.envrc
