@@ -25,15 +25,12 @@ def trust_region_params(
     MMA's real step control is the asymptote distance, not the `move` box: the
     approximation's curvature at the current point is `2*|df/dx| / asymptote_distance`,
     so pulling the asymptotes in is what makes a step conservative. Svanberg (1987, s.3)
-    describes the box itself as 'probably not very crucial', present mainly to keep the
-    subproblem away from its poles. Sizing a trust region therefore means sizing the
-    asymptotes, not just tightening the box.
+    describes the box itself as 'probably not very crucial'. Sizing a trust region
+    therefore means sizing the asymptotes, not just tightening the box.
 
-    The clamps are returned as ratios to `asyinit` (Svanberg's own 1/50 and 20x,
-    recovered from his `0.01`/`10` against `asyinit=0.5`) rather than to the variable
-    range. Keying them to the range instead would put the floor on top of `asyinit`
-    whenever the trust region is much smaller than the range, pinning the asymptotes at
-    their initial distance and silently disabling the oscillation damping.
+    The clamps are ratios to `asyinit` (Svanberg's own 1/50 and 20x), not to the
+    variable range: keying them to the range instead silently disables the oscillation
+    damping whenever the trust region is much smaller than the range (PR #90).
 
     :param move_limit: per-variable trust-region half-width, in x units
     :param xrange: `xmax - xmin`, the range the returned fractions are relative to
@@ -102,8 +99,8 @@ def mmasub(
     :param move: hard per-iteration move limit, as a fraction of `xmax - xmin`
     :param raa0: numerator of the curvature floor added to the separable approximations,
         which keeps a variable with a vanishing gradient from getting a degenerate
-        (curvature-free) approximation. Divided by `xmax - xmin`, so it is the one
-        constant here that scales *inversely* with the variable range.
+        (curvature-free) approximation. Unlike the constants above it scales *inversely*
+        with the variable range.
     :param albefa: fraction of the asymptote distance kept clear of each asymptote when
         forming the subproblem bounds, to keep the subproblem away from its poles
     :param asyincr: factor to relax the asymptotes by when a variable moves monotonically
@@ -115,9 +112,9 @@ def mmasub(
     epsimin = 1e-7
 
     device, dtype = xval.device, xval.dtype
-    # The length scale every tuning constant below is expressed in. `xmami` is the same
-    # quantity guarded against a degenerate (zero-width) range; the source only applies
-    # that guard to the raa0 term, which is the only one that divides by it.
+    # The length scale every tuning constant below is expressed in. `xmami` below is the
+    # same quantity guarded against a zero-width range, for the raa0 term that divides
+    # by it.
     xrange = xmax - xmin
 
     # Asymptotes: re-initialized on the first two iterations, then adapted based on
