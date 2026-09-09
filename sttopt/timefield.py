@@ -463,6 +463,120 @@ def relative_roughness(
     return roughness(tPhys, weights) / mean
 
 
+def sawtooth_amplitude(
+    tPhys: Float[Tensor, "nely nelx"],
+    weights: Float[Tensor, "nely nelx"] | None = None,
+) -> Float[Tensor, ""]:
+    """Typical depth of a column-alternating corrugation in the time field, in units of
+    `t`: the weighted mean of `|tPhys - smooth|`, where `smooth` is `tPhys` filtered
+    1-2-1 along x.
+
+    Unlike `roughness`, this looks along one axis only, because the mode it measures has
+    one axis: the transverse sawtooth `_gradient_cv` rewards. That makes it the
+    amplitude of the specific defect rather than a general wiggle size, which is what a
+    "would a print show this" judgement needs. Read `relative_sawtooth_amplitude` for
+    that judgement; this one is in `t` and so falls under mesh refinement.
+
+    :param tPhys: physical time field
+    :param weights: per-element weight over the columns with both neighbours, e.g. the
+        density field so void does not dominate; `None` weights every one equally
+    :return: the weighted mean deviation, or zero when the total weight is zero
+    """
+    interior = tPhys[:, 1:-1]
+    smooth = (tPhys[:, :-2] + 2 * interior + tPhys[:, 2:]) / 4
+
+    w = tPhys.new_ones(interior.shape) if weights is None else weights[:, 1:-1]
+    total_w = torch.sum(w)
+    if total_w == 0:
+        return tPhys.new_zeros(())
+    return torch.sum(w * torch.abs(interior - smooth)) / total_w
+
+
+def _central_difference_gradient(
+    tPhys: Float[Tensor, "nely nelx"], xPhys: Float[Tensor, "nely nelx"]
+) -> Float[Tensor, " k"]:
+    """`|grad tPhys|` from central differences, over the elements whose four orthogonal
+    neighbours are all solid.
+
+    The change of operator is the whole point of the diagnostics built on this. A
+    central difference is blind to a one-element sawtooth -- both neighbours carry the
+    same offset and it cancels, exactly so where the amplitude is locally constant --
+    so these samples describe the field with the padding mode removed, which
+    `gradient_magnitude` cannot do. That same blindness is why this must never be
+    optimized: it would leave the mode entirely unconstrained.
+
+    Stencils touching void are dropped rather than down-weighted: `t` over void is
+    pinned by nothing physical, so a straddling difference reports on a free variable
+    instead of on the part.
+
+    :param tPhys: physical time field
+    :param xPhys: density field, to locate the fully-solid stencils
+    :return: the qualifying samples, flattened; empty if no stencil qualifies
+    """
+    dx = (tPhys[1:-1, 2:] - tPhys[1:-1, :-2]) / 2
+    dy = (tPhys[2:, 1:-1] - tPhys[:-2, 1:-1]) / 2
+    g = torch.sqrt(dx**2 + dy**2 + _GRAD_EPS)
+
+    solid = xPhys > geometry.SOLID_THRESHOLD
+    keep = (
+        solid[1:-1, 1:-1]
+        & solid[1:-1, 2:]
+        & solid[1:-1, :-2]
+        & solid[2:, 1:-1]
+        & solid[:-2, 1:-1]
+    )
+    return g[keep]
+
+
+def relative_sawtooth_amplitude(
+    tPhys: Float[Tensor, "nely nelx"], xPhys: Float[Tensor, "nely nelx"]
+) -> Float[Tensor, ""]:
+    """`sawtooth_amplitude` in units of a layer thickness: "the corrugation is this
+    fraction of a layer deep", the number that says whether a print would show it.
+
+    The layer thickness here is the *central-difference* mean gradient, not
+    `relative_roughness`'s `_weighted_gradient_mean`. The corrugation enters the latter
+    in quadrature and inflates it, so normalizing by it would make a deepening
+    corrugation report a smaller fraction -- the wrong direction for a measure of that
+    corrugation. A sawtooth-blind denominator is the thickness the field would have
+    without the defect, which is what the fraction is meant to be against.
+
+    :param tPhys: physical time field
+    :param xPhys: density field, weighting `sawtooth_amplitude` and masking the stencils
+    :return: the ratio, or zero when no fully-solid stencil qualifies
+    """
+    g = _central_difference_gradient(tPhys, xPhys)
+    if g.numel() == 0 or g.mean() == 0:
+        return tPhys.new_zeros(())
+    return sawtooth_amplitude(tPhys, xPhys) / g.mean()
+
+
+def central_difference_cv(
+    tPhys: Float[Tensor, "nely nelx"], xPhys: Float[Tensor, "nely nelx"]
+) -> Float[Tensor, ""]:
+    """Layer-uniformity CV over `_central_difference_gradient`'s samples: the
+    sawtooth-blind counterpart of `_gradient_cv`, and a diagnostic, never an objective.
+
+    `_gradient_cv` is the quantity a run optimizes and this is the quantity a run should
+    be judged on; the gap between them is what the transverse sawtooth is padding, and
+    has been measured at 4x on the c-shape.
+
+    :param tPhys: physical time field
+    :param xPhys: density field, to locate the fully-solid stencils
+    :return: the coefficient of variation, or zero when fewer than two stencils qualify
+        or the mean gradient is zero
+    """
+    sample = _central_difference_gradient(tPhys, xPhys)
+    if sample.numel() < 2:
+        return tPhys.new_zeros(())
+    mean = sample.mean()
+    if mean == 0:
+        return tPhys.new_zeros(())
+    # Population std, not torch's default sample std, so this matches the plain
+    # `g.std()/g.mean()` of the numpy analyses this number is compared against.
+    return torch.std(sample, unbiased=False) / mean
+
+
 class UniformityMetric(StrEnum):
     """Names for `uniformity_penalty`'s selectable layer-uniformity measure. Adding a
     measure is a matter of writing a function and a member here -- see

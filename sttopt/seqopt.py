@@ -90,6 +90,15 @@ class IterationRecord:
     uniformity: float  # raw layer-uniformity penalty
     roughness: float  # smoothness regularizer, as a fraction of a layer thickness
     tru_max: float  # factor-rescaled hotspot severity, comparable across runs
+
+    # Diagnostics only -- nothing below enters the objective or a constraint. They exist
+    # because `uniformity` cannot be taken at face value: it is blind to the transverse
+    # sawtooth (`timefield._gradient_cv`), so a run can drive it down while the field
+    # gets worse. `true_cv` is the same measurement through an operator that annihilates
+    # that mode, and `sawtooth` is the mode's own amplitude; the gap between `uniformity`
+    # and `true_cv` is the evidence of gaming.
+    true_cv: float  # `timefield.central_difference_cv`, sawtooth-blind
+    sawtooth: float  # corrugation depth as a fraction of a layer thickness
     df: Float[np.ndarray, " n"]
     xmma: Float[np.ndarray, " n"]
     low: Float[np.ndarray, " n"]
@@ -295,6 +304,11 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     if loop % 30 == 0 and beta_t < 50:
         beta_t += 5
 
+    with torch.no_grad():
+        t_det = t.detach()
+        true_cv = float(timefield.central_difference_cv(t_det, xPhys))
+        sawtooth = float(timefield.relative_sawtooth_amplitude(t_det, xPhys))
+
     # -- Gradient region ends: mmasub is not part of the autograd graph. --
     mma_a = torch.zeros(problem.m, device=device, dtype=dtype)
     mma_c = torch.full((problem.m,), config.mma_c, device=device, dtype=dtype)
@@ -341,6 +355,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         uniformity=float(penalty_t.detach()),
         roughness=float(rough_t.detach()),
         tru_max=tru_max,
+        true_cv=true_cv,
+        sawtooth=sawtooth,
         df=torch_util.to_numpy(df_dt[0]),
         xmma=torch_util.to_numpy(xmma),
         low=torch_util.to_numpy(low),

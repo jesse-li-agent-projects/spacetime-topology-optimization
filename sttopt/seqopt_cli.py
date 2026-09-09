@@ -84,8 +84,12 @@ def iteration_diagnostics(
     step: "Float[np.ndarray, ' n']",
     tmove: float,
 ) -> dict:
-    """One iteration's line of `iterations.jsonl`: the objective terms, plus what the
-    trust region actually did with them.
+    """One iteration's line of `iterations.jsonl`: the objective terms, the
+    sawtooth diagnostics, plus what the trust region actually did with them.
+
+    Read `true_cv`, not `uniformity`, when judging a run: the two differ by whatever the
+    transverse sawtooth is padding, so `uniformity` alone can improve while the field
+    degrades (`seqopt.IterationRecord`).
 
     The trust-region fields are the point of logging every iteration. `step_max` against
     `tmove` says whether the configured move limit binds at all, `move_frac` says for
@@ -108,6 +112,8 @@ def iteration_diagnostics(
         "uniformity": record.uniformity,
         "tru_max": record.tru_max,
         "roughness": record.roughness,
+        "true_cv": record.true_cv,
+        "sawtooth": record.sawtooth,
         "step_max": float(absolute.max()),
         "step_mean": float(absolute.mean()),
         "move_frac": float((absolute >= 0.999 * tmove).mean()),
@@ -166,7 +172,8 @@ def main(args: argparse.Namespace) -> None:
             print(
                 f"It.: {state.loop:4d} f: {record.f:10.4f} "
                 f"hot: {record.hotspot:8.5f} unif: {record.uniformity:8.5f} "
-                f"Tm.: {record.tru_max:7.3f} rough: {record.roughness:7.4f}"
+                f"Tm.: {record.tru_max:7.3f} rough: {record.roughness:7.4f} "
+                f"true_cv: {record.true_cv:8.5f} saw: {record.sawtooth:7.4f}"
             )
             if args.log_every and state.loop % args.log_every == 0:
                 step = torch_util.to_numpy(
@@ -195,6 +202,8 @@ def main(args: argparse.Namespace) -> None:
         uniformity=record.uniformity,
         roughness=record.roughness,
         tru_max=record.tru_max,
+        true_cv=record.true_cv,
+        sawtooth=record.sawtooth,
     )
 
 

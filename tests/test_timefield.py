@@ -493,3 +493,96 @@ def test_relative_roughness_is_resolution_invariant():
 def test_relative_roughness_zero_mean_gradient_returns_zero():
     field = torch.full((6, 6), 0.3, dtype=torch.float64)  # constant -> zero gradient
     assert float(timefield.relative_roughness(field)) == 0.0
+
+
+def test_sawtooth_amplitude_recovers_an_injected_amplitude():
+    """The measure is calibrated: a `(-1)^j` corrugation of amplitude `a` reads back as
+    `a` in `t` units, and as `a` over the layer thickness once relativized. Without that
+    calibration the number could not be quoted as "this fraction of a layer deep".
+    """
+    ny, nx = 30, 40
+    layer = 1.0 / (ny - 1)
+    ramp = np.tile(np.linspace(0.0, 1.0, ny)[:, None], (1, nx))
+    _, j = np.indices((ny, nx))
+    solid = torch.ones((ny, nx), dtype=torch.float64)
+
+    for fraction in (0.05, 0.4):
+        field = torch.from_numpy(ramp + fraction * layer * (-1.0) ** j)
+        assert float(timefield.sawtooth_amplitude(field)) == pytest.approx(
+            fraction * layer, rel=1e-9
+        )
+        # Stays calibrated at a large amplitude, which is what the sawtooth-blind
+        # denominator buys: a mean-gradient denominator would read 0.31 at 0.4, since
+        # the corrugation inflates its own reference.
+        assert float(
+            timefield.relative_sawtooth_amplitude(field, solid)
+        ) == pytest.approx(fraction, rel=0.02)
+
+
+def test_sawtooth_amplitude_ignores_a_smooth_ramp_at_any_orientation():
+    """A legitimate constant-thickness sweep must read ~0 however it is oriented,
+    otherwise the diagnostic would charge a run for printing diagonally.
+    """
+    ny, nx = 25, 25
+    i, j = np.indices((ny, nx))
+    for field in (i / (ny - 1), j / (nx - 1), (i + j) / (ny + nx - 2)):
+        assert float(timefield.sawtooth_amplitude(torch.from_numpy(field))) < 1e-12
+
+
+def test_central_difference_cv_is_blind_to_the_sawtooth_it_diagnoses():
+    """The property that makes this the headline metric. Cancellation is exact only
+    where the amplitude is locally constant, so a uniform sawtooth of any size is
+    invisible outright and the modulated padding an optimizer actually builds leaks a
+    fraction of a percent -- while `_gradient_cv` reads that same padding as an
+    improvement. The two therefore disagree by what the sawtooth is hiding.
+    """
+    ny, nx = 30, 40
+    _, j = np.indices((ny, nx))
+    rate = (0.6 + 0.8 * j / (nx - 1)) / (ny - 1)
+    ramp = np.cumsum(rate, axis=0) - rate
+    padding = np.sqrt(np.clip(rate.max() ** 2 - rate**2, 0.0, None)) / 2
+
+    solid = torch.ones((ny, nx), dtype=torch.float64)
+    plain = torch.from_numpy(ramp)
+    reference = float(timefield.central_difference_cv(plain, solid))
+
+    for amplitude in (1e-4, 1e-2):
+        uniform = torch.from_numpy(ramp + amplitude * (-1.0) ** j)
+        assert float(timefield.central_difference_cv(uniform, solid)) == pytest.approx(
+            reference, rel=1e-9
+        )
+
+    padded = torch.from_numpy(ramp + padding * (-1.0) ** j)
+    assert float(timefield.central_difference_cv(padded, solid)) == pytest.approx(
+        reference, rel=0.01
+    )
+    # ... while the objective's own measure reads the padded field as the better one
+    assert float(timefield._gradient_cv(padded, None)) < float(
+        timefield._gradient_cv(plain, None)
+    )
+
+
+def test_central_difference_cv_skips_stencils_touching_void():
+    """`t` over void is pinned by nothing physical, so a difference straddling the
+    boundary would report on a free variable rather than on the part. Moving void `t`
+    alone must not move the metric.
+    """
+    ny, nx = 12, 12
+    ramp = np.tile(np.linspace(0.0, 1.0, ny)[:, None], (1, nx))
+    xPhys = np.ones((ny, nx))
+    xPhys[:, 8:] = 0.0
+
+    solid = torch.from_numpy(xPhys)
+    before = float(timefield.central_difference_cv(torch.from_numpy(ramp), solid))
+
+    disturbed = ramp.copy()
+    disturbed[:, 8:] += 5.0
+    after = float(timefield.central_difference_cv(torch.from_numpy(disturbed), solid))
+    assert after == pytest.approx(before, rel=1e-12)
+
+
+def test_central_difference_cv_too_few_solid_stencils_returns_zero():
+    """A part with no fully-surrounded solid element has nothing to average over."""
+    field = torch.from_numpy(np.tile(np.linspace(0.0, 1.0, 6)[:, None], (1, 6)))
+    xPhys = torch.zeros((6, 6), dtype=torch.float64)
+    assert float(timefield.central_difference_cv(field, xPhys)) == 0.0
