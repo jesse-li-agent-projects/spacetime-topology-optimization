@@ -1,5 +1,10 @@
 This directory contains plans for agents.
 
+- seqopt_sawtooth_multipronged.md
+    - Experiment plan for removing the gradient-padding sawtooth from `seqopt`'s
+      layer-uniformity optimization, which makes the reported CV ~4x better than the
+      field really is. Three prongs (harmonic void init, roughness_weight continuation,
+      filtered tPhys) plus the pre-checks and dead ends already settled.
 - dummy_plan.md
     - Not actually a real plan, just an example to show syntax of this index: list the
       plan's filename, then one to three sentences about it indented below.
