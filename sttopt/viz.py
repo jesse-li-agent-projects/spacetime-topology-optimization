@@ -528,17 +528,16 @@ def _animate_timefield_filled_contour(
     )
 
     fig = Figure()
-    ax = fig.add_subplot()
     out_path = plot_dir / "timefield_filled_contour_animation.gif"
     writer = PillowWriter(fps=fps)
     with writer.saving(fig, out_path, dpi=150):
         for design_file, (xPhys, tPhys, obj, *_rest) in zip(design_files, frames):
-            # ax.clear() only clears the main Axes -- the colorbar Axes that
-            # timefield_filled_contour_plot adds to the figure each call survives it
-            # and would otherwise pile up, one per frame.
-            for stale_ax in [a for a in fig.axes if a is not ax]:
+            # A fresh Axes each frame, not ax.clear() + reuse: fig.colorbar(ax=ax)
+            # shrinks its parent Axes' position to make room for the colorbar, and
+            # that shrink compounds across frames if the same Axes is reused.
+            for stale_ax in fig.axes:
                 fig.delaxes(stale_ax)
-            ax.clear()
+            ax = fig.add_subplot()
             timefield_filled_contour_plot(
                 xPhys, tPhys, n_contours, compliance=obj, levels=levels, ax=ax
             )
