@@ -116,11 +116,14 @@ class SeqRunConfig(_ConfigMixin):
     :param rmin_cond: conductivity-neighborhood radius, in elements -- same caveat as
         `lrmin`.
     :param uniformity_metric: a `timefield.UniformityMetric` member name.
-    :param roughness_weight: weight on `timefield.roughness`, the objective's smoothness
-        regularizer. Not optional in practice: the uniformity penalty is blind to a
-        sawtooth across the print direction and rewards one, so a run with this at 0
-        converges to a jagged field (PR #92). `roughness` is in units of `t`, so scale
-        this against the layer thickness the mesh implies rather than against 1.
+    :param roughness_weight: weight on `timefield.relative_roughness`, the objective's
+        smoothness regularizer. Not optional in practice: the uniformity penalty rewards
+        a sawtooth across the print direction, so a run with this at 0 converges to a
+        jagged field whose reported uniformity is several times better than the truth
+        (PR #92). Both terms are dimensionless and divide by the same mean gradient, so
+        this weight is a pure ratio and does not need rescaling with the mesh. It is not
+        a light touch: on the c-shape 0.06 still leaves a wiggle 16% of a layer deep,
+        and 0.18 is what flattens it, putting this term at 30-50% of the uniformity one.
     :param nStage: per-stage deposition budget count; 0 disables the stage-volume
         constraints. Also the stage count the plots draw boundaries for.
     :param tmove: per-iteration trust-region half-width, in `t` units.

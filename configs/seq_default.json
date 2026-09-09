@@ -8,7 +8,7 @@
   "hotspot_weight": 1.0,
   "uniformity_metric": "gradient_cv",
   "uniformity_weight": 1.0,
-  "roughness_weight": 10.0,
+  "roughness_weight": 0.2,
   "nStage": 8,
   "p": 25.0,
   "q": 3.0,

@@ -88,7 +88,7 @@ class IterationRecord:
     f: float  # objective: the weighted sum of the three raw terms below
     hotspot: float  # raw hotspot p-mean (`numer`), before any rescaling
     uniformity: float  # raw layer-uniformity penalty
-    roughness: float  # raw smoothness regularizer, in units of `t`
+    roughness: float  # smoothness regularizer, as a fraction of a layer thickness
     tru_max: float  # factor-rescaled hotspot severity, comparable across runs
     df: Float[np.ndarray, " n"]
     xmma: Float[np.ndarray, " n"]
@@ -234,7 +234,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     # sawtooth across the print direction (`timefield._gradient_cv`).
     metric = timefield.UniformityMetric(config.uniformity_metric)
     penalty_t = timefield.uniformity_penalty(t, metric, weights=xPhys)
-    rough_t = timefield.roughness(t, weights=xPhys)
+    rough_t = timefield.relative_roughness(t, weights=xPhys)
 
     f_val_t = (
         config.hotspot_weight * numer_t

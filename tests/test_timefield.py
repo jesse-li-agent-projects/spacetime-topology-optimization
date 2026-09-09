@@ -461,3 +461,35 @@ def test_roughness_penalizes_padding_thin_layers_with_a_sawtooth():
         timefield._gradient_cv(plain, None)
     )
     assert float(timefield.roughness(padded)) > float(timefield.roughness(plain))
+
+
+def test_relative_roughness_is_resolution_invariant():
+    """The point of dividing by the mean gradient: the same physical field, rasterized
+    finer, must score the same. Raw `roughness` halves with each refinement (it is an
+    RMS in units of `t`), which is what makes it unusable as a weighted objective term.
+    """
+    seen = []
+    for n in (30, 60, 120):
+        ramp = np.tile(np.linspace(0.0, 1.0, n)[:, None], (1, n))
+        _, j = np.indices((n, n))
+        # wiggle fixed at 20% of a layer, so the physical field is the same each time
+        field = torch.from_numpy(ramp + 0.2 * (1.0 / (n - 1)) * (-1.0) ** j)
+        seen.append(
+            (
+                float(timefield.relative_roughness(field)),
+                float(timefield.roughness(field)),
+            )
+        )
+
+    relative = [r for r, _ in seen]
+    raw = [r for _, r in seen]
+    # not exactly equal: the ramp's own boundary rows shift slightly with n
+    assert relative[0] == pytest.approx(relative[1], rel=1e-7)
+    assert relative[1] == pytest.approx(relative[2], rel=1e-7)
+    # and the raw measure is what it is correcting for
+    assert raw[1] == pytest.approx(raw[0] / 2, rel=0.02)
+
+
+def test_relative_roughness_zero_mean_gradient_returns_zero():
+    field = torch.full((6, 6), 0.3, dtype=torch.float64)  # constant -> zero gradient
+    assert float(timefield.relative_roughness(field)) == 0.0

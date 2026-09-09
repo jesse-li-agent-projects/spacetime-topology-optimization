@@ -388,14 +388,13 @@ def roughness(
     """Typical element-to-element wiggle amplitude of the time field, in units of `t`:
     the weighted RMS of the 5-point Laplacian residual `mean(4-neighbours) - tPhys`.
 
-    Both a diagnostic and a regularizer. The stencil annihilates any linear field and
-    responds most strongly to the one-element modes, so a legitimate constant-thickness
-    sweep reads ~0 at any orientation and penalizing it costs a smooth field nothing.
-    As a regularizer it covers `_gradient_cv`'s null space (PR #92).
+    The stencil annihilates any linear field and responds most strongly to the
+    one-element modes, so a legitimate constant-thickness sweep reads ~0 at any
+    orientation. That is what lets it cover `_gradient_cv`'s null space (PR #92).
 
-    Being an RMS, this is in units of `t`, so a weight against the dimensionless
-    uniformity penalty is resolution-dependent: scale it against the layer thickness
-    `~1/nely` the run aims for, not against 1.
+    Being an RMS, this is in units of `t` and so shrinks under mesh refinement. Weight
+    `relative_roughness` in an objective rather than this; read this one when an
+    amplitude in the time field's own units is what you want.
 
     :param tPhys: physical time field
     :param weights: per-element weight over the interior, e.g. the density field so
@@ -413,6 +412,55 @@ def roughness(
     if total_w == 0:
         return tPhys.new_zeros(())
     return torch.sqrt(torch.sum(w * residual**2) / total_w)
+
+
+def _weighted_gradient_mean(
+    tPhys: Float[Tensor, "nely nelx"], weights: Float[Tensor, "nely nelx"] | None
+) -> tuple[
+    Float[Tensor, ""],
+    Float[Tensor, "4 nely-1 nelx-1"],
+    Float[Tensor, "4 nely-1 nelx-1"],
+]:
+    """Weighted mean of `|grad tPhys|` over the Gauss points, with the samples and the
+    weights it was taken over.
+
+    This mean is the reciprocal of the mean deposited-layer thickness, so dividing by it
+    turns a quantity in units of `t` into one in units of a layer -- which is what makes
+    a weight on that quantity portable across mesh resolutions. Both penalties here
+    divide by it, so a weight *between* them is free of it entirely.
+
+    :param tPhys: physical time field
+    :param weights: per-element weight, interpolated to the Gauss points; `None` weights
+        every sample equally
+    :return: `(mean, samples, gauss_weights)`; `mean` is zero when the total weight is
+    """
+    g = gradient_magnitude(tPhys)
+    w = tPhys.new_ones(g.shape) if weights is None else interpolate_to_gauss(weights)
+    total_w = torch.sum(w)
+    if total_w == 0:
+        return tPhys.new_zeros(()), g, w
+    return torch.sum(w * g) / total_w, g, w
+
+
+def relative_roughness(
+    tPhys: Float[Tensor, "nely nelx"],
+    weights: Float[Tensor, "nely nelx"] | None = None,
+) -> Float[Tensor, ""]:
+    """`roughness` in units of the mean layer thickness: the objective's smoothness term.
+
+    Raw `roughness` is in units of `t`, so it falls under mesh refinement and a weight
+    tuned at one resolution silently means something else at the next. This ratio is
+    what stays put -- refining the same physical field leaves it unchanged -- and it
+    reads directly as "the wiggle is this fraction of a layer".
+
+    :param tPhys: physical time field
+    :param weights: per-element weight, e.g. the density field so void does not dominate
+    :return: the ratio, or zero when the mean gradient is zero (nothing to divide by)
+    """
+    mean, _, _ = _weighted_gradient_mean(tPhys, weights)
+    if mean == 0:
+        return tPhys.new_zeros(())
+    return roughness(tPhys, weights) / mean
 
 
 class UniformityMetric(StrEnum):
@@ -443,10 +491,11 @@ def _gradient_cv(
     interpretable: 0.1 means layer thickness varies by about 10% of its own mean.
 
     **Not a smoothness measure, and not usable alone.** A sawtooth across the print
-    direction is invisible here (see `gradient_magnitude`), and worse than free: it
+    direction is invisible here (see `gradient_magnitude`) and worse than free: it
     enters `|grad t|` in quadrature, so modulating its amplitude pads locally thin
-    layers up to the thickest and drives this measure *down*. Left alone, that makes
-    more iterations buy a jaggier field. Pair it with `roughness` (PR #92).
+    layers up to the thickest and drives this measure *down*. Optimizing it alone
+    therefore reports a uniformity the field does not have -- measured at 2.7% against a
+    true 11% on the c-shape. Pair it with `relative_roughness` (PR #92).
 
     :param tPhys: physical time field
     :param weights: per-element weight, shape `(nely, nelx)`, interpolated to the same
@@ -454,16 +503,10 @@ def _gradient_cv(
     :return: the coefficient of variation, or zero if the total weight or the mean
         gradient is zero (nothing to divide by)
     """
-    g = gradient_magnitude(tPhys)
-    w = tPhys.new_ones(g.shape) if weights is None else interpolate_to_gauss(weights)
-
-    total_w = torch.sum(w)
-    if total_w == 0:
-        return tPhys.new_zeros(())
-    mean = torch.sum(w * g) / total_w
+    mean, g, w = _weighted_gradient_mean(tPhys, weights)
     if mean == 0:
         return tPhys.new_zeros(())
-    variance = torch.sum(w * (g - mean) ** 2) / total_w
+    variance = torch.sum(w * (g - mean) ** 2) / torch.sum(w)
     return torch.sqrt(variance) / mean
 
 
