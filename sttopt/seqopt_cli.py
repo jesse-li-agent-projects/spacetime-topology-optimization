@@ -114,6 +114,7 @@ def iteration_diagnostics(
         "roughness": record.roughness,
         "true_cv": record.true_cv,
         "sawtooth": record.sawtooth,
+        "sawtooth_raw": record.sawtooth_raw,
         "roughness_weight": record.roughness_weight,
         "step_max": float(absolute.max()),
         "step_mean": float(absolute.mean()),
@@ -189,15 +190,20 @@ def main(args: argparse.Namespace) -> None:
                 np.savez(
                     output_dir / f"design_it{state.loop:04d}.npz",
                     t=torch_util.to_numpy(state.t),
+                    tPhys=torch_util.to_numpy(
+                        seqopt.physical_timefield(problem, state.t)
+                    ),
                 )
 
     np.savez(
         output_dir / "final_design.npz",
         loop=state.loop,
         xPhys=xPhys,
-        # tPhys == t here (seqopt does not filter the time field); written under the
-        # name viz.py reads so the plotting path works unchanged. No separate "t" key.
-        tPhys=torch_util.to_numpy(state.t),
+        # `tPhys` is the name viz.py reads, so the plotting path works unchanged; `t`
+        # is the raw design variable, which differs from it only under a time filter
+        # but is the field a sawtooth diagnosis has to look at when one is configured.
+        tPhys=torch_util.to_numpy(seqopt.physical_timefield(problem, state.t)),
+        t=torch_util.to_numpy(state.t),
         f=record.f,
         hotspot=record.hotspot,
         uniformity=record.uniformity,

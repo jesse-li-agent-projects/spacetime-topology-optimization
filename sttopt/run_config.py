@@ -121,9 +121,7 @@ class SeqRunConfig(_ConfigMixin):
 
     No `nelx`/`nely`: the geometry file (`--geometry`) defines the mesh, so a mismatch
     between config and geometry is unrepresentable rather than merely caught. No
-    `rmin` either: `seqopt` does not filter the time field (see
-    `plans/archive/fixed_geometry_sequence_optimization.md`), so there is no such
-    radius to set. No solid/void cutoff either: it would be inert on a binary geometry,
+    solid/void cutoff either: it would be inert on a binary geometry,
     which `geometry.load_geometry` requires by default, so `geometry.SOLID_THRESHOLD`
     is one constant rather than a setting that can disagree with itself between the
     print-start set and the time-field initialization.
@@ -147,6 +145,10 @@ class SeqRunConfig(_ConfigMixin):
         match.
     :param rmin_cond: conductivity-neighborhood radius, in elements -- same caveat as
         `lrmin`.
+    :param time_filter_rmin: density-filter radius applied to `t`, in elements; 0 leaves
+        the time field unfiltered, which is `seqopt`'s starting design (see its module
+        docstring for what a nonzero radius costs, and read `sawtooth_raw` alongside
+        `sawtooth` when using one).
     :param uniformity_metric: a `timefield.UniformityMetric` member name.
     :param roughness_weight: weight on `timefield.relative_roughness`, the objective's
         smoothness regularizer -- a number, or a `StepSchedule` to hold one weight and
@@ -182,6 +184,7 @@ class SeqRunConfig(_ConfigMixin):
     continuity_tol: float
     lrmin: float
     rmin_cond: float
+    time_filter_rmin: float
 
     hotspot_weight: float
     uniformity_metric: str

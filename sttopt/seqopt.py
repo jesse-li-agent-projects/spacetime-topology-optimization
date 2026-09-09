@@ -8,13 +8,21 @@ other, but the two `step`s are not shared: there is no FEM here (no `K U = F` so
 no `Emin`/`Emax`/`nu`/`penal`/`eta`/`beta_d`), and `xPhys` is a fixed input rather than
 a design variable, so `n = nel` (not `2*nel`) and `t` is the sole autograd leaf.
 
-**No filter on `t`: `tPhys = t`.** STTO reuses the density filter to smooth `tPhys`,
-which also smooths *across void* -- two branches separated by a gap get their print
-times mixed with no material between them to carry heat. `seqopt` avoids that by not
-filtering at all; see `plans/fixed_geometry_sequence_optimization.md` for the
-reasoning and the open questions this leaves (this is a starting point, not a settled
-design). Consequently `t` is both the autograd leaf and the physical field: there is
-no filter chain rule, no filter adjoint, and no separate `tPhys` name to keep in sync.
+**The filter on `t` is off by default: `tPhys = t` unless `config.time_filter_rmin`
+is set.** STTO reuses the density filter to smooth `tPhys`, which also smooths *across
+void* -- two branches separated by a gap get their print times mixed with no material
+between them to carry heat, and void `t`, which is pinned by nothing physical, bleeds
+into the `tPhys` of solid within `rmin` of the boundary. `seqopt` therefore starts from
+no filtering at all (see `plans/archive/fixed_geometry_sequence_optimization.md`), and
+`t` is then both the autograd leaf and the physical field.
+
+The radius exists because the sawtooth the uniformity penalty rewards
+(`timefield._gradient_cv`) is a one-element mode, and the filter attenuates the
+one-element modes by construction -- ~200x at `rmin=4`, so reproducing a given
+corrugation in `tPhys` would take a sawtooth in `t` large enough to dominate the design
+variable. Whether that eliminates the mode or merely hides it behind the filter is what
+the `sawtooth`/`sawtooth_raw` pair in `IterationRecord` is there to answer: a smooth
+`tPhys` over a jagged `t` is a failure, not a fix.
 
 Void elements keep their time variables as free design variables, exactly as in STTO
 -- `seqopt` is a proving ground for the full space-time approach, where density is
@@ -57,6 +65,10 @@ class Problem:
     nely: int
 
     L: Tensor  # sparse CSR continuity filter, shape (nel, nel)
+    # The density filter on `t`, or None when `config.time_filter_rmin` is 0 and
+    # `tPhys` is `t` itself -- see the module docstring.
+    H: torch_util.SymmetricCsr | None
+    Hs: Float[Tensor, " nel"] | None
     e1: Int[Tensor, " npairs"]
     e2: Int[Tensor, " npairs"]
     w: Float[Tensor, " npairs"]
@@ -70,8 +82,8 @@ class Problem:
 class State:
     """Iteration-dependent state carried from one `step` call to the next."""
 
-    t: Float[Tensor, "nely nelx"]  # the time field -- both the design variable and
-    # the physical field `step`'s physics uses; see the module docstring
+    t: Float[Tensor, "nely nelx"]  # the raw design variable; `physical_timefield`
+    # turns it into the field `step`'s physics reads
     xold1: Float[Tensor, " n"]
     xold2: Float[Tensor, " n"]
     low: Float[Tensor, " n"]
@@ -97,8 +109,12 @@ class IterationRecord:
     # gets worse. `true_cv` is the same measurement through an operator that annihilates
     # that mode, and `sawtooth` is the mode's own amplitude; the gap between `uniformity`
     # and `true_cv` is the evidence of gaming.
-    true_cv: float  # `timefield.central_difference_cv`, sawtooth-blind
-    sawtooth: float  # corrugation depth as a fraction of a layer thickness
+    true_cv: float  # `timefield.central_difference_cv` of tPhys, sawtooth-blind
+    sawtooth: float  # tPhys corrugation depth as a fraction of a layer thickness
+    # The same depth in the raw design variable. Equal to `sawtooth` when no filter is
+    # configured; when one is, the two together separate "the mode is gone" from "the
+    # mode is still there and the filter is hiding it".
+    sawtooth_raw: float
 
     roughness_weight: float  # this iteration's weight, which a schedule may vary
     df: Float[np.ndarray, " n"]
@@ -153,6 +169,12 @@ def build_problem(
     L = filters.continuity_filter(nelx, nely, config.lrmin)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, config.rmin_cond)
 
+    H = Hs = None
+    if config.time_filter_rmin > 0:
+        H_np, Hs_np = filters.density_filter(nelx, nely, config.time_filter_rmin)
+        H = torch_util.symmetric_csr_to_tensor(H_np, device, dtype)
+        Hs = torch_util.to_tensor(Hs_np, device, dtype)
+
     n = nelx * nely
     m = (1 if config.enable_continuity else 0) + len(Nei) + 2 * nStage
 
@@ -168,11 +190,28 @@ def build_problem(
         nelx=nelx,
         nely=nely,
         L=torch_util.csr_to_tensor(L, device, dtype),
+        H=H,
+        Hs=Hs,
         w=torch_util.to_tensor(w, device, dtype),
         m=m,
         n=n,
         **int_fields,
     )
+
+
+def physical_timefield(
+    problem: Problem, t: Float[Tensor, "nely nelx"]
+) -> Float[Tensor, "nely nelx"]:
+    """The physical time field the objective and the constraints read: `t` filtered,
+    or `t` itself when no radius is configured. Differentiable, so the chain rule back
+    to the design variable is autograd's.
+
+    Recomputed from `t` wherever it is needed rather than cached on `State`, so the two
+    cannot drift apart.
+    """
+    if problem.H is None:
+        return t
+    return filters.apply_density_filter(t, problem.H, problem.Hs)
 
 
 def init_state(problem: Problem) -> State:
@@ -232,10 +271,11 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     # -- Gradient region begins: t is the sole autograd leaf. --
     t = state.t.clone().requires_grad_(True)
+    tPhys = physical_timefield(problem, t)
 
     numer_t, K_est_t = conductivity.hotspot_value(
         xPhys,
-        t,
+        tPhys,
         problem.e1,
         problem.e2,
         problem.w,
@@ -247,8 +287,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     # The roughness regularizer is not optional garnish: uniformity alone rewards a
     # sawtooth across the print direction (`timefield._gradient_cv`).
     metric = timefield.UniformityMetric(config.uniformity_metric)
-    penalty_t = timefield.uniformity_penalty(t, metric, weights=xPhys)
-    rough_t = timefield.relative_roughness(t, weights=xPhys)
+    penalty_t = timefield.uniformity_penalty(tPhys, metric, weights=xPhys)
+    rough_t = timefield.relative_roughness(tPhys, weights=xPhys)
 
     roughness_weight = run_config.weight_at(config.roughness_weight, loop)
     f_val_t = (
@@ -272,11 +312,11 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     xval = tflat
 
     # -- Constraints, in the fixed documented order above. --
-    g_start_t = constraints.start_point(t, problem.Nei)
+    g_start_t = constraints.start_point(tPhys, problem.Nei)
     g_parts = [g_start_t]
     if config.enable_continuity:
         g_cont_t = constraints.time_field_continuity(
-            t, problem.L, config.continuity_tol
+            tPhys, problem.L, config.continuity_tol
         )
         g_parts.insert(0, g_cont_t[None])
 
@@ -285,7 +325,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         volfrac = float(xPhys.mean())  # xPhys.sum() == nelx*nely*volfrac, see docstring
         stage_upper_t = torch.stack(
             [
-                constraints.stage_volume_bounds(xPhys, t, t_stage, volfrac, beta_t)
+                constraints.stage_volume_bounds(xPhys, tPhys, t_stage, volfrac, beta_t)
                 for t_stage in stage_times
             ]
         )
@@ -311,9 +351,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         beta_t += 5
 
     with torch.no_grad():
-        t_det = t.detach()
-        true_cv = float(timefield.central_difference_cv(t_det, xPhys))
-        sawtooth = float(timefield.relative_sawtooth_amplitude(t_det, xPhys))
+        physical, raw = tPhys.detach(), t.detach()
+        true_cv = float(timefield.central_difference_cv(physical, xPhys))
+        sawtooth = float(timefield.relative_sawtooth_amplitude(physical, xPhys))
+        sawtooth_raw = float(timefield.relative_sawtooth_amplitude(raw, xPhys))
 
     # -- Gradient region ends: mmasub is not part of the autograd graph. --
     mma_a = torch.zeros(problem.m, device=device, dtype=dtype)
@@ -363,6 +404,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         tru_max=tru_max,
         true_cv=true_cv,
         sawtooth=sawtooth,
+        sawtooth_raw=sawtooth_raw,
         roughness_weight=roughness_weight,
         df=torch_util.to_numpy(df_dt[0]),
         xmma=torch_util.to_numpy(xmma),
