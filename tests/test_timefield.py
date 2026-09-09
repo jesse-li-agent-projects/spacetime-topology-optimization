@@ -1,6 +1,8 @@
 """Tests for sttopt.timefield: golden-regression fixture checks (see conftest.py,
 conventions.md)."""
 
+import itertools
+
 import numpy as np
 import pytest
 import torch
@@ -101,11 +103,10 @@ def test_gradient_magnitude_std_matches_numpy_gauss_reference():
         field[1:, 1:],
     )
     samples = []
-    for eta in (-a, a):
-        for xi in (-a, a):
-            gx = (1 - eta) / 2 * (lo_hi - lo_lo) + (1 + eta) / 2 * (hi_hi - hi_lo)
-            gy = (1 - xi) / 2 * (hi_lo - lo_lo) + (1 + xi) / 2 * (hi_hi - lo_hi)
-            samples.append(np.sqrt(gx**2 + gy**2))
+    for eta, xi in itertools.product((-a, a), (-a, a)):
+        gx = (1 - eta) / 2 * (lo_hi - lo_lo) + (1 + eta) / 2 * (hi_hi - hi_lo)
+        gy = (1 - xi) / 2 * (hi_lo - lo_lo) + (1 + xi) / 2 * (hi_hi - lo_hi)
+        samples.append(np.sqrt(gx**2 + gy**2))
     magnitude = np.stack(samples)
 
     value = timefield.gradient_magnitude_std(torch.from_numpy(field))
@@ -113,11 +114,10 @@ def test_gradient_magnitude_std_matches_numpy_gauss_reference():
 
 
 def test_gradient_stencil_only_null_space_is_the_constant_field():
-    """The stencil must see every high-frequency mode. The collocated central difference
-    this replaced was blind to all three checkerboards at any amplitude, so an
-    arbitrarily jagged field scored as well as a smooth one (PR #90); full 2x2
-    quadrature is also what keeps the `(-1)^(i+j)` hourglass mode visible, which a
-    single evaluation at the cell centre would miss.
+    """The stencil must see every high-frequency mode: a checkerboard it is blind to is
+    an arbitrarily jagged field that scores as well as a smooth one (PR #91). Full 2x2
+    quadrature is what keeps the `(-1)^(i+j)` hourglass mode visible in particular,
+    which a single evaluation at the cell centre would miss.
     """
     ny, nx = 8, 9
     i, j = np.indices((ny, nx))
@@ -159,8 +159,8 @@ def test_interpolate_to_gauss_is_a_partition_of_unity():
 
 
 def test_gradient_magnitude_elements_covers_every_element():
-    """Unlike the central difference this replaced, the scattered plotting field has no
-    blank border: every element sits at some cell's corner."""
+    """The scattered plotting field has no blank border: every element sits at some
+    cell's corner, so every element gets a value."""
     ny, nx = 5, 6
     i, j = np.indices((ny, nx))
     per_element = timefield.gradient_magnitude_elements(
@@ -182,9 +182,9 @@ def test_gradient_magnitude_std_is_differentiable_at_a_flat_field():
 
 @pytest.mark.parametrize("nelx,nely", [(1, 9), (9, 1), (1, 1)])
 def test_gradient_magnitude_std_degenerate_mesh(nelx, nely):
-    """A lone-1 mesh has no cell to put Gauss points in, leaving no spread to measure:
-    zero, not NaN. Every mesh with two elements in each direction does have cells, so
-    unlike the central difference this replaced the 3x3 case is no longer degenerate."""
+    """A mesh one element wide in either direction has no cell to put Gauss points in,
+    leaving no spread to measure: zero, not NaN. Two elements in each direction is
+    already enough for a cell, so nothing larger is degenerate."""
     field = torch.rand((nely, nelx), dtype=torch.float64)
     assert float(timefield.gradient_magnitude_std(field)) == 0.0
 

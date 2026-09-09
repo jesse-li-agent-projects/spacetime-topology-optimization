@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import numpy as np
+    from jaxtyping import Float
 
     import sttopt.seqopt as seqopt
     from sttopt.run_config import SeqRunConfig
@@ -80,25 +81,24 @@ def resolve_config(args: argparse.Namespace) -> "SeqRunConfig":
 
 def iteration_diagnostics(
     record: "seqopt.IterationRecord",
-    step: "np.ndarray",
+    step: "Float[np.ndarray, ' n']",
     tmove: float,
     roughness: float,
 ) -> dict:
     """One iteration's line of `iterations.jsonl`: the objective terms, plus what the
     trust region actually did with them.
 
-    The trust-region fields are the point of logging every iteration. `step_max`
-    against `tmove` says whether the configured move limit binds at all, `move_frac`
-    says for how many variables, and `asymptote_width` says how far MMA's own
-    adaptation has opened or closed since -- an oscillating run tightens the asymptotes
-    and shrinks its steps, which the objective trace alone does not distinguish from
-    convergence. `roughness` is `timefield.roughness`, reported alongside the objective
-    it is deliberately not part of.
+    The trust-region fields are the point of logging every iteration. `step_max` against
+    `tmove` says whether the configured move limit binds at all, `move_frac` says for
+    how many variables, and the asymptote widths say how far MMA's own adaptation has
+    opened or closed since -- an oscillating run tightens its asymptotes and shrinks its
+    steps, which the objective trace alone does not distinguish from convergence.
 
     :param record: the iteration's `seqopt.IterationRecord`
     :param step: `t_new - t_old`, flattened
     :param tmove: the configured per-iteration move limit, to measure saturation against
-    :param roughness: the run's independent smoothness diagnostic
+    :param roughness: the run's independent smoothness diagnostic, `timefield.roughness`
+    :return: the JSON-serializable record for one log line
     """
     import numpy as np
 

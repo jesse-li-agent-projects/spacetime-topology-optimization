@@ -258,6 +258,10 @@ def _q4_blends(
     `N` for the corner at `(row_hi, col_lo)` is `row_hi * col_lo`, and so on, so the
     same two pairs weight both the gradient's one-sided differences and any nodal field
     interpolated to the point.
+
+    :param eta_sign: sign of the point's row-direction natural coordinate
+    :param xi_sign: sign of its column-direction natural coordinate
+    :return: `((row_lo, row_hi), (col_lo, col_hi))`
     """
     eta, xi = eta_sign * _GAUSS_OFFSET, xi_sign * _GAUSS_OFFSET
     return ((1 - eta) / 2, (1 + eta) / 2), ((1 - xi) / 2, (1 + xi) / 2)
@@ -273,6 +277,9 @@ def _q4_gauss_gradient(
     derivatives are that field's, evaluated by the standard shape-function
     derivatives. Each component is a blend of the cell's two one-sided differences in
     that direction.
+
+    :param tPhys: filtered time field
+    :return: `(dt/dx, dt/dy)`, each at every cell's four Gauss points
     """
     lo_lo, lo_hi = tPhys[:-1, :-1], tPhys[:-1, 1:]
     hi_lo, hi_hi = tPhys[1:, :-1], tPhys[1:, 1:]
@@ -296,11 +303,10 @@ def gradient_magnitude(
     number. Both consume these samples directly; `gradient_magnitude_elements` scatters
     them back onto elements for plotting.
 
-    Full 2x2 quadrature rather than the cheaper single evaluation at the cell centre:
-    the centre alone cannot see the `(-1)^(i+j)` hourglass mode, and a collocated
-    central difference over `tPhys` -- what this used to be -- cannot see any of the
-    three checkerboard modes, so a sawtooth of any amplitude was free to the optimizer
-    (PR #91). This stencil's only null space is the constant field.
+    Full 2x2 quadrature, not the cheaper single evaluation at the cell centre: the
+    centre alone is blind to the `(-1)^(i+j)` hourglass mode, and a checkerboard the
+    penalty cannot see is a free sawtooth for the optimizer (PR #91). This stencil's
+    only null space is the constant field.
 
     :param tPhys: filtered time field
     :return: `|grad tPhys|` at each cell's four Gauss points
@@ -339,8 +345,7 @@ def gradient_magnitude_elements(
 
     Each Gauss point contributes to the one cell corner it sits nearest, so an interior
     element averages the four samples closest to it, one from each cell it belongs to,
-    and a border element averages the fewer it has. Unlike the central difference this
-    replaced, every element carries a value.
+    and a border element averages the fewer it has, so every element carries a value.
 
     :param tPhys: filtered time field
     :return: per-element mean of the neighbouring Gauss-point magnitudes
@@ -379,16 +384,13 @@ def roughness(
     weights: Float[Tensor, "nely nelx"] | None = None,
 ) -> Float[Tensor, ""]:
     """Typical element-to-element wiggle amplitude of the time field, in units of `t`:
-    the weighted RMS of the 5-point Laplacian residual
-    `mean(4-neighbours) - tPhys`.
+    the weighted RMS of the 5-point Laplacian residual `mean(4-neighbours) - tPhys`.
 
-    A **diagnostic, not an objective** -- nothing optimizes this. It exists to judge a
-    run's smoothness independently of the term the run was minimizing, which the
-    uniformity metric cannot do for itself: a coefficient of variation is scale-free,
-    so a field that is uniformly jagged everywhere scores as well as a smooth one. The
-    stencil annihilates any linear field and responds most strongly to exactly the
-    checkerboard modes, so a legitimate constant-thickness sweep reads ~0 however it is
-    oriented.
+    A **diagnostic, not an objective** -- nothing optimizes this. It judges a run's
+    smoothness independently of the scale-free uniformity metric, which cannot see its
+    own jaggedness. The stencil annihilates any linear field and responds most strongly
+    to the checkerboard modes, so a legitimate constant-thickness sweep reads ~0 at any
+    orientation.
 
     :param tPhys: physical time field
     :param weights: per-element weight over the interior, e.g. the density field so
