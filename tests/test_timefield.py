@@ -428,7 +428,7 @@ def test_gradient_cv_is_blind_to_a_sawtooth_across_the_print_direction():
     amplitude leaves the coefficient of variation exactly unchanged.
 
     Pinned because it is the reason `roughness` is in the objective and not only in the
-    log (PR #92): a mode this measure cannot see is one the optimizer may spend freely.
+    log (PR #94): a mode this measure cannot see is one the optimizer may spend freely.
     """
     ny, nx = 20, 24
     ramp = np.tile(np.linspace(0.0, 1.0, ny)[:, None], (1, nx))

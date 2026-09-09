@@ -390,7 +390,7 @@ def roughness(
 
     The stencil annihilates any linear field and responds most strongly to the
     one-element modes, so a legitimate constant-thickness sweep reads ~0 at any
-    orientation. That is what lets it cover `_gradient_cv`'s null space (PR #92).
+    orientation. That is what lets it cover `_gradient_cv`'s null space (PR #94).
 
     Being an RMS, this is in units of `t` and so shrinks under mesh refinement. Weight
     `relative_roughness` in an objective rather than this; read this one when an
@@ -495,7 +495,7 @@ def _gradient_cv(
     enters `|grad t|` in quadrature, so modulating its amplitude pads locally thin
     layers up to the thickest and drives this measure *down*. Optimizing it alone
     therefore reports a uniformity the field does not have -- measured at 2.7% against a
-    true 11% on the c-shape. Pair it with `relative_roughness` (PR #92).
+    true 11% on the c-shape. Pair it with `relative_roughness` (PR #94).
 
     :param tPhys: physical time field
     :param weights: per-element weight, shape `(nely, nelx)`, interpolated to the same

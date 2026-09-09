@@ -120,7 +120,7 @@ class SeqRunConfig(_ConfigMixin):
         smoothness regularizer. Not optional in practice: the uniformity penalty rewards
         a sawtooth across the print direction, so a run with this at 0 converges to a
         jagged field whose reported uniformity is several times better than the truth
-        (PR #92). Both terms are dimensionless and divide by the same mean gradient, so
+        (PR #94). Both terms are dimensionless and divide by the same mean gradient, so
         this weight is a pure ratio and does not need rescaling with the mesh. It is not
         a light touch: on the c-shape 0.06 still leaves a wiggle 16% of a layer deep,
         and 0.18 is what flattens it, putting this term at 30-50% of the uniformity one.
