@@ -106,6 +106,11 @@ class SeqRunConfig(_ConfigMixin):
     :param enable_continuity: whether the print-time continuity constraint
         (`constraints.time_field_continuity`) is included at all; ``False`` drops it
         from the MMA constraint stack entirely, rather than relaxing it via `lrmin`.
+    :param continuity_tol: bound the continuity constraint holds the time field's mean
+        squared deviation from its local neighborhood average to. Since the uniformity
+        objective is scale-free and cannot police smoothness itself, this is what
+        decides how smooth the answer is -- see `constraints.time_field_continuity`.
+        Inert when `enable_continuity` is False.
     :param lrmin: continuity-filter radius, in **elements**, as in `RunConfig`. Since
         the geometry file sets the mesh, rasterizing the same component at a different
         resolution changes what this radius means physically; rescale it by hand to
@@ -133,6 +138,7 @@ class SeqRunConfig(_ConfigMixin):
     print_base: str
 
     enable_continuity: bool
+    continuity_tol: float
     lrmin: float
     rmin_cond: float
 

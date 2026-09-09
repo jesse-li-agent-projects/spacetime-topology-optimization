@@ -252,7 +252,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     g_start_t = constraints.start_point(t, problem.Nei)
     g_parts = [g_start_t]
     if config.enable_continuity:
-        g_cont_t = constraints.time_field_continuity(t, problem.L)
+        g_cont_t = constraints.time_field_continuity(
+            t, problem.L, config.continuity_tol
+        )
         g_parts.insert(0, g_cont_t[None])
 
     if nStage > 0:

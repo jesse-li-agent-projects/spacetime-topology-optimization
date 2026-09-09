@@ -31,17 +31,31 @@ def global_volume_fraction(
 
 
 def time_field_continuity(
-    tPhys: Float[Tensor, "nely nelx"], L: Tensor
+    tPhys: Float[Tensor, "nely nelx"], L: Tensor, tolerance: float = 1.0e-6
 ) -> Float[Tensor, ""]:
     """Time-field smoothness constraint: keeps each element's print time close to its local
     neighborhood average (`filters.continuity_filter`'s `L`), so the deposition sequence
     sweeps coherently across the mesh instead of jumping between distant elements.
+
+    This is the only thing bounding how jagged the field may get: the layer-uniformity
+    objective is a coefficient of variation, which is scale-free and so scores a
+    uniformly-jagged field as well as a smooth one. Left loose, a long run improves that
+    objective while the field roughens underneath it, entirely inside this constraint's
+    feasible set -- measured on c_shape, roughness bottoms out around iteration 500 and
+    then grows 6x by 1600 while the constraint is *strictly satisfied* and its multiplier
+    falls well off its cap (PR #90). So `tolerance` is the knob that decides the
+    smoothness of the answer, not a numerical safety margin.
+
+    :param tPhys: physical time field
+    :param L: continuity filter, from `filters.continuity_filter`
+    :param tolerance: bound on the mean squared deviation from the neighborhood average,
+        so the field's RMS deviation is held to `sqrt(tolerance)`
     """
     nely, nelx = tPhys.shape
     nel = nely * nelx
     smoothness_weight = 2 * nel
     deviation = L @ tPhys.flatten()
-    return smoothness_weight * (torch.sum(deviation**2 / nel) - 1.0e-6)
+    return smoothness_weight * (torch.sum(deviation**2 / nel) - tolerance)
 
 
 def start_point(
