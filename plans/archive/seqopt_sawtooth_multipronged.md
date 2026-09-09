@@ -192,3 +192,93 @@ its place only if it beats B2 on true CV at equal budget -- B2 is already a dece
 - `viz.timefield_filled_contour_plot` at its default 30 contours puts levels 0.033 apart
   while the sawtooth is 2e-3, so it under-shows this defect as mild texture. For visual
   confirmation, crop to a solid block and use contour spacing ~0.004.
+
+---
+
+# Results (executed 2026-09-09)
+
+All 16 runs completed; none failed. Code is PR #95 (four commits off `roughreg`).
+Artefacts: `output/<id>/` and `output/overhang_bracket_<id>/`, configs in
+`configs/sawtooth_sweep/`.
+
+`true_cv` is `timefield.central_difference_cv`, `saw`/`saw_raw` are
+`relative_sawtooth_amplitude` of `tPhys`/`t`, `gap` is `true_cv / uniformity` -- above 1
+means the objective is flattering itself.
+
+## c-shape
+
+| id | init | rw | filt | true_cv | reported | gap | saw | saw_raw |
+|---|---|---|---|---|---|---|---|---|
+| B1 | geodesic | 0 | - | 0.11321 | 0.02732 | 4.1 | 0.2123 | 0.2123 |
+| B2 | geodesic | 0.2 | - | 0.02417 | 0.02970 | 0.8 | 0.0043 | 0.0043 |
+| E1a | harmonic | 0 | - | 0.02037 | 0.01894 | 1.1 | 0.0708 | 0.0708 |
+| E1b | harmonic | 0.2 | - | 0.01757 | 0.02452 | 0.7 | 0.0025 | 0.0025 |
+| E2a | geodesic | 1->0@300 | - | 0.03885 | 0.01955 | 2.0 | 0.0982 | 0.0982 |
+| E2b | geodesic | 1->0.02@300 | - | 0.02963 | 0.02423 | 1.2 | 0.0733 | 0.0733 |
+| E2c | geodesic | 1->0.06@300 | - | 0.02423 | 0.03144 | 0.8 | 0.0070 | 0.0070 |
+| E2d | geodesic | 1->0.18@300 | - | 0.02485 | 0.02847 | 0.9 | 0.0032 | 0.0032 |
+| E3a | geodesic | 0 | 2 | 0.01595 | 0.01619 | 1.0 | 0.0244 | 0.1233 |
+| E3b | geodesic | 0 | 4 | 0.07458 | 0.10724 | 0.7 | 0.0073 | 0.0156 |
+| **E4** | **harmonic** | **0.2** | **2** | **0.00488** | 0.01188 | 0.4 | **0.0021** | 0.0611 |
+
+## overhang_bracket (control, nothing tuned on it)
+
+| id | true_cv | reported | gap | saw | saw_raw |
+|---|---|---|---|---|---|
+| B1 | 0.04050 | 0.01416 | 2.9 | 0.0589 | 0.0589 |
+| B2 | 0.02811 | 0.03556 | 0.8 | 0.0041 | 0.0041 |
+| E1b | 0.02770 | 0.03114 | 0.9 | 0.0044 | 0.0044 |
+| E3a | 0.01790 | 0.01162 | 1.5 | 0.0221 | 0.1390 |
+| **E4** | **0.01034** | 0.01345 | 0.8 | **0.0031** | 0.0448 |
+
+## Verdicts
+
+**E4 wins and transfers.** Harmonic init + `roughness_weight=0.2` + `time_filter_rmin=2`
+is 5.0x better than B2 on the c-shape and 2.7x better on a geometry nothing was tuned
+on, while also carrying the lowest `tPhys` corrugation of any run. Its last-100-iteration
+band, [0.00487, 0.00518], does not overlap any other run's.
+
+**Prong 1 (harmonic init): real but geometry-specific.** Worth 1.38x on the c-shape and
+nothing (1.01x, inside the oscillation band) on `overhang_bracket`. It pays off where the
+geodesic void fill leaves a large interface jump, which the c-shape's slot produces and
+the bracket does not. Keep it, but do not expect it to carry a result on its own.
+
+**Prong 2 (continuation): dead. Do not revisit the schedule shape.** A floor of 0 or 0.02
+is worse than a constant weight; 0.06 and 0.18 merely tie it while spending 300
+iterations at `rw=1` to get there. The plan's follow-up question about *decay shape* is
+therefore moot -- the step schedule already shows there is nothing to recover. E2a is the
+sharpest picture of the pathology in the sweep: after the step to 0 the reported
+uniformity improves monotonically (0.0435 -> 0.0196) while true CV bottoms out at
+iteration 600 and then degrades, ending at 0.0389.
+
+**Prong 3 (filter): the transferable prong, with a caveat.** `rmin=2` is worth ~1.5x on
+both geometries. `rmin=4` is far too strong (0.0746, the worst reported uniformity in the
+sweep at 0.107) -- it over-smooths `tPhys` until uniformity is unreachable, which matters
+more than the boundary-layer weakness the pre-check worried about. The caveat is that the
+filter damps the mode rather than removing its reward: `t` still carries a 4-6% (E4) to
+12-14% (E3a) corrugation. `tPhys` is genuinely clean and is the physical field, exactly as
+`xPhys` is in STTO, so this is defensible -- but anything downstream that reads `t`
+instead of `tPhys` will see the sawtooth, and the optimizer is still pushing toward it.
+
+## Corrections to this plan's own text
+
+- The sawtooth on `seq_c_shape_gradonly3` is 21% of a layer domain-wide, not 35%. The
+  35% figure was a local peak at row 100 against a nominal thickness.
+- Central differences are *exactly* blind to a sawtooth only where its amplitude is
+  locally constant. The modulated padding an optimizer builds leaks ~0.35%. Harmless for
+  a diagnostic, but the plan overstated it.
+- Normalizing the sawtooth amplitude by the mean gradient (as `relative_roughness` does)
+  is wrong for this measure: the corrugation inflates that denominator in quadrature, so
+  a deepening defect reports a shrinking fraction. It is normalized by the
+  central-difference mean gradient instead.
+- B2's true CV is 0.0242, not the ~0.031 the plan estimated.
+
+## Follow-ups
+
+1. `time_filter_rmin` between 2 and 4 is unexplored, and the 2-vs-4 gap is enormous
+   (0.0049 vs 0.0746 at E4/E3b settings). 2.5 and 3 are the obvious next runs.
+2. Whether E4 holds with `hotspot_weight > 0` and the continuity constraint on is
+   untested -- the whole sweep ran with the physics switched off.
+3. If the jagged `t` under E4 proves to matter, the fix is to penalize `relative_roughness`
+   on `t` rather than on `tPhys`, which would remove the reward instead of filtering the
+   symptom.
