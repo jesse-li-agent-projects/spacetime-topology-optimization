@@ -83,7 +83,6 @@ def iteration_diagnostics(
     record: "seqopt.IterationRecord",
     step: "Float[np.ndarray, ' n']",
     tmove: float,
-    roughness: float,
 ) -> dict:
     """One iteration's line of `iterations.jsonl`: the objective terms, plus what the
     trust region actually did with them.
@@ -97,7 +96,6 @@ def iteration_diagnostics(
     :param record: the iteration's `seqopt.IterationRecord`
     :param step: `t_new - t_old`, flattened
     :param tmove: the configured per-iteration move limit, to measure saturation against
-    :param roughness: the run's independent smoothness diagnostic, `timefield.roughness`
     :return: the JSON-serializable record for one log line
     """
     import numpy as np
@@ -109,7 +107,7 @@ def iteration_diagnostics(
         "hotspot": record.hotspot,
         "uniformity": record.uniformity,
         "tru_max": record.tru_max,
-        "roughness": roughness,
+        "roughness": record.roughness,
         "step_max": float(absolute.max()),
         "step_mean": float(absolute.mean()),
         "move_frac": float((absolute >= 0.999 * tmove).mean()),
@@ -135,7 +133,6 @@ def main(args: argparse.Namespace) -> None:
 
     import sttopt.geometry as geometry
     import sttopt.seqopt as seqopt
-    import sttopt.timefield as timefield
     import sttopt.torch_util as torch_util
 
     config = resolve_config(args)
@@ -166,18 +163,17 @@ def main(args: argparse.Namespace) -> None:
         for _ in range(config.nloop):
             previous_t = state.t
             state, record = seqopt.step(problem, state)
-            rough = float(timefield.roughness(state.t, weights=problem.xPhys))
             print(
                 f"It.: {state.loop:4d} f: {record.f:10.4f} "
                 f"hot: {record.hotspot:8.5f} unif: {record.uniformity:8.5f} "
-                f"Tm.: {record.tru_max:7.3f} rough: {rough:9.2e}"
+                f"Tm.: {record.tru_max:7.3f} rough: {record.roughness:9.2e}"
             )
             if args.log_every and state.loop % args.log_every == 0:
                 step = torch_util.to_numpy(
                     (state.t - previous_t).flatten().to(torch.float64)
                 )
                 entry = {"loop": state.loop} | iteration_diagnostics(
-                    record, step, config.tmove, rough
+                    record, step, config.tmove
                 )
                 log.write(json.dumps(entry) + "\n")
                 log.flush()
@@ -197,6 +193,7 @@ def main(args: argparse.Namespace) -> None:
         f=record.f,
         hotspot=record.hotspot,
         uniformity=record.uniformity,
+        roughness=record.roughness,
         tru_max=record.tru_max,
     )
 

@@ -104,13 +104,14 @@ def test_enable_continuity_false_drops_the_continuity_constraint_row():
     assert record.dg.shape == (problem.m, nel)
 
 
-def test_hotspot_weight_and_uniformity_weight_compose_the_objective():
+def test_objective_is_the_weighted_sum_of_its_three_terms():
     problem = _problem(nStage=0)
     state = seqopt.init_state(problem)
     _, record = seqopt.step(problem, state)
     assert record.f == pytest.approx(
         problem.config.hotspot_weight * record.hotspot
-        + problem.config.uniformity_weight * record.uniformity,
+        + problem.config.uniformity_weight * record.uniformity
+        + problem.config.roughness_weight * record.roughness,
         rel=1e-9,
     )
 

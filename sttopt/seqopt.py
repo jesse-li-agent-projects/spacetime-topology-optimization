@@ -85,9 +85,10 @@ class State:
 class IterationRecord:
     """Per-iteration diagnostics and raw MMA outputs."""
 
-    f: float  # objective: hotspot_weight*hotspot + uniformity_weight*uniformity
+    f: float  # objective: the weighted sum of the three raw terms below
     hotspot: float  # raw hotspot p-mean (`numer`), before any rescaling
     uniformity: float  # raw layer-uniformity penalty
+    roughness: float  # raw smoothness regularizer, in units of `t`
     tru_max: float  # factor-rescaled hotspot severity, comparable across runs
     df: Float[np.ndarray, " n"]
     xmma: Float[np.ndarray, " n"]
@@ -229,10 +230,17 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         config.r,
         config.rouf,
     )
+    # The roughness regularizer is not optional garnish: uniformity alone rewards a
+    # sawtooth across the print direction (`timefield._gradient_cv`).
     metric = timefield.UniformityMetric(config.uniformity_metric)
     penalty_t = timefield.uniformity_penalty(t, metric, weights=xPhys)
+    rough_t = timefield.roughness(t, weights=xPhys)
 
-    f_val_t = config.hotspot_weight * numer_t + config.uniformity_weight * penalty_t
+    f_val_t = (
+        config.hotspot_weight * numer_t
+        + config.uniformity_weight * penalty_t
+        + config.roughness_weight * rough_t
+    )
     f_val = float(f_val_t.detach())
     (df_dt,) = sensitivity.jacobian_rows(f_val_t[None], (t,))
 
@@ -331,6 +339,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         f=f_val,
         hotspot=numer,
         uniformity=float(penalty_t.detach()),
+        roughness=float(rough_t.detach()),
         tru_max=tru_max,
         df=torch_util.to_numpy(df_dt[0]),
         xmma=torch_util.to_numpy(xmma),
