@@ -275,6 +275,7 @@ def timefield_filled_contour_plot(
     compliance: float | None = None,
     show_void: bool = False,
     levels: Float[np.ndarray, "nContours+1"] | None = None,
+    colorbar: bool = True,
     ax: Axes | None = None,
 ) -> Axes:
     """Filled contour plot of `tPhys` with a colorbar and thin black borders between
@@ -294,6 +295,10 @@ def timefield_filled_contour_plot(
     :param levels: contour level boundaries; defaults to `nContours` even bins spanning
         `tPhys`'s own range, e.g. pass a range spanning several `tPhys` fields to keep
         the color scale consistent across an animation's frames.
+    :param colorbar: draw a colorbar. `fig.colorbar(ax=ax)` shrinks `ax` to make room
+        for it, so redrawing into the same `ax` across an animation's frames (with
+        shared `levels`, whose mapping never changes) should pass `False` after the
+        first frame -- otherwise the shrink compounds frame over frame.
     :return: the `Axes` drawn into.
     """
     if ax is None:
@@ -308,7 +313,8 @@ def timefield_filled_contour_plot(
 
     filled = ax.contourf(X, Y, tPhys, levels=levels, cmap="viridis")
     ax.contour(X, Y, tPhys, levels=levels, colors="black", linewidths=0.5)
-    ax.figure.colorbar(filled, ax=ax, orientation="horizontal", label="Time field")
+    if colorbar:
+        ax.figure.colorbar(filled, ax=ax, orientation="horizontal", label="Time field")
 
     rows, cols = np.nonzero(xPhys <= 0.5)
     empty = PolyCollection(
@@ -528,18 +534,25 @@ def _animate_timefield_filled_contour(
     )
 
     fig = Figure()
+    ax = fig.add_subplot()
     out_path = plot_dir / "timefield_filled_contour_animation.gif"
     writer = PillowWriter(fps=fps)
     with writer.saving(fig, out_path, dpi=150):
-        for design_file, (xPhys, tPhys, obj, *_rest) in zip(design_files, frames):
-            # A fresh Axes each frame, not ax.clear() + reuse: fig.colorbar(ax=ax)
-            # shrinks its parent Axes' position to make room for the colorbar, and
-            # that shrink compounds across frames if the same Axes is reused.
-            for stale_ax in fig.axes:
-                fig.delaxes(stale_ax)
-            ax = fig.add_subplot()
+        for i, (design_file, (xPhys, tPhys, obj, *_rest)) in enumerate(
+            zip(design_files, frames)
+        ):
+            ax.clear()
+            # Only the first frame draws a colorbar: `levels` (and so the color
+            # mapping) is shared across every frame, so it never needs redrawing --
+            # and redrawing it would reshrink ax, which ax.clear() does not undo.
             timefield_filled_contour_plot(
-                xPhys, tPhys, n_contours, compliance=obj, levels=levels, ax=ax
+                xPhys,
+                tPhys,
+                n_contours,
+                compliance=obj,
+                levels=levels,
+                colorbar=(i == 0),
+                ax=ax,
             )
             ax.set_title(f"{ax.get_title()} -- {Path(design_file).stem}")
             writer.grab_frame()
