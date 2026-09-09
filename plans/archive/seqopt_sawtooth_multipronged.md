@@ -197,9 +197,14 @@ its place only if it beats B2 on true CV at equal budget -- B2 is already a dece
 
 # Results (executed 2026-09-09)
 
-All 16 runs completed; none failed. Code is PR #95 (four commits off `roughreg`).
+All 21 runs completed; none failed. Code is PR #95 (four commits off `roughreg`).
 Artefacts: `output/<id>/` and `output/overhang_bracket_<id>/`, configs in
 `configs/sawtooth_sweep/`.
+
+Beyond the planned matrix: C002/C006/C018 are constant-weight controls for the E2
+continuation runs (the plan's matrix omitted them, and without them the continuation
+question cannot be answered -- see prong 2), and E5/E6 release E4's roughness weight to
+0.02 and to 0.
 
 `true_cv` is `timefield.central_difference_cv`, `saw`/`saw_raw` are
 `relative_sawtooth_amplitude` of `tPhys`/`t`, `gap` is `true_cv / uniformity` -- above 1
@@ -219,7 +224,12 @@ means the objective is flattering itself.
 | E2d | geodesic | 1->0.18@300 | - | 0.02485 | 0.02847 | 0.9 | 0.0032 | 0.0032 |
 | E3a | geodesic | 0 | 2 | 0.01595 | 0.01619 | 1.0 | 0.0244 | 0.1233 |
 | E3b | geodesic | 0 | 4 | 0.07458 | 0.10724 | 0.7 | 0.0073 | 0.0156 |
+| C002 | geodesic | 0.02 | - | 0.09788 | 0.02354 | 4.2 | 0.1886 | 0.1886 |
+| C006 | geodesic | 0.06 | - | 0.07633 | 0.02280 | 3.3 | 0.1541 | 0.1541 |
+| C018 | geodesic | 0.18 | - | 0.02373 | 0.02796 | 0.8 | 0.0042 | 0.0042 |
 | **E4** | **harmonic** | **0.2** | **2** | **0.00488** | 0.01188 | 0.4 | **0.0021** | 0.0611 |
+| E5 | harmonic | 1->0.02@300 | 2 | 0.00479 | 0.01156 | 0.4 | 0.0039 | 0.0674 |
+| E6 | harmonic | 1->0@300 | 2 | 0.00484 | 0.01138 | 0.4 | 0.0066 | 0.0740 |
 
 ## overhang_bracket (control, nothing tuned on it)
 
@@ -243,13 +253,45 @@ nothing (1.01x, inside the oscillation band) on `overhang_bracket`. It pays off 
 geodesic void fill leaves a large interface jump, which the c-shape's slot produces and
 the bracket does not. Keep it, but do not expect it to carry a result on its own.
 
-**Prong 2 (continuation): dead. Do not revisit the schedule shape.** A floor of 0 or 0.02
-is worse than a constant weight; 0.06 and 0.18 merely tie it while spending 300
-iterations at `rw=1` to get there. The plan's follow-up question about *decay shape* is
-therefore moot -- the step schedule already shows there is nothing to recover. E2a is the
-sharpest picture of the pathology in the sweep: after the step to 0 the reported
-uniformity improves monotonically (0.0435 -> 0.0196) while true CV bottoms out at
-iteration 600 and then degrades, ending at 0.0389.
+**Prong 2 (continuation): works, and the right comparison is against a constant weight
+at the same floor.** Ranking the E2 runs against B2 answers "does continuation improve
+uniformity" (it does not), but the continuation exists to let the *end* weight be lower
+than a constant run could tolerate, so the matched control is constant-`w` versus
+continuation-to-`w`. Runs C002/C006/C018 supply it:
+
+| final weight | constant: true_cv / saw | continuation: true_cv / saw |
+|---|---|---|
+| 0 | 0.11321 / 0.2123 (B1) | 0.03885 / 0.0982 (E2a) |
+| 0.02 | 0.09788 / 0.1886 (C002) | 0.02963 / 0.0733 (E2b) |
+| 0.06 | 0.07633 / 0.1541 (C006) | 0.02423 / 0.0070 (E2c) |
+| 0.18 | 0.02373 / 0.0042 (C018) | 0.02485 / 0.0032 (E2d) |
+
+The weight that must still be carried at the end to keep the field smooth falls from
+~0.18 to ~0.06, a 3x reduction; at 0.06 the continuation run is 22x smoother than the
+constant one. The advantage disappears at 0.18, where a constant weight already suffices
+on its own -- which is exactly why comparing every E2 run against B2 (0.2) hid the effect.
+
+Composed with the filter it goes further. E5 (harmonic + `rmin=2`, stepping to 0.02) and
+E6 (same, stepping to 0) both match E4's uniformity at 800 iterations while ending at a
+tenth of its weight, or none:
+
+| run | final weight | true_cv | saw at it 300 / 800 |
+|---|---|---|---|
+| E4 | 0.2 constant | 0.00488 | 0.00206 / 0.00206 |
+| E5 | 0.02 | 0.00479 | 0.00170 / 0.00393 |
+| E6 | 0 | 0.00484 | 0.00170 / 0.00657 |
+
+The catch is stationarity, not uniformity. Only a strictly positive *constant* weight pins
+the amplitude -- E4's is flat to three digits from iteration 300 to 800. Every reduced
+floor leaves it creeping upward with no plateau (E5 +0.00045 per 100 iterations, E6
++0.0010), so a reduction trades a fixed small corrugation for a slowly growing one. At a
+fixed 800-iteration budget that is free; at an open-ended one it is not, which is the same
+"the floor must be strictly positive" conclusion the pre-checks reached, now with the
+filter slowing regrowth ~15x rather than removing it.
+
+E2a remains the sharpest picture of the pathology in the sweep: after the step to 0 with
+no filter, reported uniformity improves monotonically (0.0435 -> 0.0196) while true CV
+bottoms out at iteration 600 and then degrades, ending at 0.0389.
 
 **Prong 3 (filter): the transferable prong, with a caveat.** `rmin=2` is worth ~1.5x on
 both geometries. `rmin=4` is far too strong (0.0746, the worst reported uniformity in the
@@ -272,6 +314,11 @@ instead of `tPhys` will see the sawtooth, and the optimizer is still pushing tow
   a deepening defect reports a shrinking fraction. It is normalized by the
   central-difference mean gradient instead.
 - B2's true CV is 0.0242, not the ~0.031 the plan estimated.
+- The run matrix omits the control the continuation question needs. E2's comparison is
+  against a constant weight *at the same floor*, not against B2 -- the continuation is
+  meant to reduce the regularization still required at the end, not to improve uniformity
+  directly. Ranking E2a-d against B2 makes the prong look dead when it is not. C002/C006/
+  C018 were added afterwards to supply it.
 
 ## Follow-ups
 
@@ -282,3 +329,11 @@ instead of `tPhys` will see the sawtooth, and the optimizer is still pushing tow
 3. If the jagged `t` under E4 proves to matter, the fix is to penalize `relative_roughness`
    on `t` rather than on `tPhys`, which would remove the reward instead of filtering the
    symptom.
+4. Every reduced floor leaves the amplitude creeping with no plateau, so the E5/E6 result
+   is a statement about an 800-iteration budget. Re-run the best floor at 2000+ iterations
+   before treating a released weight as safe; a schedule that steps *back up* late, or a
+   floor set by a target amplitude rather than by a constant, would both address it.
+5. The switch iteration (300) and hold weight (1.0) are unvaried -- the sweep answers "how
+   low can the floor go", not "how long must the hold be". E5's field at iteration 300 is
+   already at true CV 0.00895, so a shorter hold may be enough and would leave more of the
+   budget at the low weight.

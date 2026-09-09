@@ -157,11 +157,16 @@ class SeqRunConfig(_ConfigMixin):
         jagged field whose reported uniformity is several times better than the truth
         (PR #94). Both terms are dimensionless and divide by the same mean gradient, so
         this weight is a pure ratio and does not need rescaling with the mesh. It is not
-        a light touch: on the c-shape 0.06 still leaves a wiggle 16% of a layer deep,
-        and 0.18 is what flattens it, putting this term at 30-50% of the uniformity one.
-        The floor of a schedule must be strictly positive -- a smooth field is not a
-        local minimum of the uniformity penalty alone, so the sawtooth regrows from any
-        starting point once the weight reaches zero.
+        a light touch as a constant: on the c-shape 0.06 still leaves a wiggle 16% of a
+        layer deep, and 0.18 is what flattens it, putting this term at 30-50% of the
+        uniformity one. A `StepSchedule` is what buys a lower end weight -- holding 1.0
+        to iteration 300 and then releasing reaches the same smoothness ending at 0.06,
+        and at 0.02 alongside a `time_filter_rmin` (PR #95).
+        Only a strictly positive *constant* weight makes the sawtooth amplitude
+        stationary. A smooth field is not a local minimum of the uniformity penalty
+        alone, so under any released floor the mode creeps back with no plateau -- slowly
+        enough to be irrelevant over a few hundred iterations, but a schedule's floor is
+        a statement about a budget rather than about a converged field.
     :param nStage: per-stage deposition budget count; 0 disables the stage-volume
         constraints. Also the stage count the plots draw boundaries for.
     :param tmove: per-iteration trust-region half-width, in `t` units.
