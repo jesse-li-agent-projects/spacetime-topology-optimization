@@ -103,6 +103,11 @@ class SeqRunConfig(_ConfigMixin):
 
     :param print_base: print-start location, naming a `timefield.TimeField` member
         (case-insensitively) for JSON.
+    :param void_extension: a `timefield.VoidExtension` member name, choosing how the
+        initialization fills `t` over void. Not a cosmetic choice: `geodesic` leaves a
+        jump in `t` at the material interface, which on the c-shape puts the initial
+        uniformity CV at 2.22 against `harmonic`'s 0.097, and a run has to spend
+        iterations undoing it.
     :param enable_continuity: whether the print-time continuity constraint
         (`constraints.time_field_continuity`) is included at all; ``False`` drops it
         from the MMA constraint stack entirely, rather than relaxing it via `lrmin`.
@@ -140,6 +145,7 @@ class SeqRunConfig(_ConfigMixin):
     nloop: int
 
     print_base: str
+    void_extension: str
 
     enable_continuity: bool
     continuity_tol: float

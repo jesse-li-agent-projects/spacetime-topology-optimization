@@ -1,6 +1,7 @@
 {
   "nloop": 800,
   "print_base": "bottom_edge",
+  "void_extension": "geodesic",
   "enable_continuity": true,
   "continuity_tol": 1e-06,
   "lrmin": 2.0,

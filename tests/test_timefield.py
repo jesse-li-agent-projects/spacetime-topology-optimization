@@ -586,3 +586,77 @@ def test_central_difference_cv_too_few_solid_stencils_returns_zero():
     field = torch.from_numpy(np.tile(np.linspace(0.0, 1.0, 6)[:, None], (1, 6)))
     xPhys = torch.zeros((6, 6), dtype=torch.float64)
     assert float(timefield.central_difference_cv(field, xPhys)) == 0.0
+
+
+def test_harmonic_timefield_leaves_the_solid_times_alone():
+    """The two void fills share a solid pass, so switching between them must move only
+    the free variables -- otherwise a comparison between them is confounded.
+    """
+    xPhys = np.ones((10, 10))
+    xPhys[3:7, 3:7] = 0.0  # an enclosed void pocket, so there is something to fill
+    base = np.arange(10) + 90
+
+    solid = xPhys.flatten() > 0.5
+    geodesic = timefield.init_geodesic_timefield(xPhys, base).flatten()
+    harmonic = timefield.init_harmonic_timefield(xPhys, base).flatten()
+
+    assert_close(harmonic[solid], geodesic[solid])
+    assert not np.allclose(harmonic[~solid], geodesic[~solid])
+
+
+def test_harmonic_void_satisfies_the_discrete_laplace_equation():
+    """What "harmonic" has to mean: every void element is the average of the orthogonal
+    neighbours it has, so the fill introduces no interior extremum of its own.
+    """
+    xPhys = np.ones((9, 11))
+    xPhys[2:7, 3:8] = 0.0
+    base = np.arange(11) + 8 * 11
+
+    t = timefield.init_harmonic_timefield(xPhys, base)
+    void = xPhys < 0.5
+    padded = np.pad(t, 1, mode="edge")  # edge padding == the Neumann condition
+    neighbour_mean = (
+        padded[:-2, 1:-1] + padded[2:, 1:-1] + padded[1:-1, :-2] + padded[1:-1, 2:]
+    ) / 4
+    assert_close(t[void], neighbour_mean[void])
+
+
+def test_harmonic_void_stays_within_the_interface_values():
+    """The maximum principle, which is what lets the result skip a clip to [0, 1]: an
+    extension cannot overshoot the material times it interpolates between.
+    """
+    xPhys = np.ones((12, 12))
+    xPhys[4:8, 4:8] = 0.0
+    base = np.arange(12) + 11 * 12
+
+    t = timefield.init_harmonic_timefield(xPhys, base)
+    solid = xPhys > 0.5
+    assert t.min() >= t[solid].min() - 1e-12
+    assert t.max() <= t[solid].max() + 1e-12
+
+
+def test_harmonic_timefield_with_no_void_is_the_geodesic_field():
+    """A fully solid part has nothing to extend into, so the two must agree exactly."""
+    xPhys = np.ones((8, 8))
+    base = np.arange(8) + 56
+    assert_close(
+        timefield.init_harmonic_timefield(xPhys, base),
+        timefield.init_geodesic_timefield(xPhys, base),
+    )
+
+
+def test_init_geometry_timefield_dispatches_and_rejects_unknown_extensions():
+    xPhys = np.ones((8, 9))
+    xPhys[2:5, 2:6] = 0.0
+    base = np.arange(9) + 7 * 9
+
+    for name, expected in (
+        ("geodesic", timefield.init_geodesic_timefield),
+        ("harmonic", timefield.init_harmonic_timefield),
+    ):
+        assert_close(
+            timefield.init_geometry_timefield(xPhys, base, name),
+            expected(xPhys, base),
+        )
+    with pytest.raises(ValueError, match="VoidExtension"):
+        timefield.init_geometry_timefield(xPhys, base, "biharmonic")

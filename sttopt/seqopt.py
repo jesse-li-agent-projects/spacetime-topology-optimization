@@ -175,14 +175,17 @@ def build_problem(
 
 def init_state(problem: Problem) -> State:
     """Initial state: `t` is the normalized geodesic distance from the print-start
-    element(s) through the material (`timefield.init_geodesic_timefield`), `seqopt`'s
-    default initialization. Nothing else to set up -- both objective terms are
-    dimensionless and order 1 (`plans/fixed_geometry_sequence_optimization.md`), so no
-    scale is latched from the initial field.
+    element(s) through the material, with the void filled per `config.void_extension`
+    (`timefield.init_geometry_timefield`). Nothing else to set up -- both objective
+    terms are dimensionless and order 1
+    (`plans/archive/fixed_geometry_sequence_optimization.md`), so no scale is latched
+    from the initial field.
     """
     xPhys_np = torch_util.to_numpy(problem.xPhys)
     Nei_np = torch_util.to_numpy(problem.Nei)
-    t0 = timefield.init_geodesic_timefield(xPhys_np, Nei_np)
+    t0 = timefield.init_geometry_timefield(
+        xPhys_np, Nei_np, timefield.VoidExtension(problem.config.void_extension)
+    )
     t = torch_util.to_tensor(t0, problem.device, problem.dtype)
 
     xold = t.flatten().clone()
