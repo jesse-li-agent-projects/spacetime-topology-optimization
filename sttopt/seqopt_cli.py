@@ -114,6 +114,7 @@ def iteration_diagnostics(
         "roughness": record.roughness,
         "true_cv": record.true_cv,
         "sawtooth": record.sawtooth,
+        "roughness_weight": record.roughness_weight,
         "step_max": float(absolute.max()),
         "step_mean": float(absolute.mean()),
         "move_frac": float((absolute >= 0.999 * tmove).mean()),

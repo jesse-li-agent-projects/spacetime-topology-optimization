@@ -99,6 +99,8 @@ class IterationRecord:
     # and `true_cv` is the evidence of gaming.
     true_cv: float  # `timefield.central_difference_cv`, sawtooth-blind
     sawtooth: float  # corrugation depth as a fraction of a layer thickness
+
+    roughness_weight: float  # this iteration's weight, which a schedule may vary
     df: Float[np.ndarray, " n"]
     xmma: Float[np.ndarray, " n"]
     low: Float[np.ndarray, " n"]
@@ -248,10 +250,11 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     penalty_t = timefield.uniformity_penalty(t, metric, weights=xPhys)
     rough_t = timefield.relative_roughness(t, weights=xPhys)
 
+    roughness_weight = run_config.weight_at(config.roughness_weight, loop)
     f_val_t = (
         config.hotspot_weight * numer_t
         + config.uniformity_weight * penalty_t
-        + config.roughness_weight * rough_t
+        + roughness_weight * rough_t
     )
     f_val = float(f_val_t.detach())
     (df_dt,) = sensitivity.jacobian_rows(f_val_t[None], (t,))
@@ -360,6 +363,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         tru_max=tru_max,
         true_cv=true_cv,
         sawtooth=sawtooth,
+        roughness_weight=roughness_weight,
         df=torch_util.to_numpy(df_dt[0]),
         xmma=torch_util.to_numpy(xmma),
         low=torch_util.to_numpy(low),

@@ -111,7 +111,29 @@ def test_objective_is_the_weighted_sum_of_its_three_terms():
     assert record.f == pytest.approx(
         problem.config.hotspot_weight * record.hotspot
         + problem.config.uniformity_weight * record.uniformity
-        + problem.config.roughness_weight * record.roughness,
+        + record.roughness_weight * record.roughness,
+        rel=1e-9,
+    )
+
+
+def test_scheduled_roughness_weight_steps_during_the_run():
+    """A schedule has to reach the objective, not just the config: the point of the
+    continuation is that the term's weight really is released mid-run."""
+    problem = _problem(
+        nStage=0,
+        roughness_weight={"initial": 1.0, "switch_iteration": 1, "final": 0.06},
+    )
+    state = seqopt.init_state(problem)
+
+    state, first = seqopt.step(problem, state)
+    _, second = seqopt.step(problem, state)
+
+    assert first.roughness_weight == 1.0
+    assert second.roughness_weight == 0.06
+    assert second.f == pytest.approx(
+        problem.config.hotspot_weight * second.hotspot
+        + problem.config.uniformity_weight * second.uniformity
+        + 0.06 * second.roughness,
         rel=1e-9,
     )
 
