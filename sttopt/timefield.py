@@ -300,7 +300,7 @@ def gradient_magnitude(
     the centre alone cannot see the `(-1)^(i+j)` hourglass mode, and a collocated
     central difference over `tPhys` -- what this used to be -- cannot see any of the
     three checkerboard modes, so a sawtooth of any amplitude was free to the optimizer
-    (PR #90). This stencil's only null space is the constant field.
+    (PR #91). This stencil's only null space is the constant field.
 
     :param tPhys: filtered time field
     :return: `|grad tPhys|` at each cell's four Gauss points

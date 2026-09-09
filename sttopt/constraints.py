@@ -37,19 +37,25 @@ def time_field_continuity(
     neighborhood average (`filters.continuity_filter`'s `L`), so the deposition sequence
     sweeps coherently across the mesh instead of jumping between distant elements.
 
-    This is the only thing bounding how jagged the field may get: the layer-uniformity
-    objective is a coefficient of variation, which is scale-free and so scores a
-    uniformly-jagged field as well as a smooth one. Left loose, a long run improves that
-    objective while the field roughens underneath it, entirely inside this constraint's
-    feasible set -- measured on c_shape, roughness bottoms out around iteration 500 and
-    then grows 6x by 1600 while the constraint is *strictly satisfied* and its multiplier
-    falls well off its cap (PR #90). So `tolerance` is the knob that decides the
-    smoothness of the answer, not a numerical safety margin.
+    This is the only thing bounding how jagged the field may get, since the
+    layer-uniformity objective is a coefficient of variation and a scale-free statistic
+    scores a uniformly-jagged field as well as a smooth one. It does not bound it
+    tightly: a long run keeps improving that objective while the field roughens
+    underneath it, entirely inside this constraint's feasible set (PR #91).
+
+    Tightening `tolerance` does not fix that, because this is an aggregate over the
+    whole field and cannot tell a sawtooth from real curvature. A geometry's own
+    legitimate curvature sets a floor on the deviation -- c_shape's already exceeds an
+    RMS of 3.2e-4 -- and below that floor the constraint is simply infeasible from the
+    first iteration, its multiplier pins at `mma_c`, and it degenerates into a constant
+    linear penalty the optimizer fights rather than satisfies. Two tolerances an order
+    of magnitude apart then give the same answer to three digits.
 
     :param tPhys: physical time field
     :param L: continuity filter, from `filters.continuity_filter`
     :param tolerance: bound on the mean squared deviation from the neighborhood average,
-        so the field's RMS deviation is held to `sqrt(tolerance)`
+        so the field's RMS deviation is held to `sqrt(tolerance)`. Must stay above the
+        geometry's own curvature floor to be a constraint at all.
     """
     nely, nelx = tPhys.shape
     nel = nely * nelx
