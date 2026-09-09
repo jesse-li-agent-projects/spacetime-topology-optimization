@@ -420,3 +420,44 @@ def test_gradient_cv_zero_mean_gradient_returns_zero():
         )
         == 0.0
     )
+
+
+def test_gradient_cv_is_blind_to_a_sawtooth_across_the_print_direction():
+    """The stencil sees a `(-1)^j` sawtooth in `dt/dx`, but only as an alternating sign,
+    and `|grad t|` squares that away: on a print sweeping in y, such a sawtooth of any
+    amplitude leaves the coefficient of variation exactly unchanged.
+
+    Pinned because it is the reason `roughness` is in the objective and not only in the
+    log (PR #92): a mode this measure cannot see is one the optimizer may spend freely.
+    """
+    ny, nx = 20, 24
+    ramp = np.tile(np.linspace(0.0, 1.0, ny)[:, None], (1, nx))
+    _, j = np.indices((ny, nx))
+    reference = float(timefield._gradient_cv(torch.from_numpy(ramp), None))
+
+    for amplitude in (1e-4, 1e-2):
+        field = torch.from_numpy(ramp + amplitude * (-1.0) ** j)
+        assert float(timefield._gradient_cv(field, None)) == pytest.approx(
+            reference, abs=1e-12
+        )
+        assert float(timefield.roughness(field)) == pytest.approx(amplitude, rel=1e-9)
+
+
+def test_roughness_penalizes_padding_thin_layers_with_a_sawtooth():
+    """The sawtooth above is not merely free to the uniformity penalty but rewarded:
+    modulating its amplitude thickens locally thin layers in quadrature, so `_gradient_cv`
+    improves while the field gets jaggier. `roughness` is what moves the other way.
+    """
+    ny, nx = 30, 40
+    _, j = np.indices((ny, nx))
+    rate = (0.6 + 0.8 * j / (nx - 1)) / (ny - 1)  # layer thickness varies across x
+    ramp = np.cumsum(rate, axis=0) - rate
+    padding = np.sqrt(np.clip(rate.max() ** 2 - rate**2, 0.0, None)) / 2
+
+    plain = torch.from_numpy(ramp)
+    padded = torch.from_numpy(ramp + padding * (-1.0) ** j)
+
+    assert float(timefield._gradient_cv(padded, None)) < float(
+        timefield._gradient_cv(plain, None)
+    )
+    assert float(timefield.roughness(padded)) > float(timefield.roughness(plain))

@@ -305,8 +305,10 @@ def gradient_magnitude(
 
     Full 2x2 quadrature, not the cheaper single evaluation at the cell centre: the
     centre alone is blind to the `(-1)^(i+j)` hourglass mode, and a checkerboard the
-    penalty cannot see is a free sawtooth for the optimizer (PR #91). This stencil's
-    only null space is the constant field.
+    penalty cannot see is a free sawtooth for the optimizer (PR #91). As a linear map
+    on `tPhys` this stencil's only null space is the constant field -- but the magnitude
+    is not injective, since squaring erases the alternating sign a `(-1)^j` sawtooth
+    puts on `dt/dx`. See `_gradient_cv` for what that costs.
 
     :param tPhys: filtered time field
     :return: `|grad tPhys|` at each cell's four Gauss points
@@ -386,11 +388,14 @@ def roughness(
     """Typical element-to-element wiggle amplitude of the time field, in units of `t`:
     the weighted RMS of the 5-point Laplacian residual `mean(4-neighbours) - tPhys`.
 
-    A **diagnostic, not an objective** -- nothing optimizes this. It judges a run's
-    smoothness independently of the scale-free uniformity metric, which cannot see its
-    own jaggedness. The stencil annihilates any linear field and responds most strongly
-    to the checkerboard modes, so a legitimate constant-thickness sweep reads ~0 at any
-    orientation.
+    Both a diagnostic and a regularizer. The stencil annihilates any linear field and
+    responds most strongly to the one-element modes, so a legitimate constant-thickness
+    sweep reads ~0 at any orientation and penalizing it costs a smooth field nothing.
+    As a regularizer it covers `_gradient_cv`'s null space (PR #92).
+
+    Being an RMS, this is in units of `t`, so a weight against the dimensionless
+    uniformity penalty is resolution-dependent: scale it against the layer thickness
+    `~1/nely` the run aims for, not against 1.
 
     :param tPhys: physical time field
     :param weights: per-element weight over the interior, e.g. the density field so
@@ -436,6 +441,12 @@ def _gradient_cv(
     a field spanning `[0, 1]`, but the ratio does not. That keeps a `uniformity_weight`
     meaningful across resolutions of the same component, and makes the value directly
     interpretable: 0.1 means layer thickness varies by about 10% of its own mean.
+
+    **Not a smoothness measure, and not usable alone.** A sawtooth across the print
+    direction is invisible here (see `gradient_magnitude`), and worse than free: it
+    enters `|grad t|` in quadrature, so modulating its amplitude pads locally thin
+    layers up to the thickest and drives this measure *down*. Left alone, that makes
+    more iterations buy a jaggier field. Pair it with `roughness` (PR #92).
 
     :param tPhys: physical time field
     :param weights: per-element weight, shape `(nely, nelx)`, interpolated to the same
