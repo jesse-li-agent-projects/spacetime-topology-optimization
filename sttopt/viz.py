@@ -533,6 +533,11 @@ def _animate_timefield_filled_contour(
     writer = PillowWriter(fps=fps)
     with writer.saving(fig, out_path, dpi=150):
         for design_file, (xPhys, tPhys, obj, *_rest) in zip(design_files, frames):
+            # ax.clear() only clears the main Axes -- the colorbar Axes that
+            # timefield_filled_contour_plot adds to the figure each call survives it
+            # and would otherwise pile up, one per frame.
+            for stale_ax in [a for a in fig.axes if a is not ax]:
+                fig.delaxes(stale_ax)
             ax.clear()
             timefield_filled_contour_plot(
                 xPhys, tPhys, n_contours, compliance=obj, levels=levels, ax=ax
