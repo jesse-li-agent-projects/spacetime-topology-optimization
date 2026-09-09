@@ -823,14 +823,20 @@ def test_whole_compliance_fixture_regression_through_mgcg():
 
 
 def test_e2e_trajectory_through_mgcg():
-    """The `nloop=3` end-to-end fixture with every FEM solve routed through MGCG.
+    """The `nloop=3` end-to-end configuration with every FEM solve routed through MGCG,
+    compared against the same loop run on the direct solver.
 
     Substituting the solver inside a *closed loop* is a strictly stronger check than
     any single-solve comparison: an error that a one-shot test would absorb inside its
     tolerance instead feeds MMA, moves the design, and compounds over iterations.
+    Comparing the two solvers against each other isolates the substitution, which is
+    what this is for.
     """
-    fx = load_fixture_npz("e2e")
     problem = stto.build_problem(e2e_mod.CONFIG)
+    direct = stto.run_from_state(
+        problem, stto.init_state(problem, e2e_mod.BETA_INIT), e2e_mod.NLOOP
+    )
+
     setup = calib.mesh_setup(e2e_mod.NELX, e2e_mod.NELY)
     with calib.mgcg_backend(setup, rtol=calib.RECOMMENDED_RTOL) as iters:
         result = stto.run_from_state(
@@ -842,13 +848,16 @@ def test_e2e_trajectory_through_mgcg():
 
     for k in range(1, e2e_mod.NLOOP + 1):
         assert_close(
-            result.xPhys_traj[k], fx["xPhys_traj"][:, :, k], tier="e2e", iteration=k
+            result.xPhys_traj[k], direct.xPhys_traj[k], tier="e2e", iteration=k
         )
         assert_close(
-            result.tPhys_traj[k], fx["tPhys_traj"][:, :, k], tier="e2e", iteration=k
+            result.tPhys_traj[k], direct.tPhys_traj[k], tier="e2e", iteration=k
         )
         assert_close(
-            result.records[k - 1].obj, fx["objf"][k - 1], tier="e2e", iteration=k
+            result.records[k - 1].obj,
+            direct.records[k - 1].obj,
+            tier="e2e",
+            iteration=k,
         )
 
 

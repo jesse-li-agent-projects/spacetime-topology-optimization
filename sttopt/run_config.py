@@ -106,6 +106,9 @@ class SeqRunConfig(_ConfigMixin):
     :param enable_continuity: whether the print-time continuity constraint
         (`constraints.time_field_continuity`) is included at all; ``False`` drops it
         from the MMA constraint stack entirely, rather than relaxing it via `lrmin`.
+    :param continuity_tol: `constraints.time_field_continuity`'s bound on the time
+        field's mean squared deviation from its local neighborhood average -- the only
+        term deciding how smooth the answer is. Inert when `enable_continuity` is False.
     :param lrmin: continuity-filter radius, in **elements**, as in `RunConfig`. Since
         the geometry file sets the mesh, rasterizing the same component at a different
         resolution changes what this radius means physically; rescale it by hand to
@@ -115,6 +118,15 @@ class SeqRunConfig(_ConfigMixin):
     :param uniformity_metric: a `timefield.UniformityMetric` member name.
     :param nStage: per-stage deposition budget count; 0 disables the stage-volume
         constraints. Also the stage count the plots draw boundaries for.
+    :param tmove: per-iteration trust-region half-width, in `t` units.
+    :param asyclamp_min_ratio: MMA asymptote floor, as a fraction of the initial
+        asymptote distance; tightens how far oscillation damping can pull in.
+    :param asyclamp_max_ratio: MMA asymptote ceiling, as a multiple of the initial
+        distance; usually the binding limit on step size rather than `tmove`, so see
+        `mma.trust_region_params` before changing either.
+    :param asyincr: factor the asymptotes relax by per iteration when a variable moves
+        monotonically.
+    :param asydecr: factor they tighten by when a variable oscillates.
     """
 
     nloop: int
@@ -122,6 +134,7 @@ class SeqRunConfig(_ConfigMixin):
     print_base: str
 
     enable_continuity: bool
+    continuity_tol: float
     lrmin: float
     rmin_cond: float
 
@@ -138,3 +151,7 @@ class SeqRunConfig(_ConfigMixin):
     a0: float
     mma_c: float
     tmove: float
+    asyclamp_min_ratio: float
+    asyclamp_max_ratio: float
+    asyincr: float
+    asydecr: float

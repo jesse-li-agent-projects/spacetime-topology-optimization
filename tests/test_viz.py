@@ -50,17 +50,16 @@ def test_stage_boundary_plot_nonzero_segments_for_two_region_split():
     assert len(coll.get_segments()) > 0
 
 
-def test_gradient_magnitude_plot_draws_only_interior_solid_elements():
-    """The gradient magnitude is a central difference, so the border carries no value
-    and must stay blank even where it holds material.
-    """
+def test_gradient_magnitude_plot_draws_every_solid_element():
+    """The Gauss-point magnitudes scatter back onto every element, border included, so
+    the plot covers the whole part rather than leaving a blank frame."""
     xPhys = np.full((NELY, NELX), 1.0)
-    grad = np.ones((NELY - 2, NELX - 2))
+    grad = np.ones((NELY, NELX))
 
     ax = viz.timefield_gradient_magnitude_plot(xPhys, grad)
 
     coll = ax.collections[0]
-    assert len(coll.get_paths()) == (NELY - 2) * (NELX - 2)
+    assert len(coll.get_paths()) == NELY * NELX
 
 
 def test_combination_and_boundary_compose_on_one_axes():

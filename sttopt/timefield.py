@@ -235,27 +235,132 @@ def init_geodesic_timefield(
 # unchanged to many digits wherever it is nonzero.
 _GRAD_EPS = 1e-12
 
+# Natural-coordinate offset of a 2x2 Gauss point, and the four points as
+# (eta, xi) sign pairs ordered to match `_GAUSS_CORNERS`.
+_GAUSS_OFFSET = 3.0**-0.5
+_GAUSS_SIGNS = ((-1, -1), (-1, 1), (1, -1), (1, 1))
+# For each Gauss point, the slice of the element grid holding the cell corner it sits
+# nearest. Used to scatter a per-Gauss-point quantity back onto elements.
+_GAUSS_CORNERS = (
+    (slice(None, -1), slice(None, -1)),
+    (slice(None, -1), slice(1, None)),
+    (slice(1, None), slice(None, -1)),
+    (slice(1, None), slice(1, None)),
+)
+
+
+def _q4_blends(
+    eta_sign: int, xi_sign: int
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """The bilinear shape functions at one 2x2 Gauss point, factored into their row and
+    column parts: `((row_lo, row_hi), (col_lo, col_hi))`, each pair summing to 1.
+
+    `N` for the corner at `(row_hi, col_lo)` is `row_hi * col_lo`, and so on, so the
+    same two pairs weight both the gradient's one-sided differences and any nodal field
+    interpolated to the point.
+
+    :param eta_sign: sign of the point's row-direction natural coordinate
+    :param xi_sign: sign of its column-direction natural coordinate
+    :return: `((row_lo, row_hi), (col_lo, col_hi))`
+    """
+    eta, xi = eta_sign * _GAUSS_OFFSET, xi_sign * _GAUSS_OFFSET
+    return ((1 - eta) / 2, (1 + eta) / 2), ((1 - xi) / 2, (1 + xi) / 2)
+
+
+def _q4_gauss_gradient(
+    tPhys: Float[Tensor, "nely nelx"],
+) -> tuple[Float[Tensor, "4 nely-1 nelx-1"], Float[Tensor, "4 nely-1 nelx-1"]]:
+    """`(dt/dx, dt/dy)` at the 2x2 Gauss points of every cell, in element units.
+
+    Cells are the dual grid: cell `(i, j)` has the four elements `tPhys[i:i+2, j:j+2]`
+    as its corner nodes, so `tPhys` is read as a bilinear (Q4) nodal field and the
+    derivatives are that field's, evaluated by the standard shape-function
+    derivatives. Each component is a blend of the cell's two one-sided differences in
+    that direction.
+
+    :param tPhys: filtered time field
+    :return: `(dt/dx, dt/dy)`, each at every cell's four Gauss points
+    """
+    lo_lo, lo_hi = tPhys[:-1, :-1], tPhys[:-1, 1:]
+    hi_lo, hi_hi = tPhys[1:, :-1], tPhys[1:, 1:]
+
+    dt_dx, dt_dy = [], []
+    for eta_sign, xi_sign in _GAUSS_SIGNS:
+        (row_lo, row_hi), (col_lo, col_hi) = _q4_blends(eta_sign, xi_sign)
+        dt_dx.append(row_lo * (lo_hi - lo_lo) + row_hi * (hi_hi - hi_lo))
+        dt_dy.append(col_lo * (hi_lo - lo_lo) + col_hi * (hi_hi - lo_hi))
+    return torch.stack(dt_dx), torch.stack(dt_dy)
+
 
 def gradient_magnitude(
     tPhys: Float[Tensor, "nely nelx"],
-) -> Float[Tensor, "nely-2 nelx-2"]:
-    """Magnitude of the time field's spatial gradient on the mesh interior.
+) -> Float[Tensor, "4 nely-1 nelx-1"]:
+    """Magnitude of the time field's spatial gradient, at the 2x2 Gauss points of every
+    cell of the dual grid.
 
-    Gradients are 2nd-order central differences in element units, so they are defined
-    only on interior elements; the border is excluded rather than one-sided. The
-    magnitude is the reciprocal of the local deposited-layer thickness, so it is a
-    per-element view of what `gradient_magnitude_std` reduces to one number.
+    The magnitude is the reciprocal of the local deposited-layer thickness, so this is
+    the pointwise view of what `gradient_magnitude_std` and `_gradient_cv` reduce to one
+    number. Both consume these samples directly; `gradient_magnitude_elements` scatters
+    them back onto elements for plotting.
+
+    Full 2x2 quadrature, not the cheaper single evaluation at the cell centre: the
+    centre alone is blind to the `(-1)^(i+j)` hourglass mode, and a checkerboard the
+    penalty cannot see is a free sawtooth for the optimizer (PR #91). This stencil's
+    only null space is the constant field.
 
     :param tPhys: filtered time field
-    :return: `|grad tPhys|` on the interior elements, i.e. `tPhys[1:-1, 1:-1]`
+    :return: `|grad tPhys|` at each cell's four Gauss points
     """
-    dt_dx = (tPhys[1:-1, 2:] - tPhys[1:-1, :-2]) / 2
-    dt_dy = (tPhys[2:, 1:-1] - tPhys[:-2, 1:-1]) / 2
+    dt_dx, dt_dy = _q4_gauss_gradient(tPhys)
     return torch.sqrt(dt_dx**2 + dt_dy**2 + _GRAD_EPS)
 
 
+def interpolate_to_gauss(
+    field: Float[Tensor, "nely nelx"],
+) -> Float[Tensor, "4 nely-1 nelx-1"]:
+    """Bilinear interpolation of a per-element field onto the same Gauss points
+    `gradient_magnitude` evaluates at, so a weight lines up with the sample it weights.
+
+    :param field: per-element values, read as Q4 nodal values like `tPhys` is
+    :return: `field` at each cell's four Gauss points
+    """
+    lo_lo, lo_hi = field[:-1, :-1], field[:-1, 1:]
+    hi_lo, hi_hi = field[1:, :-1], field[1:, 1:]
+
+    out = []
+    for eta_sign, xi_sign in _GAUSS_SIGNS:
+        (row_lo, row_hi), (col_lo, col_hi) = _q4_blends(eta_sign, xi_sign)
+        out.append(
+            row_lo * (col_lo * lo_lo + col_hi * lo_hi)
+            + row_hi * (col_lo * hi_lo + col_hi * hi_hi)
+        )
+    return torch.stack(out)
+
+
+def gradient_magnitude_elements(
+    tPhys: Float[Tensor, "nely nelx"],
+) -> Float[Tensor, "nely nelx"]:
+    """`gradient_magnitude` averaged back onto elements, for plotting on the element
+    grid the rest of the visualization uses.
+
+    Each Gauss point contributes to the one cell corner it sits nearest, so an interior
+    element averages the four samples closest to it, one from each cell it belongs to,
+    and a border element averages the fewer it has, so every element carries a value.
+
+    :param tPhys: filtered time field
+    :return: per-element mean of the neighbouring Gauss-point magnitudes
+    """
+    magnitude = gradient_magnitude(tPhys)
+    total = torch.zeros_like(tPhys)
+    count = torch.zeros_like(tPhys)
+    for sample, (rows, cols) in zip(magnitude, _GAUSS_CORNERS):
+        total[rows, cols] += sample
+        count[rows, cols] += 1
+    return total / count.clamp(min=1)
+
+
 def gradient_magnitude_std(tPhys: Float[Tensor, "nely nelx"]) -> Float[Tensor, ""]:
-    """Spread of the time field's spatial gradient magnitude over the mesh interior.
+    """Spread of the time field's spatial gradient magnitude over the mesh.
 
     The print-time gradient sets the local deposited-layer thickness (thickness goes as
     the reciprocal of the gradient magnitude), so a field whose gradient magnitude
@@ -264,14 +369,45 @@ def gradient_magnitude_std(tPhys: Float[Tensor, "nely nelx"]) -> Float[Tensor, "
     uniform layer thickness without prescribing what that thickness should be.
 
     :param tPhys: filtered time field
-    :return: standard deviation of `gradient_magnitude(tPhys)`; zero when the interior
-        holds fewer than two elements, since a standard deviation over fewer than two
-        samples has no spread to measure
+    :return: standard deviation of `gradient_magnitude(tPhys)`; zero when there are
+        fewer than two samples, since a standard deviation over fewer than two samples
+        has no spread to measure
     """
     magnitude = gradient_magnitude(tPhys)
     if magnitude.numel() < 2:
         return tPhys.new_zeros(())
     return torch.std(magnitude)
+
+
+def roughness(
+    tPhys: Float[Tensor, "nely nelx"],
+    weights: Float[Tensor, "nely nelx"] | None = None,
+) -> Float[Tensor, ""]:
+    """Typical element-to-element wiggle amplitude of the time field, in units of `t`:
+    the weighted RMS of the 5-point Laplacian residual `mean(4-neighbours) - tPhys`.
+
+    A **diagnostic, not an objective** -- nothing optimizes this. It judges a run's
+    smoothness independently of the scale-free uniformity metric, which cannot see its
+    own jaggedness. The stencil annihilates any linear field and responds most strongly
+    to the checkerboard modes, so a legitimate constant-thickness sweep reads ~0 at any
+    orientation.
+
+    :param tPhys: physical time field
+    :param weights: per-element weight over the interior, e.g. the density field so
+        void does not dominate; `None` weights every interior element equally
+    :return: the weighted RMS residual, or zero when the interior is empty
+    """
+    interior = tPhys[1:-1, 1:-1]
+    neighbour_mean = (
+        tPhys[:-2, 1:-1] + tPhys[2:, 1:-1] + tPhys[1:-1, :-2] + tPhys[1:-1, 2:]
+    ) / 4
+    residual = neighbour_mean - interior
+
+    w = tPhys.new_ones(residual.shape) if weights is None else weights[1:-1, 1:-1]
+    total_w = torch.sum(w)
+    if total_w == 0:
+        return tPhys.new_zeros(())
+    return torch.sqrt(torch.sum(w * residual**2) / total_w)
 
 
 class UniformityMetric(StrEnum):
@@ -286,28 +422,29 @@ class UniformityMetric(StrEnum):
 def _gradient_cv(
     tPhys: Float[Tensor, "nely nelx"], weights: Float[Tensor, "nely nelx"] | None
 ) -> Float[Tensor, ""]:
-    """Density-weighted coefficient of variation of `|grad tPhys|` over the mesh
-    interior: `m = sum(w*g)/sum(w)`, `s = sqrt(sum(w*(g-m)^2)/sum(w))`, returning `s/m`.
+    """Density-weighted coefficient of variation of `|grad tPhys|` over the mesh:
+    `m = sum(w*g)/sum(w)`, `s = sqrt(sum(w*(g-m)^2)/sum(w))`, returning `s/m`.
+
+    Samples are `gradient_magnitude`'s Gauss points, so the sums are a 2x2 quadrature
+    of the weighted statistic over the domain rather than an element average.
 
     Weighted, so the statistic is taken over the part rather than the bounding box --
     `t` over void is pinned by nothing physical, so unweighted gradients there would be
     noise dominating the spread on any part that doesn't fill its box. Divided by the
-    mean, so the measure is resolution-invariant: `gradient_magnitude` is a central
-    difference in element units, so `|grad t|` (and its raw spread) scale as
-    `1/nelx`/`1/nely` for a field spanning `[0, 1]`, but the ratio does not. That keeps
-    a `uniformity_weight` meaningful across resolutions of the same component, and
-    makes the value directly interpretable: 0.1 means layer thickness varies by about
-    10% of its own mean.
+    mean, so the measure is resolution-invariant: `gradient_magnitude` is a difference
+    in element units, so `|grad t|` (and its raw spread) scale as `1/nelx`/`1/nely` for
+    a field spanning `[0, 1]`, but the ratio does not. That keeps a `uniformity_weight`
+    meaningful across resolutions of the same component, and makes the value directly
+    interpretable: 0.1 means layer thickness varies by about 10% of its own mean.
 
     :param tPhys: physical time field
-    :param weights: per-element weight, shape `(nely, nelx)`, cropped to the interior
-        to line up with `gradient_magnitude`'s output; `None` weights every interior
-        element equally
+    :param weights: per-element weight, shape `(nely, nelx)`, interpolated to the same
+        Gauss points as the gradient; `None` weights every sample equally
     :return: the coefficient of variation, or zero if the total weight or the mean
         gradient is zero (nothing to divide by)
     """
     g = gradient_magnitude(tPhys)
-    w = tPhys.new_ones(g.shape) if weights is None else weights[1:-1, 1:-1]
+    w = tPhys.new_ones(g.shape) if weights is None else interpolate_to_gauss(weights)
 
     total_w = torch.sum(w)
     if total_w == 0:

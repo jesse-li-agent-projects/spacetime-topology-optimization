@@ -212,7 +212,7 @@ def timefield_plot(
 
 def timefield_gradient_magnitude_plot(
     xPhys: Float[np.ndarray, "nely nelx"],
-    gradient_magnitude: Float[np.ndarray, "nely-2 nelx-2"],
+    gradient_magnitude: Float[np.ndarray, "nely nelx"],
     *,
     ax: Axes | None = None,
 ) -> Axes:
@@ -220,21 +220,14 @@ def timefield_gradient_magnitude_plot(
     gradient magnitude, i.e. the reciprocal of the local deposited-layer thickness: an
     even color means even layers.
 
-    The magnitude is a central difference, so it exists only on interior elements; the
-    mesh border is left blank rather than filled with a one-sided value.
-
     :param xPhys: physical density field (not yet binarized), over the full mesh.
     :param gradient_magnitude: per-element `|grad tPhys|`, e.g. from
-        `timefield.gradient_magnitude`, over the interior elements only.
+        `timefield.gradient_magnitude_elements`.
     :return: the `Axes` drawn into.
     """
-    values = np.full(xPhys.shape, np.nan)
-    values[1:-1, 1:-1] = gradient_magnitude
-    interior = np.zeros(xPhys.shape, dtype=xPhys.dtype)
-    interior[1:-1, 1:-1] = xPhys[1:-1, 1:-1] > 0.5
     ax = combination_plot(
-        interior,
-        values,
+        (xPhys > 0.5).astype(xPhys.dtype),
+        gradient_magnitude,
         eps=1.0e-1,
         cmap="magma",
         colorbar_label="Time field gradient magnitude",
@@ -421,7 +414,7 @@ def _load_stto_run(run_dir: Path, design_file: str = "final_design.npz") -> tupl
     ).reshape(config.nely, config.nelx)
     K_est = torch_util.to_numpy(K_est)
     hotspot_severity = (1 - K_est) * (xPhys > 0.5)
-    grad_magnitude = torch_util.to_numpy(timefield.gradient_magnitude(tPhys_t))
+    grad_magnitude = torch_util.to_numpy(timefield.gradient_magnitude_elements(tPhys_t))
     return xPhys, tPhys, obj, hotspot_severity, grad_magnitude, config.nStage
 
 
@@ -470,7 +463,7 @@ def _load_seqopt_run(run_dir: Path, design_file: str = "final_design.npz") -> tu
     ).reshape(nely, nelx)
     K_est = torch_util.to_numpy(K_est)
     hotspot_severity = (1 - K_est) * (xPhys > 0.5)
-    grad_magnitude = torch_util.to_numpy(timefield.gradient_magnitude(tPhys_t))
+    grad_magnitude = torch_util.to_numpy(timefield.gradient_magnitude_elements(tPhys_t))
     return xPhys, tPhys, None, hotspot_severity, grad_magnitude, config.nStage
 
 

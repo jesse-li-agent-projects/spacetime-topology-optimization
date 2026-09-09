@@ -399,16 +399,19 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     f_val = float(f_val_t.detach())
     df_dx = _sensitivity_rows(f_val_t[None], x, t)[0]
 
-    # -- Move-limit bounds on this iteration's raw MMA variables --
+    # -- Bounds and trust region for this iteration's raw MMA variables. Density and
+    # time carry separate move limits, so the trust region is per-variable. --
     xflat = state.x.flatten()
     tflat = state.t.flatten()
-    xminx = torch.clamp(xflat - config.move, min=0.0)
-    xmaxx = torch.clamp(xflat + config.move, max=1.0)
-    xmint = torch.clamp(tflat - config.tmove, min=0.0)
-    xmaxt = torch.clamp(tflat + config.tmove, max=1.0)
-    xmin = _flatten_pair(xminx, xmint)
-    xmax = _flatten_pair(xmaxx, xmaxt)
     xval = _flatten_pair(xflat, tflat)
+    xmin = torch.zeros_like(xval)
+    xmax = torch.ones_like(xval)
+    mma_trust = mma.trust_region_params(
+        _flatten_pair(
+            torch.full_like(xflat, config.move), torch.full_like(tflat, config.tmove)
+        ),
+        xmax - xmin,
+    )
 
     # -- Constraints, stacked in the reference loop's exact order. `tests/
     # matlab_reference_loop.py` is the authority for this row order. --
@@ -508,6 +511,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         mma_a,
         mma_c,
         mma_d,
+        **mma_trust,
     )
 
     x_new = xmma[:nel].reshape(nely, nelx)

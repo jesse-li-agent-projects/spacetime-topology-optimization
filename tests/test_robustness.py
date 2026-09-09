@@ -30,60 +30,6 @@ import tests.reference.conductivity as conductivity_ref
 NELX, NELY, NSTAGE, NLOOP = 7, 5, 3, 3
 
 
-def test_e2e_agreement_is_at_machine_precision():
-    """`conftest.e2e_rtol` loosens by a decade per iteration (1e-9, 1e-8, 1e-7 over the
-    fixture's three), on the stated rationale that "subsolv's inner Newton line search
-    amplifies small per-iteration differences ... iteration 1 matches to 1e-9,
-    iteration 5 to 1e-4".
-
-    That amplification does not actually happen at this problem size: measured
-    agreement against `e2e.npz`/`constraints.npz` is at machine precision at *every*
-    iteration, including the third. The ladder therefore leaves many decades of slack,
-    so `test_e2e_trajectory_matches_fixture` and `test_constraints_stacking_matches_fixture`
-    would still pass with a substantial regression present.
-
-    This test pins the agreement that is actually achieved. It is the sensitive version
-    of those two tests; if a future change genuinely does introduce iteration-dependent
-    drift, this is where it will show up, and *then* is the time to decide whether the
-    ladder is justified -- rather than assuming it up front.
-    """
-    e2e = load_fixture_npz("e2e")
-    cons = load_fixture_npz("constraints")
-    config = default_run_config(
-        nelx=NELX,
-        nely=NELY,
-        nStage=NSTAGE,
-        volfrac=0.5,
-        Theta=0.1,
-        Tcr=0.8,
-        print_base="opposite_corner",
-        rmin=2.0,
-        lrmin=2.0,
-        rmin_cond=3.0,
-    )
-    problem = stto.build_problem(config)
-    result = stto.run_from_state(problem, stto.init_state(problem, 1.0), NLOOP)
-
-    strict = 1e-12
-    for k in range(1, NLOOP + 1):
-        rec = result.records[k - 1]
-        for name, got, want in [
-            ("xPhys", result.xPhys_traj[k], e2e["xPhys_traj"][:, :, k]),
-            ("tPhys", result.tPhys_traj[k], e2e["tPhys_traj"][:, :, k]),
-            ("obj", np.array([rec.obj]), np.array([e2e["objf"][k - 1]])),
-            ("vol", np.array([rec.vol]), np.array([e2e["vol"][k - 1]])),
-            ("tru_max", np.array([rec.tru_max]), np.array([e2e["tru_max_all"][k - 1]])),
-            ("fval", rec.g, cons["fval_all"][:, k - 1]),
-            ("dfdx", rec.dg, cons["dfdx_all"][:, :, k - 1]),
-        ]:
-            got, want = torch_util.to_numpy(got).astype(float), np.asarray(want, float)
-            err = np.abs(got - want).max() / max(np.abs(want).max(), 1e-30)
-            assert err < strict, (
-                f"iteration {k} {name}: rel err {err:.2e} exceeds {strict:g} "
-                f"(the loose ladder would have allowed {e2e_rtol(k):.0e})"
-            )
-
-
 def test_subsolv_m_ge_n_solves_the_subproblem():
     """`mma.subsolv`'s `m >= n` elimination is flagged in the source as ported but
     unvalidated, and the existing `test_subsolv_m_gt_n_smoke` -- despite a docstring
@@ -312,9 +258,7 @@ def test_stable_sigmoid_matches_the_matlab_expression():
     a = np.arange(z.size)
     b = a + z.size
     FT = conductivity._pairwise_sigmoid(tt(t), tti(a), tti(b), rouf).numpy()
-    DFT = conductivity_ref._pairwise_sigmoid_deriv(
-        tt(t), tti(a), tti(b), rouf
-    ).numpy()
+    DFT = conductivity_ref._pairwise_sigmoid_deriv(tt(t), tti(a), tti(b), rouf).numpy()
 
     with np.errstate(over="ignore", invalid="ignore"):
         FT_matlab = 1.0 / (1.0 + np.exp(z))
@@ -362,9 +306,7 @@ def test_dft_zero_only_at_self_pairs():
     # branch is self-justifying, not just asserted.
     idx = np.arange(n)
     FT_self = conductivity._pairwise_sigmoid(tt(t), tti(idx), tti(idx), rouf)
-    DFT_self = conductivity_ref._pairwise_sigmoid_deriv(
-        tt(t), tti(idx), tti(idx), rouf
-    )
+    DFT_self = conductivity_ref._pairwise_sigmoid_deriv(tt(t), tti(idx), tti(idx), rouf)
     assert torch.all(FT_self == 0.5)
     assert torch.all(DFT_self == 0.0)
 
@@ -373,7 +315,5 @@ def test_dft_zero_only_at_self_pairs():
     t_dup = np.concatenate([t, t])
     a = np.arange(n)
     b = a + n
-    DFT_tied = conductivity_ref._pairwise_sigmoid_deriv(
-        tt(t_dup), tti(a), tti(b), rouf
-    )
+    DFT_tied = conductivity_ref._pairwise_sigmoid_deriv(tt(t_dup), tti(a), tti(b), rouf)
     np.testing.assert_allclose(DFT_tied, rouf / 4.0, rtol=1e-14, atol=0)

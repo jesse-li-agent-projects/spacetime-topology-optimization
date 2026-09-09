@@ -236,17 +236,25 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     f_val = float(f_val_t.detach())
     (df_dt,) = sensitivity.jacobian_rows(f_val_t[None], (t,))
 
-    # -- Move-limit bounds on this iteration's raw MMA variable --
+    # -- Bounds and trust region for this iteration's raw MMA variable --
     tflat = state.t.flatten()
-    xmin = torch.clamp(tflat - config.tmove, min=0.0)
-    xmax = torch.clamp(tflat + config.tmove, max=1.0)
+    xmin = torch.zeros_like(tflat)
+    xmax = torch.ones_like(tflat)
+    mma_trust = mma.trust_region_params(
+        torch.full_like(tflat, config.tmove),
+        xmax - xmin,
+        asyclamp_min_ratio=config.asyclamp_min_ratio,
+        asyclamp_max_ratio=config.asyclamp_max_ratio,
+    )
     xval = tflat
 
     # -- Constraints, in the fixed documented order above. --
     g_start_t = constraints.start_point(t, problem.Nei)
     g_parts = [g_start_t]
     if config.enable_continuity:
-        g_cont_t = constraints.time_field_continuity(t, problem.L)
+        g_cont_t = constraints.time_field_continuity(
+            t, problem.L, config.continuity_tol
+        )
         g_parts.insert(0, g_cont_t[None])
 
     if nStage > 0:
@@ -302,6 +310,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         mma_a,
         mma_c,
         mma_d,
+        asyincr=config.asyincr,
+        asydecr=config.asydecr,
+        **mma_trust,
     )
 
     t_new = xmma.reshape(nely, nelx)

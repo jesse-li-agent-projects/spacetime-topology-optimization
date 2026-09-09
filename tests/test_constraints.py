@@ -549,6 +549,24 @@ def test_time_field_continuity_value_matches_hand_derived():
     assert_close(dft.flatten(), dft_ref, tier="algebraic")
 
 
+def test_time_field_continuity_tolerance_is_the_rms_deviation_bound():
+    """The constraint is satisfied exactly when the field's RMS deviation from its local
+    neighborhood average is under `sqrt(tolerance)`, which is what makes the tolerance a
+    smoothness setting rather than a numerical margin.
+    """
+    nelx, nely = 8, 6
+    L = torch_util.csr_to_tensor(
+        filters.continuity_filter(nelx, nely, LRMIN), "cpu", torch.float64
+    )
+    rng = np.random.default_rng(7)
+    tPhys = torch.from_numpy(rng.random((nely, nelx)))
+
+    rms = float(torch.sqrt(torch.mean((L @ tPhys.flatten()) ** 2)))
+    # Bracket the measured RMS: the constraint must flip sign across it.
+    assert float(constraints.time_field_continuity(tPhys, L, (rms * 1.01) ** 2)) < 0
+    assert float(constraints.time_field_continuity(tPhys, L, (rms * 0.99) ** 2)) > 0
+
+
 def test_start_point_value_matches_hand_derived():
     nelx, nely = 6, 4
     Nei = torch.arange(nely) * nelx

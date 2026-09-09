@@ -98,6 +98,8 @@ def test_base_elements_raises_when_lifted_clear():
         ("overhang_bracket", None),
         ("c_shape", None),
         ("l_shape", None),
+        ("i_shape", None),
+        ("h_shape", None),
     ],
 )
 def test_builder_nonsquare_mesh_runs(shape_name, corner_solid):
@@ -142,6 +144,30 @@ def test_l_shape_solid_fraction_and_corners():
     assert xPhys[-1, -1] == 1.0  # bottom-right: solid (base)
     assert xPhys[0, 0] == 1.0  # top-left: solid (vertical arm)
     assert xPhys[0, -1] == 0.0  # top-right: void
+
+
+def test_i_shape_solid_fraction_and_waist():
+    nelx = nely = 40  # 200x200 is square
+    xPhys = geometry_builders.i_shape(nelx, nely)
+    # Area = 2 flanges 200*50 + web 60*(200-100) = 20000 + 6000 = 26000 -> 0.65.
+    assert xPhys.mean() == pytest.approx(0.65, abs=0.02)
+    assert xPhys[-1, 0] == 1.0  # bottom-left: solid (bottom flange)
+    assert xPhys[0, -1] == 1.0  # top-right: solid (top flange)
+    waist_row = nely // 2
+    assert xPhys[waist_row, 0] == 0.0  # mid-height, far left: void beside the web
+    assert xPhys[waist_row, nelx // 2] == 1.0  # mid-height, centred: the web
+
+
+def test_h_shape_solid_fraction_and_split_footprint():
+    nelx = nely = 40
+    xPhys = geometry_builders.h_shape(nelx, nely)
+    # Area = 2 legs 50*200 + bar (200-100)*60 = 20000 + 6000 = 26000 -> 0.65.
+    assert xPhys.mean() == pytest.approx(0.65, abs=0.02)
+    # The build plate sees two separate footprints, which is the point of this shape.
+    assert xPhys[-1, 0] == 1.0
+    assert xPhys[-1, -1] == 1.0
+    assert xPhys[-1, nelx // 2] == 0.0
+    assert xPhys[nely // 2, nelx // 2] == 1.0  # joined at the bar
 
 
 def test_binarize_reports_solid_fraction(tmp_path, capsys):
