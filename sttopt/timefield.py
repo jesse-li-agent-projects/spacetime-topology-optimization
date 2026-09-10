@@ -25,6 +25,7 @@ import scipy.sparse as sp
 import torch
 from jaxtyping import Bool, Float, Int
 from scipy.sparse.csgraph import dijkstra
+from scipy.sparse.linalg import spsolve
 from torch import Tensor
 
 import sttopt.geometry as geometry
@@ -175,6 +176,131 @@ def _void_geodesic(
     return dijkstra(graph, directed=True, indices=nel)[:nel]
 
 
+def _harmonic_void(
+    solid: Bool[np.ndarray, " nel"],
+    t_solid: Float[np.ndarray, " nel"],
+    nelx: int,
+    nely: int,
+) -> Float[np.ndarray, " nel"]:
+    """Harmonic extension of `t_solid` into the void: `grad^2 t = 0` there, Dirichlet
+    `t = t_solid` on the material interface, natural (Neumann) conditions on the domain
+    boundary.
+
+    The 5-point Laplacian, restricted to the void unknowns; solid neighbours move to the
+    right-hand side as known values, and out-of-domain neighbours are simply dropped,
+    which is the reflecting condition. Every void component borders material on a
+    domain with any solid at all, so the restricted operator is nonsingular.
+
+    :param solid: flat material mask
+    :param t_solid: flat field holding the interface values at the solid entries
+    :param nelx: element count in x
+    :param nely: element count in y
+    :return: flat field, void entries filled; solid entries are `t_solid` unchanged
+    """
+    nel = solid.size
+    void_idx = np.flatnonzero(~solid)
+    out = t_solid.copy()
+    if void_idx.size == 0:
+        return out
+
+    grid = np.arange(nel).reshape(nely, nelx)
+    unknown = np.full(nel, -1)
+    unknown[void_idx] = np.arange(void_idx.size)
+
+    rows, cols, vals = [], [], []
+    degree = np.zeros(void_idx.size)
+    rhs = np.zeros(void_idx.size)
+    for axis, step in ((0, nelx), (0, -nelx), (1, 1), (1, -1)):
+        # `here`/`there` pair each element with one orthogonal neighbour, dropping the
+        # border row or column that has none in this direction -- which is the Neumann
+        # condition, since a missing neighbour then contributes to neither side.
+        keep = slice(1, None) if step > 0 else slice(None, -1)
+        here = (grid[keep, :] if axis == 0 else grid[:, keep]).flatten()
+        there = here - step
+
+        here, there = here[~solid[here]], there[~solid[here]]
+        row = unknown[here]
+        np.add.at(degree, row, 1.0)
+
+        into_void = ~solid[there]
+        rows.append(row[into_void])
+        cols.append(unknown[there[into_void]])
+        vals.append(np.full(int(into_void.sum()), -1.0))
+        np.add.at(rhs, row[~into_void], t_solid[there[~into_void]])
+
+    rows.append(np.arange(void_idx.size))
+    cols.append(np.arange(void_idx.size))
+    vals.append(degree)
+    A = sp.coo_matrix(
+        (np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
+        shape=(void_idx.size, void_idx.size),
+    ).tocsr()
+
+    out[void_idx] = spsolve(A, rhs)
+    return out
+
+
+def init_harmonic_timefield(
+    xPhys: Float[np.ndarray, "nely nelx"], base: Int[np.ndarray, " k"]
+) -> Float[np.ndarray, "nely nelx"]:
+    """`init_geodesic_timefield`'s solid pass, with the void filled by a harmonic
+    extension (`_harmonic_void`) instead of by growing outward from the material.
+
+    Same solid times, so the part's own initialization is untouched; the difference is
+    entirely in the free variables. Growing outward makes `t` jump at the interface
+    wherever the void inherits from a distant part of the material, and that jump is a
+    large spurious contribution to any gradient statistic -- 99.7% of the c-shape's
+    initial gradient variance sits on boundary-straddling cells under the geodesic fill
+    against 86% under this one, and the initial CV falls from 2.22 to 0.097. An
+    optimizer starting from a field with less to undo starts in a better basin.
+
+    This deliberately drops the geodesic fill's "void prints after the solid it grows
+    from" ordering: a harmonic extension interpolates, so void can land earlier than
+    adjacent solid. `t` over void is pinned by nothing physical and is a free design
+    variable (see `seqopt`'s module docstring), so for an initialization smoothness is
+    the more useful property -- but this is a change of intent, not a bug fix.
+
+    Continuity across the interface is all this buys, not smoothness: a harmonic
+    extension matches value but not normal derivative, so `|grad t|` still kinks there.
+    A biharmonic extension is the C1 fix should that residual prove to matter.
+
+    :param xPhys: density field, shape `(nely, nelx)`; every solid element must connect
+        to `base` through material (`geometry.drop_disconnected`)
+    :param base: 0-indexed element numbers to measure distance from
+    :return: normalized time field, shape `(nely, nelx)`, in `[0, 1]`
+    :raises ValueError: as `init_geodesic_timefield`
+    """
+    nely, nelx = xPhys.shape
+    solid = geometry.solid_mask(xPhys)
+
+    d_solid = _solid_geodesic(solid, base, nelx, nely)
+    scale = _geodesic_scale(d_solid, solid)
+
+    t_solid = np.where(solid, d_solid / scale, 0.0)
+    # The maximum principle keeps the extension inside the interface values' own range,
+    # so the result lands in [0, 1] without a clip.
+    return _harmonic_void(solid, t_solid, nelx, nely).reshape(nely, nelx)
+
+
+def _geodesic_scale(
+    d_solid: Float[np.ndarray, " nel"], solid: Bool[np.ndarray, " nel"]
+) -> float:
+    """The largest solid geodesic distance, which every initialization normalizes by.
+
+    Normalizing by a *solid* extent is what keeps the part's own times independent of
+    how much empty space surrounds it -- padding a geometry file, or rasterizing a
+    component into a roomier box, leaves them unchanged.
+
+    :raises ValueError: if the material has no geodesic extent to normalize by
+    """
+    scale = float(d_solid[solid].max())
+    if scale == 0:
+        raise ValueError(
+            "the geometry has no geodesic extent: every solid element is a print-start element, so the whole part deposits at t=0 and there is no print sequence to optimize"
+        )
+    return scale
+
+
 def init_geodesic_timefield(
     xPhys: Float[np.ndarray, "nely nelx"], base: Int[np.ndarray, " k"]
 ) -> Float[np.ndarray, "nely nelx"]:
@@ -222,12 +348,45 @@ def init_geodesic_timefield(
     d_void = _void_geodesic(solid, d_solid, nelx, nely)
     dist = np.where(solid, d_solid, d_void)
 
-    scale = float(d_solid[solid].max())
-    if scale == 0:
-        raise ValueError(
-            "the geometry has no geodesic extent: every solid element is a print-start element, so the whole part deposits at t=0 and there is no print sequence to optimize"
-        )
+    scale = _geodesic_scale(d_solid, solid)
     return np.minimum(dist / scale, 1.0).reshape(nely, nelx)
+
+
+class VoidExtension(StrEnum):
+    """Names for how a geometry-dependent initialization fills the void, selectable per
+    run. The solid times are the same either way; these differ only in the free
+    variables. Adding one is a matter of writing the function and a member here.
+    """
+
+    GEODESIC = "geodesic"
+    HARMONIC = "harmonic"
+
+
+_VOID_EXTENSIONS = {
+    VoidExtension.GEODESIC: init_geodesic_timefield,
+    VoidExtension.HARMONIC: init_harmonic_timefield,
+}
+
+
+def init_geometry_timefield(
+    xPhys: Float[np.ndarray, "nely nelx"],
+    base: Int[np.ndarray, " k"],
+    extension: VoidExtension,
+) -> Float[np.ndarray, "nely nelx"]:
+    """The geometry-dependent time-field initialization, dispatched by how it fills the
+    void. See `init_geodesic_timefield` and `init_harmonic_timefield`.
+
+    :param xPhys: density field, shape `(nely, nelx)`
+    :param base: 0-indexed element numbers to measure distance from
+    :param extension: which void fill to use, by `VoidExtension` name
+    :return: normalized time field, shape `(nely, nelx)`, in `[0, 1]`
+    :raises ValueError: if `extension` doesn't name a `VoidExtension` member
+    """
+    try:
+        fn = _VOID_EXTENSIONS[VoidExtension(extension)]
+    except ValueError:
+        raise ValueError(f"extension must be a VoidExtension member, got {extension!r}")
+    return fn(xPhys, base)
 
 
 # Keeps d|grad t|/d(grad t) finite where the gradient vanishes; small enough (relative
@@ -305,8 +464,10 @@ def gradient_magnitude(
 
     Full 2x2 quadrature, not the cheaper single evaluation at the cell centre: the
     centre alone is blind to the `(-1)^(i+j)` hourglass mode, and a checkerboard the
-    penalty cannot see is a free sawtooth for the optimizer (PR #91). This stencil's
-    only null space is the constant field.
+    penalty cannot see is a free sawtooth for the optimizer (PR #91). As a linear map
+    on `tPhys` this stencil's only null space is the constant field -- but the magnitude
+    is not injective, since squaring erases the alternating sign a `(-1)^j` sawtooth
+    puts on `dt/dx`. See `_gradient_cv` for what that costs.
 
     :param tPhys: filtered time field
     :return: `|grad tPhys|` at each cell's four Gauss points
@@ -386,11 +547,13 @@ def roughness(
     """Typical element-to-element wiggle amplitude of the time field, in units of `t`:
     the weighted RMS of the 5-point Laplacian residual `mean(4-neighbours) - tPhys`.
 
-    A **diagnostic, not an objective** -- nothing optimizes this. It judges a run's
-    smoothness independently of the scale-free uniformity metric, which cannot see its
-    own jaggedness. The stencil annihilates any linear field and responds most strongly
-    to the checkerboard modes, so a legitimate constant-thickness sweep reads ~0 at any
-    orientation.
+    The stencil annihilates any linear field and responds most strongly to the
+    one-element modes, so a legitimate constant-thickness sweep reads ~0 at any
+    orientation. That is what lets it cover `_gradient_cv`'s null space (PR #94).
+
+    Being an RMS, this is in units of `t` and so shrinks under mesh refinement. Weight
+    `relative_roughness` in an objective rather than this; read this one when an
+    amplitude in the time field's own units is what you want.
 
     :param tPhys: physical time field
     :param weights: per-element weight over the interior, e.g. the density field so
@@ -408,6 +571,169 @@ def roughness(
     if total_w == 0:
         return tPhys.new_zeros(())
     return torch.sqrt(torch.sum(w * residual**2) / total_w)
+
+
+def _weighted_gradient_mean(
+    tPhys: Float[Tensor, "nely nelx"], weights: Float[Tensor, "nely nelx"] | None
+) -> tuple[
+    Float[Tensor, ""],
+    Float[Tensor, "4 nely-1 nelx-1"],
+    Float[Tensor, "4 nely-1 nelx-1"],
+]:
+    """Weighted mean of `|grad tPhys|` over the Gauss points, with the samples and the
+    weights it was taken over.
+
+    This mean is the reciprocal of the mean deposited-layer thickness, so dividing by it
+    turns a quantity in units of `t` into one in units of a layer -- which is what makes
+    a weight on that quantity portable across mesh resolutions. Both penalties here
+    divide by it, so a weight *between* them is free of it entirely.
+
+    :param tPhys: physical time field
+    :param weights: per-element weight, interpolated to the Gauss points; `None` weights
+        every sample equally
+    :return: `(mean, samples, gauss_weights)`; `mean` is zero when the total weight is
+    """
+    g = gradient_magnitude(tPhys)
+    w = tPhys.new_ones(g.shape) if weights is None else interpolate_to_gauss(weights)
+    total_w = torch.sum(w)
+    if total_w == 0:
+        return tPhys.new_zeros(()), g, w
+    return torch.sum(w * g) / total_w, g, w
+
+
+def relative_roughness(
+    tPhys: Float[Tensor, "nely nelx"],
+    weights: Float[Tensor, "nely nelx"] | None = None,
+) -> Float[Tensor, ""]:
+    """`roughness` in units of the mean layer thickness: the objective's smoothness term.
+
+    Raw `roughness` is in units of `t`, so it falls under mesh refinement and a weight
+    tuned at one resolution silently means something else at the next. This ratio is
+    what stays put -- refining the same physical field leaves it unchanged -- and it
+    reads directly as "the wiggle is this fraction of a layer".
+
+    :param tPhys: physical time field
+    :param weights: per-element weight, e.g. the density field so void does not dominate
+    :return: the ratio, or zero when the mean gradient is zero (nothing to divide by)
+    """
+    mean, _, _ = _weighted_gradient_mean(tPhys, weights)
+    if mean == 0:
+        return tPhys.new_zeros(())
+    return roughness(tPhys, weights) / mean
+
+
+def sawtooth_amplitude(
+    tPhys: Float[Tensor, "nely nelx"],
+    weights: Float[Tensor, "nely nelx"] | None = None,
+) -> Float[Tensor, ""]:
+    """Typical depth of a column-alternating corrugation in the time field, in units of
+    `t`: the weighted mean of `|tPhys - smooth|`, where `smooth` is `tPhys` filtered
+    1-2-1 along x.
+
+    Unlike `roughness`, this looks along one axis only, because the mode it measures has
+    one axis: the transverse sawtooth `_gradient_cv` rewards. That makes it the
+    amplitude of the specific defect rather than a general wiggle size, which is what a
+    "would a print show this" judgement needs. Read `relative_sawtooth_amplitude` for
+    that judgement; this one is in `t` and so falls under mesh refinement.
+
+    :param tPhys: physical time field
+    :param weights: per-element weight over the columns with both neighbours, e.g. the
+        density field so void does not dominate; `None` weights every one equally
+    :return: the weighted mean deviation, or zero when the total weight is zero
+    """
+    interior = tPhys[:, 1:-1]
+    smooth = (tPhys[:, :-2] + 2 * interior + tPhys[:, 2:]) / 4
+
+    w = tPhys.new_ones(interior.shape) if weights is None else weights[:, 1:-1]
+    total_w = torch.sum(w)
+    if total_w == 0:
+        return tPhys.new_zeros(())
+    return torch.sum(w * torch.abs(interior - smooth)) / total_w
+
+
+def _central_difference_gradient(
+    tPhys: Float[Tensor, "nely nelx"], xPhys: Float[Tensor, "nely nelx"]
+) -> Float[Tensor, " k"]:
+    """`|grad tPhys|` from central differences, over the elements whose four orthogonal
+    neighbours are all solid.
+
+    The change of operator is the whole point of the diagnostics built on this. A
+    central difference is blind to a one-element sawtooth -- both neighbours carry the
+    same offset and it cancels, exactly so where the amplitude is locally constant --
+    so these samples describe the field with the padding mode removed, which
+    `gradient_magnitude` cannot do. That same blindness is why this must never be
+    optimized: it would leave the mode entirely unconstrained.
+
+    Stencils touching void are dropped rather than down-weighted: `t` over void is
+    pinned by nothing physical, so a straddling difference reports on a free variable
+    instead of on the part.
+
+    :param tPhys: physical time field
+    :param xPhys: density field, to locate the fully-solid stencils
+    :return: the qualifying samples, flattened; empty if no stencil qualifies
+    """
+    dx = (tPhys[1:-1, 2:] - tPhys[1:-1, :-2]) / 2
+    dy = (tPhys[2:, 1:-1] - tPhys[:-2, 1:-1]) / 2
+    g = torch.sqrt(dx**2 + dy**2 + _GRAD_EPS)
+
+    solid = xPhys > geometry.SOLID_THRESHOLD
+    keep = (
+        solid[1:-1, 1:-1]
+        & solid[1:-1, 2:]
+        & solid[1:-1, :-2]
+        & solid[2:, 1:-1]
+        & solid[:-2, 1:-1]
+    )
+    return g[keep]
+
+
+def relative_sawtooth_amplitude(
+    tPhys: Float[Tensor, "nely nelx"], xPhys: Float[Tensor, "nely nelx"]
+) -> Float[Tensor, ""]:
+    """`sawtooth_amplitude` in units of a layer thickness: "the corrugation is this
+    fraction of a layer deep", the number that says whether a print would show it.
+
+    The layer thickness here is the *central-difference* mean gradient, not
+    `relative_roughness`'s `_weighted_gradient_mean`. The corrugation enters the latter
+    in quadrature and inflates it, so normalizing by it would make a deepening
+    corrugation report a smaller fraction -- the wrong direction for a measure of that
+    corrugation. A sawtooth-blind denominator is the thickness the field would have
+    without the defect, which is what the fraction is meant to be against.
+
+    :param tPhys: physical time field
+    :param xPhys: density field, weighting `sawtooth_amplitude` and masking the stencils
+    :return: the ratio, or zero when no fully-solid stencil qualifies
+    """
+    g = _central_difference_gradient(tPhys, xPhys)
+    if g.numel() == 0 or g.mean() == 0:
+        return tPhys.new_zeros(())
+    return sawtooth_amplitude(tPhys, xPhys) / g.mean()
+
+
+def central_difference_cv(
+    tPhys: Float[Tensor, "nely nelx"], xPhys: Float[Tensor, "nely nelx"]
+) -> Float[Tensor, ""]:
+    """Layer-uniformity CV over `_central_difference_gradient`'s samples: the
+    sawtooth-blind counterpart of `_gradient_cv`, and a diagnostic, never an objective.
+
+    `_gradient_cv` is the quantity a run optimizes and this is the quantity a run should
+    be judged on; the gap between them is what the transverse sawtooth is padding, and
+    has been measured at 4x on the c-shape.
+
+    :param tPhys: physical time field
+    :param xPhys: density field, to locate the fully-solid stencils
+    :return: the coefficient of variation, or zero when fewer than two stencils qualify
+        or the mean gradient is zero
+    """
+    sample = _central_difference_gradient(tPhys, xPhys)
+    if sample.numel() < 2:
+        return tPhys.new_zeros(())
+    mean = sample.mean()
+    if mean == 0:
+        return tPhys.new_zeros(())
+    # Population std, not torch's default sample std, so this matches the plain
+    # `g.std()/g.mean()` of the numpy analyses this number is compared against.
+    return torch.std(sample, unbiased=False) / mean
 
 
 class UniformityMetric(StrEnum):
@@ -437,22 +763,23 @@ def _gradient_cv(
     meaningful across resolutions of the same component, and makes the value directly
     interpretable: 0.1 means layer thickness varies by about 10% of its own mean.
 
+    **Not a smoothness measure, and not usable alone.** A sawtooth across the print
+    direction is invisible here (see `gradient_magnitude`) and worse than free: it
+    enters `|grad t|` in quadrature, so modulating its amplitude pads locally thin
+    layers up to the thickest and drives this measure *down*. Optimizing it alone
+    therefore reports a uniformity the field does not have -- measured at 2.7% against a
+    true 11% on the c-shape. Pair it with `relative_roughness` (PR #94).
+
     :param tPhys: physical time field
     :param weights: per-element weight, shape `(nely, nelx)`, interpolated to the same
         Gauss points as the gradient; `None` weights every sample equally
     :return: the coefficient of variation, or zero if the total weight or the mean
         gradient is zero (nothing to divide by)
     """
-    g = gradient_magnitude(tPhys)
-    w = tPhys.new_ones(g.shape) if weights is None else interpolate_to_gauss(weights)
-
-    total_w = torch.sum(w)
-    if total_w == 0:
-        return tPhys.new_zeros(())
-    mean = torch.sum(w * g) / total_w
+    mean, g, w = _weighted_gradient_mean(tPhys, weights)
     if mean == 0:
         return tPhys.new_zeros(())
-    variance = torch.sum(w * (g - mean) ** 2) / total_w
+    variance = torch.sum(w * (g - mean) ** 2) / torch.sum(w)
     return torch.sqrt(variance) / mean
 
 

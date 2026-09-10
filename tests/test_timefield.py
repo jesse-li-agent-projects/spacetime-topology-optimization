@@ -420,3 +420,243 @@ def test_gradient_cv_zero_mean_gradient_returns_zero():
         )
         == 0.0
     )
+
+
+def test_gradient_cv_is_blind_to_a_sawtooth_across_the_print_direction():
+    """The stencil sees a `(-1)^j` sawtooth in `dt/dx`, but only as an alternating sign,
+    and `|grad t|` squares that away: on a print sweeping in y, such a sawtooth of any
+    amplitude leaves the coefficient of variation exactly unchanged.
+
+    Pinned because it is the reason `roughness` is in the objective and not only in the
+    log (PR #94): a mode this measure cannot see is one the optimizer may spend freely.
+    """
+    ny, nx = 20, 24
+    ramp = np.tile(np.linspace(0.0, 1.0, ny)[:, None], (1, nx))
+    _, j = np.indices((ny, nx))
+    reference = float(timefield._gradient_cv(torch.from_numpy(ramp), None))
+
+    for amplitude in (1e-4, 1e-2):
+        field = torch.from_numpy(ramp + amplitude * (-1.0) ** j)
+        assert float(timefield._gradient_cv(field, None)) == pytest.approx(
+            reference, abs=1e-12
+        )
+        assert float(timefield.roughness(field)) == pytest.approx(amplitude, rel=1e-9)
+
+
+def test_roughness_penalizes_padding_thin_layers_with_a_sawtooth():
+    """The sawtooth above is not merely free to the uniformity penalty but rewarded:
+    modulating its amplitude thickens locally thin layers in quadrature, so `_gradient_cv`
+    improves while the field gets jaggier. `roughness` is what moves the other way.
+    """
+    ny, nx = 30, 40
+    _, j = np.indices((ny, nx))
+    rate = (0.6 + 0.8 * j / (nx - 1)) / (ny - 1)  # layer thickness varies across x
+    ramp = np.cumsum(rate, axis=0) - rate
+    padding = np.sqrt(np.clip(rate.max() ** 2 - rate**2, 0.0, None)) / 2
+
+    plain = torch.from_numpy(ramp)
+    padded = torch.from_numpy(ramp + padding * (-1.0) ** j)
+
+    assert float(timefield._gradient_cv(padded, None)) < float(
+        timefield._gradient_cv(plain, None)
+    )
+    assert float(timefield.roughness(padded)) > float(timefield.roughness(plain))
+
+
+def test_relative_roughness_is_resolution_invariant():
+    """The point of dividing by the mean gradient: the same physical field, rasterized
+    finer, must score the same. Raw `roughness` halves with each refinement (it is an
+    RMS in units of `t`), which is what makes it unusable as a weighted objective term.
+    """
+    seen = []
+    for n in (30, 60, 120):
+        ramp = np.tile(np.linspace(0.0, 1.0, n)[:, None], (1, n))
+        _, j = np.indices((n, n))
+        # wiggle fixed at 20% of a layer, so the physical field is the same each time
+        field = torch.from_numpy(ramp + 0.2 * (1.0 / (n - 1)) * (-1.0) ** j)
+        seen.append(
+            (
+                float(timefield.relative_roughness(field)),
+                float(timefield.roughness(field)),
+            )
+        )
+
+    relative = [r for r, _ in seen]
+    raw = [r for _, r in seen]
+    # not exactly equal: the ramp's own boundary rows shift slightly with n
+    assert relative[0] == pytest.approx(relative[1], rel=1e-7)
+    assert relative[1] == pytest.approx(relative[2], rel=1e-7)
+    # and the raw measure is what it is correcting for
+    assert raw[1] == pytest.approx(raw[0] / 2, rel=0.02)
+
+
+def test_relative_roughness_zero_mean_gradient_returns_zero():
+    field = torch.full((6, 6), 0.3, dtype=torch.float64)  # constant -> zero gradient
+    assert float(timefield.relative_roughness(field)) == 0.0
+
+
+def test_sawtooth_amplitude_recovers_an_injected_amplitude():
+    """The measure is calibrated: a `(-1)^j` corrugation of amplitude `a` reads back as
+    `a` in `t` units, and as `a` over the layer thickness once relativized. Without that
+    calibration the number could not be quoted as "this fraction of a layer deep".
+    """
+    ny, nx = 30, 40
+    layer = 1.0 / (ny - 1)
+    ramp = np.tile(np.linspace(0.0, 1.0, ny)[:, None], (1, nx))
+    _, j = np.indices((ny, nx))
+    solid = torch.ones((ny, nx), dtype=torch.float64)
+
+    for fraction in (0.05, 0.4):
+        field = torch.from_numpy(ramp + fraction * layer * (-1.0) ** j)
+        assert float(timefield.sawtooth_amplitude(field)) == pytest.approx(
+            fraction * layer, rel=1e-9
+        )
+        # Stays calibrated at a large amplitude, which is what the sawtooth-blind
+        # denominator buys: a mean-gradient denominator would read 0.31 at 0.4, since
+        # the corrugation inflates its own reference.
+        assert float(
+            timefield.relative_sawtooth_amplitude(field, solid)
+        ) == pytest.approx(fraction, rel=0.02)
+
+
+def test_sawtooth_amplitude_ignores_a_smooth_ramp_at_any_orientation():
+    """A legitimate constant-thickness sweep must read ~0 however it is oriented,
+    otherwise the diagnostic would charge a run for printing diagonally.
+    """
+    ny, nx = 25, 25
+    i, j = np.indices((ny, nx))
+    for field in (i / (ny - 1), j / (nx - 1), (i + j) / (ny + nx - 2)):
+        assert float(timefield.sawtooth_amplitude(torch.from_numpy(field))) < 1e-12
+
+
+def test_central_difference_cv_is_blind_to_the_sawtooth_it_diagnoses():
+    """The property that makes this the headline metric. Cancellation is exact only
+    where the amplitude is locally constant, so a uniform sawtooth of any size is
+    invisible outright and the modulated padding an optimizer actually builds leaks a
+    fraction of a percent -- while `_gradient_cv` reads that same padding as an
+    improvement. The two therefore disagree by what the sawtooth is hiding.
+    """
+    ny, nx = 30, 40
+    _, j = np.indices((ny, nx))
+    rate = (0.6 + 0.8 * j / (nx - 1)) / (ny - 1)
+    ramp = np.cumsum(rate, axis=0) - rate
+    padding = np.sqrt(np.clip(rate.max() ** 2 - rate**2, 0.0, None)) / 2
+
+    solid = torch.ones((ny, nx), dtype=torch.float64)
+    plain = torch.from_numpy(ramp)
+    reference = float(timefield.central_difference_cv(plain, solid))
+
+    for amplitude in (1e-4, 1e-2):
+        uniform = torch.from_numpy(ramp + amplitude * (-1.0) ** j)
+        assert float(timefield.central_difference_cv(uniform, solid)) == pytest.approx(
+            reference, rel=1e-9
+        )
+
+    padded = torch.from_numpy(ramp + padding * (-1.0) ** j)
+    assert float(timefield.central_difference_cv(padded, solid)) == pytest.approx(
+        reference, rel=0.01
+    )
+    # ... while the objective's own measure reads the padded field as the better one
+    assert float(timefield._gradient_cv(padded, None)) < float(
+        timefield._gradient_cv(plain, None)
+    )
+
+
+def test_central_difference_cv_skips_stencils_touching_void():
+    """`t` over void is pinned by nothing physical, so a difference straddling the
+    boundary would report on a free variable rather than on the part. Moving void `t`
+    alone must not move the metric.
+    """
+    ny, nx = 12, 12
+    ramp = np.tile(np.linspace(0.0, 1.0, ny)[:, None], (1, nx))
+    xPhys = np.ones((ny, nx))
+    xPhys[:, 8:] = 0.0
+
+    solid = torch.from_numpy(xPhys)
+    before = float(timefield.central_difference_cv(torch.from_numpy(ramp), solid))
+
+    disturbed = ramp.copy()
+    disturbed[:, 8:] += 5.0
+    after = float(timefield.central_difference_cv(torch.from_numpy(disturbed), solid))
+    assert after == pytest.approx(before, rel=1e-12)
+
+
+def test_central_difference_cv_too_few_solid_stencils_returns_zero():
+    """A part with no fully-surrounded solid element has nothing to average over."""
+    field = torch.from_numpy(np.tile(np.linspace(0.0, 1.0, 6)[:, None], (1, 6)))
+    xPhys = torch.zeros((6, 6), dtype=torch.float64)
+    assert float(timefield.central_difference_cv(field, xPhys)) == 0.0
+
+
+def test_harmonic_timefield_leaves_the_solid_times_alone():
+    """The two void fills share a solid pass, so switching between them must move only
+    the free variables -- otherwise a comparison between them is confounded.
+    """
+    xPhys = np.ones((10, 10))
+    xPhys[3:7, 3:7] = 0.0  # an enclosed void pocket, so there is something to fill
+    base = np.arange(10) + 90
+
+    solid = xPhys.flatten() > 0.5
+    geodesic = timefield.init_geodesic_timefield(xPhys, base).flatten()
+    harmonic = timefield.init_harmonic_timefield(xPhys, base).flatten()
+
+    assert_close(harmonic[solid], geodesic[solid])
+    assert not np.allclose(harmonic[~solid], geodesic[~solid])
+
+
+def test_harmonic_void_satisfies_the_discrete_laplace_equation():
+    """What "harmonic" has to mean: every void element is the average of the orthogonal
+    neighbours it has, so the fill introduces no interior extremum of its own.
+    """
+    xPhys = np.ones((9, 11))
+    xPhys[2:7, 3:8] = 0.0
+    base = np.arange(11) + 8 * 11
+
+    t = timefield.init_harmonic_timefield(xPhys, base)
+    void = xPhys < 0.5
+    padded = np.pad(t, 1, mode="edge")  # edge padding == the Neumann condition
+    neighbour_mean = (
+        padded[:-2, 1:-1] + padded[2:, 1:-1] + padded[1:-1, :-2] + padded[1:-1, 2:]
+    ) / 4
+    assert_close(t[void], neighbour_mean[void])
+
+
+def test_harmonic_void_stays_within_the_interface_values():
+    """The maximum principle, which is what lets the result skip a clip to [0, 1]: an
+    extension cannot overshoot the material times it interpolates between.
+    """
+    xPhys = np.ones((12, 12))
+    xPhys[4:8, 4:8] = 0.0
+    base = np.arange(12) + 11 * 12
+
+    t = timefield.init_harmonic_timefield(xPhys, base)
+    solid = xPhys > 0.5
+    assert t.min() >= t[solid].min() - 1e-12
+    assert t.max() <= t[solid].max() + 1e-12
+
+
+def test_harmonic_timefield_with_no_void_is_the_geodesic_field():
+    """A fully solid part has nothing to extend into, so the two must agree exactly."""
+    xPhys = np.ones((8, 8))
+    base = np.arange(8) + 56
+    assert_close(
+        timefield.init_harmonic_timefield(xPhys, base),
+        timefield.init_geodesic_timefield(xPhys, base),
+    )
+
+
+def test_init_geometry_timefield_dispatches_and_rejects_unknown_extensions():
+    xPhys = np.ones((8, 9))
+    xPhys[2:5, 2:6] = 0.0
+    base = np.arange(9) + 7 * 9
+
+    for name, expected in (
+        ("geodesic", timefield.init_geodesic_timefield),
+        ("harmonic", timefield.init_harmonic_timefield),
+    ):
+        assert_close(
+            timefield.init_geometry_timefield(xPhys, base, name),
+            expected(xPhys, base),
+        )
+    with pytest.raises(ValueError, match="VoidExtension"):
+        timefield.init_geometry_timefield(xPhys, base, "biharmonic")

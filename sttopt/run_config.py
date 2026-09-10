@@ -44,6 +44,33 @@ class _ConfigMixin:
 
 
 @dataclass(kw_only=True)
+class StepSchedule:
+    """A scalar hyperparameter that holds `initial` through iteration
+    `switch_iteration`, then steps to `final` for the rest of the run.
+
+    A step rather than a decay, deliberately: it makes any change in the run's behaviour
+    attributable to one known iteration, and keeps the end value from being confounded
+    with the rate it was approached at. Use it to ask "can this weight be released once
+    the field is in a good basin, and how far".
+
+    Wherever a config field accepts one of these it also accepts a bare number, which
+    means a constant; `weight_at` resolves either.
+    """
+
+    initial: float
+    switch_iteration: int
+    final: float
+
+    def at(self, loop: int) -> float:
+        return self.initial if loop <= self.switch_iteration else self.final
+
+
+def weight_at(setting: "float | StepSchedule", loop: int) -> float:
+    """The value of a possibly-scheduled scalar at 1-indexed iteration `loop`."""
+    return setting.at(loop) if isinstance(setting, StepSchedule) else float(setting)
+
+
+@dataclass(kw_only=True)
 class RunConfig(_ConfigMixin):
     """
     Full hyperparameter set for a single space-time topology optimization run,
@@ -94,15 +121,18 @@ class SeqRunConfig(_ConfigMixin):
 
     No `nelx`/`nely`: the geometry file (`--geometry`) defines the mesh, so a mismatch
     between config and geometry is unrepresentable rather than merely caught. No
-    `rmin` either: `seqopt` does not filter the time field (see
-    `plans/archive/fixed_geometry_sequence_optimization.md`), so there is no such
-    radius to set. No solid/void cutoff either: it would be inert on a binary geometry,
+    solid/void cutoff either: it would be inert on a binary geometry,
     which `geometry.load_geometry` requires by default, so `geometry.SOLID_THRESHOLD`
     is one constant rather than a setting that can disagree with itself between the
     print-start set and the time-field initialization.
 
     :param print_base: print-start location, naming a `timefield.TimeField` member
         (case-insensitively) for JSON.
+    :param void_extension: a `timefield.VoidExtension` member name, choosing how the
+        initialization fills `t` over void. Not a cosmetic choice: `geodesic` leaves a
+        jump in `t` at the material interface, which on the c-shape puts the initial
+        uniformity CV at 2.22 against `harmonic`'s 0.097, and a run has to spend
+        iterations undoing it.
     :param enable_continuity: whether the print-time continuity constraint
         (`constraints.time_field_continuity`) is included at all; ``False`` drops it
         from the MMA constraint stack entirely, rather than relaxing it via `lrmin`.
@@ -115,7 +145,28 @@ class SeqRunConfig(_ConfigMixin):
         match.
     :param rmin_cond: conductivity-neighborhood radius, in elements -- same caveat as
         `lrmin`.
+    :param time_filter_rmin: density-filter radius applied to `t`, in elements; 0 leaves
+        the time field unfiltered, which is `seqopt`'s starting design (see its module
+        docstring for what a nonzero radius costs, and read `sawtooth_raw` alongside
+        `sawtooth` when using one).
     :param uniformity_metric: a `timefield.UniformityMetric` member name.
+    :param roughness_weight: weight on `timefield.relative_roughness`, the objective's
+        smoothness regularizer -- a number, or a `StepSchedule` to hold one weight and
+        then release it. Not optional in practice: the uniformity penalty rewards a
+        sawtooth across the print direction, so a run with this at 0 converges to a
+        jagged field whose reported uniformity is several times better than the truth
+        (PR #94). Both terms are dimensionless and divide by the same mean gradient, so
+        this weight is a pure ratio and does not need rescaling with the mesh. It is not
+        a light touch as a constant: on the c-shape 0.06 still leaves a wiggle 16% of a
+        layer deep, and 0.18 is what flattens it, putting this term at 30-50% of the
+        uniformity one. A `StepSchedule` is what buys a lower end weight -- holding 1.0
+        to iteration 300 and then releasing reaches the same smoothness ending at 0.06,
+        and at 0.02 alongside a `time_filter_rmin` (PR #95).
+        Only a strictly positive *constant* weight makes the sawtooth amplitude
+        stationary. A smooth field is not a local minimum of the uniformity penalty
+        alone, so under any released floor the mode creeps back with no plateau -- slowly
+        enough to be irrelevant over a few hundred iterations, but a schedule's floor is
+        a statement about a budget rather than about a converged field.
     :param nStage: per-stage deposition budget count; 0 disables the stage-volume
         constraints. Also the stage count the plots draw boundaries for.
     :param tmove: per-iteration trust-region half-width, in `t` units.
@@ -132,15 +183,18 @@ class SeqRunConfig(_ConfigMixin):
     nloop: int
 
     print_base: str
+    void_extension: str
 
     enable_continuity: bool
     continuity_tol: float
     lrmin: float
     rmin_cond: float
+    time_filter_rmin: float
 
     hotspot_weight: float
     uniformity_metric: str
     uniformity_weight: float
+    roughness_weight: float | StepSchedule
 
     nStage: int
     p: float
@@ -155,3 +209,10 @@ class SeqRunConfig(_ConfigMixin):
     asyclamp_max_ratio: float
     asyincr: float
     asydecr: float
+
+    def __post_init__(self) -> None:
+        # JSON has no way to say "a StepSchedule", so a mapping in a scheduled field's
+        # place is one. Done here rather than in `from_dict` so that a config assembled
+        # in code from parsed JSON fragments coerces identically.
+        if isinstance(self.roughness_weight, dict):
+            self.roughness_weight = StepSchedule(**self.roughness_weight)

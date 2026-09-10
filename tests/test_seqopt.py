@@ -104,13 +104,36 @@ def test_enable_continuity_false_drops_the_continuity_constraint_row():
     assert record.dg.shape == (problem.m, nel)
 
 
-def test_hotspot_weight_and_uniformity_weight_compose_the_objective():
+def test_objective_is_the_weighted_sum_of_its_three_terms():
     problem = _problem(nStage=0)
     state = seqopt.init_state(problem)
     _, record = seqopt.step(problem, state)
     assert record.f == pytest.approx(
         problem.config.hotspot_weight * record.hotspot
-        + problem.config.uniformity_weight * record.uniformity,
+        + problem.config.uniformity_weight * record.uniformity
+        + record.roughness_weight * record.roughness,
+        rel=1e-9,
+    )
+
+
+def test_scheduled_roughness_weight_steps_during_the_run():
+    """A schedule has to reach the objective, not just the config: the point of the
+    continuation is that the term's weight really is released mid-run."""
+    problem = _problem(
+        nStage=0,
+        roughness_weight={"initial": 1.0, "switch_iteration": 1, "final": 0.06},
+    )
+    state = seqopt.init_state(problem)
+
+    state, first = seqopt.step(problem, state)
+    _, second = seqopt.step(problem, state)
+
+    assert first.roughness_weight == 1.0
+    assert second.roughness_weight == 0.06
+    assert second.f == pytest.approx(
+        problem.config.hotspot_weight * second.hotspot
+        + problem.config.uniformity_weight * second.uniformity
+        + 0.06 * second.roughness,
         rel=1e-9,
     )
 
@@ -119,9 +142,13 @@ def test_hotspot_weight_and_uniformity_weight_compose_the_objective():
 
 
 @pytest.mark.parametrize("nStage", [0, 2])
-def test_sensitivities_match_finite_differences(nStage):
+@pytest.mark.parametrize("time_filter_rmin", [0.0, 2.0])
+def test_sensitivities_match_finite_differences(nStage, time_filter_rmin):
+    """Covers the filtered case too, where the gradient has to carry the filter's chain
+    rule back to the design variable -- a term autograd supplies but nothing else
+    checks."""
     h = 1e-5
-    problem = _problem(nStage=nStage)
+    problem = _problem(nStage=nStage, time_filter_rmin=time_filter_rmin)
     nel = NELX * NELY
     rng = np.random.default_rng(0)
     t_raw = rng.uniform(0.1, 0.9, size=(NELY, NELX))
@@ -150,6 +177,43 @@ def test_sensitivities_match_finite_differences(nStage):
 
     np.testing.assert_allclose(record.df, fd_f0, rtol=1e-4, atol=1e-6)
     np.testing.assert_allclose(record.dg, fd_f, rtol=1e-4, atol=1e-6)
+
+
+# --- the optional filter on t ---------------------------------------------------
+
+
+def test_unfiltered_is_the_default_and_leaves_t_untouched():
+    """`tPhys is t` at radius 0, not merely equal to it: `seqopt`'s starting design is
+    that the design variable and the physical field are the same object, and a filter
+    that quietly copied would put a no-op in every gradient.
+    """
+    problem = _problem(nStage=0)
+    assert problem.config.time_filter_rmin == 0.0
+    assert problem.H is None
+    t = seqopt.init_state(problem).t
+    assert seqopt.physical_timefield(problem, t) is t
+
+
+def test_time_filter_attenuates_a_one_element_sawtooth():
+    """The reason a radius is on offer: the mode the uniformity penalty rewards is a
+    one-element one, and the filter's whole job is to make those expensive in the
+    design variable. Pinning that it attenuates rather than merely alters the field.
+    """
+    problem = _problem(nStage=0, time_filter_rmin=4.0)
+    _, j = np.indices((NELY, NELX))
+    ramp = np.tile(np.linspace(0.0, 1.0, NELY)[:, None], (1, NELX))
+
+    amplitude = 0.05
+    t = torch_util.to_tensor(
+        ramp + amplitude * (-1.0) ** j, problem.device, problem.dtype
+    )
+    xPhys = problem.xPhys
+    before = float(timefield.sawtooth_amplitude(t, xPhys))
+    after = float(
+        timefield.sawtooth_amplitude(seqopt.physical_timefield(problem, t), xPhys)
+    )
+    assert before == pytest.approx(amplitude, rel=0.05)
+    assert after < before / 20
 
 
 # --- optimization makes progress ------------------------------------------------

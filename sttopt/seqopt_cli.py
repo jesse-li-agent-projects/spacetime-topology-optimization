@@ -83,10 +83,13 @@ def iteration_diagnostics(
     record: "seqopt.IterationRecord",
     step: "Float[np.ndarray, ' n']",
     tmove: float,
-    roughness: float,
 ) -> dict:
-    """One iteration's line of `iterations.jsonl`: the objective terms, plus what the
-    trust region actually did with them.
+    """One iteration's line of `iterations.jsonl`: the objective terms, the
+    sawtooth diagnostics, plus what the trust region actually did with them.
+
+    Read `true_cv`, not `uniformity`, when judging a run: the two differ by whatever the
+    transverse sawtooth is padding, so `uniformity` alone can improve while the field
+    degrades (`seqopt.IterationRecord`).
 
     The trust-region fields are the point of logging every iteration. `step_max` against
     `tmove` says whether the configured move limit binds at all, `move_frac` says for
@@ -97,7 +100,6 @@ def iteration_diagnostics(
     :param record: the iteration's `seqopt.IterationRecord`
     :param step: `t_new - t_old`, flattened
     :param tmove: the configured per-iteration move limit, to measure saturation against
-    :param roughness: the run's independent smoothness diagnostic, `timefield.roughness`
     :return: the JSON-serializable record for one log line
     """
     import numpy as np
@@ -109,7 +111,11 @@ def iteration_diagnostics(
         "hotspot": record.hotspot,
         "uniformity": record.uniformity,
         "tru_max": record.tru_max,
-        "roughness": roughness,
+        "roughness": record.roughness,
+        "true_cv": record.true_cv,
+        "sawtooth": record.sawtooth,
+        "sawtooth_raw": record.sawtooth_raw,
+        "roughness_weight": record.roughness_weight,
         "step_max": float(absolute.max()),
         "step_mean": float(absolute.mean()),
         "move_frac": float((absolute >= 0.999 * tmove).mean()),
@@ -135,7 +141,6 @@ def main(args: argparse.Namespace) -> None:
 
     import sttopt.geometry as geometry
     import sttopt.seqopt as seqopt
-    import sttopt.timefield as timefield
     import sttopt.torch_util as torch_util
 
     config = resolve_config(args)
@@ -166,18 +171,18 @@ def main(args: argparse.Namespace) -> None:
         for _ in range(config.nloop):
             previous_t = state.t
             state, record = seqopt.step(problem, state)
-            rough = float(timefield.roughness(state.t, weights=problem.xPhys))
             print(
                 f"It.: {state.loop:4d} f: {record.f:10.4f} "
                 f"hot: {record.hotspot:8.5f} unif: {record.uniformity:8.5f} "
-                f"Tm.: {record.tru_max:7.3f} rough: {rough:9.2e}"
+                f"Tm.: {record.tru_max:7.3f} rough: {record.roughness:7.4f} "
+                f"true_cv: {record.true_cv:8.5f} saw: {record.sawtooth:7.4f}"
             )
             if args.log_every and state.loop % args.log_every == 0:
                 step = torch_util.to_numpy(
                     (state.t - previous_t).flatten().to(torch.float64)
                 )
                 entry = {"loop": state.loop} | iteration_diagnostics(
-                    record, step, config.tmove, rough
+                    record, step, config.tmove
                 )
                 log.write(json.dumps(entry) + "\n")
                 log.flush()
@@ -185,19 +190,27 @@ def main(args: argparse.Namespace) -> None:
                 np.savez(
                     output_dir / f"design_it{state.loop:04d}.npz",
                     t=torch_util.to_numpy(state.t),
+                    tPhys=torch_util.to_numpy(
+                        seqopt.physical_timefield(problem, state.t)
+                    ),
                 )
 
     np.savez(
         output_dir / "final_design.npz",
         loop=state.loop,
         xPhys=xPhys,
-        # tPhys == t here (seqopt does not filter the time field); written under the
-        # name viz.py reads so the plotting path works unchanged. No separate "t" key.
-        tPhys=torch_util.to_numpy(state.t),
+        # `tPhys` is the name viz.py reads, so the plotting path works unchanged; `t`
+        # is the raw design variable, which differs from it only under a time filter
+        # but is the field a sawtooth diagnosis has to look at when one is configured.
+        tPhys=torch_util.to_numpy(seqopt.physical_timefield(problem, state.t)),
+        t=torch_util.to_numpy(state.t),
         f=record.f,
         hotspot=record.hotspot,
         uniformity=record.uniformity,
+        roughness=record.roughness,
         tru_max=record.tru_max,
+        true_cv=record.true_cv,
+        sawtooth=record.sawtooth,
     )
 
 
