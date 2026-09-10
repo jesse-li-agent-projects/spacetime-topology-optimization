@@ -1292,3 +1292,96 @@ def test_half_stencil_sees_a_free_surface_on_the_mesh_edge():
 def test_constant_denominator_rejects_an_unknown_normalization():
     with pytest.raises(ValueError, match="Normalization member"):
         conductivity.constant_denominator("nonsense", RMIN_COND)
+
+
+def test_base_exemption_covers_exactly_the_stencil_reach():
+    """The exempt set is "can see the print base through the conductivity stencil",
+    which is the stencil's own reach -- not a band of hand-picked depth.
+    """
+    nelx, nely, rmin_cond = 20, 15, 4.0
+    base = np.arange(nelx) + (nely - 1) * nelx  # bottom row, as BOTTOM_EDGE gives
+    mask = conductivity.base_exempt_mask(nelx, nely, base, rmin_cond)
+
+    # Independently: an element is exempt exactly when the neighbor structure the
+    # conductivity sum itself runs over pairs it with a base element.
+    e1, e2, _ = conductivity.neighbor_weights(nelx, nely, rmin_cond)
+    is_base = np.zeros(nelx * nely, dtype=bool)
+    is_base[base] = True
+    expected = np.zeros(nelx * nely, dtype=bool)
+    expected[e1[is_base[e2]]] = True
+
+    np.testing.assert_array_equal(mask, expected)
+
+
+def test_base_exemption_is_none_for_the_self_normalized_variant():
+    """NEIGHBORHOOD's denominator already collapses with its numerator at the first
+    deposited layer, so exempting there would only hide real information.
+    """
+    nelx, nely = 12, 10
+    base = np.arange(nelx) + (nely - 1) * nelx
+    assert (
+        conductivity.base_exemption(
+            nelx, nely, base, 3.0, conductivity.Normalization.NEIGHBORHOOD
+        )
+        is None
+    )
+
+
+def test_base_exemption_rejects_a_wholly_exempt_part():
+    """Stated against the quantity that is actually inconsistent -- no elements left
+    to aggregate -- rather than against a mesh size, which only produces it under the
+    current radius.
+    """
+    nelx, nely = 6, 5
+    base = np.arange(nelx) + (nely - 1) * nelx
+    with pytest.raises(ValueError, match="no elements left to aggregate"):
+        conductivity.base_exemption(
+            nelx, nely, base, 12.0, conductivity.Normalization.HALF_STENCIL
+        )
+
+
+def test_base_exemption_removes_the_first_layer_false_hotspot():
+    """The first deposited layer has nothing before it, so a constant denominator
+    scores it as the worst hotspot in the domain -- an artifact of the print base
+    being absent from the model, not a real overheating risk.
+    """
+    nelx, nely = 30, 24
+    rmin_cond = 5.0
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+    denom = conductivity.constant_denominator(
+        conductivity.Normalization.HALF_STENCIL, rmin_cond
+    )
+
+    xPhys = np.ones((nely, nelx))
+    tPhys = np.tile(np.linspace(1, 0, nely)[:, None], (1, nelx))  # bottom row first
+    K = conductivity.estimated_conductivity(
+        tt(xPhys), tt(tPhys), e1, e2, w, Q, ROUF, denom
+    ).reshape(nely, nelx)
+    severity = 1 - torch_util.to_numpy(K)
+
+    base = np.arange(nelx) + (nely - 1) * nelx
+    exempt = conductivity.base_exempt_mask(nelx, nely, base, rmin_cond).reshape(
+        nely, nelx
+    )
+    # Unexempted, the first-deposited row is the worst element in the whole domain.
+    assert severity[-1].max() == pytest.approx(severity.max())
+    assert severity[~exempt].max() < severity[-1].max()
+
+    numer_bare, _ = conductivity.hotspot_value(
+        tt(xPhys), tt(tPhys), e1, e2, w, P, Q, R, ROUF, denom
+    )
+    numer_exempt, _ = conductivity.hotspot_value(
+        tt(xPhys),
+        tt(tPhys),
+        e1,
+        e2,
+        w,
+        P,
+        Q,
+        R,
+        ROUF,
+        denom,
+        tt(exempt.flatten()).bool(),
+    )
+    assert float(numer_exempt) < float(numer_bare)

@@ -114,6 +114,69 @@ def constant_denominator(
         )
 
 
+def base_exempt_mask(
+    nelx: int, nely: int, base: Int[np.ndarray, " k"], rmin_cond: float
+) -> Bool[np.ndarray, " nel"]:
+    """Elements whose conductivity stencil reaches the print base, and which are
+    therefore excluded from the hotspot measure entirely.
+
+    The print base is a heat sink, not part of the design: the material it stands in
+    for is always already there, whatever the deposition order. `Normalization.
+    HALF_STENCIL` has no way to say that -- its denominator assumes a full
+    half-neighborhood of prior material everywhere, so the first-deposited layer,
+    which by definition has nothing before it, scores as the worst hotspot in the
+    domain. Modelling the base as infinitely dense makes `K_est` diverge for anything
+    that can see it, which is what this mask is: the same statement, without an
+    infinity to represent.
+
+    Coarse on purpose. It exempts a band `rmin_cond` deep rather than shading the base
+    into the field, so a part small enough to sit entirely within `rmin_cond` of its
+    base has no hotspot measure left -- `seqopt.build_problem`/`stto.build_problem`
+    reject that rather than silently aggregating nothing.
+
+    :param base: 0-indexed print-start elements, e.g. `geometry.base_elements`
+    """
+    is_base = np.zeros((nely, nelx), dtype=bool)
+    is_base.flat[base] = True
+    reaches = np.zeros((nely, nelx), dtype=bool)
+    # `reaches[j, i] |= is_base[j + dj, i + di]`, over the offsets that stay in-mesh.
+    # A stencil wider than the mesh leaves offsets with no in-mesh destination at all.
+    for di, dj, _ in _stencil_offsets(rmin_cond):
+        j0, j1 = max(0, -dj), min(nely, nely - dj)
+        i0, i1 = max(0, -di), min(nelx, nelx - di)
+        if j0 >= j1 or i0 >= i1:
+            continue
+        reaches[j0:j1, i0:i1] |= is_base[j0 + dj : j1 + dj, i0 + di : i1 + di]
+    return reaches.flatten()
+
+
+def base_exemption(
+    nelx: int,
+    nely: int,
+    base: Int[np.ndarray, " k"],
+    rmin_cond: float,
+    normalization: Normalization,
+) -> Bool[np.ndarray, " nel"] | None:
+    """`base_exempt_mask` for the normalizations that need one, else `None`.
+
+    NEIGHBORHOOD needs none: its denominator shrinks along with its numerator at the
+    first deposited layer, so an element there already scores near zero severity
+    without being told the base exists. Only a constant denominator has to be told.
+
+    :raises ValueError: if every element is exempt, leaving the hotspot measure with
+        nothing to aggregate over -- the whole part lies within one conductivity
+        radius of its print base
+    """
+    if normalization == Normalization.NEIGHBORHOOD:
+        return None
+    exempt = base_exempt_mask(nelx, nely, base, rmin_cond)
+    if exempt.all():
+        raise ValueError(
+            f"every element is within rmin_cond={rmin_cond} of the print base, so the hotspot measure has no elements left to aggregate over; shrink rmin_cond or use hotspot_normalization='neighborhood'"
+        )
+    return exempt
+
+
 def neighbor_weights(
     nelx: int, nely: int, rmin_cond: float
 ) -> tuple[
@@ -235,6 +298,7 @@ def hotspot_value(
     r: float,
     rouf: float,
     denom: float | None = None,
+    exempt: Bool[Tensor, " nel"] | None = None,
 ) -> tuple[Float[Tensor, ""], Float[Tensor, " nely*nelx"]]:
     """`hotspot_constraint`'s value alone (`numer`, `K_est`), differentiable end to end
     w.r.t. `xPhys`/`tPhys` (autograd sensitivity path, `plans/torch_port_part2.md`
@@ -254,6 +318,9 @@ def hotspot_value(
         `T_val` can go negative under a constant denominator, which the `**p` here
         only tolerates while `p` is integral -- `Aggregation.LOGSUMEXP` is the pairing
         that does not care.
+    :param exempt: elements to drop from the aggregate entirely, `base_exempt_mask`.
+        Fixed by the mesh and the print base, so it is a constant weight here rather
+        than anything autograd has to see through.
     """
     nely, nelx = xPhys.shape
     nel = nely * nelx
@@ -265,6 +332,8 @@ def hotspot_value(
     T_val = 1 - K_est
 
     cond_p = T_val**p * x ** (r * p)
+    if exempt is not None:
+        cond_p = torch.where(exempt, torch.zeros_like(cond_p), cond_p)
     sum_cond = torch.sum(cond_p)
     numer = _safe_pmean(sum_cond / nel, p)
     return numer, K_est

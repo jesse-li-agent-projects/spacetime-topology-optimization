@@ -35,7 +35,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
-from jaxtyping import Float, Int
+from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 import sttopt.conductivity as conductivity
@@ -75,6 +75,9 @@ class Problem:
     # Constant `K_est` divisor for `config.hotspot_normalization`, or None where the
     # divisor is per-element -- `conductivity.constant_denominator`.
     hotspot_denom: float | None
+    # Elements the hotspot measure skips because they can see the print base, or None
+    # where the normalization needs no exemption -- `conductivity.base_exemption`.
+    hotspot_exempt: Bool[Tensor, " nel"] | None
     Nei: Int[Tensor, " k"]  # print-start element(s), already filtered to solid ones
 
     m: int  # number of MMA constraint rows: continuity + start-point(s) + 2*nStage
@@ -174,6 +177,13 @@ def build_problem(
     hotspot_denom = conductivity.constant_denominator(
         conductivity.Normalization(config.hotspot_normalization), config.rmin_cond
     )
+    hotspot_exempt = conductivity.base_exemption(
+        nelx,
+        nely,
+        Nei,
+        config.rmin_cond,
+        conductivity.Normalization(config.hotspot_normalization),
+    )
 
     H = Hs = None
     if config.time_filter_rmin > 0:
@@ -200,6 +210,11 @@ def build_problem(
         Hs=Hs,
         w=torch_util.to_tensor(w, device, dtype),
         hotspot_denom=hotspot_denom,
+        hotspot_exempt=(
+            None
+            if hotspot_exempt is None
+            else torch.as_tensor(hotspot_exempt, device=device)
+        ),
         m=m,
         n=n,
         **int_fields,
@@ -291,6 +306,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         config.r,
         config.rouf,
         problem.hotspot_denom,
+        problem.hotspot_exempt,
     )
     # The roughness regularizer is not optional garnish: uniformity alone rewards a
     # sawtooth across the print direction (`timefield._gradient_cv`).
@@ -348,7 +364,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     numer = float(numer_t.detach())
     factor = state.factor
     if loop % 25 == 0:
-        max_g = float(torch.max((1 - K_est_t.detach()) * xPhys.flatten() ** config.r))
+        severity = (1 - K_est_t.detach()) * xPhys.flatten() ** config.r
+        if problem.hotspot_exempt is not None:
+            severity = severity[~problem.hotspot_exempt]
+        max_g = float(torch.max(severity))
         if max_g > 1e-14 or numer > 1e-14:  # both zero implies no hotspots anywhere
             if numer == 0:
                 print(f"{max_g=}")

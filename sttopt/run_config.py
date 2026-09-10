@@ -103,8 +103,10 @@ class RunConfig(_ConfigMixin):
     :param Gamma: weight of the layer-thickness-uniformity objective term
         (`timefield.gradient_magnitude_std`); 0 disables it.
     :param hotspot_normalization: a `conductivity.Normalization` member name -- see
-        `SeqRunConfig` for why its default is the legacy variant rather than the
-        recommended one.
+        `SeqRunConfig` for the variants. `configs/default.json` stays on
+        `neighborhood`, unlike the `seqopt` one: this config is what the MATLAB-port
+        fidelity fixtures are generated and checked against, so its hotspot term has
+        to keep matching the source's rather than improving on it.
     """
 
     # Frequently varied -- also exposed as a CLI flag in stto_cli.py.
