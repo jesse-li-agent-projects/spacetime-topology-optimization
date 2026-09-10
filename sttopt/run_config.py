@@ -17,6 +17,7 @@ the CLI's `args`, not here. Neither config has default values -- `configs/defaul
 """
 
 import dataclasses
+import math
 import warnings
 from dataclasses import dataclass
 from typing import TypeVar
@@ -44,30 +45,47 @@ class _ConfigMixin:
 
 
 @dataclass(kw_only=True)
-class StepSchedule:
-    """A scalar hyperparameter that holds `initial` through iteration
-    `switch_iteration`, then steps to `final` for the rest of the run.
+class CosineSchedule:
+    """A scalar hyperparameter decaying from `initial` to `final` along a half cosine
+    over a run's first `decay_iterations` iterations, then holding `final`.
 
-    A step rather than a decay, deliberately: it makes any change in the run's behaviour
-    attributable to one known iteration, and keeps the end value from being confounded
-    with the rate it was approached at. Use it to ask "can this weight be released once
-    the field is in a good basin, and how far".
+    Use it to release a regularizer once the design is in a good basin, and to ask how
+    far it can be released. `decay_iterations` is independent of `nloop`, so the decay
+    can finish well before the run does and leave the rest of the budget at `final`.
+    It is the last iteration still decaying: iteration 1 is exactly `initial`, and
+    iteration `decay_iterations + 1` onward is exactly `final`.
+
+    Cosine rather than linear because it is flat at both ends -- the weight stays near
+    `initial` while the design is still finding its basin, and settles onto `final`
+    without a discontinuity in the objective.
 
     Wherever a config field accepts one of these it also accepts a bare number, which
-    means a constant; `weight_at` resolves either.
+    means a constant; `weight_at` resolves either. JSON has no way to name a class, so
+    a mapping in such a field's place is one of these.
     """
 
     initial: float
-    switch_iteration: int
+    decay_iterations: int
     final: float
 
+    def __post_init__(self) -> None:
+        if self.decay_iterations < 1:
+            raise ValueError(
+                f"decay_iterations must be at least 1, got {self.decay_iterations}; a "
+                f"zero-length decay is a constant at `final`, which a bare number says "
+                f"more clearly"
+            )
+
     def at(self, loop: int) -> float:
-        return self.initial if loop <= self.switch_iteration else self.final
+        """The value at 1-indexed iteration `loop`."""
+        progress = min(max((loop - 1) / self.decay_iterations, 0.0), 1.0)
+        taper = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return self.final + (self.initial - self.final) * taper
 
 
-def weight_at(setting: "float | StepSchedule", loop: int) -> float:
+def weight_at(setting: "float | CosineSchedule", loop: int) -> float:
     """The value of a possibly-scheduled scalar at 1-indexed iteration `loop`."""
-    return setting.at(loop) if isinstance(setting, StepSchedule) else float(setting)
+    return setting.at(loop) if isinstance(setting, CosineSchedule) else float(setting)
 
 
 @dataclass(kw_only=True)
@@ -151,17 +169,17 @@ class SeqRunConfig(_ConfigMixin):
         `sawtooth` when using one).
     :param uniformity_metric: a `timefield.UniformityMetric` member name.
     :param roughness_weight: weight on `timefield.relative_roughness`, the objective's
-        smoothness regularizer -- a number, or a `StepSchedule` to hold one weight and
-        then release it. Not optional in practice: the uniformity penalty rewards a
+        smoothness regularizer -- a number, or a `CosineSchedule` decaying one weight
+        into a lower one. Not optional in practice: the uniformity penalty rewards a
         sawtooth across the print direction, so a run with this at 0 converges to a
         jagged field whose reported uniformity is several times better than the truth
         (PR #94). Both terms are dimensionless and divide by the same mean gradient, so
         this weight is a pure ratio and does not need rescaling with the mesh. It is not
         a light touch as a constant: on the c-shape 0.06 still leaves a wiggle 16% of a
         layer deep, and 0.18 is what flattens it, putting this term at 30-50% of the
-        uniformity one. A `StepSchedule` is what buys a lower end weight -- holding 1.0
-        to iteration 300 and then releasing reaches the same smoothness ending at 0.06,
-        and at 0.02 alongside a `time_filter_rmin` (PR #95).
+        uniformity one. A schedule is what buys a lower end weight -- holding near 1.0
+        over the first few hundred iterations and then releasing reaches the same
+        smoothness ending at 0.06, and at 0.02 alongside a `time_filter_rmin` (PR #95).
         Only a strictly positive *constant* weight makes the sawtooth amplitude
         stationary. A smooth field is not a local minimum of the uniformity penalty
         alone, so under any released floor the mode creeps back with no plateau -- slowly
@@ -194,7 +212,7 @@ class SeqRunConfig(_ConfigMixin):
     hotspot_weight: float
     uniformity_metric: str
     uniformity_weight: float
-    roughness_weight: float | StepSchedule
+    roughness_weight: float | CosineSchedule
 
     nStage: int
     p: float
@@ -211,8 +229,8 @@ class SeqRunConfig(_ConfigMixin):
     asydecr: float
 
     def __post_init__(self) -> None:
-        # JSON has no way to say "a StepSchedule", so a mapping in a scheduled field's
-        # place is one. Done here rather than in `from_dict` so that a config assembled
-        # in code from parsed JSON fragments coerces identically.
+        # JSON has no way to say "a CosineSchedule", so a mapping in a scheduled
+        # field's place is one. Done here rather than in `from_dict` so that a config
+        # assembled in code from parsed JSON fragments coerces identically.
         if isinstance(self.roughness_weight, dict):
-            self.roughness_weight = StepSchedule(**self.roughness_weight)
+            self.roughness_weight = CosineSchedule(**self.roughness_weight)

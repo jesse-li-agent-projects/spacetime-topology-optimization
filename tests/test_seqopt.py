@@ -116,12 +116,13 @@ def test_objective_is_the_weighted_sum_of_its_three_terms():
     )
 
 
-def test_scheduled_roughness_weight_steps_during_the_run():
+def test_scheduled_roughness_weight_decays_during_the_run():
     """A schedule has to reach the objective, not just the config: the point of the
-    continuation is that the term's weight really is released mid-run."""
+    continuation is that the term's weight really is released mid-run. A one-iteration
+    decay puts both endpoints in the first two steps."""
     problem = _problem(
         nStage=0,
-        roughness_weight={"initial": 1.0, "switch_iteration": 1, "final": 0.06},
+        roughness_weight={"initial": 1.0, "decay_iterations": 1, "final": 0.06},
     )
     state = seqopt.init_state(problem)
 
