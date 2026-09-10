@@ -72,6 +72,9 @@ class Problem:
     e1: Int[Tensor, " npairs"]
     e2: Int[Tensor, " npairs"]
     w: Float[Tensor, " npairs"]
+    # Constant `K_est` divisor for `config.hotspot_normalization`, or None where the
+    # divisor is per-element -- `conductivity.constant_denominator`.
+    hotspot_denom: float | None
     Nei: Int[Tensor, " k"]  # print-start element(s), already filtered to solid ones
 
     m: int  # number of MMA constraint rows: continuity + start-point(s) + 2*nStage
@@ -168,6 +171,9 @@ def build_problem(
 
     L = filters.continuity_filter(nelx, nely, config.lrmin)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, config.rmin_cond)
+    hotspot_denom = conductivity.constant_denominator(
+        conductivity.Normalization(config.hotspot_normalization), config.rmin_cond
+    )
 
     H = Hs = None
     if config.time_filter_rmin > 0:
@@ -193,6 +199,7 @@ def build_problem(
         H=H,
         Hs=Hs,
         w=torch_util.to_tensor(w, device, dtype),
+        hotspot_denom=hotspot_denom,
         m=m,
         n=n,
         **int_fields,
@@ -283,6 +290,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         config.q,
         config.r,
         config.rouf,
+        problem.hotspot_denom,
     )
     # The roughness regularizer is not optional garnish: uniformity alone rewards a
     # sawtooth across the print direction (`timefield._gradient_cv`).

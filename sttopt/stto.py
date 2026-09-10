@@ -72,6 +72,9 @@ class Problem:
     e1: Int[Tensor, " npairs"]
     e2: Int[Tensor, " npairs"]
     w: Float[Tensor, " npairs"]
+    # Constant `K_est` divisor for `config.hotspot_normalization`, or None where the
+    # divisor is per-element -- `conductivity.constant_denominator`.
+    hotspot_denom: float | None
     Nei: Int[Tensor, " k"]
 
     m: int  # number of MMA constraint rows: vol + continuity + start-point(s) + 2*nStage + hotspot
@@ -186,6 +189,9 @@ def build_problem(
     L = filters.continuity_filter(nelx, nely, config.lrmin)
     C = gravity.gravity_load_matrix(nelx, nely)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, config.rmin_cond)
+    hotspot_denom = conductivity.constant_denominator(
+        conductivity.Normalization(config.hotspot_normalization), config.rmin_cond
+    )
 
     # Print-start element(s), per constraints.start_point's own docstring.
     Nei = timefield.base_elements(nelx, nely, tfield)
@@ -215,6 +221,7 @@ def build_problem(
         H=torch_util.symmetric_csr_to_tensor(H, device, dtype),
         L=torch_util.csr_to_tensor(L, device, dtype),
         C=torch_util.csr_to_tensor(C, device, dtype),
+        hotspot_denom=hotspot_denom,
         m=m,
         n=n,
         **float_fields,
@@ -450,6 +457,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         config.q,
         config.r,
         config.rouf,
+        problem.hotspot_denom,
     )
     g_hotspot_t = state.factor * numer_t / config.Tcr - 1
 

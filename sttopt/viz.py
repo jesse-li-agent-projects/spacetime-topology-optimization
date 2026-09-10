@@ -437,6 +437,7 @@ def _load_stto_run(run_dir: Path, design_file: str = "final_design.npz") -> tupl
         problem.w,
         problem.config.q,
         problem.config.rouf,
+        problem.hotspot_denom,
     ).reshape(config.nely, config.nelx)
     K_est = torch_util.to_numpy(K_est)
     hotspot_severity = (1 - K_est) * (xPhys > 0.5)
@@ -486,6 +487,9 @@ def _load_seqopt_run(run_dir: Path, design_file: str = "final_design.npz") -> tu
         torch_util.to_tensor(w, device="cpu", dtype=torch.float64),
         config.q,
         config.rouf,
+        conductivity.constant_denominator(
+            conductivity.Normalization(config.hotspot_normalization), config.rmin_cond
+        ),
     ).reshape(nely, nelx)
     K_est = torch_util.to_numpy(K_est)
     hotspot_severity = (1 - K_est) * (xPhys > 0.5)

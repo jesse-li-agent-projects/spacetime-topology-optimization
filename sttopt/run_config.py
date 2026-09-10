@@ -12,8 +12,12 @@ fighting the two apart rather than helping. Only the JSON round-trip
 `nloop` is also exposed as a CLI flag on each; every other field is reachable only via
 a `--config` JSON file or by constructing the dataclass directly in code. Run
 bookkeeping that isn't a `build_problem` hyperparameter (`--tag`, `--device`) lives on
-the CLI's `args`, not here. Neither config has default values -- `configs/default.json`
-/`configs/seq_default.json` are the single source of default settings.
+the CLI's `args`, not here. `configs/default.json`/`configs/seq_default.json` are the
+single source of default *settings*: a field carries a dataclass default only when a
+run record written before that field existed has a well-defined meaning, so that
+`viz.py` can still replay an old output directory. Such a default is what the field
+used to be implicitly, never what a new run should pick -- the config files carry
+that.
 """
 
 import dataclasses
@@ -98,6 +102,9 @@ class RunConfig(_ConfigMixin):
         `timefield.TimeField` member (case-insensitively) for JSON.
     :param Gamma: weight of the layer-thickness-uniformity objective term
         (`timefield.gradient_magnitude_std`); 0 disables it.
+    :param hotspot_normalization: a `conductivity.Normalization` member name -- see
+        `SeqRunConfig` for why its default is the legacy variant rather than the
+        recommended one.
     """
 
     # Frequently varied -- also exposed as a CLI flag in stto_cli.py.
@@ -111,6 +118,7 @@ class RunConfig(_ConfigMixin):
     Theta: float
     Gamma: float
     Tcr: float
+    hotspot_normalization: str = "neighborhood"
     print_base: str
     rmin: float
     lrmin: float
@@ -167,6 +175,11 @@ class SeqRunConfig(_ConfigMixin):
         the time field unfiltered, which is `seqopt`'s starting design (see its module
         docstring for what a nonzero radius costs, and read `sawtooth_raw` alongside
         `sawtooth` when using one).
+    :param hotspot_normalization: a `conductivity.Normalization` member name, choosing
+        what `K_est` measures shielding against. Not a tuning knob: `neighborhood`
+        cannot see a free surface that lies on the mesh boundary, and lets void print
+        time drive the result (PR #96). It is the default only so that run records
+        written before this field existed still load and replay as they ran.
     :param uniformity_metric: a `timefield.UniformityMetric` member name.
     :param roughness_weight: weight on `timefield.relative_roughness`, the objective's
         smoothness regularizer -- a number, or a `CosineSchedule` decaying one weight
@@ -210,6 +223,7 @@ class SeqRunConfig(_ConfigMixin):
     time_filter_rmin: float
 
     hotspot_weight: float
+    hotspot_normalization: str = "neighborhood"
     uniformity_metric: str
     uniformity_weight: float
     roughness_weight: float | CosineSchedule

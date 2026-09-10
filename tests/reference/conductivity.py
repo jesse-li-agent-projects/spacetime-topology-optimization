@@ -76,6 +76,10 @@ def _conductivity_terms(
     terms `hotspot_constraint` needs: the neighbor-role-swapped sigmoid pair terms
     `FT_ba`/`DFT_ba` (its cross term) and `S1`/`S2` (its self/diagonal term).
 
+    The hand-derived sensitivities below differentiate through a per-element `Nsum3`,
+    so this is `Normalization.NEIGHBORHOOD` only -- a constant denominator drops those
+    terms rather than changing them.
+
     Reuses `e1`'s weight for both pair directions (`w[e1,e2] == w[e2,e1]` by
     construction of `neighbor_weights` -- confirmed against the MATLAB `WE` fixture in
     `tests/test_conductivity.py`) rather than a second lookup.
@@ -91,7 +95,7 @@ def _conductivity_terms(
     S2 = torch.zeros(nel, dtype=x.dtype, device=x.device)
     S2.index_add_(0, e1, core.xb_q * w * DFT_ab)
 
-    return _ConductivityTerms(core.K_est, core.Nsum3, FT_ba, DFT_ba, S1, S2)
+    return _ConductivityTerms(core.K_est, core.denom, FT_ba, DFT_ba, S1, S2)
 
 
 class HotspotConstraintResult(NamedTuple):

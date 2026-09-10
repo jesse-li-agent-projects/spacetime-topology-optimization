@@ -1189,3 +1189,106 @@ def test_hotspot_value_fully_solid_part_gradient_is_finite():
     (d_x,) = torch.autograd.grad(numer, (xPhys,))
     assert torch.all(torch.isfinite(d_x))
     assert torch.all(d_x == 0.0)
+
+
+# --- Normalization.HALF_STENCIL (PR #96) --------------------------------------------
+
+
+@pytest.mark.parametrize("rouf", [1.0, 100.0, 1e6])
+@pytest.mark.parametrize("rmin_cond", [3.0, 5.5, 12.0])
+def test_half_stencil_weight_is_the_interior_printed_weight(rmin_cond, rouf):
+    """`half_stencil_weight` is what an element's already-printed neighbor weight
+    actually comes to under a uniform layer schedule -- the identity the constant
+    denominator rests on, and the reason it holds for any sigmoid sharpness.
+
+    Checked at an interior element, where nothing is truncated by the mesh edge.
+    """
+    nelx = nely = 4 * int(np.ceil(rmin_cond))
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
+    x = torch.ones(nely * nelx, dtype=torch.float64)
+    t = (torch.arange(nely, dtype=torch.float64) / nely).repeat_interleave(nelx)
+
+    core = conductivity._conductivity_core(x, t, tti(e1), tti(e2), tt(w), Q, rouf)
+    interior = (nely // 2) * nelx + nelx // 2
+    assert_close(
+        float(core.denom[interior]), conductivity.half_stencil_weight(rmin_cond)
+    )
+
+
+def test_half_stencil_is_blind_to_void_print_time():
+    """Void print time is an artifact -- nothing physical pins `t` where there is no
+    material -- but under NEIGHBORHOOD it steers `K_est` through the denominator,
+    since a void neighbor printed earlier adds weight there while adding no density to
+    the numerator. HALF_STENCIL's denominator does not depend on `t` at all, so void
+    time can only ever multiply a zero density.
+    """
+    nelx, nely = 16, 12
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+    denom = conductivity.constant_denominator(
+        conductivity.Normalization.HALF_STENCIL, RMIN_COND
+    )
+
+    rng = np.random.default_rng(96)
+    xPhys = (rng.uniform(size=(nely, nelx)) > 0.4).astype(float)
+    tPhys = np.tile(np.linspace(1, 0, nely)[:, None], (1, nelx))
+    void = xPhys == 0.0
+    assert void.any()
+
+    def numer_with_void_time(fill, denom):
+        t = tPhys.copy()
+        t[void] = fill
+        return float(
+            conductivity.hotspot_value(
+                tt(xPhys), tt(t), e1, e2, w, P, Q, R, ROUF, denom
+            )[0]
+        )
+
+    assert_close(numer_with_void_time(-1e3, denom), numer_with_void_time(1e3, denom))
+    # ... and the same swap does move NEIGHBORHOOD, so the test above is not vacuous.
+    assert numer_with_void_time(-1e3, None) != pytest.approx(
+        numer_with_void_time(1e3, None)
+    )
+
+
+def test_half_stencil_sees_a_free_surface_on_the_mesh_edge():
+    """A solid column against the mesh edge and one against an equally wide internal
+    void are the same free surface, and must score alike. NEIGHBORHOOD renormalizes
+    the off-mesh half of the stencil away and scores the mesh-edge column at exactly
+    zero severity, hiding it (PR #96).
+    """
+    nelx, nely = 40, 24
+    rmin_cond = 6.0
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+
+    # Solid left of the notch and right of it, with a void gap wider than the stencil
+    # so neither solid edge can see through it to the other.
+    xPhys = np.ones((nely, nelx))
+    xPhys[:, 20:34] = 0.0
+    tPhys = np.tile(np.linspace(1, 0, nely)[:, None], (1, nelx))
+    row = nely // 2
+
+    def severity(denom):
+        K = conductivity.estimated_conductivity(
+            tt(xPhys), tt(tPhys), e1, e2, w, Q, ROUF, denom
+        ).reshape(nely, nelx)
+        return 1 - torch_util.to_numpy(K)[row]
+
+    edge_col, notch_col = 0, 19
+    legacy = severity(None)
+    assert legacy[edge_col] == pytest.approx(0.0, abs=1e-12)
+    assert legacy[notch_col] > 0.1
+
+    half = severity(
+        conductivity.constant_denominator(
+            conductivity.Normalization.HALF_STENCIL, rmin_cond
+        )
+    )
+    assert half[edge_col] == pytest.approx(half[notch_col], rel=0.25)
+    assert half[edge_col] > 0.1
+
+
+def test_constant_denominator_rejects_an_unknown_normalization():
+    with pytest.raises(ValueError, match="Normalization member"):
+        conductivity.constant_denominator("nonsense", RMIN_COND)

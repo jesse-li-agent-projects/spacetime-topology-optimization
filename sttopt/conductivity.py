@@ -3,12 +3,16 @@ constraint bounding its worst-case value.
 
 `estimated_conductivity` scores each element by how strongly its already-printed
 (cooler, earlier-`tPhys`) neighborhood shields it from residual heat -- a proxy for
-overheating risk during additive deposition. `hotspot_value` computes the p-norm of
-`1 - K_est` (weighted toward already-dense, hot regions) that the hotspot constraint
-bounds below a critical threshold `Tcr`, smoothly approximating a hard max via a
-p-norm as `p -> inf`; the caller (`stto.step`) applies the `factor`/`Tcr` scaling
-and gets the sensitivity from autograd through this (Phase 3.4,
-`plans/torch_port_part2.md`).
+overheating risk during additive deposition. `hotspot_value` aggregates `1 - K_est`
+(weighted toward already-dense, hot regions) into the smooth maximum that the hotspot
+constraint bounds below a critical threshold `Tcr`; the caller (`stto.step`) applies
+the `factor`/`Tcr` scaling and gets the sensitivity from autograd through this
+(Phase 3.4, `plans/torch_port_part2.md`).
+
+Two orthogonal choices shape that number, both selectable per run: `Normalization`
+sets what `K_est` measures shielding against, and `Aggregation` sets how the field
+collapses to one scalar. They pair -- HALF_STENCIL admits `K_est > 1`, which only
+LOGSUMEXP accepts unconditionally -- but neither implies the other.
 
 `tests/reference/conductivity.py` keeps `hotspot_constraint`, the hand-derived
 predecessor that folds the `factor`/`Tcr` scaling and the density-filter chain rule
@@ -27,12 +31,87 @@ neighbor by its raw density `rho_j`, where `_conductivity_core` uses `x_j**q` wi
 `q = 3` -- a SIMP-style penalization of intermediate density the paper does not have.
 """
 
+from enum import StrEnum
+from functools import cache
 from typing import NamedTuple
 
 import numpy as np
 import torch
-from jaxtyping import Float, Int
+from jaxtyping import Bool, Float, Int
 from torch import Tensor
+
+
+class Normalization(StrEnum):
+    """Names for what `K_est` measures shielding *against*, selectable per run.
+
+    NEIGHBORHOOD divides by the weight of the caller's own already-printed neighbors,
+    so `K_est` is a weighted average of neighbor density and is bounded by 1. Its
+    denominator shrinks wherever the stencil leaves the mesh, which renormalizes the
+    missing region away: an element on the domain edge whose in-mesh neighbors are all
+    solid scores `K_est == 1` exactly, while an identical element beside an internal
+    void does not. That makes free surfaces on the mesh boundary invisible, and leaves
+    the print time of void -- a quantity nothing physical pins -- driving the result
+    through the denominator (PR #96).
+
+    HALF_STENCIL divides by `half_stencil_weight` instead: the shielding an infinite
+    uniform layer schedule would supply at the same point in its own schedule. The
+    denominator is then the same constant everywhere, so leaving the mesh costs
+    exactly what an equal-sized internal void costs, and void print time drops out
+    entirely (it only ever multiplies a zero density). `K_est` is no longer an average
+    and may exceed 1, meaning "better shielded than an infinite uniform layer" -- see
+    `Aggregation` for what tolerates that.
+    """
+
+    NEIGHBORHOOD = "neighborhood"
+    HALF_STENCIL = "half_stencil"
+
+
+def _stencil_offsets(rmin_cond: float) -> list[tuple[int, int, float]]:
+    """Every `(di, dj, w)` grid offset inside the conductivity stencil's radial cutoff.
+
+    The single definition of which offsets are in the stencil and what each weighs, so
+    the neighbor pair list, its untruncated total, and the print-base exemption cannot
+    drift apart about it.
+    """
+    r = int(np.ceil(rmin_cond)) - 1
+    offsets = []
+    for di in range(-r, r + 1):
+        for dj in range(-r, r + 1):
+            dist = np.hypot(di, dj)
+            if rmin_cond - dist < 0:
+                continue
+            offsets.append((di, dj, (rmin_cond - dist) / rmin_cond))
+    return offsets
+
+
+@cache
+def half_stencil_weight(rmin_cond: float) -> float:
+    """`Normalization.HALF_STENCIL`'s constant denominator: the stencil weight already
+    deposited around any element under an infinite uniform layer schedule.
+
+    Exactly half the untruncated stencil total, for any `rouf` and any layer spacing.
+    Pairing offset `(di, +dj)` against `(di, -dj)` gives equal radial weight and
+    `sigmoid(z) + sigmoid(-z) == 1`, so a time field linear in height puts precisely
+    half the surrounding weight before each element -- including the `dj == 0` row,
+    whose self-pair contributes `sigmoid(0) == 1/2`.
+    """
+    return sum(w for _, _, w in _stencil_offsets(rmin_cond)) / 2
+
+
+def constant_denominator(
+    normalization: Normalization, rmin_cond: float
+) -> float | None:
+    """The fixed `K_est` denominator a normalization variant calls for, or `None` for
+    NEIGHBORHOOD, which derives a per-element one instead.
+    """
+    if normalization == Normalization.NEIGHBORHOOD:
+        return None
+    elif normalization == Normalization.HALF_STENCIL:
+        return half_stencil_weight(rmin_cond)
+    else:
+        raise ValueError(
+            f"normalization must be a Normalization member, got {normalization!r}"
+        )
 
 
 def neighbor_weights(
@@ -47,20 +126,15 @@ def neighbor_weights(
     each other -- the same square-window/circular-cutoff pattern as
     `filters.density_filter`, but normalized by `rmin_cond` (density_filter's isn't).
     """
-    r = int(np.ceil(rmin_cond)) - 1
     e = np.arange(nelx * nely)
     i1, j1 = e % nelx, e // nelx
     e1s, e2s, ws = [], [], []
-    for di in range(-r, r + 1):
-        for dj in range(-r, r + 1):
-            dist = np.hypot(di, dj)
-            if rmin_cond - dist < 0:
-                continue
-            i2, j2 = i1 + di, j1 + dj
-            valid = (i2 >= 0) & (i2 < nelx) & (j2 >= 0) & (j2 < nely)
-            e1s.append(e[valid])
-            e2s.append((j2 * nelx + i2)[valid])
-            ws.append(np.full(valid.sum(), (rmin_cond - dist) / rmin_cond))
+    for di, dj, weight in _stencil_offsets(rmin_cond):
+        i2, j2 = i1 + di, j1 + dj
+        valid = (i2 >= 0) & (i2 < nelx) & (j2 >= 0) & (j2 < nely)
+        e1s.append(e[valid])
+        e2s.append((j2 * nelx + i2)[valid])
+        ws.append(np.full(valid.sum(), weight))
     return np.concatenate(e1s), np.concatenate(e2s), np.concatenate(ws)
 
 
@@ -89,7 +163,7 @@ def _pairwise_sigmoid(
 
 class _ConductivityCore(NamedTuple):
     K_est: Float[Tensor, " nel"]
-    Nsum3: Float[Tensor, " nel"]
+    denom: Float[Tensor, " nel"] | Float[Tensor, ""]
     FT_ab: Float[Tensor, " npairs"]
     xb_q: Float[Tensor, " npairs"]
 
@@ -102,21 +176,28 @@ def _conductivity_core(
     w: Float[Tensor, " npairs"],
     q: float,
     rouf: float,
+    denom: float | None = None,
 ) -> _ConductivityCore:
-    """`K_est`/`Nsum3` (its row-sum denominator), plus the `a->b` pair terms
+    """`K_est` and the divisor it was formed with, plus the `a->b` pair terms
     (`FT_ab`/`xb_q`) shared by `estimated_conductivity` and
     `tests/reference/conductivity.py`'s `_conductivity_terms` -- computed once here
     rather than redone by each.
+
+    :param denom: a constant divisor for every element (`constant_denominator`), or
+        `None` for the per-element already-printed neighbor weight. Only the `None`
+        case makes `denom` indexable per element.
     """
     nel = x.shape[0]
     FT_ab = _pairwise_sigmoid(t, e1, e2, rouf)
     xb_q = x[e2] ** q
-    Nsum3 = torch.zeros(nel, dtype=x.dtype, device=x.device)
-    Nsum3.index_add_(0, e1, w * FT_ab)
     num = torch.zeros(nel, dtype=x.dtype, device=x.device)
     num.index_add_(0, e1, xb_q * w * FT_ab)
-    K_est = num / Nsum3
-    return _ConductivityCore(K_est, Nsum3, FT_ab, xb_q)
+    if denom is None:
+        divisor = torch.zeros(nel, dtype=x.dtype, device=x.device)
+        divisor.index_add_(0, e1, w * FT_ab)
+    else:
+        divisor = torch.as_tensor(denom, dtype=x.dtype, device=x.device)
+    return _ConductivityCore(num / divisor, divisor, FT_ab, xb_q)
 
 
 def _safe_pmean(u: Float[Tensor, ""], p: float) -> Float[Tensor, ""]:
@@ -153,6 +234,7 @@ def hotspot_value(
     q: float,
     r: float,
     rouf: float,
+    denom: float | None = None,
 ) -> tuple[Float[Tensor, ""], Float[Tensor, " nely*nelx"]]:
     """`hotspot_constraint`'s value alone (`numer`, `K_est`), differentiable end to end
     w.r.t. `xPhys`/`tPhys` (autograd sensitivity path, `plans/torch_port_part2.md`
@@ -167,13 +249,18 @@ def hotspot_value(
     input against the (rarer) fully-solid-part singularity. Callers needing the caller
     owned `factor`/`Tcr` scaling and the constraint value build them from `numer`
     directly, as `hotspot_constraint` does.
+
+    :param denom: `constant_denominator` for the run's `Normalization`. Note that
+        `T_val` can go negative under a constant denominator, which the `**p` here
+        only tolerates while `p` is integral -- `Aggregation.LOGSUMEXP` is the pairing
+        that does not care.
     """
     nely, nelx = xPhys.shape
     nel = nely * nelx
     x = xPhys.flatten()
     t = tPhys.flatten()
 
-    core = _conductivity_core(x, t, e1, e2, w, q, rouf)
+    core = _conductivity_core(x, t, e1, e2, w, q, rouf, denom)
     K_est = core.K_est
     T_val = 1 - K_est
 
@@ -191,11 +278,13 @@ def estimated_conductivity(
     w: Float[Tensor, " npairs"],
     q: float,
     rouf: float,
+    denom: float | None = None,
 ) -> Float[Tensor, " nely*nelx"]:
-    """Local estimated conductivity: a density/print-time-weighted average of how
-    strongly each element's neighborhood has already solidified (cooler, earlier
-    `tPhys`) around it, used as an overheating proxy by `hotspot_value`.
+    """Local estimated conductivity: how strongly each element's neighborhood has
+    already solidified (cooler, earlier `tPhys`) around it, used as an overheating
+    proxy by `hotspot_value`. `Normalization` sets what it is measured relative to,
+    via `denom`.
     """
     x = xPhys.flatten()
     t = tPhys.flatten()
-    return _conductivity_core(x, t, e1, e2, w, q, rouf).K_est
+    return _conductivity_core(x, t, e1, e2, w, q, rouf, denom).K_est
