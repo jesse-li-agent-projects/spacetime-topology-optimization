@@ -183,6 +183,7 @@ def build_problem(
         Nei,
         config.rmin_cond,
         conductivity.Normalization(config.hotspot_normalization),
+        geometry.solid_mask(xPhys).flatten(),
     )
 
     H = Hs = None
@@ -307,6 +308,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         config.rouf,
         problem.hotspot_denom,
         problem.hotspot_exempt,
+        conductivity.Aggregation(config.hotspot_aggregation),
+        config.hotspot_beta,
+        config.hotspot_density_exponent,
     )
     # The roughness regularizer is not optional garnish: uniformity alone rewards a
     # sawtooth across the print direction (`timefield._gradient_cv`).

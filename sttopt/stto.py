@@ -474,6 +474,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         config.rouf,
         problem.hotspot_denom,
         problem.hotspot_exempt,
+        conductivity.Aggregation(config.hotspot_aggregation),
+        config.hotspot_beta,
+        config.hotspot_density_exponent,
     )
     g_hotspot_t = state.factor * numer_t / config.Tcr - 1
 

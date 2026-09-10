@@ -66,6 +66,30 @@ class Normalization(StrEnum):
     HALF_STENCIL = "half_stencil"
 
 
+class Aggregation(StrEnum):
+    """Names for how the per-element severity field collapses to the one scalar the
+    hotspot term reports, selectable per run.
+
+    P_MEAN takes `mean(T**p * x**(r*p)) ** (1/p)`, a scale-equivariant smooth maximum.
+    It is built on powers, so it needs a non-negative field, and it approaches the
+    true maximum from below by a factor `nel**(-1/p)` that worsens as the mesh grows
+    -- 0.687 at `p=25` on a 120x100 mesh, a quarter low. Its density weight is
+    `x**(r*p)`, so `p` cannot be changed without also changing how hard void is
+    suppressed, and `r*p <= 1` silently makes the gradient diverge at `x == 0`.
+
+    LOGSUMEXP takes `log(sum(x**s * exp(beta*T))) / beta`. It is translation
+    equivariant rather than scale equivariant, which is the property that fits once
+    `Normalization.HALF_STENCIL` has pinned the scale against a physical reference:
+    `exp` is defined on all of R, so `K_est > 1` needs no clamp. Its bias is additive
+    and bounded by `log(nel_weighted)/beta` rather than multiplicative -- +0.001 at
+    `beta=200` where P_MEAN at `p=25` is -26%. Sharpness (`beta`) and density
+    suppression (`s`) are independent knobs.
+    """
+
+    P_MEAN = "p_mean"
+    LOGSUMEXP = "logsumexp"
+
+
 def _stencil_offsets(rmin_cond: float) -> list[tuple[int, int, float]]:
     """Every `(di, dj, w)` grid offset inside the conductivity stencil's radial cutoff.
 
@@ -156,6 +180,7 @@ def base_exemption(
     base: Int[np.ndarray, " k"],
     rmin_cond: float,
     normalization: Normalization,
+    solid: Bool[np.ndarray, " nel"] | None = None,
 ) -> Bool[np.ndarray, " nel"] | None:
     """`base_exempt_mask` for the normalizations that need one, else `None`.
 
@@ -163,16 +188,20 @@ def base_exemption(
     first deposited layer, so an element there already scores near zero severity
     without being told the base exists. Only a constant denominator has to be told.
 
-    :raises ValueError: if every element is exempt, leaving the hotspot measure with
-        nothing to aggregate over -- the whole part lies within one conductivity
-        radius of its print base
+    :param solid: which elements hold material, where that is fixed up front. Pass it
+        to have the check below see the part rather than the bounding box; omit it
+        where density is itself a design variable and no such answer exists yet.
+    :raises ValueError: if the exemption leaves the hotspot measure nothing to
+        aggregate over, every candidate element being within one conductivity radius
+        of the print base
     """
     if normalization == Normalization.NEIGHBORHOOD:
         return None
     exempt = base_exempt_mask(nelx, nely, base, rmin_cond)
-    if exempt.all():
+    considered = ~exempt if solid is None else (~exempt & solid)
+    if not considered.any():
         raise ValueError(
-            f"every element is within rmin_cond={rmin_cond} of the print base, so the hotspot measure has no elements left to aggregate over; shrink rmin_cond or use hotspot_normalization='neighborhood'"
+            f"the print-base exemption at rmin_cond={rmin_cond} covers every element the hotspot measure would aggregate over, leaving it nothing to report; shrink rmin_cond or use hotspot_normalization='neighborhood'"
         )
     return exempt
 
@@ -287,6 +316,25 @@ def _safe_pmean(u: Float[Tensor, ""], p: float) -> Float[Tensor, ""]:
     return torch.where(u == 0, torch.zeros_like(val), val)
 
 
+def _weighted_logsumexp(
+    T_val: Float[Tensor, " nel"], weight: Float[Tensor, " nel"], beta: float
+) -> Float[Tensor, ""]:
+    """`log(sum(weight * exp(beta * T_val))) / beta`, shifted by `max(T_val)` so the
+    exponential cannot overflow at the large `beta` a sharp maximum needs.
+
+    Shifting by a detached maximum is exact, not an approximation: the shift cancels
+    between the sum and the added-back constant, and the gradient it produces,
+    `weight * softmax(beta * T_val)`, is the same either way.
+
+    :param weight: per-element weight, zero wherever an element takes no part
+    :param beta: sharpness; the result exceeds `max(T_val)` over the weighted
+        elements by at most `log(sum(weight))/beta`
+    """
+    shift = T_val.max().detach()
+    total = torch.sum(weight * torch.exp(beta * (T_val - shift)))
+    return shift + torch.log(total) / beta
+
+
 def hotspot_value(
     xPhys: Float[Tensor, "nely nelx"],
     tPhys: Float[Tensor, "nely nelx"],
@@ -299,6 +347,9 @@ def hotspot_value(
     rouf: float,
     denom: float | None = None,
     exempt: Bool[Tensor, " nel"] | None = None,
+    aggregation: Aggregation = Aggregation.P_MEAN,
+    beta: float = 200.0,
+    density_exponent: float | None = None,
 ) -> tuple[Float[Tensor, ""], Float[Tensor, " nely*nelx"]]:
     """`hotspot_constraint`'s value alone (`numer`, `K_est`), differentiable end to end
     w.r.t. `xPhys`/`tPhys` (autograd sensitivity path, `plans/torch_port_part2.md`
@@ -321,6 +372,11 @@ def hotspot_value(
     :param exempt: elements to drop from the aggregate entirely, `base_exempt_mask`.
         Fixed by the mesh and the print base, so it is a constant weight here rather
         than anything autograd has to see through.
+    :param aggregation: which smooth maximum collapses the severity field.
+    :param beta: LOGSUMEXP sharpness; unused by P_MEAN, which takes `p` instead.
+    :param density_exponent: LOGSUMEXP's void-suppression exponent, defaulting to
+        P_MEAN's implicit `r * p`. Must exceed 1, or the weight's own gradient
+        diverges at `x == 0`. Unused by P_MEAN, whose exponent is not separable.
     """
     nely, nelx = xPhys.shape
     nel = nely * nelx
@@ -331,11 +387,21 @@ def hotspot_value(
     K_est = core.K_est
     T_val = 1 - K_est
 
-    cond_p = T_val**p * x ** (r * p)
-    if exempt is not None:
-        cond_p = torch.where(exempt, torch.zeros_like(cond_p), cond_p)
-    sum_cond = torch.sum(cond_p)
-    numer = _safe_pmean(sum_cond / nel, p)
+    if aggregation == Aggregation.P_MEAN:
+        cond_p = T_val**p * x ** (r * p)
+        if exempt is not None:
+            cond_p = torch.where(exempt, torch.zeros_like(cond_p), cond_p)
+        numer = _safe_pmean(torch.sum(cond_p) / nel, p)
+    elif aggregation == Aggregation.LOGSUMEXP:
+        s = r * p if density_exponent is None else density_exponent
+        weight = x**s
+        if exempt is not None:
+            weight = torch.where(exempt, torch.zeros_like(weight), weight)
+        numer = _weighted_logsumexp(T_val, weight, beta)
+    else:
+        raise ValueError(
+            f"aggregation must be an Aggregation member, got {aggregation!r}"
+        )
     return numer, K_est
 
 

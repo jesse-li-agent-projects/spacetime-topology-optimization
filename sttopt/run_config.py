@@ -121,6 +121,9 @@ class RunConfig(_ConfigMixin):
     Gamma: float
     Tcr: float
     hotspot_normalization: str = "neighborhood"
+    hotspot_aggregation: str = "p_mean"
+    hotspot_beta: float = 200.0
+    hotspot_density_exponent: float | None = None
     print_base: str
     rmin: float
     lrmin: float
@@ -182,6 +185,21 @@ class SeqRunConfig(_ConfigMixin):
         cannot see a free surface that lies on the mesh boundary, and lets void print
         time drive the result (PR #96). It is the default only so that run records
         written before this field existed still load and replay as they ran.
+    :param hotspot_aggregation: a `conductivity.Aggregation` member name, choosing the
+        smooth maximum that collapses the severity field. Defaults to the legacy
+        variant for the same reason `hotspot_normalization` does.
+    :param hotspot_beta: `logsumexp` sharpness. It sets where the sensitivity goes:
+        high concentrates nearly all of it on the single hottest element, which is a
+        sharp statement but makes MMA chatter as the argmax moves; low spreads it and
+        blunts the term. The aggregate overshoots the true maximum by at most
+        `log(sum of weights)/beta`. Inert under `p_mean`, which uses `p`.
+    :param hotspot_density_exponent: `logsumexp`'s void-suppression exponent. Needed
+        at all because void is the hottest thing in the domain -- nothing shields it,
+        so an unweighted aggregate reports empty space rather than the part. Must
+        exceed 1 or the weight's own gradient diverges at zero density. `null` takes
+        `p_mean`'s implicit `r * p`, which is where the "must exceed 1" requirement is
+        met only by coincidence of two unrelated knobs. Inert under `p_mean`, and inert
+        on any binary geometry, where `x**s == x` for every `s`.
     :param uniformity_metric: a `timefield.UniformityMetric` member name.
     :param roughness_weight: weight on `timefield.relative_roughness`, the objective's
         smoothness regularizer -- a number, or a `CosineSchedule` decaying one weight
@@ -226,6 +244,9 @@ class SeqRunConfig(_ConfigMixin):
 
     hotspot_weight: float
     hotspot_normalization: str = "neighborhood"
+    hotspot_aggregation: str = "p_mean"
+    hotspot_beta: float = 200.0
+    hotspot_density_exponent: float | None = None
     uniformity_metric: str
     uniformity_weight: float
     roughness_weight: float | CosineSchedule
