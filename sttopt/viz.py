@@ -17,6 +17,8 @@ Run as a script (`python -m sttopt.viz <tag>`) to regenerate plots for a saved r
 its `output/<tag>/` artefacts, without rerunning the optimization. This reads
 `final_design.npz`'s `xPhys`/`tPhys` -- the state *after* the last MMA update -- whereas
 `stto_cli.py`'s own end-of-run plot uses `prev_state` (the state entering that last update).
+Pass `--animate` to instead render the time field filled contour as a GIF across a
+seqopt run's logged checkpoints.
 """
 
 import argparse
@@ -272,6 +274,8 @@ def timefield_filled_contour_plot(
     *,
     compliance: float | None = None,
     show_void: bool = False,
+    levels: Float[np.ndarray, "nContours+1"] | None = None,
+    colorbar: bool = True,
     ax: Axes | None = None,
 ) -> Axes:
     """Filled contour plot of `tPhys` with a colorbar and thin black borders between
@@ -288,6 +292,13 @@ def timefield_filled_contour_plot(
     :param compliance: whole-structure compliance to report in the title, if known.
     :param show_void: cover the void with translucent gray instead of opaque white, so
         the time field there stays readable while still reading as "not printed".
+    :param levels: contour level boundaries; defaults to `nContours` even bins spanning
+        `tPhys`'s own range, e.g. pass a range spanning several `tPhys` fields to keep
+        the color scale consistent across an animation's frames.
+    :param colorbar: draw a colorbar. `fig.colorbar(ax=ax)` shrinks `ax` to make room
+        for it, so redrawing into the same `ax` across an animation's frames (with
+        shared `levels`, whose mapping never changes) should pass `False` after the
+        first frame -- otherwise the shrink compounds frame over frame.
     :return: the `Axes` drawn into.
     """
     if ax is None:
@@ -297,11 +308,13 @@ def timefield_filled_contour_plot(
     # Cell centers, in combination_plot's coordinate frame: x in [col, col+1],
     # y in [-(row+1), -row].
     X, Y = np.meshgrid(np.arange(nelx) + 0.5, -(np.arange(nely) + 0.5))
-    levels = np.linspace(tPhys.min(), tPhys.max(), nContours + 1)
+    if levels is None:
+        levels = np.linspace(tPhys.min(), tPhys.max(), nContours + 1)
 
     filled = ax.contourf(X, Y, tPhys, levels=levels, cmap="viridis")
     ax.contour(X, Y, tPhys, levels=levels, colors="black", linewidths=0.5)
-    ax.figure.colorbar(filled, ax=ax, orientation="horizontal", label="Time field")
+    if colorbar:
+        ax.figure.colorbar(filled, ax=ax, orientation="horizontal", label="Time field")
 
     rows, cols = np.nonzero(xPhys <= 0.5)
     empty = PolyCollection(
@@ -352,6 +365,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="final_design.npz",
         help="which output/<tag>/ artefact to plot (default: final_design.npz); pass "
         "e.g. design_it0200.npz to inspect an intermediate checkpoint",
+    )
+    parser.add_argument(
+        "--animate",
+        action="store_true",
+        help="instead of the usual plots, animate the time field filled contour "
+        "across every output/<tag>/design_it*.npz checkpoint plus final_design.npz "
+        "(seqopt runs only, saved as timefield_filled_contour_animation.gif)",
+    )
+    parser.add_argument(
+        "--fps",
+        type=float,
+        default=2.0,
+        help="animation frame rate, only used with --animate (default: 2)",
     )
     return parser.parse_args(argv)
 
@@ -467,9 +493,85 @@ def _load_seqopt_run(run_dir: Path, design_file: str = "final_design.npz") -> tu
     return xPhys, tPhys, None, hotspot_severity, grad_magnitude, config.nStage
 
 
+def _design_checkpoints(run_dir: Path) -> list[str]:
+    """Every `design_it*.npz` checkpoint under `run_dir`, in iteration order, followed by
+    `final_design.npz`.
+    """
+    import re
+
+    checkpoints = sorted(
+        run_dir.glob("design_it*.npz"),
+        key=lambda p: int(re.search(r"\d+", p.stem).group()),
+    )
+    return [p.name for p in checkpoints] + ["final_design.npz"]
+
+
+def _animate_timefield_filled_contour(
+    run_dir: Path, plot_dir: Path, n_contours: int, fps: float, is_seqopt: bool
+) -> None:
+    """Renders `timefield_filled_contour_plot` for every design checkpoint in `run_dir`
+    and stitches the frames into a GIF, with one shared color scale spanning every
+    frame's `tPhys` range.
+
+    Only seqopt runs are supported: `stto`'s `design_it*.npz` checkpoints save raw,
+    unfiltered `x`/`t` rather than `xPhys`/`tPhys` (see `_load_stto_run`), so they can't
+    be plotted this way.
+    """
+    from matplotlib.animation import PillowWriter
+
+    if not is_seqopt:
+        raise SystemExit(
+            "--animate only supports seqopt runs -- stto's design_it*.npz checkpoints "
+            "don't carry filtered xPhys/tPhys (see _load_stto_run)"
+        )
+
+    design_files = _design_checkpoints(run_dir)
+    frames = [_load_seqopt_run(run_dir, design_file) for design_file in design_files]
+    levels = np.linspace(
+        min(tPhys.min() for _, tPhys, *_ in frames),
+        max(tPhys.max() for _, tPhys, *_ in frames),
+        n_contours + 1,
+    )
+
+    fig = Figure()
+    ax = fig.add_subplot()
+    out_path = plot_dir / "timefield_filled_contour_animation.gif"
+    writer = PillowWriter(fps=fps)
+    with writer.saving(fig, out_path, dpi=150):
+        for i, (design_file, (xPhys, tPhys, obj, *_rest)) in enumerate(
+            zip(design_files, frames)
+        ):
+            ax.clear()
+            # Only the first frame draws a colorbar: `levels` (and so the color
+            # mapping) is shared across every frame, so it never needs redrawing --
+            # and redrawing it would reshrink ax, which ax.clear() does not undo.
+            timefield_filled_contour_plot(
+                xPhys,
+                tPhys,
+                n_contours,
+                compliance=obj,
+                levels=levels,
+                colorbar=(i == 0),
+                ax=ax,
+            )
+            ax.set_title(f"{ax.get_title()} -- {Path(design_file).stem}")
+            writer.grab_frame()
+    print(f"Saved time field filled contour animation to {out_path}")
+
+
 def _main(args: argparse.Namespace) -> None:
     run_dir = args.output_dir / args.tag
-    if (run_dir / "seq_config.json").exists():
+    is_seqopt = (run_dir / "seq_config.json").exists()
+
+    if args.animate:
+        plot_dir = args.plot_dir / args.tag
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        _animate_timefield_filled_contour(
+            run_dir, plot_dir, args.n_contours, args.fps, is_seqopt
+        )
+        return
+
+    if is_seqopt:
         xPhys, tPhys, obj, hotspot_severity, grad_magnitude, nStage = _load_seqopt_run(
             run_dir, args.design_file
         )
