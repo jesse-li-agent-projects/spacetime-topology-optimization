@@ -6,7 +6,7 @@ import json
 import pytest
 
 from conftest import default_run_config, default_seq_run_config
-from sttopt.run_config import RunConfig, SeqRunConfig, StepSchedule, weight_at
+from sttopt.run_config import CosineSchedule, RunConfig, SeqRunConfig, weight_at
 
 
 @pytest.mark.parametrize(
@@ -30,14 +30,53 @@ def test_from_dict_warns_and_drops_unknown_keys(cls, config):
     assert got == config
 
 
-def test_step_schedule_holds_then_steps():
-    """The switch iteration is the last one at the initial value, so a 300/500 split of
-    an 800-iteration run reads as written."""
-    schedule = StepSchedule(initial=1.0, switch_iteration=300, final=0.06)
+def test_cosine_schedule_decays_between_its_endpoints():
+    """`decay_iterations` is the last iteration still decaying, so a 300-iteration
+    decay of an 800-iteration run reads as written."""
+    schedule = CosineSchedule(initial=1.0, decay_iterations=300, final=0.02)
     assert schedule.at(1) == 1.0
-    assert schedule.at(300) == 1.0
-    assert schedule.at(301) == 0.06
-    assert schedule.at(800) == 0.06
+    assert schedule.at(301) == pytest.approx(0.02)
+    assert schedule.at(151) == pytest.approx(0.51)  # half a cosine's midpoint
+
+
+def test_cosine_schedule_holds_final_past_the_decay():
+    """The decay is allowed to finish well before the run does, so every later
+    iteration has to stay at `final` rather than overshoot below it."""
+    schedule = CosineSchedule(initial=1.0, decay_iterations=300, final=0.02)
+    assert schedule.at(800) == pytest.approx(0.02)
+    assert schedule.at(10_000) == pytest.approx(0.02)
+
+
+def test_cosine_schedule_decreases_monotonically():
+    values = [
+        CosineSchedule(initial=1.0, decay_iterations=300, final=0.02).at(loop)
+        for loop in range(1, 302)
+    ]
+    assert all(later <= earlier for earlier, later in zip(values, values[1:]))
+
+
+def test_cosine_schedule_rejects_a_zero_length_decay():
+    """The failure is in `decay_iterations` itself, not in any run length it is
+    compared against."""
+    with pytest.raises(ValueError, match="decay_iterations must be at least 1"):
+        CosineSchedule(initial=1.0, decay_iterations=0, final=0.02)
+
+
+def test_seq_config_round_trips_a_cosine_weight():
+    """JSON has no way to name a `CosineSchedule`, so a mapping in the field's place is
+    one -- and it has to survive the round trip a run directory's `seq_config.json`
+    depends on."""
+    scheduled = default_seq_run_config(
+        roughness_weight={"initial": 1.0, "decay_iterations": 300, "final": 0.02}
+    )
+    assert scheduled.roughness_weight == CosineSchedule(
+        initial=1.0, decay_iterations=300, final=0.02
+    )
+
+    revived = SeqRunConfig.from_dict(json.loads(json.dumps(scheduled.to_dict())))
+    assert revived == scheduled
+    assert weight_at(revived.roughness_weight, 1) == 1.0
+    assert weight_at(revived.roughness_weight, 800) == pytest.approx(0.02)
 
 
 def test_weight_at_passes_a_bare_number_through():
@@ -45,22 +84,6 @@ def test_weight_at_passes_a_bare_number_through():
     casing at the call site."""
     assert weight_at(0.2, 1) == 0.2
     assert weight_at(0.2, 10_000) == 0.2
-
-
-def test_seq_config_round_trips_a_scheduled_weight():
-    """JSON has no way to name a `StepSchedule`, so a mapping in the field's place is
-    one -- and it has to survive the round trip a run directory's `seq_config.json`
-    depends on."""
-    scheduled = default_seq_run_config(
-        roughness_weight={"initial": 1.0, "switch_iteration": 300, "final": 0.06}
-    )
-    assert scheduled.roughness_weight == StepSchedule(
-        initial=1.0, switch_iteration=300, final=0.06
-    )
-
-    revived = SeqRunConfig.from_dict(json.loads(json.dumps(scheduled.to_dict())))
-    assert revived == scheduled
-    assert weight_at(revived.roughness_weight, 301) == 0.06
 
 
 def test_seq_config_round_trips_a_constant_weight_as_a_number():
