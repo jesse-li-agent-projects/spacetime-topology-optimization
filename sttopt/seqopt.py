@@ -267,9 +267,9 @@ def hotspot_value(
     """The run's hotspot term and the `K_est` field behind it, with every conductivity
     setting taken from `problem`.
 
-    The one path to that field, so offline tooling (`viz.py`) cannot report a hotspot
-    measure the run never optimized -- it once plotted the print base as the worst
-    hotspot in the domain by rebuilding this call by hand (PR #98).
+    The one path to that field, so offline tooling cannot report a hotspot measure the
+    run never optimized -- rebuilding this call by hand once plotted the print base as
+    the worst hotspot in the domain (PR #98).
     """
     config = problem.config
     return conductivity.hotspot_value(
@@ -305,7 +305,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     variable.
 
     Both periodic updates (`beta_t += 5` every 30 iterations capped at 50, the hotspot
-    hotspot calibration refresh every 25 iterations) are deferred to take effect the *next*
+    calibration refresh every 25 iterations) are deferred to take effect the *next*
     iteration, matching `stto.step`'s convention. There is no Heaviside sharpening
     here: there is no density projection to sharpen.
     """

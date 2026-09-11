@@ -6,8 +6,8 @@ constraint bounding its worst-case value.
 overheating risk during additive deposition. `hotspot_value` aggregates `1 - K_est`
 (weighted toward already-dense, hot regions) into the smooth maximum that the hotspot
 constraint bounds below a critical threshold `Tcr`; the caller (`stto.step`) applies
-the `Aggregation.calibrated`/`Tcr` scaling and gets the sensitivity from autograd through this
-(Phase 3.4, `plans/torch_port_part2.md`).
+the `Aggregation.calibrated`/`Tcr` scaling and gets the sensitivity from autograd
+through this (Phase 3.4, `plans/torch_port_part2.md`).
 
 Two orthogonal choices shape that number, both selectable per run: `Normalization`
 sets what `K_est` measures shielding against, and `Aggregation` sets how the field
@@ -15,8 +15,8 @@ collapses to one scalar. They pair -- HALF_STENCIL admits `K_est > 1`, which onl
 LOGSUMEXP accepts unconditionally -- but neither implies the other.
 
 `tests/reference/conductivity.py` keeps `hotspot_constraint`, the hand-derived
-predecessor that folds the P_MEAN `factor`/`Tcr` scaling and the density-filter chain rule
-(`H`/`Hs`/`dx` from `filters.py`) directly into its sensitivities, as a cross-check
+predecessor that folds the P_MEAN `factor`/`Tcr` scaling and the density-filter chain
+rule (`H`/`Hs`/`dx` from `filters.py`) directly into its sensitivities, as a cross-check
 (`tests/test_reference_sweep.py`) and timing baseline
 (`benchmarks/bench_sensitivities.py`). See `conventions.md` for array-order/tolerance
 conventions.
@@ -33,6 +33,7 @@ neighbor by its raw density `rho_j`, where `_conductivity_core` uses `x_j**q` wi
 
 from enum import StrEnum
 from functools import cache
+from itertools import product
 from typing import NamedTuple
 
 import numpy as np
@@ -51,7 +52,7 @@ class Normalization(StrEnum):
     solid scores `K_est == 1` exactly, while an identical element beside an internal
     void does not. That makes free surfaces on the mesh boundary invisible, and leaves
     the print time of void -- a quantity nothing physical pins -- driving the result
-    through the denominator (PR #96).
+    through the denominator (PR #98).
 
     HALF_STENCIL divides by `half_stencil_weight` instead: the shielding an infinite
     uniform layer schedule would supply at the same point in its own schedule. The
@@ -137,12 +138,11 @@ def _stencil_offsets(rmin_cond: float) -> list[tuple[int, int, float]]:
     """
     r = int(np.ceil(rmin_cond)) - 1
     offsets = []
-    for di in range(-r, r + 1):
-        for dj in range(-r, r + 1):
-            dist = np.hypot(di, dj)
-            if rmin_cond - dist < 0:
-                continue
-            offsets.append((di, dj, (rmin_cond - dist) / rmin_cond))
+    for di, dj in product(range(-r, r + 1), repeat=2):
+        dist = np.hypot(di, dj)
+        if rmin_cond - dist < 0:
+            continue
+        offsets.append((di, dj, (rmin_cond - dist) / rmin_cond))
     return offsets
 
 
@@ -379,12 +379,12 @@ def hotspot_value(
     :param base: `infinite_base`'s print base, whose infinite density takes every
         element within stencil reach of it out of the aggregate.
     :param aggregation: which smooth maximum collapses the severity field.
+    :param beta: LOGSUMEXP sharpness; unused by P_MEAN, which takes `p` instead.
+    :param density_exponent: LOGSUMEXP's void-suppression exponent (`Aggregation` for
+        what it has to satisfy), defaulting to P_MEAN's implicit `r * p`. Unused by
+        P_MEAN, whose exponent is not separable.
     :raises ValueError: if no element carrying density is left with a finite `K_est`,
         the whole part being within stencil reach of the print base
-    :param beta: LOGSUMEXP sharpness; unused by P_MEAN, which takes `p` instead.
-    :param density_exponent: LOGSUMEXP's void-suppression exponent, defaulting to
-        P_MEAN's implicit `r * p`. Must exceed 1, or the weight's own gradient
-        diverges at `x == 0`. Unused by P_MEAN, whose exponent is not separable.
     """
     nely, nelx = xPhys.shape
     nel = nely * nelx

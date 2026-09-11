@@ -102,11 +102,11 @@ class RunConfig(_ConfigMixin):
         `timefield.TimeField` member (case-insensitively) for JSON.
     :param Gamma: weight of the layer-thickness-uniformity objective term
         (`timefield.gradient_magnitude_std`); 0 disables it.
-    :param hotspot_normalization: a `conductivity.Normalization` member name -- see
-        `SeqRunConfig` for the variants. `configs/default.json` stays on
-        `neighborhood`, unlike the `seqopt` one: this config is what the MATLAB-port
-        fidelity fixtures are generated and checked against, so its hotspot term has
-        to keep matching the source's rather than improving on it.
+    :param hotspot_normalization: a `conductivity.Normalization` member name, whose
+        docstring carries the variants. `configs/default.json` stays on `neighborhood`,
+        unlike the `seqopt` one: this config is what the MATLAB-port fidelity fixtures
+        are generated and checked against, so its hotspot term has to keep matching the
+        source's rather than improving on it.
     """
 
     # Frequently varied -- also exposed as a CLI flag in stto_cli.py.
@@ -183,7 +183,7 @@ class SeqRunConfig(_ConfigMixin):
     :param hotspot_normalization: a `conductivity.Normalization` member name, choosing
         what `K_est` measures shielding against. Not a tuning knob: `neighborhood`
         cannot see a free surface that lies on the mesh boundary, and lets void print
-        time drive the result (PR #96). It is the default only so that run records
+        time drive the result (PR #98). It is the default only so that run records
         written before this field existed still load and replay as they ran.
     :param hotspot_aggregation: a `conductivity.Aggregation` member name, choosing the
         smooth maximum that collapses the severity field. Defaults to the legacy

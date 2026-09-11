@@ -1191,7 +1191,7 @@ def test_hotspot_value_fully_solid_part_gradient_is_finite():
     assert torch.all(d_x == 0.0)
 
 
-# --- Normalization.HALF_STENCIL (PR #96) --------------------------------------------
+# --- Normalization.HALF_STENCIL (PR #98) --------------------------------------------
 
 
 @pytest.mark.parametrize("rouf", [1.0, 100.0, 1e6])
@@ -1255,7 +1255,7 @@ def test_half_stencil_sees_a_free_surface_on_the_mesh_edge():
     """A solid column against the mesh edge and one against an equally wide internal
     void are the same free surface, and must score alike. NEIGHBORHOOD renormalizes
     the off-mesh half of the stencil away and scores the mesh-edge column at exactly
-    zero severity, hiding it (PR #96).
+    zero severity, hiding it (PR #98).
     """
     nelx, nely = 40, 24
     rmin_cond = 6.0
@@ -1442,7 +1442,7 @@ def test_infinite_base_leaves_gradients_finite(aggregation):
     assert torch.all(torch.isfinite(d_x)) and torch.all(torch.isfinite(d_t))
 
 
-# --- Aggregation.LOGSUMEXP (PR #96) -------------------------------------------------
+# --- Aggregation.LOGSUMEXP (PR #98) -------------------------------------------------
 
 
 def _severity_field(xPhys, tPhys, e1, e2, w, denom):

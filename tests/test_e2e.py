@@ -95,13 +95,14 @@ def test_constraints_stacking_matches_fixture():
 
 
 def test_hotspot_calibration_refresh_at_loop_25():
-    """Targeted coverage for step()'s `loop % 25 == 0` factor-refresh branch: no fixture
-    exercises it (NLOOP=3), so this drives 24 *real* iterations from init_state (rather
-    than fabricating a `loop=24` state directly -- stale `low`/`upp`/`xold1`/`xold2` at an
-    unrealistic loop count makes `mmasub`'s inner Newton loop fail to converge, an
-    incidental warning unrelated to what this test targets) and checks the 25th call's
-    returned `hotspot_calibration`, `.g`, and `.dg` against an independent recomputation, rather
-    than relying on `step`'s internals to be self-consistently correct.
+    """Targeted coverage for step()'s `loop % 25 == 0` calibration-refresh branch: no
+    fixture exercises it (NLOOP=3), so this drives 24 *real* iterations from init_state
+    (rather than fabricating a `loop=24` state directly -- stale
+    `low`/`upp`/`xold1`/`xold2` at an unrealistic loop count makes `mmasub`'s inner
+    Newton loop fail to converge, an incidental warning unrelated to what this test
+    targets) and checks the 25th call's returned `hotspot_calibration`, `.g`, and `.dg`
+    against an independent recomputation, rather than relying on `step`'s internals to
+    be self-consistently correct.
 
     The refresh takes effect starting the *next* iteration, not the one that computes
     it: loop 25's own `.g`/`.dg` are evaluated at the old calibration, and the new one

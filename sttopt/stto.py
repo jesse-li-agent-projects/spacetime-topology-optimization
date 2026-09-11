@@ -4,10 +4,11 @@ conductivity/mma together into the actual space-time topology optimization itera
 Every module this file calls already owns its own math and its own fixture/FD tests;
 this file's only job is *wiring* -- building the stacked objective/constraint arrays
 MMA expects, in the exact row order the MATLAB main loop uses, and threading the
-iteration-dependent state (`beta_d`, `beta_t`, `hotspot_calibration`, `xold1`/`xold2`, `low`/`upp`, and
-the raw-vs-filtered x/t fields) from one call to the next. See `conventions.md` for
-array-order conventions and `tests/matlab_reference_loop.py` (a literal transliteration
-of the MATLAB source this ports) for the authoritative iteration order.
+iteration-dependent state (`beta_d`, `beta_t`, `hotspot_calibration`, `xold1`/`xold2`,
+`low`/`upp`, and the raw-vs-filtered x/t fields) from one call to the next. See
+`conventions.md` for array-order conventions and `tests/matlab_reference_loop.py` (a
+literal transliteration of the MATLAB source this ports) for the authoritative
+iteration order.
 
 Two field pairs are threaded per design variable, and must not be conflated: `x`/`t`
 are each iteration's *raw* MMA output (unfiltered, unprojected -- what next
@@ -119,7 +120,7 @@ class IterationRecord:
 
     obj: float  # whole-structure compliance (doesn't include intermediate structures)
     vol: float  # volume fraction (mean xPhys)
-    tru_max: float  # Estimated max hotspot severity (debiased from P-mean)
+    tru_max: float  # calibrated hotspot severity, comparable across runs
     grad_std: float  # spread of |grad tPhys|, the layer-uniformity penalty, unweighted
     f: float  # objective (compliance terms plus the Gamma-weighted uniformity penalty)
     df: Float[np.ndarray, " n"]
@@ -349,9 +350,9 @@ def hotspot_value(
     """The run's hotspot term and the `K_est` field behind it, with every conductivity
     setting taken from `problem`.
 
-    The one path to that field, so offline tooling (`viz.py`) cannot report a hotspot
-    measure the run never optimized -- it once plotted the print base as the worst
-    hotspot in the domain by rebuilding this call by hand (PR #98).
+    The one path to that field, so offline tooling cannot report a hotspot measure the
+    run never optimized -- rebuilding this call by hand once plotted the print base as
+    the worst hotspot in the domain (PR #98).
     """
     config = problem.config
     return conductivity.hotspot_value(
@@ -389,9 +390,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     `state.x`/`state.t` at `state.beta_d` produces.
 
     All three periodic state updates (`beta_t += 5` at loop%30==0, `beta_d *= 2` at
-    loop%50==0, the hotspot calibration refresh at loop%25==0) happen at the tail, next to
-    each other, and take effect starting the *next* iteration's `step` call rather than
-    rescaling this iteration's own `g_all`/`dg_dx`/`xPhys` mid-loop -- a deliberate
+    loop%50==0, the hotspot calibration refresh at loop%25==0) happen at the tail, next
+    to each other, and take effect starting the *next* iteration's `step` call rather
+    than rescaling this iteration's own `g_all`/`dg_dx`/`xPhys` mid-loop -- a deliberate
     simplification, not a fidelity gap. None of the three trigger against the small
     E2E fixture (`nloop=3`) -- unexercised by that fixture, not unimplemented or
     worked around.
