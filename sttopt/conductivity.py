@@ -6,7 +6,7 @@ constraint bounding its worst-case value.
 overheating risk during additive deposition. `hotspot_value` aggregates `1 - K_est`
 (weighted toward already-dense, hot regions) into the smooth maximum that the hotspot
 constraint bounds below a critical threshold `Tcr`; the caller (`stto.step`) applies
-the `factor`/`Tcr` scaling and gets the sensitivity from autograd through this
+the `Aggregation.calibrated`/`Tcr` scaling and gets the sensitivity from autograd through this
 (Phase 3.4, `plans/torch_port_part2.md`).
 
 Two orthogonal choices shape that number, both selectable per run: `Normalization`
@@ -15,7 +15,7 @@ collapses to one scalar. They pair -- HALF_STENCIL admits `K_est > 1`, which onl
 LOGSUMEXP accepts unconditionally -- but neither implies the other.
 
 `tests/reference/conductivity.py` keeps `hotspot_constraint`, the hand-derived
-predecessor that folds the `factor`/`Tcr` scaling and the density-filter chain rule
+predecessor that folds the P_MEAN `factor`/`Tcr` scaling and the density-filter chain rule
 (`H`/`Hs`/`dx` from `filters.py`) directly into its sensitivities, as a cross-check
 (`tests/test_reference_sweep.py`) and timing baseline
 (`benchmarks/bench_sensitivities.py`). See `conventions.md` for array-order/tolerance
@@ -88,6 +88,44 @@ class Aggregation(StrEnum):
 
     P_MEAN = "p_mean"
     LOGSUMEXP = "logsumexp"
+
+    @property
+    def uncalibrated(self) -> float:
+        """The `calibration` that leaves an aggregate where it is, for a run that has
+        not refreshed one yet.
+        """
+        return 1.0 if self is Aggregation.P_MEAN else 0.0
+
+    def calibration(self, numer: float, true_max: float) -> float | None:
+        """The constant carrying this aggregate onto `true_max`, or `None` where it is
+        undefined.
+
+        Each aggregate is biased in the shape its own algebra gives it, which is what
+        decides the shape of the correction. With `N` elements sharing the maximum and
+        the rest negligible, `P_MEAN` reads `true_max * (N/nel)**(1/p)` and `LOGSUMEXP`
+        reads `true_max + log(N)/beta`: a ratio to undo in one case, a difference in the
+        other. Correcting either one in the other's shape holds only at the instant it
+        is measured and drifts everywhere else.
+
+        :return: `None` for `P_MEAN` at `numer == 0`, where the ratio has no value --
+            every element contributed zero, so the aggregate says nothing about the
+            maximum. `LOGSUMEXP` always has one, negative severity included.
+        """
+        if self is Aggregation.P_MEAN:
+            return None if numer == 0 else true_max / numer
+        return numer - true_max
+
+    def calibrated(
+        self, numer: Float[Tensor, ""] | float, calibration: float
+    ) -> Float[Tensor, ""] | float:
+        """`numer` carried onto the true weighted maximum by a `calibration`, as an
+        estimate of the maximum severity the smooth maximum stands in for.
+
+        Differentiable in `numer`, for the constraint rows built on it.
+        """
+        if self is Aggregation.P_MEAN:
+            return calibration * numer
+        return numer - calibration
 
 
 def _stencil_offsets(rmin_cond: float) -> list[tuple[int, int, float]]:
@@ -331,7 +369,7 @@ def hotspot_value(
     identical `T_val**p * x**(r*p)` instead, whose gradient is finite because
     `r*p > 1` at production settings (`r=0.05, p=25`). Also guards `_safe_pmean`'s
     input against the (rarer) fully-solid-part singularity. Callers needing the caller
-    owned `factor`/`Tcr` scaling and the constraint value build them from `numer`
+    owned calibration/`Tcr` scaling and the constraint value build them from `numer`
     directly, as `hotspot_constraint` does.
 
     :param denom: `constant_denominator` for the run's `Normalization`. Note that

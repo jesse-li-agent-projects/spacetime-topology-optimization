@@ -4,7 +4,7 @@ conductivity/mma together into the actual space-time topology optimization itera
 Every module this file calls already owns its own math and its own fixture/FD tests;
 this file's only job is *wiring* -- building the stacked objective/constraint arrays
 MMA expects, in the exact row order the MATLAB main loop uses, and threading the
-iteration-dependent state (`beta_d`, `beta_t`, `factor`, `xold1`/`xold2`, `low`/`upp`, and
+iteration-dependent state (`beta_d`, `beta_t`, `hotspot_calibration`, `xold1`/`xold2`, `low`/`upp`, and
 the raw-vs-filtered x/t fields) from one call to the next. See `conventions.md` for
 array-order conventions and `tests/matlab_reference_loop.py` (a literal transliteration
 of the MATLAB source this ports) for the authoritative iteration order.
@@ -100,7 +100,10 @@ class State:
     loop: int
     beta_t: float  # gravity/stage-mask sigmoid sharpness
     beta_d: float  # Heaviside projection sharpness
-    factor: float  # hotspot-constraint rescaling constant, periodically refreshed
+    # Carries the hotspot aggregate onto the true maximum severity the constraint is
+    # written against; a ratio or an offset, whichever `config.hotspot_aggregation`'s
+    # bias calls for. Periodically refreshed -- `conductivity.Aggregation.calibration`.
+    hotspot_calibration: float
 
     # Batched FEM solution from this iteration's whole_compliance + gravity_compliance
     # solves, `(1 + nStage, ndof)`, row 0 the whole-structure solve and row `1 + i`
@@ -284,7 +287,9 @@ def init_state(problem: Problem, beta_d: float) -> State:
         loop=0,
         beta_t=10.0,
         beta_d=beta_d,
-        factor=1.0,
+        hotspot_calibration=conductivity.Aggregation(
+            config.hotspot_aggregation
+        ).uncalibrated,
         U=None,
     )
 
@@ -384,7 +389,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     `state.x`/`state.t` at `state.beta_d` produces.
 
     All three periodic state updates (`beta_t += 5` at loop%30==0, `beta_d *= 2` at
-    loop%50==0, the hotspot `factor` refresh at loop%25==0) happen at the tail, next to
+    loop%50==0, the hotspot calibration refresh at loop%25==0) happen at the tail, next to
     each other, and take effect starting the *next* iteration's `step` call rather than
     rescaling this iteration's own `g_all`/`dg_dx`/`xPhys` mid-loop -- a deliberate
     simplification, not a fidelity gap. None of the three trigger against the small
@@ -480,13 +485,15 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         [stage_upper_t, -stage_upper_t - 1.0e-5], dim=1
     ).flatten()
 
-    # Hotspot constraint, evaluated at this iteration's (possibly stale) `factor`.
-    # `factor` is refreshed every 25 iterations from this same call's `numer`/`K_est`
-    # (both independent of `factor`), but the refresh only takes effect starting next
-    # iteration's `step` call -- `fv`/the hotspot row below are never rescaled
-    # mid-iteration.
+    # Hotspot constraint, evaluated at this iteration's (possibly stale) calibration.
+    # That is refreshed every 25 iterations from this same call's `numer`/`K_est` (both
+    # independent of it), but the refresh only takes effect starting next iteration's
+    # `step` call -- `fv`/the hotspot row below are never recalibrated mid-iteration.
+    aggregation = conductivity.Aggregation(config.hotspot_aggregation)
     numer_t, K_est_t = hotspot_value(problem, xPhys, tPhys)
-    g_hotspot_t = state.factor * numer_t / config.Tcr - 1
+    g_hotspot_t = (
+        aggregation.calibrated(numer_t, state.hotspot_calibration) / config.Tcr - 1
+    )
 
     g_parts: list[Tensor] = [
         g_vol_t[None],
@@ -504,15 +511,16 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     # -- Periodic state updates, all deferred to take effect starting *next*
     # iteration's step() call, never rescaling this iteration's own g_all/dg_dx mid-loop. --
     numer = float(numer_t.detach())
-    factor = state.factor
+    calibration = state.hotspot_calibration
     if loop % 25 == 0:
         K_est = K_est_t.detach()
         severity = (1 - K_est) * xPhys.detach().flatten() ** config.r
         # An infinitely shielded element has no severity to take a maximum over.
         max_g = float(torch.max(severity[torch.isfinite(K_est)]))
-        if max_g != 0 or numer != 0:  # both zero implies no hotspots anywhere
-            factor = max_g / numer
-    tru_max = factor * numer
+        refreshed = aggregation.calibration(numer, max_g)
+        if refreshed is not None:
+            calibration = refreshed
+    tru_max = aggregation.calibrated(numer, calibration)
 
     if loop % 30 == 0 and beta_t < 50:
         beta_t += 5
@@ -570,7 +578,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         loop=loop,
         beta_t=beta_t,
         beta_d=beta_d,
-        factor=factor,
+        hotspot_calibration=calibration,
         # Required: femsolve() asserts its x0 argument arrives already detached (the
         # next iteration passes state.U as x0). Undetached, this leaked ~180 MB/step
         # of multigrid hierarchy across iterations -- see commit 855eb76.

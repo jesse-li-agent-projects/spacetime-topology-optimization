@@ -1628,3 +1628,58 @@ def test_hotspot_value_rejects_an_unknown_aggregation():
             None,
             "nonsense",
         )
+
+
+def test_calibration_takes_the_shape_of_each_aggregates_bias():
+    """With `N` elements sharing the maximum and the rest negligible, the count
+    multiplies P_MEAN and adds to LOGSUMEXP, which is what makes one calibration a
+    ratio and the other a difference.
+    """
+    nel, beta, true_max = 12000, 200.0, 0.45
+    for N in (1, 10, 100, 1000):
+        T = torch.full((nel,), -1e3, dtype=torch.float64)
+        T[:N] = true_max
+        p_mean = float(
+            conductivity._safe_pmean(torch.sum(torch.clamp(T, min=0.0) ** P) / nel, P)
+        )
+        lse = float(conductivity._weighted_logsumexp(T, torch.ones_like(T), beta))
+        assert p_mean == pytest.approx(true_max * (N / nel) ** (1 / P))
+        assert lse == pytest.approx(true_max + np.log(N) / beta)
+
+        assert conductivity.Aggregation.P_MEAN.calibration(
+            p_mean, true_max
+        ) == pytest.approx((nel / N) ** (1 / P))
+        assert conductivity.Aggregation.LOGSUMEXP.calibration(
+            lse, true_max
+        ) == pytest.approx(np.log(N) / beta)
+
+
+@pytest.mark.parametrize("aggregation", list(conductivity.Aggregation))
+def test_calibrated_recovers_the_true_max_it_was_calibrated_against(aggregation):
+    numer, true_max = 0.6231, 0.4508
+    calibration = aggregation.calibration(numer, true_max)
+    assert float(aggregation.calibrated(numer, calibration)) == pytest.approx(true_max)
+    # Before any refresh, an aggregate stands unaltered.
+    assert float(
+        aggregation.calibrated(numer, aggregation.uncalibrated)
+    ) == pytest.approx(numer)
+
+
+@pytest.mark.parametrize("aggregation", list(conductivity.Aggregation))
+def test_calibrated_is_differentiable_in_the_aggregate(aggregation):
+    """`stto`'s hotspot constraint row is built on it."""
+    numer = torch.tensor(0.6231, dtype=torch.float64, requires_grad=True)
+    calibration = aggregation.calibration(0.6231, 0.4508)
+    (grad,) = torch.autograd.grad(aggregation.calibrated(numer, calibration), numer)
+    assert torch.isfinite(grad)
+
+
+def test_calibration_is_undefined_only_where_the_ratio_is():
+    """A zero P_MEAN says nothing about the maximum -- every element contributed zero
+    -- so there is no ratio to take. LOGSUMEXP's difference always has a value, at
+    negative severity included.
+    """
+    assert conductivity.Aggregation.P_MEAN.calibration(0.0, 0.5) is None
+    assert conductivity.Aggregation.LOGSUMEXP.calibration(-0.2, -0.3) == pytest.approx(
+        0.1
+    )

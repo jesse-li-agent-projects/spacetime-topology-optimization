@@ -296,15 +296,18 @@ def test_step_output_state_is_self_consistent(tfield):
 # --- step: finite-difference check of the assembled sensitivities ---------------------
 
 
-def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, factor=1.0, beta_t=10.0):
+def _state_from_raw(
+    problem, x_raw, t_raw, *, beta_d=BETA_D, calibration=1.0, beta_t=10.0
+):
     """A `State` at raw design point `[x_raw; t_raw]`, with the physics fields derived
     per the invariant above -- i.e. the state `step` itself would have produced.
 
     `loop` is left at 0 so the ensuing `step` runs as iteration 1, which is none of
-    30/50/25: `beta_t`, `beta_d` and `factor` all stay fixed across the call, so `.f`/`.g`
-    are smooth functions of the raw variables alone. (At a refresh iteration `factor`
-    jumps as a function of the design, and the reported gradient deliberately does not
-    account for that -- a different question from the one this test asks.)
+    30/50/25: `beta_t`, `beta_d` and the hotspot calibration all stay fixed across the
+    call, so `.f`/`.g` are smooth functions of the raw variables alone. (At a refresh
+    iteration the calibration jumps as a function of the design, and the reported
+    gradient deliberately does not account for that -- a different question from the
+    one this test asks.)
     """
     nely, nelx = problem.config.nely, problem.config.nelx
     device, dtype = problem.device, problem.dtype
@@ -322,7 +325,7 @@ def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, factor=1.0, beta_t=
         loop=0,
         beta_t=beta_t,
         beta_d=beta_d,
-        factor=factor,
+        hotspot_calibration=calibration,
         U=None,
     )
 
@@ -719,7 +722,7 @@ def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
         loop=800,
         beta_t=50.0,
         beta_d=128.0,
-        factor=1.0,
+        hotspot_calibration=1.0,
         U=None,
     )
 

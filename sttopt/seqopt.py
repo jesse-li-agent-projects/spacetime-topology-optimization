@@ -96,7 +96,10 @@ class State:
     upp: Float[Tensor, " n"]
     loop: int
     beta_t: float  # stage-mask sigmoid sharpness
-    factor: float  # hotspot rescaling constant, periodically refreshed
+    # Carries the hotspot aggregate onto the true maximum severity; a ratio or an
+    # offset, whichever `config.hotspot_aggregation`'s bias calls for. Periodically
+    # refreshed -- `conductivity.Aggregation.calibration`.
+    hotspot_calibration: float
 
 
 @dataclass(frozen=True)
@@ -107,7 +110,7 @@ class IterationRecord:
     hotspot: float  # raw hotspot p-mean (`numer`), before any rescaling
     uniformity: float  # raw layer-uniformity penalty
     roughness: float  # smoothness regularizer, as a fraction of a layer thickness
-    tru_max: float  # factor-rescaled hotspot severity, comparable across runs
+    tru_max: float  # calibrated hotspot severity, comparable across runs
 
     # Diagnostics only -- nothing below enters the objective or a constraint. They exist
     # because `uniformity` cannot be taken at face value: it is blind to the transverse
@@ -252,7 +255,9 @@ def init_state(problem: Problem) -> State:
         upp=torch.zeros(problem.n, device=problem.device, dtype=problem.dtype),
         loop=0,
         beta_t=10.0,
-        factor=1.0,
+        hotspot_calibration=conductivity.Aggregation(
+            problem.config.hotspot_aggregation
+        ).uncalibrated,
     )
 
 
@@ -300,7 +305,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     variable.
 
     Both periodic updates (`beta_t += 5` every 30 iterations capped at 50, the hotspot
-    `factor` refresh every 25 iterations) are deferred to take effect the *next*
+    hotspot calibration refresh every 25 iterations) are deferred to take effect the *next*
     iteration, matching `stto.step`'s convention. There is no Heaviside sharpening
     here: there is no density projection to sharpen.
     """
@@ -371,17 +376,17 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     # -- Periodic state updates, deferred to take effect starting *next* iteration. --
     numer = float(numer_t.detach())
-    factor = state.factor
+    aggregation = conductivity.Aggregation(config.hotspot_aggregation)
+    calibration = state.hotspot_calibration
     if loop % 25 == 0:
         K_est = K_est_t.detach()
         severity = (1 - K_est) * xPhys.flatten() ** config.r
         # An infinitely shielded element has no severity to take a maximum over.
         max_g = float(torch.max(severity[torch.isfinite(K_est)]))
-        if max_g > 1e-14 or numer > 1e-14:  # both zero implies no hotspots anywhere
-            if numer == 0:
-                print(f"{max_g=}")
-            factor = max_g / numer
-    tru_max = factor * numer
+        refreshed = aggregation.calibration(numer, max_g)
+        if refreshed is not None:
+            calibration = refreshed
+    tru_max = aggregation.calibrated(numer, calibration)
 
     if loop % 30 == 0 and beta_t < 50:
         beta_t += 5
@@ -430,7 +435,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         upp=upp,
         loop=loop,
         beta_t=beta_t,
-        factor=factor,
+        hotspot_calibration=calibration,
     )
     record = IterationRecord(
         f=f_val,
