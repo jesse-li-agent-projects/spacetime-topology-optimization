@@ -35,7 +35,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
-from jaxtyping import Bool, Float, Int
+from jaxtyping import Float, Int
 from torch import Tensor
 
 import sttopt.conductivity as conductivity
@@ -75,9 +75,9 @@ class Problem:
     # Constant `K_est` divisor for `config.hotspot_normalization`, or None where the
     # divisor is per-element -- `conductivity.constant_denominator`.
     hotspot_denom: float | None
-    # Elements the hotspot measure skips because they can see the print base, or None
-    # where the normalization needs no exemption -- `conductivity.base_exemption`.
-    hotspot_exempt: Bool[Tensor, " nel"] | None
+    # Print base elements the hotspot measure treats as infinitely dense, or None where
+    # the normalization needs no print base -- `conductivity.infinite_base`.
+    hotspot_base: Int[Tensor, " k"] | None
     Nei: Int[Tensor, " k"]  # print-start element(s), already filtered to solid ones
 
     m: int  # number of MMA constraint rows: continuity + start-point(s) + 2*nStage
@@ -177,13 +177,8 @@ def build_problem(
     hotspot_denom = conductivity.constant_denominator(
         conductivity.Normalization(config.hotspot_normalization), config.rmin_cond
     )
-    hotspot_exempt = conductivity.base_exemption(
-        nelx,
-        nely,
-        Nei,
-        config.rmin_cond,
-        conductivity.Normalization(config.hotspot_normalization),
-        geometry.solid_mask(xPhys).flatten(),
+    hotspot_base = conductivity.infinite_base(
+        conductivity.Normalization(config.hotspot_normalization), Nei
     )
 
     H = Hs = None
@@ -211,11 +206,7 @@ def build_problem(
         Hs=Hs,
         w=torch_util.to_tensor(w, device, dtype),
         hotspot_denom=hotspot_denom,
-        hotspot_exempt=(
-            None
-            if hotspot_exempt is None
-            else torch.as_tensor(hotspot_exempt, device=device)
-        ),
+        hotspot_base=None if hotspot_base is None else int_fields["Nei"],
         m=m,
         n=n,
         **int_fields,
@@ -265,6 +256,35 @@ def init_state(problem: Problem) -> State:
     )
 
 
+def hotspot_value(
+    problem: Problem, tPhys: Float[Tensor, "nely nelx"]
+) -> tuple[Float[Tensor, ""], Float[Tensor, " nel"]]:
+    """The run's hotspot term and the `K_est` field behind it, with every conductivity
+    setting taken from `problem`.
+
+    The one path to that field, so offline tooling (`viz.py`) cannot report a hotspot
+    measure the run never optimized -- it once plotted the print base as the worst
+    hotspot in the domain by rebuilding this call by hand (PR #98).
+    """
+    config = problem.config
+    return conductivity.hotspot_value(
+        problem.xPhys,
+        tPhys,
+        problem.e1,
+        problem.e2,
+        problem.w,
+        config.p,
+        config.q,
+        config.r,
+        config.rouf,
+        problem.hotspot_denom,
+        problem.hotspot_base,
+        conductivity.Aggregation(config.hotspot_aggregation),
+        config.hotspot_beta,
+        config.hotspot_density_exponent,
+    )
+
+
 def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     """Run one optimization iteration: build the objective and every constraint's
     value, differentiate by autograd (`t` is the sole leaf), call `mma.mmasub`, and
@@ -296,22 +316,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     t = state.t.clone().requires_grad_(True)
     tPhys = physical_timefield(problem, t)
 
-    numer_t, K_est_t = conductivity.hotspot_value(
-        xPhys,
-        tPhys,
-        problem.e1,
-        problem.e2,
-        problem.w,
-        config.p,
-        config.q,
-        config.r,
-        config.rouf,
-        problem.hotspot_denom,
-        problem.hotspot_exempt,
-        conductivity.Aggregation(config.hotspot_aggregation),
-        config.hotspot_beta,
-        config.hotspot_density_exponent,
-    )
+    numer_t, K_est_t = hotspot_value(problem, tPhys)
     # The roughness regularizer is not optional garnish: uniformity alone rewards a
     # sawtooth across the print direction (`timefield._gradient_cv`).
     metric = timefield.UniformityMetric(config.uniformity_metric)
@@ -368,10 +373,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     numer = float(numer_t.detach())
     factor = state.factor
     if loop % 25 == 0:
-        severity = (1 - K_est_t.detach()) * xPhys.flatten() ** config.r
-        if problem.hotspot_exempt is not None:
-            severity = severity[~problem.hotspot_exempt]
-        max_g = float(torch.max(severity))
+        K_est = K_est_t.detach()
+        severity = (1 - K_est) * xPhys.flatten() ** config.r
+        # An infinitely shielded element has no severity to take a maximum over.
+        max_g = float(torch.max(severity[torch.isfinite(K_est)]))
         if max_g > 1e-14 or numer > 1e-14:  # both zero implies no hotspots anywhere
             if numer == 0:
                 print(f"{max_g=}")

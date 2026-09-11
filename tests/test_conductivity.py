@@ -1294,53 +1294,71 @@ def test_constant_denominator_rejects_an_unknown_normalization():
         conductivity.constant_denominator("nonsense", RMIN_COND)
 
 
-def test_base_exemption_covers_exactly_the_stencil_reach():
-    """The exempt set is "can see the print base through the conductivity stencil",
-    which is the stencil's own reach -- not a band of hand-picked depth.
+def test_infinite_base_diverges_over_the_stencils_reach():
+    """An infinitely dense base sends `K_est` to infinity for every element carrying
+    any stencil weight on it -- the stencil's own reach, never a depth chosen for it.
     """
     nelx, nely, rmin_cond = 20, 15, 4.0
     base = np.arange(nelx) + (nely - 1) * nelx  # bottom row, as BOTTOM_EDGE gives
-    mask = conductivity.base_exempt_mask(nelx, nely, base, rmin_cond)
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
+    denom = conductivity.constant_denominator(
+        conductivity.Normalization.HALF_STENCIL, rmin_cond
+    )
+    xPhys = np.ones((nely, nelx))
+    tPhys = np.tile(np.linspace(1, 0, nely)[:, None], (1, nelx))
+    K = conductivity.estimated_conductivity(
+        tt(xPhys), tt(tPhys), tti(e1), tti(e2), tt(w), Q, ROUF, denom, tti(base)
+    )
 
-    # Independently: an element is exempt exactly when the neighbor structure the
-    # conductivity sum itself runs over pairs it with a base element.
-    e1, e2, _ = conductivity.neighbor_weights(nelx, nely, rmin_cond)
+    # Independently: the neighbor structure the conductivity sum itself runs over
+    # pairs the element with a base element at nonzero weight.
     is_base = np.zeros(nelx * nely, dtype=bool)
     is_base[base] = True
     expected = np.zeros(nelx * nely, dtype=bool)
-    expected[e1[is_base[e2]]] = True
+    expected[e1[is_base[e2] & (w > 0)]] = True
 
-    np.testing.assert_array_equal(mask, expected)
+    np.testing.assert_array_equal(torch_util.to_numpy(torch.isinf(K)), expected)
 
 
-def test_base_exemption_is_none_for_the_self_normalized_variant():
+def test_infinite_base_is_none_for_the_self_normalized_variant():
     """NEIGHBORHOOD's denominator already collapses with its numerator at the first
-    deposited layer, so exempting there would only hide real information.
+    deposited layer, so diverging there would only hide real information.
     """
-    nelx, nely = 12, 10
-    base = np.arange(nelx) + (nely - 1) * nelx
+    base = np.arange(12) + 9 * 12
     assert (
-        conductivity.base_exemption(
-            nelx, nely, base, 3.0, conductivity.Normalization.NEIGHBORHOOD
-        )
+        conductivity.infinite_base(conductivity.Normalization.NEIGHBORHOOD, base)
         is None
     )
 
 
-def test_base_exemption_rejects_a_wholly_exempt_part():
-    """Stated against the quantity that is actually inconsistent -- no elements left
-    to aggregate -- rather than against a mesh size, which only produces it under the
-    current radius.
+def test_infinite_base_rejects_a_wholly_shielded_part():
+    """Stated against the quantity that is actually inconsistent -- no element left
+    with a finite `K_est` -- rather than against a mesh size, which only produces it
+    under the current radius.
     """
-    nelx, nely = 6, 5
+    nelx, nely, rmin_cond = 6, 5, 12.0
     base = np.arange(nelx) + (nely - 1) * nelx
-    with pytest.raises(ValueError, match="leaving it nothing to report"):
-        conductivity.base_exemption(
-            nelx, nely, base, 12.0, conductivity.Normalization.HALF_STENCIL
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
+    denom = conductivity.constant_denominator(
+        conductivity.Normalization.HALF_STENCIL, rmin_cond
+    )
+    with pytest.raises(ValueError, match="nothing left to aggregate over"):
+        conductivity.hotspot_value(
+            tt(np.ones((nely, nelx))),
+            tt(np.zeros((nely, nelx))),
+            tti(e1),
+            tti(e2),
+            tt(w),
+            P,
+            Q,
+            R,
+            ROUF,
+            denom,
+            tti(base),
         )
 
 
-def test_base_exemption_removes_the_first_layer_false_hotspot():
+def test_infinite_base_removes_the_first_layer_false_hotspot():
     """The first deposited layer has nothing before it, so a constant denominator
     scores it as the worst hotspot in the domain -- an artifact of the print base
     being absent from the model, not a real overheating risk.
@@ -1349,31 +1367,63 @@ def test_base_exemption_removes_the_first_layer_false_hotspot():
     rmin_cond = 5.0
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
     e1, e2, w = tti(e1), tti(e2), tt(w)
+    base = tti(np.arange(nelx) + (nely - 1) * nelx)
     denom = conductivity.constant_denominator(
         conductivity.Normalization.HALF_STENCIL, rmin_cond
     )
 
     xPhys = np.ones((nely, nelx))
     tPhys = np.tile(np.linspace(1, 0, nely)[:, None], (1, nelx))  # bottom row first
-    K = conductivity.estimated_conductivity(
-        tt(xPhys), tt(tPhys), e1, e2, w, Q, ROUF, denom
+    bare = 1 - torch_util.to_numpy(
+        conductivity.estimated_conductivity(
+            tt(xPhys), tt(tPhys), e1, e2, w, Q, ROUF, denom
+        )
     ).reshape(nely, nelx)
-    severity = 1 - torch_util.to_numpy(K)
+    with_base = 1 - torch_util.to_numpy(
+        conductivity.estimated_conductivity(
+            tt(xPhys), tt(tPhys), e1, e2, w, Q, ROUF, denom, base
+        )
+    ).reshape(nely, nelx)
 
-    base = np.arange(nelx) + (nely - 1) * nelx
-    exempt = conductivity.base_exempt_mask(nelx, nely, base, rmin_cond).reshape(
-        nely, nelx
-    )
-    # Unexempted, the first-deposited row is the worst element in the whole domain.
-    assert severity[-1].max() == pytest.approx(severity.max())
-    assert severity[~exempt].max() < severity[-1].max()
+    # Without the base in the model, the first-deposited row is the worst element in
+    # the whole domain; with it, that row scores nothing at all.
+    assert bare[-1].max() == pytest.approx(bare.max())
+    assert np.isneginf(with_base[-1]).all()
+    assert with_base[np.isfinite(with_base)].max() < bare[-1].max()
 
     numer_bare, _ = conductivity.hotspot_value(
         tt(xPhys), tt(tPhys), e1, e2, w, P, Q, R, ROUF, denom
     )
-    numer_exempt, _ = conductivity.hotspot_value(
-        tt(xPhys),
-        tt(tPhys),
+    numer_base, _ = conductivity.hotspot_value(
+        tt(xPhys), tt(tPhys), e1, e2, w, P, Q, R, ROUF, denom, base
+    )
+    assert float(numer_base) < float(numer_bare)
+
+
+@pytest.mark.parametrize(
+    "aggregation", [conductivity.Aggregation.P_MEAN, conductivity.Aggregation.LOGSUMEXP]
+)
+def test_infinite_base_leaves_gradients_finite(aggregation):
+    """The divergence is selected into `K_est`, not evaluated as `inf * w`, so neither
+    aggregation carries a `nan` back to the design variables it is differentiated
+    against.
+    """
+    nelx, nely, rmin_cond = 18, 14, 4.0
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+    base = tti(np.arange(nelx) + (nely - 1) * nelx)
+    denom = conductivity.constant_denominator(
+        conductivity.Normalization.HALF_STENCIL, rmin_cond
+    )
+
+    rng = np.random.default_rng(203)
+    xPhys_t = tt((rng.uniform(size=(nely, nelx)) > 0.3).astype(float)).requires_grad_(
+        True
+    )
+    tPhys_t = tt(rng.uniform(0.0, 1.0, size=(nely, nelx))).requires_grad_(True)
+    numer, _ = conductivity.hotspot_value(
+        xPhys_t,
+        tPhys_t,
         e1,
         e2,
         w,
@@ -1382,9 +1432,14 @@ def test_base_exemption_removes_the_first_layer_false_hotspot():
         R,
         ROUF,
         denom,
-        tt(exempt.flatten()).bool(),
+        base,
+        aggregation,
+        200.0,
+        1.25,
     )
-    assert float(numer_exempt) < float(numer_bare)
+    assert torch.isfinite(numer)
+    d_x, d_t = torch.autograd.grad(numer, (xPhys_t, tPhys_t))
+    assert torch.all(torch.isfinite(d_x)) and torch.all(torch.isfinite(d_t))
 
 
 # --- Aggregation.LOGSUMEXP (PR #96) -------------------------------------------------

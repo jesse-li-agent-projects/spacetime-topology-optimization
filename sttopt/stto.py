@@ -75,9 +75,9 @@ class Problem:
     # Constant `K_est` divisor for `config.hotspot_normalization`, or None where the
     # divisor is per-element -- `conductivity.constant_denominator`.
     hotspot_denom: float | None
-    # Elements the hotspot measure skips because they can see the print base, or None
-    # where the normalization needs no exemption -- `conductivity.base_exemption`.
-    hotspot_exempt: Bool[Tensor, " nel"] | None
+    # Print base elements the hotspot measure treats as infinitely dense, or None where
+    # the normalization needs no print base -- `conductivity.infinite_base`.
+    hotspot_base: Int[Tensor, " k"] | None
     Nei: Int[Tensor, " k"]
 
     m: int  # number of MMA constraint rows: vol + continuity + start-point(s) + 2*nStage + hotspot
@@ -198,12 +198,8 @@ def build_problem(
 
     # Print-start element(s), per constraints.start_point's own docstring.
     Nei = timefield.base_elements(nelx, nely, tfield)
-    hotspot_exempt = conductivity.base_exemption(
-        nelx,
-        nely,
-        Nei,
-        config.rmin_cond,
-        conductivity.Normalization(config.hotspot_normalization),
+    hotspot_base = conductivity.infinite_base(
+        conductivity.Normalization(config.hotspot_normalization), Nei
     )
 
     n = 2 * nelx * nely
@@ -232,11 +228,7 @@ def build_problem(
         L=torch_util.csr_to_tensor(L, device, dtype),
         C=torch_util.csr_to_tensor(C, device, dtype),
         hotspot_denom=hotspot_denom,
-        hotspot_exempt=(
-            None
-            if hotspot_exempt is None
-            else torch.as_tensor(hotspot_exempt, device=device)
-        ),
+        hotspot_base=None if hotspot_base is None else int_fields["Nei"],
         m=m,
         n=n,
         **float_fields,
@@ -342,6 +334,37 @@ def _sensitivity_rows(
     :return: `(k, n)` sensitivity rows.
     """
     return _flatten_pair(*sensitivity.jacobian_rows(outputs, (x, t)))
+
+
+def hotspot_value(
+    problem: Problem,
+    xPhys: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+) -> tuple[Float[Tensor, ""], Float[Tensor, " nel"]]:
+    """The run's hotspot term and the `K_est` field behind it, with every conductivity
+    setting taken from `problem`.
+
+    The one path to that field, so offline tooling (`viz.py`) cannot report a hotspot
+    measure the run never optimized -- it once plotted the print base as the worst
+    hotspot in the domain by rebuilding this call by hand (PR #98).
+    """
+    config = problem.config
+    return conductivity.hotspot_value(
+        xPhys,
+        tPhys,
+        problem.e1,
+        problem.e2,
+        problem.w,
+        config.p,
+        config.q,
+        config.r,
+        config.rouf,
+        problem.hotspot_denom,
+        problem.hotspot_base,
+        conductivity.Aggregation(config.hotspot_aggregation),
+        config.hotspot_beta,
+        config.hotspot_density_exponent,
+    )
 
 
 def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
@@ -462,22 +485,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     # (both independent of `factor`), but the refresh only takes effect starting next
     # iteration's `step` call -- `fv`/the hotspot row below are never rescaled
     # mid-iteration.
-    numer_t, K_est_t = conductivity.hotspot_value(
-        xPhys,
-        tPhys,
-        problem.e1,
-        problem.e2,
-        problem.w,
-        config.p,
-        config.q,
-        config.r,
-        config.rouf,
-        problem.hotspot_denom,
-        problem.hotspot_exempt,
-        conductivity.Aggregation(config.hotspot_aggregation),
-        config.hotspot_beta,
-        config.hotspot_density_exponent,
-    )
+    numer_t, K_est_t = hotspot_value(problem, xPhys, tPhys)
     g_hotspot_t = state.factor * numer_t / config.Tcr - 1
 
     g_parts: list[Tensor] = [
@@ -498,10 +506,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     numer = float(numer_t.detach())
     factor = state.factor
     if loop % 25 == 0:
-        severity = (1 - K_est_t.detach()) * xPhys.detach().flatten() ** config.r
-        if problem.hotspot_exempt is not None:
-            severity = severity[~problem.hotspot_exempt]
-        max_g = float(torch.max(severity))
+        K_est = K_est_t.detach()
+        severity = (1 - K_est) * xPhys.detach().flatten() ** config.r
+        # An infinitely shielded element has no severity to take a maximum over.
+        max_g = float(torch.max(severity[torch.isfinite(K_est)]))
         if max_g != 0 or numer != 0:  # both zero implies no hotspots anywhere
             factor = max_g / numer
     tru_max = factor * numer

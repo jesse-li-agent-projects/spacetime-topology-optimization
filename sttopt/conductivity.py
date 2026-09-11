@@ -37,7 +37,7 @@ from typing import NamedTuple
 
 import numpy as np
 import torch
-from jaxtyping import Bool, Float, Int
+from jaxtyping import Float, Int
 from torch import Tensor
 
 
@@ -138,72 +138,27 @@ def constant_denominator(
         )
 
 
-def base_exempt_mask(
-    nelx: int, nely: int, base: Int[np.ndarray, " k"], rmin_cond: float
-) -> Bool[np.ndarray, " nel"]:
-    """Elements whose conductivity stencil reaches the print base, and which are
-    therefore excluded from the hotspot measure entirely.
+def infinite_base(
+    normalization: Normalization, base: Int[np.ndarray, " k"]
+) -> Int[np.ndarray, " k"] | None:
+    """The print base, for the normalizations that model it as an infinitely dense heat
+    sink, else `None`.
 
-    The print base is a heat sink, not part of the design: the material it stands in
-    for is always already there, whatever the deposition order. `Normalization.
-    HALF_STENCIL` has no way to say that -- its denominator assumes a full
-    half-neighborhood of prior material everywhere, so the first-deposited layer,
-    which by definition has nothing before it, scores as the worst hotspot in the
-    domain. Modelling the base as infinitely dense makes `K_est` diverge for anything
-    that can see it, which is what this mask is: the same statement, without an
-    infinity to represent.
-
-    Coarse on purpose. It exempts a band `rmin_cond` deep rather than shading the base
-    into the field, so a part small enough to sit entirely within `rmin_cond` of its
-    base has no hotspot measure left -- `seqopt.build_problem`/`stto.build_problem`
-    reject that rather than silently aggregating nothing.
-
-    :param base: 0-indexed print-start elements, e.g. `geometry.base_elements`
-    """
-    is_base = np.zeros((nely, nelx), dtype=bool)
-    is_base.flat[base] = True
-    reaches = np.zeros((nely, nelx), dtype=bool)
-    # `reaches[j, i] |= is_base[j + dj, i + di]`, over the offsets that stay in-mesh.
-    # A stencil wider than the mesh leaves offsets with no in-mesh destination at all.
-    for di, dj, _ in _stencil_offsets(rmin_cond):
-        j0, j1 = max(0, -dj), min(nely, nely - dj)
-        i0, i1 = max(0, -di), min(nelx, nelx - di)
-        if j0 >= j1 or i0 >= i1:
-            continue
-        reaches[j0:j1, i0:i1] |= is_base[j0 + dj : j1 + dj, i0 + di : i1 + di]
-    return reaches.flatten()
-
-
-def base_exemption(
-    nelx: int,
-    nely: int,
-    base: Int[np.ndarray, " k"],
-    rmin_cond: float,
-    normalization: Normalization,
-    solid: Bool[np.ndarray, " nel"] | None = None,
-) -> Bool[np.ndarray, " nel"] | None:
-    """`base_exempt_mask` for the normalizations that need one, else `None`.
+    The base is not part of the design: the material it stands in for is there whatever
+    the deposition order. HALF_STENCIL's denominator assumes a full half-neighborhood of
+    prior material everywhere, so the first deposited layer, which by definition has
+    nothing before it, otherwise scores as the worst hotspot in the domain. An
+    infinitely dense base sends `K_est` to infinity for every element whose stencil
+    reaches it, which is what takes those elements out of the hotspot measure -- the
+    reach is a consequence of the stencil, never a depth chosen here.
 
     NEIGHBORHOOD needs none: its denominator shrinks along with its numerator at the
     first deposited layer, so an element there already scores near zero severity
     without being told the base exists. Only a constant denominator has to be told.
 
-    :param solid: which elements hold material, where that is fixed up front. Pass it
-        to have the check below see the part rather than the bounding box; omit it
-        where density is itself a design variable and no such answer exists yet.
-    :raises ValueError: if the exemption leaves the hotspot measure nothing to
-        aggregate over, every candidate element being within one conductivity radius
-        of the print base
+    :param base: 0-indexed print-start elements, e.g. `geometry.base_elements`
     """
-    if normalization == Normalization.NEIGHBORHOOD:
-        return None
-    exempt = base_exempt_mask(nelx, nely, base, rmin_cond)
-    considered = ~exempt if solid is None else (~exempt & solid)
-    if not considered.any():
-        raise ValueError(
-            f"the print-base exemption at rmin_cond={rmin_cond} covers every element the hotspot measure would aggregate over, leaving it nothing to report; shrink rmin_cond or use hotspot_normalization='neighborhood'"
-        )
-    return exempt
+    return None if normalization == Normalization.NEIGHBORHOOD else base
 
 
 def neighbor_weights(
@@ -269,6 +224,7 @@ def _conductivity_core(
     q: float,
     rouf: float,
     denom: float | None = None,
+    base: Int[Tensor, " k"] | None = None,
 ) -> _ConductivityCore:
     """`K_est` and the divisor it was formed with, plus the `a->b` pair terms
     (`FT_ab`/`xb_q`) shared by `estimated_conductivity` and
@@ -278,6 +234,8 @@ def _conductivity_core(
     :param denom: a constant divisor for every element (`constant_denominator`), or
         `None` for the per-element already-printed neighbor weight. Only the `None`
         case makes `denom` indexable per element.
+    :param base: print base elements, taken to be infinitely dense (`infinite_base`),
+        or `None` to leave them ordinary design material.
     """
     nel = x.shape[0]
     FT_ab = _pairwise_sigmoid(t, e1, e2, rouf)
@@ -289,7 +247,18 @@ def _conductivity_core(
         divisor.index_add_(0, e1, w * FT_ab)
     else:
         divisor = torch.as_tensor(denom, dtype=x.dtype, device=x.device)
-    return _ConductivityCore(num / divisor, divisor, FT_ab, xb_q)
+    K_est = num / divisor
+    if base is not None:
+        # An infinitely dense neighbor sends the sum above to infinity, so `K_est`
+        # diverges wherever any stencil weight lands on the base at all. Selected
+        # rather than evaluated as `inf * w`, whose backward is `nan` -- the same
+        # safe-input-then-reselect pattern as `_safe_pmean`.
+        on_base = torch.zeros(nel, dtype=x.dtype, device=x.device)
+        on_base[base] = 1.0
+        base_weight = torch.zeros(nel, dtype=x.dtype, device=x.device)
+        base_weight.index_add_(0, e1, w * FT_ab.detach() * on_base[e2])
+        K_est = torch.where(base_weight > 0, torch.inf, K_est)
+    return _ConductivityCore(K_est, divisor, FT_ab, xb_q)
 
 
 def _safe_pmean(u: Float[Tensor, ""], p: float) -> Float[Tensor, ""]:
@@ -346,7 +315,7 @@ def hotspot_value(
     r: float,
     rouf: float,
     denom: float | None = None,
-    exempt: Bool[Tensor, " nel"] | None = None,
+    base: Int[Tensor, " k"] | None = None,
     aggregation: Aggregation = Aggregation.P_MEAN,
     beta: float = 200.0,
     density_exponent: float | None = None,
@@ -369,10 +338,11 @@ def hotspot_value(
         `T_val` can go negative under a constant denominator, which the `**p` here
         only tolerates while `p` is integral -- `Aggregation.LOGSUMEXP` is the pairing
         that does not care.
-    :param exempt: elements to drop from the aggregate entirely, `base_exempt_mask`.
-        Fixed by the mesh and the print base, so it is a constant weight here rather
-        than anything autograd has to see through.
+    :param base: `infinite_base`'s print base, whose infinite density takes every
+        element within stencil reach of it out of the aggregate.
     :param aggregation: which smooth maximum collapses the severity field.
+    :raises ValueError: if no element carrying density is left with a finite `K_est`,
+        the whole part being within stencil reach of the print base
     :param beta: LOGSUMEXP sharpness; unused by P_MEAN, which takes `p` instead.
     :param density_exponent: LOGSUMEXP's void-suppression exponent, defaulting to
         P_MEAN's implicit `r * p`. Must exceed 1, or the weight's own gradient
@@ -383,20 +353,25 @@ def hotspot_value(
     x = xPhys.flatten()
     t = tPhys.flatten()
 
-    core = _conductivity_core(x, t, e1, e2, w, q, rouf, denom)
+    core = _conductivity_core(x, t, e1, e2, w, q, rouf, denom, base)
     K_est = core.K_est
     T_val = 1 - K_est
+    infinitely_shielded = torch.isinf(K_est)
+    if base is not None and not bool((~infinitely_shielded & (x > 0)).any()):
+        raise ValueError(
+            "every element carrying density has infinite K_est, being within the conductivity stencil's reach of the print base, so the hotspot measure has nothing left to aggregate over; shrink rmin_cond or use a normalization that needs no print base (infinite_base)"
+        )
 
     if aggregation == Aggregation.P_MEAN:
-        cond_p = T_val**p * x ** (r * p)
-        if exempt is not None:
-            cond_p = torch.where(exempt, torch.zeros_like(cond_p), cond_p)
+        # An infinitely shielded element contributes nothing, which `(-inf)**p` is not
+        # a way to say.
+        T_p = torch.where(infinitely_shielded, torch.zeros_like(T_val), T_val)
+        cond_p = T_p**p * x ** (r * p)
         numer = _safe_pmean(torch.sum(cond_p) / nel, p)
     elif aggregation == Aggregation.LOGSUMEXP:
         s = r * p if density_exponent is None else density_exponent
         weight = x**s
-        if exempt is not None:
-            weight = torch.where(exempt, torch.zeros_like(weight), weight)
+        # Infinitely shielded elements need no weight of their own: `exp(-inf) == 0`.
         numer = _weighted_logsumexp(T_val, weight, beta)
     else:
         raise ValueError(
@@ -414,12 +389,13 @@ def estimated_conductivity(
     q: float,
     rouf: float,
     denom: float | None = None,
+    base: Int[Tensor, " k"] | None = None,
 ) -> Float[Tensor, " nely*nelx"]:
     """Local estimated conductivity: how strongly each element's neighborhood has
     already solidified (cooler, earlier `tPhys`) around it, used as an overheating
     proxy by `hotspot_value`. `Normalization` sets what it is measured relative to,
-    via `denom`.
+    via `denom`, and `infinite_base`'s `base` is infinite wherever it is in reach.
     """
     x = xPhys.flatten()
     t = tPhys.flatten()
-    return _conductivity_core(x, t, e1, e2, w, q, rouf, denom).K_est
+    return _conductivity_core(x, t, e1, e2, w, q, rouf, denom, base).K_est
