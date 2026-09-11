@@ -382,6 +382,20 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _hotspot_severity(
+    xPhys: Float[np.ndarray, "nely nelx"], K_est: Float[np.ndarray, "nely nelx"]
+) -> Float[np.ndarray, "nely nelx"]:
+    """`1 - K_est` over the printed elements, `nan` where the hotspot measure has no
+    value to report -- an element an infinitely conductive print base shields
+    (`conductivity.infinite_base`) has `K_est == inf`. `nan` leaves it uncolored rather
+    than dominating the color scale with a severity the run never optimized against.
+    """
+    severity = np.full(K_est.shape, np.nan)
+    measured = np.isfinite(K_est)  # `inf * 0` where it is not, hence no bare `where`
+    severity[measured] = (1 - K_est[measured]) * (xPhys[measured] > 0.5)
+    return severity
+
+
 def _load_stto_run(run_dir: Path, design_file: str = "final_design.npz") -> tuple:
     """Loads an `stto` run directory's plotting inputs: `xPhys`, `tPhys`, whole-
     structure compliance, hotspot severity, `|grad tPhys|`, and `nStage`.
@@ -395,7 +409,6 @@ def _load_stto_run(run_dir: Path, design_file: str = "final_design.npz") -> tupl
     import json
 
     import sttopt.compliance as compliance
-    import sttopt.conductivity as conductivity
     import sttopt.stto as stto
     import sttopt.timefield as timefield
     import sttopt.torch_util as torch_util
@@ -411,9 +424,6 @@ def _load_stto_run(run_dir: Path, design_file: str = "final_design.npz") -> tupl
         )
     xPhys, tPhys = design["xPhys"], design["tPhys"]
 
-    # Only e1/e2/w/q/rouf (the conductivity-estimation neighborhood) are needed below,
-    # but build_problem doesn't expose that setup on its own -- see stto_cli.py's post-loop
-    # section, which computes hotspot_severity the same way.
     problem = stto.build_problem(config)
     xPhys_t = torch_util.to_tensor(xPhys, device=problem.device, dtype=problem.dtype)
     tPhys_t = torch_util.to_tensor(tPhys, device=problem.device, dtype=problem.dtype)
@@ -429,26 +439,17 @@ def _load_stto_run(run_dir: Path, design_file: str = "final_design.npz") -> tupl
         problem.ndof,
     )
     obj = float(obj)
-    K_est = conductivity.estimated_conductivity(
-        xPhys_t,
-        tPhys_t,
-        problem.e1,
-        problem.e2,
-        problem.w,
-        problem.config.q,
-        problem.config.rouf,
-        problem.hotspot_denom,
-    ).reshape(config.nely, config.nelx)
-    K_est = torch_util.to_numpy(K_est)
-    hotspot_severity = (1 - K_est) * (xPhys > 0.5)
+    _, K_est_t = stto.hotspot_value(problem, xPhys_t, tPhys_t)
+    K_est = torch_util.to_numpy(K_est_t).reshape(config.nely, config.nelx)
+    hotspot_severity = _hotspot_severity(xPhys, K_est)
     grad_magnitude = torch_util.to_numpy(timefield.gradient_magnitude_elements(tPhys_t))
     return xPhys, tPhys, obj, hotspot_severity, grad_magnitude, config.nStage
 
 
 def _load_seqopt_run(run_dir: Path, design_file: str = "final_design.npz") -> tuple:
     """`_load_stto_run`'s counterpart for a `seqopt` run directory: no FEM, so
-    compliance is `None`, and the conductivity neighborhood is built directly from
-    the saved geometry rather than through a full `Problem`.
+    compliance is `None`, and the geometry comes from the run's own artefacts rather
+    than from a config.
 
     :param design_file: an artefact under `run_dir` holding a time field, either
         `final_design.npz` (`xPhys`/`tPhys`) or a periodic `design_it*.npz` checkpoint
@@ -459,7 +460,7 @@ def _load_seqopt_run(run_dir: Path, design_file: str = "final_design.npz") -> tu
 
     import torch
 
-    import sttopt.conductivity as conductivity
+    import sttopt.seqopt as seqopt
     import sttopt.timefield as timefield
     import sttopt.torch_util as torch_util
     from sttopt.run_config import SeqRunConfig
@@ -474,25 +475,13 @@ def _load_seqopt_run(run_dir: Path, design_file: str = "final_design.npz") -> tu
         else np.load(run_dir / "geometry.npz")["xPhys"]
     )
     tPhys = design["tPhys"] if "tPhys" in design else design["t"]
-    nely, nelx = xPhys.shape
 
-    e1, e2, w = conductivity.neighbor_weights(nelx, nely, config.rmin_cond)
-    xPhys_t = torch_util.to_tensor(xPhys, device="cpu", dtype=torch.float64)
+    problem = seqopt.build_problem(config, xPhys, device="cpu", dtype=torch.float64)
     tPhys_t = torch_util.to_tensor(tPhys, device="cpu", dtype=torch.float64)
-    K_est = conductivity.estimated_conductivity(
-        xPhys_t,
-        tPhys_t,
-        torch_util.to_tensor(e1, device="cpu", dtype=torch.int64),
-        torch_util.to_tensor(e2, device="cpu", dtype=torch.int64),
-        torch_util.to_tensor(w, device="cpu", dtype=torch.float64),
-        config.q,
-        config.rouf,
-        conductivity.constant_denominator(
-            conductivity.Normalization(config.hotspot_normalization), config.rmin_cond
-        ),
-    ).reshape(nely, nelx)
-    K_est = torch_util.to_numpy(K_est)
-    hotspot_severity = (1 - K_est) * (xPhys > 0.5)
+    _, K_est_t = seqopt.hotspot_value(problem, tPhys_t)
+    xPhys = torch_util.to_numpy(problem.xPhys)  # what the run optimized, post-cleanup
+    K_est = torch_util.to_numpy(K_est_t).reshape(xPhys.shape)
+    hotspot_severity = _hotspot_severity(xPhys, K_est)
     grad_magnitude = torch_util.to_numpy(timefield.gradient_magnitude_elements(tPhys_t))
     return xPhys, tPhys, None, hotspot_severity, grad_magnitude, config.nStage
 
