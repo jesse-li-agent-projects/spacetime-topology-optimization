@@ -29,6 +29,7 @@ import numpy as np
 from jaxtyping import Float
 from matplotlib.axes import Axes
 from matplotlib.collections import LineCollection, PolyCollection
+from matplotlib.colors import Colormap
 from matplotlib.figure import Figure
 
 matplotlib.rcParams["savefig.bbox"] = "tight"
@@ -37,6 +38,7 @@ matplotlib.rcParams["savefig.dpi"] = "300"
 _BOUNDARY_LINEWIDTH = 1.5
 _VOID_GRAY = "0.5"
 _VOID_ALPHA = 0.65
+_NO_MEASURE_GRAY = "0.75"  # solid element, quantity undefined -- not void
 
 
 def _new_axes() -> Axes:
@@ -71,7 +73,7 @@ def combination_plot(
     values: Float[np.ndarray, "nely nelx"],
     eps: float,
     *,
-    cmap: str = "viridis",
+    cmap: str | Colormap = "viridis",
     colorbar_label: str | None = None,
     ax: Axes | None = None,
 ) -> Axes:
@@ -79,7 +81,11 @@ def combination_plot(
     per-face color, not interpolated). `values` is any per-element scalar (e.g. `tPhys`,
     or a hotspot-severity score), not necessarily a time field.
 
-    :param cmap: colormap name; callers below pick one that suits `values`.
+    An element still draws where its value is `nan`, in the colormap's "bad" color --
+    the cell is part of the design whether or not the quantity has a value there, so
+    pass a colormap whose bad color says so (the default is fully transparent).
+
+    :param cmap: colormap name or object; callers below pick one that suits `values`.
     :param colorbar_label: if given, adds a horizontal colorbar below `ax` labelled with
         this string; omitted (the default) draws no colorbar.
     """
@@ -173,7 +179,9 @@ def hotspot_severity_plot(
         XPhys,
         hotspot_severity,
         eps=1.0e-1,
-        cmap="plasma",
+        # Gray where the measure reports nothing (`nan`), so the design's full extent
+        # still reads while the color scale spans only the elements it does report.
+        cmap=matplotlib.colormaps["plasma"].with_extremes(bad=_NO_MEASURE_GRAY),
         colorbar_label="Hotspot severity",
         ax=ax,
     )
@@ -387,8 +395,9 @@ def _hotspot_severity(
 ) -> Float[np.ndarray, "nely nelx"]:
     """`1 - K_est` over the printed elements, `nan` where the hotspot measure has no
     value to report -- an element an infinitely conductive print base shields
-    (`conductivity.infinite_base`) has `K_est == inf`. `nan` leaves it uncolored rather
-    than dominating the color scale with a severity the run never optimized against.
+    (`conductivity.infinite_base`) has `K_est == inf`. `nan` keeps it out of the color
+    scale, which a severity the run never optimized against would otherwise dominate;
+    the element itself still draws (`combination_plot`'s "bad" color).
     """
     severity = np.full(K_est.shape, np.nan)
     measured = np.isfinite(K_est)  # `inf * 0` where it is not, hence no bare `where`
