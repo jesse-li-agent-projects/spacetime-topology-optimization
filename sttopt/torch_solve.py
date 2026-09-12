@@ -42,6 +42,12 @@ from torch import Tensor
 
 from sttopt import torch_fem, torch_mg
 
+#: Default CG relative-residual tolerance. Everything downstream of a solve -- `U`, the
+#: compliances, their sensitivities -- is converged only to this, so a test comparing
+#: quantities derived from two separate solves cannot demand more agreement than the
+#: noise this leaves behind.
+DEFAULT_CG_RTOL = 1e-8
+
 
 class FemSolve(torch.autograd.Function):
     """`K @ U = F` as a differentiable op, `K` implicit from `density` and `KE`.
@@ -169,7 +175,7 @@ def femsolve(
     nelx: int,
     nely: int,
     *,
-    rtol: float = 1e-8,
+    rtol: float = DEFAULT_CG_RTOL,
     max_iter: int = 500,
     x0: Float[Tensor, "*batch ndof"] | None = None,
     omega: float = 0.6,

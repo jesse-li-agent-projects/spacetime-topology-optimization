@@ -28,6 +28,7 @@ import sttopt.compliance as compliance
 import sttopt.filters as filters
 import sttopt.stto as stto
 import sttopt.timefield as timefield
+import sttopt.torch_solve as torch_solve
 import sttopt.torch_util as torch_util
 import tests.reference.fem as fem_ref
 from conftest import FIXTURES_DIR, default_run_config
@@ -579,7 +580,15 @@ def test_step_objective_adds_the_gamma_weighted_gradient_uniformity_penalty():
 def test_step_gradient_of_the_penalty_reaches_the_time_half_only():
     """Raising `Gamma` changes `.df`'s time half and leaves its density half untouched:
     the penalty reads `tPhys` alone, and the difference of the two gradients must be
-    `Gamma` times the penalty's own sensitivity."""
+    `Gamma` times the penalty's own sensitivity.
+
+    Both halves are isolated by differencing two separate `step` calls, so the
+    compliance sensitivity has to cancel between them. It only cancels to the CG
+    tolerance: the solve is iterative, and on CUDA its reduction order is not
+    reproducible, so two runs at the same `Gamma` land on different iterates within
+    `rtol`. Tolerances here are keyed to that noise floor, not to a constant -- see
+    PR #99.
+    """
     nelx, nely = 10, 8
     rng = np.random.default_rng(3)
     nel = nelx * nely
@@ -595,7 +604,13 @@ def test_step_gradient_of_the_penalty_reaches_the_time_half_only():
     Gamma = 100.0
     df_g, problem = df_at(Gamma)
 
-    np.testing.assert_allclose(df_g[:nel], df_0[:nel], rtol=1e-9, atol=1e-9)
+    def solve_noise(df_half):
+        """How far two solves of the same problem may disagree on `df_half`."""
+        return 10 * torch_solve.DEFAULT_CG_RTOL * np.abs(df_half).max()
+
+    np.testing.assert_allclose(
+        df_g[:nel], df_0[:nel], rtol=0, atol=solve_noise(df_0[:nel])
+    )
 
     # The expected difference, assembled independently: the penalty's autograd
     # sensitivity w.r.t. tPhys, pushed back through the filter as step() does.
@@ -605,8 +620,11 @@ def test_step_gradient_of_the_penalty_reaches_the_time_half_only():
     tPhys = ((problem.H @ t_leaf.flatten()) / problem.Hs).reshape(nely, nelx)
     (d_tPhys,) = torch.autograd.grad(timefield.gradient_magnitude_std(tPhys), t_leaf)
     expected = Gamma * torch_util.to_numpy(d_tPhys).ravel()
+    # Non-vacuous: the penalty's own contribution has to clear the noise it is
+    # recovered through, or this asserts nothing.
+    assert np.abs(expected).max() > 100 * solve_noise(df_0[nel:])
     np.testing.assert_allclose(
-        df_g[nel:] - df_0[nel:], expected, rtol=1e-7, atol=1e-9 * np.abs(expected).max()
+        df_g[nel:] - df_0[nel:], expected, rtol=1e-4, atol=solve_noise(df_0[nel:])
     )
 
 
