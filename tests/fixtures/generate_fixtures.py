@@ -252,7 +252,7 @@ def main():
             dx,
             problem.H,
             problem.Hs,
-            state.factor,
+            state.hotspot_calibration,
             problem.config.Tcr,
             problem.config.p,
             problem.config.q,

@@ -12,8 +12,12 @@ fighting the two apart rather than helping. Only the JSON round-trip
 `nloop` is also exposed as a CLI flag on each; every other field is reachable only via
 a `--config` JSON file or by constructing the dataclass directly in code. Run
 bookkeeping that isn't a `build_problem` hyperparameter (`--tag`, `--device`) lives on
-the CLI's `args`, not here. Neither config has default values -- `configs/default.json`
-/`configs/seq_default.json` are the single source of default settings.
+the CLI's `args`, not here. `configs/default.json`/`configs/seq_default.json` are the
+single source of default *settings*: a field carries a dataclass default only when a
+run record written before that field existed has a well-defined meaning, so that
+`viz.py` can still replay an old output directory. Such a default is what the field
+used to be implicitly, never what a new run should pick -- the config files carry
+that.
 """
 
 import dataclasses
@@ -98,6 +102,11 @@ class RunConfig(_ConfigMixin):
         `timefield.TimeField` member (case-insensitively) for JSON.
     :param Gamma: weight of the layer-thickness-uniformity objective term
         (`timefield.gradient_magnitude_std`); 0 disables it.
+    :param hotspot_normalization: a `conductivity.Normalization` member name, whose
+        docstring carries the variants. `configs/default.json` stays on `neighborhood`,
+        unlike the `seqopt` one: this config is what the MATLAB-port fidelity fixtures
+        are generated and checked against, so its hotspot term has to keep matching the
+        source's rather than improving on it.
     """
 
     # Frequently varied -- also exposed as a CLI flag in stto_cli.py.
@@ -111,6 +120,10 @@ class RunConfig(_ConfigMixin):
     Theta: float
     Gamma: float
     Tcr: float
+    hotspot_normalization: str = "neighborhood"
+    hotspot_aggregation: str = "p_mean"
+    hotspot_beta: float = 200.0
+    hotspot_density_exponent: float | None = None
     print_base: str
     rmin: float
     lrmin: float
@@ -167,6 +180,26 @@ class SeqRunConfig(_ConfigMixin):
         the time field unfiltered, which is `seqopt`'s starting design (see its module
         docstring for what a nonzero radius costs, and read `sawtooth_raw` alongside
         `sawtooth` when using one).
+    :param hotspot_normalization: a `conductivity.Normalization` member name, choosing
+        what `K_est` measures shielding against. Not a tuning knob: `neighborhood`
+        cannot see a free surface that lies on the mesh boundary, and lets void print
+        time drive the result (PR #98). It is the default only so that run records
+        written before this field existed still load and replay as they ran.
+    :param hotspot_aggregation: a `conductivity.Aggregation` member name, choosing the
+        smooth maximum that collapses the severity field. Defaults to the legacy
+        variant for the same reason `hotspot_normalization` does.
+    :param hotspot_beta: `logsumexp` sharpness. It sets where the sensitivity goes:
+        high concentrates nearly all of it on the single hottest element, which is a
+        sharp statement but makes MMA chatter as the argmax moves; low spreads it and
+        blunts the term. The aggregate overshoots the true maximum by at most
+        `log(sum of weights)/beta`. Inert under `p_mean`, which uses `p`.
+    :param hotspot_density_exponent: `logsumexp`'s void-suppression exponent. Needed
+        at all because void is the hottest thing in the domain -- nothing shields it,
+        so an unweighted aggregate reports empty space rather than the part. Must
+        exceed 1 or the weight's own gradient diverges at zero density. `null` takes
+        `p_mean`'s implicit `r * p`, which is where the "must exceed 1" requirement is
+        met only by coincidence of two unrelated knobs. Inert under `p_mean`, and inert
+        on any binary geometry, where `x**s == x` for every `s`.
     :param uniformity_metric: a `timefield.UniformityMetric` member name.
     :param roughness_weight: weight on `timefield.relative_roughness`, the objective's
         smoothness regularizer -- a number, or a `CosineSchedule` decaying one weight
@@ -210,6 +243,10 @@ class SeqRunConfig(_ConfigMixin):
     time_filter_rmin: float
 
     hotspot_weight: float
+    hotspot_normalization: str = "neighborhood"
+    hotspot_aggregation: str = "p_mean"
+    hotspot_beta: float = 200.0
+    hotspot_density_exponent: float | None = None
     uniformity_metric: str
     uniformity_weight: float
     roughness_weight: float | CosineSchedule

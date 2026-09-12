@@ -76,6 +76,10 @@ def _conductivity_terms(
     terms `hotspot_constraint` needs: the neighbor-role-swapped sigmoid pair terms
     `FT_ba`/`DFT_ba` (its cross term) and `S1`/`S2` (its self/diagonal term).
 
+    The hand-derived sensitivities below differentiate through a per-element `Nsum3`,
+    so this is `Normalization.NEIGHBORHOOD` only -- a constant denominator drops those
+    terms rather than changing them.
+
     Reuses `e1`'s weight for both pair directions (`w[e1,e2] == w[e2,e1]` by
     construction of `neighbor_weights` -- confirmed against the MATLAB `WE` fixture in
     `tests/test_conductivity.py`) rather than a second lookup.
@@ -91,7 +95,7 @@ def _conductivity_terms(
     S2 = torch.zeros(nel, dtype=x.dtype, device=x.device)
     S2.index_add_(0, e1, core.xb_q * w * DFT_ab)
 
-    return _ConductivityTerms(core.K_est, core.Nsum3, FT_ba, DFT_ba, S1, S2)
+    return _ConductivityTerms(core.K_est, core.denom, FT_ba, DFT_ba, S1, S2)
 
 
 class HotspotConstraintResult(NamedTuple):
@@ -124,8 +128,8 @@ def hotspot_constraint(
     stays below `Tcr`, smoothly bounding the worst-case local overheating risk.
 
     `factor` is a periodically-refreshed rescaling constant the main optimization loop
-    owns as persistent state (`stto.State.factor`) -- pass it through, never
-    recompute it here. `numer`/`K_est` are returned for the caller's periodic
+    owns as persistent state (`stto.State.hotspot_calibration`) -- pass it through,
+    never recompute it here. `numer`/`K_est` are returned for the caller's periodic
     refresh (MATLAB's `rem(loop,25)==0` guard), which needs both but must not perturb
     this call's own `factor`-scaled result. Sensitivity algebra is hand-derived from the
     MATLAB source's per-element neighbor loop; see `tests/test_conductivity.py` for the

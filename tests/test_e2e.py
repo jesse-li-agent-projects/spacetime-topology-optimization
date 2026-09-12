@@ -94,25 +94,26 @@ def test_constraints_stacking_matches_fixture():
     assert_close(record.dg, fx["dfdx_all"][:, :, 0], tier="e2e", iteration=1)
 
 
-def test_hotspot_factor_refresh_at_loop_25():
-    """Targeted coverage for step()'s `loop % 25 == 0` factor-refresh branch: no fixture
-    exercises it (NLOOP=3), so this drives 24 *real* iterations from init_state (rather
-    than fabricating a `loop=24` state directly -- stale `low`/`upp`/`xold1`/`xold2` at an
-    unrealistic loop count makes `mmasub`'s inner Newton loop fail to converge, an
-    incidental warning unrelated to what this test targets) and checks the 25th call's
-    returned `factor`, `.g`, and `.dg` against an independent recomputation, rather
-    than relying on `step`'s internals to be self-consistently correct.
+def test_hotspot_calibration_refresh_at_loop_25():
+    """Targeted coverage for step()'s `loop % 25 == 0` calibration-refresh branch: no
+    fixture exercises it (NLOOP=3), so this drives 24 *real* iterations from init_state
+    (rather than fabricating a `loop=24` state directly -- stale
+    `low`/`upp`/`xold1`/`xold2` at an unrealistic loop count makes `mmasub`'s inner
+    Newton loop fail to converge, an incidental warning unrelated to what this test
+    targets) and checks the 25th call's returned `hotspot_calibration`, `.g`, and `.dg`
+    against an independent recomputation, rather than relying on `step`'s internals to
+    be self-consistently correct.
 
     The refresh takes effect starting the *next* iteration, not the one that computes
-    it: loop 25's own `.g`/`.dg` are evaluated at the old `factor`, and the new
-    `factor` only lands in `new_state.factor` for loop 26 onward.
+    it: loop 25's own `.g`/`.dg` are evaluated at the old calibration, and the new one
+    only lands in `new_state.hotspot_calibration` for loop 26 onward.
     """
     problem = stto.build_problem(CONFIG)
     state = stto.init_state(problem, BETA_INIT)
     for _ in range(24):
         state, _ = stto.step(problem, state)
     assert state.loop == 24
-    assert state.factor == 1.0  # never refreshed before loop 25
+    assert state.hotspot_calibration == 1.0  # never refreshed before loop 25
 
     new_state, record = stto.step(problem, state)
     assert new_state.loop == 25
@@ -120,7 +121,7 @@ def test_hotspot_factor_refresh_at_loop_25():
     xPhys = state.xPhys
     tPhys = state.tPhys
 
-    # Independent recomputation of the refresh formula (factor = max_g / numer), using
+    # Independent recomputation of the refresh formula (P_MEAN's max_g / numer), using
     # the pre-update xPhys/tPhys/dx the refresh actually saw.
     dx = filters.heaviside_projection_derivative(
         state.xTilde, state.beta_d, problem.config.eta
@@ -134,14 +135,14 @@ def test_hotspot_factor_refresh_at_loop_25():
         dx,
         problem.H,
         problem.Hs,
-        state.factor,
+        state.hotspot_calibration,
         problem.config.Tcr,
         problem.config.p,
         problem.config.q,
         problem.config.r,
         problem.config.rouf,
     )
-    numer = (old.fval + 1) * problem.config.Tcr / state.factor
+    numer = (old.fval + 1) * problem.config.Tcr / state.hotspot_calibration
     K_est = conductivity.estimated_conductivity(
         xPhys,
         tPhys,
@@ -152,17 +153,19 @@ def test_hotspot_factor_refresh_at_loop_25():
         problem.config.rouf,
     )
     max_g = float(torch.max((1 - K_est) * xPhys.flatten() ** problem.config.r))
-    expected_factor = max_g / numer
+    expected_calibration = max_g / numer
 
-    assert not np.isclose(expected_factor, state.factor), "refresh must be non-vacuous"
-    assert_close(new_state.factor, expected_factor, tier="algebraic")
+    assert not np.isclose(
+        expected_calibration, state.hotspot_calibration
+    ), "refresh must be non-vacuous"
+    assert_close(new_state.hotspot_calibration, expected_calibration, tier="algebraic")
 
     # Loop 25's own fv/df1/dt1 in `record` are evaluated at the *old* (pre-refresh)
-    # factor -- they must match `old` (already computed above at `state.factor`), not
-    # a recompute at `expected_factor`. `tru_max`, a pure diagnostic, uses the refreshed
-    # factor immediately.
+    # calibration -- they must match `old` (already computed above at
+    # `state.hotspot_calibration`), not a recompute at `expected_calibration`.
+    # `tru_max`, a pure diagnostic, uses the refreshed calibration immediately.
     nel = problem.config.nelx * problem.config.nely
     assert_close(record.g[-1], old.fval, tier="algebraic")
     assert_close(record.dg[-1, :nel], old.df1, tier="algebraic")
     assert_close(record.dg[-1, nel:], old.dt1, tier="algebraic")
-    assert_close(record.tru_max, expected_factor * numer, tier="algebraic")
+    assert_close(record.tru_max, expected_calibration * numer, tier="algebraic")

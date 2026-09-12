@@ -72,6 +72,12 @@ class Problem:
     e1: Int[Tensor, " npairs"]
     e2: Int[Tensor, " npairs"]
     w: Float[Tensor, " npairs"]
+    # Constant `K_est` divisor for `config.hotspot_normalization`, or None where the
+    # divisor is per-element -- `conductivity.constant_denominator`.
+    hotspot_denom: float | None
+    # Print base elements the hotspot measure treats as infinitely dense, or None where
+    # the normalization needs no print base -- `conductivity.infinite_base`.
+    hotspot_base: Int[Tensor, " k"] | None
     Nei: Int[Tensor, " k"]  # print-start element(s), already filtered to solid ones
 
     m: int  # number of MMA constraint rows: continuity + start-point(s) + 2*nStage
@@ -90,7 +96,10 @@ class State:
     upp: Float[Tensor, " n"]
     loop: int
     beta_t: float  # stage-mask sigmoid sharpness
-    factor: float  # hotspot rescaling constant, periodically refreshed
+    # Carries the hotspot aggregate onto the true maximum severity; a ratio or an
+    # offset, whichever `config.hotspot_aggregation`'s bias calls for. Periodically
+    # refreshed -- `conductivity.Aggregation.calibration`.
+    hotspot_calibration: float
 
 
 @dataclass(frozen=True)
@@ -101,7 +110,7 @@ class IterationRecord:
     hotspot: float  # raw hotspot p-mean (`numer`), before any rescaling
     uniformity: float  # raw layer-uniformity penalty
     roughness: float  # smoothness regularizer, as a fraction of a layer thickness
-    tru_max: float  # factor-rescaled hotspot severity, comparable across runs
+    tru_max: float  # calibrated hotspot severity, comparable across runs
 
     # Diagnostics only -- nothing below enters the objective or a constraint. They exist
     # because `uniformity` cannot be taken at face value: it is blind to the transverse
@@ -168,6 +177,12 @@ def build_problem(
 
     L = filters.continuity_filter(nelx, nely, config.lrmin)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, config.rmin_cond)
+    hotspot_denom = conductivity.constant_denominator(
+        conductivity.Normalization(config.hotspot_normalization), config.rmin_cond
+    )
+    hotspot_base = conductivity.infinite_base(
+        conductivity.Normalization(config.hotspot_normalization), Nei
+    )
 
     H = Hs = None
     if config.time_filter_rmin > 0:
@@ -193,6 +208,8 @@ def build_problem(
         H=H,
         Hs=Hs,
         w=torch_util.to_tensor(w, device, dtype),
+        hotspot_denom=hotspot_denom,
+        hotspot_base=None if hotspot_base is None else int_fields["Nei"],
         m=m,
         n=n,
         **int_fields,
@@ -238,7 +255,38 @@ def init_state(problem: Problem) -> State:
         upp=torch.zeros(problem.n, device=problem.device, dtype=problem.dtype),
         loop=0,
         beta_t=10.0,
-        factor=1.0,
+        hotspot_calibration=conductivity.Aggregation(
+            problem.config.hotspot_aggregation
+        ).uncalibrated,
+    )
+
+
+def hotspot_value(
+    problem: Problem, tPhys: Float[Tensor, "nely nelx"]
+) -> tuple[Float[Tensor, ""], Float[Tensor, " nel"]]:
+    """The run's hotspot term and the `K_est` field behind it, with every conductivity
+    setting taken from `problem`.
+
+    The one path to that field, so offline tooling cannot report a hotspot measure the
+    run never optimized -- rebuilding this call by hand once plotted the print base as
+    the worst hotspot in the domain (PR #98).
+    """
+    config = problem.config
+    return conductivity.hotspot_value(
+        problem.xPhys,
+        tPhys,
+        problem.e1,
+        problem.e2,
+        problem.w,
+        config.p,
+        config.q,
+        config.r,
+        config.rouf,
+        problem.hotspot_denom,
+        problem.hotspot_base,
+        conductivity.Aggregation(config.hotspot_aggregation),
+        config.hotspot_beta,
+        config.hotspot_density_exponent,
     )
 
 
@@ -257,7 +305,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     variable.
 
     Both periodic updates (`beta_t += 5` every 30 iterations capped at 50, the hotspot
-    `factor` refresh every 25 iterations) are deferred to take effect the *next*
+    calibration refresh every 25 iterations) are deferred to take effect the *next*
     iteration, matching `stto.step`'s convention. There is no Heaviside sharpening
     here: there is no density projection to sharpen.
     """
@@ -273,17 +321,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     t = state.t.clone().requires_grad_(True)
     tPhys = physical_timefield(problem, t)
 
-    numer_t, K_est_t = conductivity.hotspot_value(
-        xPhys,
-        tPhys,
-        problem.e1,
-        problem.e2,
-        problem.w,
-        config.p,
-        config.q,
-        config.r,
-        config.rouf,
-    )
+    numer_t, K_est_t = hotspot_value(problem, tPhys)
     # The roughness regularizer is not optional garnish: uniformity alone rewards a
     # sawtooth across the print direction (`timefield._gradient_cv`).
     metric = timefield.UniformityMetric(config.uniformity_metric)
@@ -338,14 +376,17 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     # -- Periodic state updates, deferred to take effect starting *next* iteration. --
     numer = float(numer_t.detach())
-    factor = state.factor
+    aggregation = conductivity.Aggregation(config.hotspot_aggregation)
+    calibration = state.hotspot_calibration
     if loop % 25 == 0:
-        max_g = float(torch.max((1 - K_est_t.detach()) * xPhys.flatten() ** config.r))
-        if max_g > 1e-14 or numer > 1e-14:  # both zero implies no hotspots anywhere
-            if numer == 0:
-                print(f"{max_g=}")
-            factor = max_g / numer
-    tru_max = factor * numer
+        K_est = K_est_t.detach()
+        severity = (1 - K_est) * xPhys.flatten() ** config.r
+        # An infinitely shielded element has no severity to take a maximum over.
+        max_g = float(torch.max(severity[torch.isfinite(K_est)]))
+        refreshed = aggregation.calibration(numer, max_g)
+        if refreshed is not None:
+            calibration = refreshed
+    tru_max = aggregation.calibrated(numer, calibration)
 
     if loop % 30 == 0 and beta_t < 50:
         beta_t += 5
@@ -394,7 +435,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         upp=upp,
         loop=loop,
         beta_t=beta_t,
-        factor=factor,
+        hotspot_calibration=calibration,
     )
     record = IterationRecord(
         f=f_val,

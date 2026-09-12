@@ -28,6 +28,7 @@ import sttopt.compliance as compliance
 import sttopt.filters as filters
 import sttopt.stto as stto
 import sttopt.timefield as timefield
+import sttopt.torch_solve as torch_solve
 import sttopt.torch_util as torch_util
 import tests.reference.fem as fem_ref
 from conftest import FIXTURES_DIR, default_run_config
@@ -296,15 +297,18 @@ def test_step_output_state_is_self_consistent(tfield):
 # --- step: finite-difference check of the assembled sensitivities ---------------------
 
 
-def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, factor=1.0, beta_t=10.0):
+def _state_from_raw(
+    problem, x_raw, t_raw, *, beta_d=BETA_D, calibration=1.0, beta_t=10.0
+):
     """A `State` at raw design point `[x_raw; t_raw]`, with the physics fields derived
     per the invariant above -- i.e. the state `step` itself would have produced.
 
     `loop` is left at 0 so the ensuing `step` runs as iteration 1, which is none of
-    30/50/25: `beta_t`, `beta_d` and `factor` all stay fixed across the call, so `.f`/`.g`
-    are smooth functions of the raw variables alone. (At a refresh iteration `factor`
-    jumps as a function of the design, and the reported gradient deliberately does not
-    account for that -- a different question from the one this test asks.)
+    30/50/25: `beta_t`, `beta_d` and the hotspot calibration all stay fixed across the
+    call, so `.f`/`.g` are smooth functions of the raw variables alone. (At a refresh
+    iteration the calibration jumps as a function of the design, and the reported
+    gradient deliberately does not account for that -- a different question from the
+    one this test asks.)
     """
     nely, nelx = problem.config.nely, problem.config.nelx
     device, dtype = problem.device, problem.dtype
@@ -322,7 +326,7 @@ def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, factor=1.0, beta_t=
         loop=0,
         beta_t=beta_t,
         beta_d=beta_d,
-        factor=factor,
+        hotspot_calibration=calibration,
         U=None,
     )
 
@@ -576,7 +580,15 @@ def test_step_objective_adds_the_gamma_weighted_gradient_uniformity_penalty():
 def test_step_gradient_of_the_penalty_reaches_the_time_half_only():
     """Raising `Gamma` changes `.df`'s time half and leaves its density half untouched:
     the penalty reads `tPhys` alone, and the difference of the two gradients must be
-    `Gamma` times the penalty's own sensitivity."""
+    `Gamma` times the penalty's own sensitivity.
+
+    Both halves are isolated by differencing two separate `step` calls, so the
+    compliance sensitivity has to cancel between them. It only cancels to the CG
+    tolerance: the solve is iterative, and on CUDA its reduction order is not
+    reproducible, so two runs at the same `Gamma` land on different iterates within
+    `rtol`. Tolerances here are keyed to that noise floor, not to a constant -- see
+    PR #99.
+    """
     nelx, nely = 10, 8
     rng = np.random.default_rng(3)
     nel = nelx * nely
@@ -592,7 +604,13 @@ def test_step_gradient_of_the_penalty_reaches_the_time_half_only():
     Gamma = 100.0
     df_g, problem = df_at(Gamma)
 
-    np.testing.assert_allclose(df_g[:nel], df_0[:nel], rtol=1e-9, atol=1e-9)
+    def solve_noise(df_half):
+        """How far two solves of the same problem may disagree on `df_half`."""
+        return 10 * torch_solve.DEFAULT_CG_RTOL * np.abs(df_half).max()
+
+    np.testing.assert_allclose(
+        df_g[:nel], df_0[:nel], rtol=0, atol=solve_noise(df_0[:nel])
+    )
 
     # The expected difference, assembled independently: the penalty's autograd
     # sensitivity w.r.t. tPhys, pushed back through the filter as step() does.
@@ -602,8 +620,11 @@ def test_step_gradient_of_the_penalty_reaches_the_time_half_only():
     tPhys = ((problem.H @ t_leaf.flatten()) / problem.Hs).reshape(nely, nelx)
     (d_tPhys,) = torch.autograd.grad(timefield.gradient_magnitude_std(tPhys), t_leaf)
     expected = Gamma * torch_util.to_numpy(d_tPhys).ravel()
+    # Non-vacuous: the penalty's own contribution has to clear the noise it is
+    # recovered through, or this asserts nothing.
+    assert np.abs(expected).max() > 100 * solve_noise(df_0[nel:])
     np.testing.assert_allclose(
-        df_g[nel:] - df_0[nel:], expected, rtol=1e-7, atol=1e-9 * np.abs(expected).max()
+        df_g[nel:] - df_0[nel:], expected, rtol=1e-4, atol=solve_noise(df_0[nel:])
     )
 
 
@@ -719,7 +740,7 @@ def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
         loop=800,
         beta_t=50.0,
         beta_d=128.0,
-        factor=1.0,
+        hotspot_calibration=1.0,
         U=None,
     )
 

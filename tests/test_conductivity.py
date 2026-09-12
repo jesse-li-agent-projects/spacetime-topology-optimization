@@ -1189,3 +1189,497 @@ def test_hotspot_value_fully_solid_part_gradient_is_finite():
     (d_x,) = torch.autograd.grad(numer, (xPhys,))
     assert torch.all(torch.isfinite(d_x))
     assert torch.all(d_x == 0.0)
+
+
+# --- Normalization.HALF_STENCIL (PR #98) --------------------------------------------
+
+
+@pytest.mark.parametrize("rouf", [1.0, 100.0, 1e6])
+@pytest.mark.parametrize("rmin_cond", [3.0, 5.5, 12.0])
+def test_half_stencil_weight_is_the_interior_printed_weight(rmin_cond, rouf):
+    """`half_stencil_weight` is what an element's already-printed neighbor weight
+    actually comes to under a uniform layer schedule -- the identity the constant
+    denominator rests on, and the reason it holds for any sigmoid sharpness.
+
+    Checked at an interior element, where nothing is truncated by the mesh edge.
+    """
+    nelx = nely = 4 * int(np.ceil(rmin_cond))
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
+    x = torch.ones(nely * nelx, dtype=torch.float64)
+    t = (torch.arange(nely, dtype=torch.float64) / nely).repeat_interleave(nelx)
+
+    core = conductivity._conductivity_core(x, t, tti(e1), tti(e2), tt(w), Q, rouf)
+    interior = (nely // 2) * nelx + nelx // 2
+    assert_close(
+        float(core.denom[interior]), conductivity.half_stencil_weight(rmin_cond)
+    )
+
+
+def test_half_stencil_is_blind_to_void_print_time():
+    """Void print time is an artifact -- nothing physical pins `t` where there is no
+    material -- but under NEIGHBORHOOD it steers `K_est` through the denominator,
+    since a void neighbor printed earlier adds weight there while adding no density to
+    the numerator. HALF_STENCIL's denominator does not depend on `t` at all, so void
+    time can only ever multiply a zero density.
+    """
+    nelx, nely = 16, 12
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+    denom = conductivity.constant_denominator(
+        conductivity.Normalization.HALF_STENCIL, RMIN_COND
+    )
+
+    rng = np.random.default_rng(96)
+    xPhys = (rng.uniform(size=(nely, nelx)) > 0.4).astype(float)
+    tPhys = np.tile(np.linspace(1, 0, nely)[:, None], (1, nelx))
+    void = xPhys == 0.0
+    assert void.any()
+
+    def numer_with_void_time(fill, denom):
+        t = tPhys.copy()
+        t[void] = fill
+        return float(
+            conductivity.hotspot_value(
+                tt(xPhys), tt(t), e1, e2, w, P, Q, R, ROUF, denom
+            )[0]
+        )
+
+    assert_close(numer_with_void_time(-1e3, denom), numer_with_void_time(1e3, denom))
+    # ... and the same swap does move NEIGHBORHOOD, so the test above is not vacuous.
+    assert numer_with_void_time(-1e3, None) != pytest.approx(
+        numer_with_void_time(1e3, None)
+    )
+
+
+def test_half_stencil_sees_a_free_surface_on_the_mesh_edge():
+    """A solid column against the mesh edge and one against an equally wide internal
+    void are the same free surface, and must score alike. NEIGHBORHOOD renormalizes
+    the off-mesh half of the stencil away and scores the mesh-edge column at exactly
+    zero severity, hiding it (PR #98).
+    """
+    nelx, nely = 40, 24
+    rmin_cond = 6.0
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+
+    # Solid left of the notch and right of it, with a void gap wider than the stencil
+    # so neither solid edge can see through it to the other.
+    xPhys = np.ones((nely, nelx))
+    xPhys[:, 20:34] = 0.0
+    tPhys = np.tile(np.linspace(1, 0, nely)[:, None], (1, nelx))
+    row = nely // 2
+
+    def severity(denom):
+        K = conductivity.estimated_conductivity(
+            tt(xPhys), tt(tPhys), e1, e2, w, Q, ROUF, denom
+        ).reshape(nely, nelx)
+        return 1 - torch_util.to_numpy(K)[row]
+
+    edge_col, notch_col = 0, 19
+    legacy = severity(None)
+    assert legacy[edge_col] == pytest.approx(0.0, abs=1e-12)
+    assert legacy[notch_col] > 0.1
+
+    half = severity(
+        conductivity.constant_denominator(
+            conductivity.Normalization.HALF_STENCIL, rmin_cond
+        )
+    )
+    assert half[edge_col] == pytest.approx(half[notch_col], rel=0.25)
+    assert half[edge_col] > 0.1
+
+
+def test_constant_denominator_rejects_an_unknown_normalization():
+    with pytest.raises(ValueError, match="Normalization member"):
+        conductivity.constant_denominator("nonsense", RMIN_COND)
+
+
+def test_infinite_base_diverges_over_the_stencils_reach():
+    """An infinitely dense base sends `K_est` to infinity for every element carrying
+    any stencil weight on it -- the stencil's own reach, never a depth chosen for it.
+    """
+    nelx, nely, rmin_cond = 20, 15, 4.0
+    base = np.arange(nelx) + (nely - 1) * nelx  # bottom row, as BOTTOM_EDGE gives
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
+    denom = conductivity.constant_denominator(
+        conductivity.Normalization.HALF_STENCIL, rmin_cond
+    )
+    xPhys = np.ones((nely, nelx))
+    tPhys = np.tile(np.linspace(1, 0, nely)[:, None], (1, nelx))
+    K = conductivity.estimated_conductivity(
+        tt(xPhys), tt(tPhys), tti(e1), tti(e2), tt(w), Q, ROUF, denom, tti(base)
+    )
+
+    # Independently: the neighbor structure the conductivity sum itself runs over
+    # pairs the element with a base element at nonzero weight.
+    is_base = np.zeros(nelx * nely, dtype=bool)
+    is_base[base] = True
+    expected = np.zeros(nelx * nely, dtype=bool)
+    expected[e1[is_base[e2] & (w > 0)]] = True
+
+    np.testing.assert_array_equal(torch_util.to_numpy(torch.isinf(K)), expected)
+
+
+def test_infinite_base_is_none_for_the_self_normalized_variant():
+    """NEIGHBORHOOD's denominator already collapses with its numerator at the first
+    deposited layer, so diverging there would only hide real information.
+    """
+    base = np.arange(12) + 9 * 12
+    assert (
+        conductivity.infinite_base(conductivity.Normalization.NEIGHBORHOOD, base)
+        is None
+    )
+
+
+def test_infinite_base_rejects_a_wholly_shielded_part():
+    """Stated against the quantity that is actually inconsistent -- no element left
+    with a finite `K_est` -- rather than against a mesh size, which only produces it
+    under the current radius.
+    """
+    nelx, nely, rmin_cond = 6, 5, 12.0
+    base = np.arange(nelx) + (nely - 1) * nelx
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
+    denom = conductivity.constant_denominator(
+        conductivity.Normalization.HALF_STENCIL, rmin_cond
+    )
+    with pytest.raises(ValueError, match="nothing left to aggregate over"):
+        conductivity.hotspot_value(
+            tt(np.ones((nely, nelx))),
+            tt(np.zeros((nely, nelx))),
+            tti(e1),
+            tti(e2),
+            tt(w),
+            P,
+            Q,
+            R,
+            ROUF,
+            denom,
+            tti(base),
+        )
+
+
+def test_infinite_base_removes_the_first_layer_false_hotspot():
+    """The first deposited layer has nothing before it, so a constant denominator
+    scores it as the worst hotspot in the domain -- an artifact of the print base
+    being absent from the model, not a real overheating risk.
+    """
+    nelx, nely = 30, 24
+    rmin_cond = 5.0
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+    base = tti(np.arange(nelx) + (nely - 1) * nelx)
+    denom = conductivity.constant_denominator(
+        conductivity.Normalization.HALF_STENCIL, rmin_cond
+    )
+
+    xPhys = np.ones((nely, nelx))
+    tPhys = np.tile(np.linspace(1, 0, nely)[:, None], (1, nelx))  # bottom row first
+    bare = 1 - torch_util.to_numpy(
+        conductivity.estimated_conductivity(
+            tt(xPhys), tt(tPhys), e1, e2, w, Q, ROUF, denom
+        )
+    ).reshape(nely, nelx)
+    with_base = 1 - torch_util.to_numpy(
+        conductivity.estimated_conductivity(
+            tt(xPhys), tt(tPhys), e1, e2, w, Q, ROUF, denom, base
+        )
+    ).reshape(nely, nelx)
+
+    # Without the base in the model, the first-deposited row is the worst element in
+    # the whole domain; with it, that row scores nothing at all.
+    assert bare[-1].max() == pytest.approx(bare.max())
+    assert np.isneginf(with_base[-1]).all()
+    assert with_base[np.isfinite(with_base)].max() < bare[-1].max()
+
+    numer_bare, _ = conductivity.hotspot_value(
+        tt(xPhys), tt(tPhys), e1, e2, w, P, Q, R, ROUF, denom
+    )
+    numer_base, _ = conductivity.hotspot_value(
+        tt(xPhys), tt(tPhys), e1, e2, w, P, Q, R, ROUF, denom, base
+    )
+    assert float(numer_base) < float(numer_bare)
+
+
+@pytest.mark.parametrize(
+    "aggregation", [conductivity.Aggregation.P_MEAN, conductivity.Aggregation.LOGSUMEXP]
+)
+def test_infinite_base_leaves_gradients_finite(aggregation):
+    """The divergence is selected into `K_est`, not evaluated as `inf * w`, so neither
+    aggregation carries a `nan` back to the design variables it is differentiated
+    against.
+    """
+    nelx, nely, rmin_cond = 18, 14, 4.0
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+    base = tti(np.arange(nelx) + (nely - 1) * nelx)
+    denom = conductivity.constant_denominator(
+        conductivity.Normalization.HALF_STENCIL, rmin_cond
+    )
+
+    rng = np.random.default_rng(203)
+    xPhys_t = tt((rng.uniform(size=(nely, nelx)) > 0.3).astype(float)).requires_grad_(
+        True
+    )
+    tPhys_t = tt(rng.uniform(0.0, 1.0, size=(nely, nelx))).requires_grad_(True)
+    numer, _ = conductivity.hotspot_value(
+        xPhys_t,
+        tPhys_t,
+        e1,
+        e2,
+        w,
+        P,
+        Q,
+        R,
+        ROUF,
+        denom,
+        base,
+        aggregation,
+        200.0,
+        1.25,
+    )
+    assert torch.isfinite(numer)
+    d_x, d_t = torch.autograd.grad(numer, (xPhys_t, tPhys_t))
+    assert torch.all(torch.isfinite(d_x)) and torch.all(torch.isfinite(d_t))
+
+
+# --- Aggregation.LOGSUMEXP (PR #98) -------------------------------------------------
+
+
+def _severity_field(xPhys, tPhys, e1, e2, w, denom):
+    K = conductivity.estimated_conductivity(
+        tt(xPhys), tt(tPhys), e1, e2, w, Q, ROUF, denom
+    )
+    return 1 - torch_util.to_numpy(K)
+
+
+@pytest.mark.parametrize("beta", [50.0, 200.0, 800.0])
+def test_logsumexp_brackets_the_true_max_from_above(beta):
+    """LOGSUMEXP overshoots the true weighted maximum, by at most
+    `log(sum of weights)/beta` -- an additive, `beta`-controlled bias, against
+    P_MEAN's multiplicative `nel**(-1/p)` shortfall.
+    """
+    nelx, nely = 24, 18
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+    denom = conductivity.constant_denominator(
+        conductivity.Normalization.HALF_STENCIL, RMIN_COND
+    )
+
+    rng = np.random.default_rng(200)
+    xPhys = (rng.uniform(size=(nely, nelx)) > 0.3).astype(float)
+    tPhys = np.tile(np.linspace(1, 0, nely)[:, None], (1, nelx))
+
+    severity = _severity_field(xPhys, tPhys, e1, e2, w, denom)
+    solid = xPhys.flatten() > 0.5
+    true_max = severity[solid].max()
+
+    numer, _ = conductivity.hotspot_value(
+        tt(xPhys),
+        tt(tPhys),
+        e1,
+        e2,
+        w,
+        P,
+        Q,
+        R,
+        ROUF,
+        denom,
+        None,
+        conductivity.Aggregation.LOGSUMEXP,
+        beta,
+        1.25,
+    )
+    bound = np.log(solid.sum()) / beta
+    assert true_max <= float(numer) <= true_max + bound
+
+
+def test_logsumexp_admits_severity_below_zero():
+    """A constant denominator lets `K_est` exceed 1 where an element is better
+    shielded than an infinite uniform layer, making severity negative. P_MEAN's
+    `T**p` only survives that while `p` is integral and silently returns `nan`
+    otherwise; LOGSUMEXP has no such precondition.
+    """
+    nelx, nely = 20, 16
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+    denom = conductivity.constant_denominator(
+        conductivity.Normalization.HALF_STENCIL, RMIN_COND
+    )
+    xPhys = np.ones((nely, nelx))
+    # A uniform ramp reproduces the reference state exactly (`K_est == 1`); deposit
+    # one interior element dead last instead, so its whole neighborhood precedes it
+    # and it is shielded about twice as well as the reference.
+    tPhys = np.tile(np.linspace(1, 0, nely)[:, None], (1, nelx))
+    tPhys[nely // 2, nelx // 2] = 2.0
+    severity = _severity_field(xPhys, tPhys, e1, e2, w, denom)
+    # Its whole stencil precedes it bar its own self-pair, which `sigmoid(0)` halves,
+    # so `K_est == (W_tot - 0.5) / (W_tot / 2)` and severity is `1/W_tot - 1`.
+    total = 2 * conductivity.half_stencil_weight(RMIN_COND)
+    assert severity[(nely // 2) * nelx + nelx // 2] == pytest.approx(1 / total - 1)
+    assert severity.min() < 0
+
+    xPhys_t = tt(xPhys).requires_grad_(True)
+    tPhys_t = tt(tPhys).requires_grad_(True)
+    numer, _ = conductivity.hotspot_value(
+        xPhys_t,
+        tPhys_t,
+        e1,
+        e2,
+        w,
+        P,
+        Q,
+        R,
+        ROUF,
+        denom,
+        None,
+        conductivity.Aggregation.LOGSUMEXP,
+        200.0,
+        1.25,
+    )
+    assert torch.isfinite(numer)
+    d_x, d_t = torch.autograd.grad(numer, (xPhys_t, tPhys_t))
+    assert torch.all(torch.isfinite(d_x)) and torch.all(torch.isfinite(d_t))
+
+    # Non-integral `p` is what P_MEAN cannot survive on the same field.
+    naive, _ = conductivity.hotspot_value(
+        tt(xPhys), tt(tPhys), e1, e2, w, 25.5, Q, R, ROUF, denom
+    )
+    assert torch.isnan(naive)
+
+
+def test_logsumexp_gradient_matches_finite_differences():
+    """Oracle-free check that the max-shift in `_weighted_logsumexp` is exact rather
+    than an approximation: shifting by a detached maximum must leave the gradient
+    untouched.
+    """
+    nelx, nely = 8, 6
+    nel = nelx * nely
+    h = 1e-7
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+    denom = conductivity.constant_denominator(
+        conductivity.Normalization.HALF_STENCIL, RMIN_COND
+    )
+
+    rng = np.random.default_rng(201)
+    xPhys0 = rng.uniform(0.2, 0.9, size=(nely, nelx))
+    tPhys0 = rng.uniform(0.0, 1.0, size=(nely, nelx))
+    args = (P, Q, R, ROUF, denom, None, conductivity.Aggregation.LOGSUMEXP, 20.0, 1.25)
+
+    def numer_of(xPhys, tPhys):
+        n, _ = conductivity.hotspot_value(tt(xPhys), tt(tPhys), e1, e2, w, *args)
+        return float(n)
+
+    xPhys_t = tt(xPhys0).requires_grad_(True)
+    tPhys_t = tt(tPhys0).requires_grad_(True)
+    numer, _ = conductivity.hotspot_value(xPhys_t, tPhys_t, e1, e2, w, *args)
+    d_x, d_t = torch.autograd.grad(numer, (xPhys_t, tPhys_t))
+
+    fd_x, fd_t = np.zeros(nel), np.zeros(nel)
+    for e in range(nel):
+        j, i = e // nelx, e % nelx
+        xp, xm = xPhys0.copy(), xPhys0.copy()
+        xp[j, i] += h
+        xm[j, i] -= h
+        fd_x[e] = (numer_of(xp, tPhys0) - numer_of(xm, tPhys0)) / (2 * h)
+        tp, tm = tPhys0.copy(), tPhys0.copy()
+        tp[j, i] += h
+        tm[j, i] -= h
+        fd_t[e] = (numer_of(xPhys0, tp) - numer_of(xPhys0, tm)) / (2 * h)
+
+    np.testing.assert_allclose(d_x.numpy().flatten(), fd_x, rtol=1e-5, atol=1e-8)
+    np.testing.assert_allclose(d_t.numpy().flatten(), fd_t, rtol=1e-5, atol=1e-8)
+
+
+def test_logsumexp_density_exponent_defaults_to_the_p_mean_one():
+    """`null` means "whatever P_MEAN was implicitly using", so a config that does not
+    mention the exponent does not silently change how hard void is suppressed.
+    """
+    nelx, nely = 14, 10
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    e1, e2, w = tti(e1), tti(e2), tt(w)
+    rng = np.random.default_rng(202)
+    xPhys = rng.uniform(0.1, 1.0, size=(nely, nelx))
+    tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
+    common = (e1, e2, w, P, Q, R, ROUF, None, None, conductivity.Aggregation.LOGSUMEXP)
+
+    implicit, _ = conductivity.hotspot_value(tt(xPhys), tt(tPhys), *common, 200.0, None)
+    explicit, _ = conductivity.hotspot_value(
+        tt(xPhys), tt(tPhys), *common, 200.0, R * P
+    )
+    assert_close(float(implicit), float(explicit))
+
+
+def test_hotspot_value_rejects_an_unknown_aggregation():
+    nelx, nely = 6, 5
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    with pytest.raises(ValueError, match="Aggregation member"):
+        conductivity.hotspot_value(
+            tt(np.ones((nely, nelx))),
+            tt(np.zeros((nely, nelx))),
+            tti(e1),
+            tti(e2),
+            tt(w),
+            P,
+            Q,
+            R,
+            ROUF,
+            None,
+            None,
+            "nonsense",
+        )
+
+
+def test_calibration_takes_the_shape_of_each_aggregates_bias():
+    """With `N` elements sharing the maximum and the rest negligible, the count
+    multiplies P_MEAN and adds to LOGSUMEXP, which is what makes one calibration a
+    ratio and the other a difference.
+    """
+    nel, beta, true_max = 12000, 200.0, 0.45
+    for N in (1, 10, 100, 1000):
+        T = torch.full((nel,), -1e3, dtype=torch.float64)
+        T[:N] = true_max
+        p_mean = float(
+            conductivity._safe_pmean(torch.sum(torch.clamp(T, min=0.0) ** P) / nel, P)
+        )
+        lse = float(conductivity._weighted_logsumexp(T, torch.ones_like(T), beta))
+        assert p_mean == pytest.approx(true_max * (N / nel) ** (1 / P))
+        assert lse == pytest.approx(true_max + np.log(N) / beta)
+
+        assert conductivity.Aggregation.P_MEAN.calibration(
+            p_mean, true_max
+        ) == pytest.approx((nel / N) ** (1 / P))
+        assert conductivity.Aggregation.LOGSUMEXP.calibration(
+            lse, true_max
+        ) == pytest.approx(np.log(N) / beta)
+
+
+@pytest.mark.parametrize("aggregation", list(conductivity.Aggregation))
+def test_calibrated_recovers_the_true_max_it_was_calibrated_against(aggregation):
+    numer, true_max = 0.6231, 0.4508
+    calibration = aggregation.calibration(numer, true_max)
+    assert float(aggregation.calibrated(numer, calibration)) == pytest.approx(true_max)
+    # Before any refresh, an aggregate stands unaltered.
+    assert float(
+        aggregation.calibrated(numer, aggregation.uncalibrated)
+    ) == pytest.approx(numer)
+
+
+@pytest.mark.parametrize("aggregation", list(conductivity.Aggregation))
+def test_calibrated_is_differentiable_in_the_aggregate(aggregation):
+    """`stto`'s hotspot constraint row is built on it."""
+    numer = torch.tensor(0.6231, dtype=torch.float64, requires_grad=True)
+    calibration = aggregation.calibration(0.6231, 0.4508)
+    (grad,) = torch.autograd.grad(aggregation.calibrated(numer, calibration), numer)
+    assert torch.isfinite(grad)
+
+
+def test_calibration_is_undefined_only_where_the_ratio_is():
+    """A zero P_MEAN says nothing about the maximum -- every element contributed zero
+    -- so there is no ratio to take. LOGSUMEXP's difference always has a value, at
+    negative severity included.
+    """
+    assert conductivity.Aggregation.P_MEAN.calibration(0.0, 0.5) is None
+    assert conductivity.Aggregation.LOGSUMEXP.calibration(-0.2, -0.3) == pytest.approx(
+        0.1
+    )
