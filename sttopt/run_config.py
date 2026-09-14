@@ -102,6 +102,9 @@ class RunConfig(_ConfigMixin):
         `timefield.TimeField` member (case-insensitively) for JSON.
     :param Gamma: weight of the layer-thickness-uniformity objective term
         (`timefield.gradient_magnitude_std`); 0 disables it.
+    :param enable_stage_volume: whether the per-stage volume bounds
+        (`constraints.stage_volume_bounds`) are in the MMA constraint stack at all.
+        `nStage` still sets the `Theta`-weighted stage compliances either way.
     :param hotspot_normalization: a `conductivity.Normalization` member name, whose
         docstring carries the variants. `configs/default.json` stays on `neighborhood`,
         unlike the `seqopt` one: this config is what the MATLAB-port fidelity fixtures
@@ -117,6 +120,7 @@ class RunConfig(_ConfigMixin):
     nely: int
     volfrac: float
     nStage: int
+    enable_stage_volume: bool = True
     Theta: float
     Gamma: float
     Tcr: float

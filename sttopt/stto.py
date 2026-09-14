@@ -81,7 +81,7 @@ class Problem:
     hotspot_base: Int[Tensor, " k"] | None
     Nei: Int[Tensor, " k"]
 
-    m: int  # number of MMA constraint rows: vol + continuity + start-point(s) + 2*nStage + hotspot
+    m: int  # number of MMA constraint rows: vol + continuity + start-point(s) + 2*nStage (if enable_stage_volume) + hotspot
     n: int  # number of MMA design variables: 2*nelx*nely (density half + time half)
 
 
@@ -209,7 +209,7 @@ def build_problem(
     n = 2 * nelx * nely
     # MATLAB hardcodes `m = 1 + 1 + nely + 2*nStage + 1` -- only self-consistent when
     # tfield != CORNER (Nei has nely rows); computing from len(Nei) generalizes correctly.
-    m = 1 + 1 + len(Nei) + 2 * nStage + 1
+    m = 1 + 1 + len(Nei) + (2 * nStage if config.enable_stage_volume else 0) + 1
 
     # Batch every float-valued and every int-valued raw array into one boundary crossing
     # each, rather than a `to_tensor` call per field (plans/torch_port_review_followup.md
@@ -473,18 +473,21 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     g_start_t = constraints.start_point(tPhys, problem.Nei)
 
-    stage_upper_t = [  # per-stage volume bounds
-        constraints.stage_volume_bounds(
-            xPhys, tPhys, float(t_stage), config.volfrac, beta_t
-        )
-        for t_stage in stage_times
-    ]
-    stage_upper_t = torch.stack(stage_upper_t)
+    g_parts: list[Tensor] = [g_vol_t[None], g_cont_t[None], g_start_t]
 
-    # Interleaves upper_0, lower_0, upper_1, lower_1, ...
-    g_stage_rows_t = torch.stack(
-        [stage_upper_t, -stage_upper_t - 1.0e-5], dim=1
-    ).flatten()
+    if config.enable_stage_volume:
+        stage_upper_t = [  # per-stage volume bounds
+            constraints.stage_volume_bounds(
+                xPhys, tPhys, float(t_stage), config.volfrac, beta_t
+            )
+            for t_stage in stage_times
+        ]
+        stage_upper_t = torch.stack(stage_upper_t)
+
+        # Interleaves upper_0, lower_0, upper_1, lower_1, ...
+        g_parts.append(
+            torch.stack([stage_upper_t, -stage_upper_t - 1.0e-5], dim=1).flatten()
+        )
 
     # Hotspot constraint, evaluated at this iteration's (possibly stale) calibration.
     # That is refreshed every 25 iterations from this same call's `numer`/`K_est` (both
@@ -496,13 +499,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         aggregation.calibrated(numer_t, state.hotspot_calibration) / config.Tcr - 1
     )
 
-    g_parts: list[Tensor] = [
-        g_vol_t[None],
-        g_cont_t[None],
-        g_start_t,
-        g_stage_rows_t,
-        g_hotspot_t[None],
-    ]
+    g_parts.append(g_hotspot_t[None])
     g_all = torch.cat(g_parts)
     dg_dx = torch.cat(
         [_sensitivity_rows(g, x, t) for g in g_parts],
