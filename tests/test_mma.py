@@ -40,6 +40,11 @@ def test_mmasub_iteration1():
         tt(a),
         tt(c),
         tt(d),
+        **{
+            k.removeprefix("trust_"): tt(v)
+            for k, v in fx.items()
+            if k.startswith("trust_")
+        },
     )
 
     assert xmma.shape == fx["xmma_all"][:, 0].shape

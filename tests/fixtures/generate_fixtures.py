@@ -9,8 +9,9 @@ catch an unintended future change to these functions' output, not to validate
 correctness -- correctness is established by the closed-form/first-principles tests
 alongside each fixture-based test, and by `test_reference_sweep.py`'s oracle sweep.
 
-Run from anywhere (paths are resolved relative to this script's own location):
-    python tests/fixtures/generate_fixtures.py
+Run from the repo root, so `sttopt`/`tests` resolve to this checkout rather than to
+whichever one the environment has installed:
+    PYTHONPATH=. python tests/fixtures/generate_fixtures.py
 """
 
 import dataclasses
@@ -18,15 +19,18 @@ import json
 from pathlib import Path
 
 import numpy as np
+import torch
 
 import sttopt.compliance as compliance
 import sttopt.conductivity as conductivity
 import sttopt.fem as fem
 import sttopt.filters as filters
 import sttopt.gravity as gravity
+import sttopt.mma as mma
 import sttopt.stto as stto
 import sttopt.run_config as run_config
 import sttopt.timefield as timefield
+import sttopt.torch_util as torch_util
 import tests.reference.compliance as compliance_ref
 import tests.reference.conductivity as conductivity_ref
 import tests.reference.fem as fem_ref
@@ -47,9 +51,10 @@ RMIN_COND = 3.0
 BETA_D_INIT = 1.0
 EMIN, EMAX, PENAL = 1e-9, 1.0, 3
 NU = 0.3
+ORACLE_FACTOR = 1.0
 
 # The rest of RunConfig's hyperparameters (eta, beta_d_max, p, q, r, rouf, a0, mma_c,
-# move, tmove) aren't varied by these fixtures, so they come from
+# move, tmove, hotspot_*) aren't varied by these fixtures, so they come from
 # configs/default.json rather than being restated here.
 _DEFAULT_CONFIG = run_config.RunConfig.from_dict(
     json.loads((OUT.parent.parent / "configs" / "default.json").read_text())
@@ -70,6 +75,11 @@ CONFIG = dataclasses.replace(
 )
 
 
+def N(x):
+    """`torch_util.to_numpy`, short for the many conversions at the `np.savez` boundary."""
+    return torch_util.to_numpy(x)
+
+
 def main():
     # -- fem_setup.npz: KE, edofMat -----------------------------------------------
     KE = fem.plane_stress_KE(nu=NU)
@@ -77,14 +87,17 @@ def main():
     np.savez(OUT / "fem_setup.npz", KE=KE, edofMat=edofMat, nelx=NELX, nely=NELY)
 
     # -- fem_solve.npz: standalone FE solve at the initial (uniform) density ------
-    problem = stto.build_problem(CONFIG)
+    # CPU float64 regardless of the machine, so a regeneration is reproducible.
+    problem = stto.build_problem(CONFIG, device="cpu", dtype=torch.float64)
     xPhys0 = filters.heaviside_projection(
-        np.full((NELY, NELX), VOLFRAC), BETA_D_INIT, problem.config.eta
+        torch.full((NELY, NELX), VOLFRAC, dtype=torch.float64),
+        BETA_D_INIT,
+        problem.config.eta,
     )
     c0, dcx0 = compliance_ref.whole_compliance(
         xPhys0,
-        KE,
-        edofMat,
+        problem.KE,
+        problem.edofMat,
         EMIN,
         EMAX,
         PENAL,
@@ -93,15 +106,15 @@ def main():
         problem.ndof,
     )
     K0 = fem_ref.assemble_stiffness(
-        KE, xPhys0, EMIN, EMAX, PENAL, edofMat, problem.ndof
+        KE, N(xPhys0), EMIN, EMAX, PENAL, edofMat, problem.ndof
     )
-    U0 = fem_ref.solve_fe(K0, problem.F, problem.freedofs)
+    U0 = fem_ref.solve_fe(K0, N(problem.F), N(problem.freedofs))
     np.savez(
         OUT / "fem_solve.npz",
-        xPhys0=xPhys0,
+        xPhys0=N(xPhys0),
         U0=U0,
         c0=c0,
-        dcx0=dcx0,
+        dcx0=N(dcx0),
         nelx=NELX,
         nely=NELY,
     )
@@ -152,8 +165,8 @@ def main():
     # so per-module fixtures agree with the trajectory by construction. -------------
     state = stto.init_state(problem, BETA_D_INIT)
 
-    xPhys_traj = [state.xPhys.copy()]
-    tPhys_traj = [state.tPhys.copy()]
+    xPhys_traj = [N(state.xPhys)]
+    tPhys_traj = [N(state.tPhys)]
     dx_all = np.zeros((NELY, NELX, NLOOP))
     objf = np.zeros(NLOOP)
     vol = np.zeros(NLOOP)
@@ -177,21 +190,22 @@ def main():
 
     # iteration-1 mmasub snapshot (matches test_mma.py's standalone mmasub call)
     n = problem.n
-    xval_1 = np.concatenate([state.x.flatten(), state.t.flatten()])
-    xmin_1 = np.concatenate(
+    x_1, t_1 = N(state.x).flatten(), N(state.t).flatten()
+    xval_1 = np.concatenate([x_1, t_1])
+    # The bounds and trust region `stto.step` hands `mmasub`.
+    xmin_1 = np.zeros(n)
+    xmax_1 = np.ones(n)
+    move_1 = np.concatenate(
         [
-            np.maximum(0.0, state.x.flatten() - problem.config.move),
-            np.maximum(0.0, state.t.flatten() - problem.config.tmove),
+            np.full(x_1.size, problem.config.move),
+            np.full(t_1.size, problem.config.tmove),
         ]
     )
-    xmax_1 = np.concatenate(
-        [
-            np.minimum(1.0, state.x.flatten() + problem.config.move),
-            np.minimum(1.0, state.t.flatten() + problem.config.tmove),
-        ]
+    trust_1 = mma.trust_region_params(
+        torch.from_numpy(move_1), torch.from_numpy(xmax_1 - xmin_1)
     )
-    xold1_1 = state.xold1.copy()
-    xold2_1 = state.xold2.copy()
+    xold1_1 = N(state.xold1)
+    xold2_1 = N(state.xold2)
     low_1 = np.zeros(n)
     upp_1 = np.zeros(n)
 
@@ -205,12 +219,12 @@ def main():
         dx = filters.heaviside_projection_derivative(
             state.xTilde, state.beta_d, problem.config.eta
         )
-        dx_all[:, :, k] = dx
+        dx_all[:, :, k] = N(dx)
 
         c_whole, dcx_whole = compliance_ref.whole_compliance(
             state.xPhys,
-            KE,
-            edofMat,
+            problem.KE,
+            problem.edofMat,
             EMIN,
             EMAX,
             PENAL,
@@ -219,14 +233,14 @@ def main():
             problem.ndof,
         )
         c_whole_all[k] = c_whole
-        dcx_whole_all[:, :, k] = dcx_whole
+        dcx_whole_all[:, :, k] = N(dcx_whole)
 
         for i, ti in enumerate(np.linspace(0, 1, NSTAGE + 1)[1:]):
             c_grav, dcx_grav, dct_grav = compliance_ref.gravity_compliance(
                 state.xPhys,
                 state.tPhys,
-                KE,
-                edofMat,
+                problem.KE,
+                problem.edofMat,
                 EMIN,
                 EMAX,
                 PENAL,
@@ -237,38 +251,47 @@ def main():
                 problem.ndof,
             )
             c_grav_all[k, i] = c_grav
-            dcx_grav_all[:, i, k] = dcx_grav
-            dct_grav_all[:, i, k] = dct_grav
+            dcx_grav_all[:, i, k] = N(dcx_grav)
+            dct_grav_all[:, i, k] = N(dct_grav)
 
+        # The hand-derived oracle is the MATLAB-source formulation (neighborhood
+        # normalization, P_MEAN at factor 1), evaluated along whatever trajectory the
+        # default config produces -- not the run's own hotspot term.
         K_est = conductivity.estimated_conductivity(
-            state.xPhys, state.tPhys, e1, e2, w, problem.config.q, problem.config.rouf
+            state.xPhys,
+            state.tPhys,
+            problem.e1,
+            problem.e2,
+            problem.w,
+            problem.config.q,
+            problem.config.rouf,
         )
         hotspot = conductivity_ref.hotspot_constraint(
             state.xPhys,
             state.tPhys,
-            e1,
-            e2,
-            w,
+            problem.e1,
+            problem.e2,
+            problem.w,
             dx,
             problem.H,
             problem.Hs,
-            state.hotspot_calibration,
+            ORACLE_FACTOR,
             problem.config.Tcr,
             problem.config.p,
             problem.config.q,
             problem.config.r,
             problem.config.rouf,
         )
-        K_est_all[:, k] = K_est
+        K_est_all[:, k] = N(K_est)
         numer_all[k] = hotspot.numer
-        factor_all[k] = state.factor
-        df1_all[:, k] = hotspot.df1
-        dt1_all[:, k] = hotspot.dt1
+        factor_all[k] = ORACLE_FACTOR
+        df1_all[:, k] = N(hotspot.df1)
+        dt1_all[:, k] = N(hotspot.dt1)
 
         state, record = stto.step(problem, state)
 
-        xPhys_traj.append(state.xPhys.copy())
-        tPhys_traj.append(state.tPhys.copy())
+        xPhys_traj.append(N(state.xPhys))
+        tPhys_traj.append(N(state.tPhys))
         objf[k] = record.obj
         vol[k] = record.vol
         tru_max_all[k] = record.tru_max
@@ -324,6 +347,7 @@ def main():
         xval_1=xval_1,
         xmin_1=xmin_1,
         xmax_1=xmax_1,
+        **{f"trust_{k}": N(v) for k, v in trust_1.items()},
         xold1_1=xold1_1,
         xold2_1=xold2_1,
         f0val_1=f0val_1,
