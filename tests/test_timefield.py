@@ -107,7 +107,7 @@ def test_gradient_magnitude_std_matches_numpy_gauss_reference():
         gx = (1 - eta) / 2 * (lo_hi - lo_lo) + (1 + eta) / 2 * (hi_hi - hi_lo)
         gy = (1 - xi) / 2 * (hi_lo - lo_lo) + (1 + xi) / 2 * (hi_hi - lo_hi)
         samples.append(np.sqrt(gx**2 + gy**2))
-    magnitude = np.stack(samples)
+    magnitude = np.stack(samples) * np.sqrt(field.size)  # per unit length
 
     value = timefield.gradient_magnitude_std(torch.from_numpy(field))
     assert float(value) == pytest.approx(magnitude.std(ddof=1), rel=1e-9)
@@ -142,12 +142,24 @@ def test_gradient_stencil_is_exact_on_a_linear_field():
     so a constant-thickness sweep scores zero spread however it is oriented."""
     ny, nx = 6, 7
     i, j = np.indices((ny, nx))
-    field = torch.from_numpy(3.0 * j - 2.0 * i)
+    unit = np.sqrt(ny * nx)
+    field = torch.from_numpy((3.0 * j - 2.0 * i) / unit)
     dt_dx, dt_dy = timefield._q4_gauss_gradient(field)
     assert float(dt_dx.min()) == pytest.approx(3.0, abs=1e-12)
     assert float(dt_dx.max()) == pytest.approx(3.0, abs=1e-12)
     assert float(dt_dy.min()) == pytest.approx(-2.0, abs=1e-12)
     assert float(dt_dy.max()) == pytest.approx(-2.0, abs=1e-12)
+
+
+@pytest.mark.parametrize("ny,nx", [(10, 10), (20, 20), (15, 45)])
+def test_gradient_magnitude_is_per_unit_length(ny, nx):
+    """A field rising by one `t` per unit length reads a magnitude of exactly 1, at any
+    resolution or aspect ratio -- what makes a weight on a gradient statistic portable
+    across meshes. Per element, the same slope would read `1 / sqrt(nx * ny)`."""
+    i, j = np.indices((ny, nx))
+    field = torch.from_numpy((0.6 * j + 0.8 * i) / np.sqrt(ny * nx))
+    magnitude = timefield.gradient_magnitude(field)
+    assert float((magnitude - 1.0).abs().max()) == pytest.approx(0.0, abs=1e-12)
 
 
 def test_interpolate_to_gauss_is_a_partition_of_unity():
@@ -164,7 +176,7 @@ def test_gradient_magnitude_elements_covers_every_element():
     ny, nx = 5, 6
     i, j = np.indices((ny, nx))
     per_element = timefield.gradient_magnitude_elements(
-        torch.from_numpy(3.0 * j + 0.0 * i)
+        torch.from_numpy((3.0 * j + 0.0 * i) / np.sqrt(ny * nx))
     )
     assert per_element.shape == (ny, nx)
     assert torch.all(torch.isfinite(per_element))
