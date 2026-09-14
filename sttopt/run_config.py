@@ -105,11 +105,10 @@ class RunConfig(_ConfigMixin):
     :param enable_stage_volume: whether the per-stage volume bounds
         (`constraints.stage_volume_bounds`) are in the MMA constraint stack at all.
         `nStage` still sets the `Theta`-weighted stage compliances either way.
-    :param hotspot_normalization: a `conductivity.Normalization` member name, whose
-        docstring carries the variants. `configs/default.json` stays on `neighborhood`,
-        unlike the `seqopt` one: this config is what the MATLAB-port fidelity fixtures
-        are generated and checked against, so its hotspot term has to keep matching the
-        source's rather than improving on it.
+    :param hotspot_normalization: as in `SeqRunConfig`, as are the other `hotspot_*`
+        fields. The field defaults are the legacy MATLAB-source formulation only so that
+        run records written before these fields existed still load and replay as they
+        ran; `configs/default.json` sets the current one.
     """
 
     # Frequently varied -- also exposed as a CLI flag in stto_cli.py.
