@@ -1634,3 +1634,23 @@ def test_p_mean_keeps_its_calibration_where_the_ratio_is_undefined():
     lse = conductivity.LogSumExp(200.0, 1.0, R)
     K_est = torch.full((20,), 1.3, dtype=torch.float64)
     assert float(lse(K_est, xPhys, recalibrate=True)) == pytest.approx(-0.3)
+
+
+def test_severity_logsumexp_approaches_the_true_maximum_of_the_severity():
+    """The smooth maximum is taken over `T * x**r` itself, so at a sharp `beta` its
+    uncalibrated value already sits on the maximum the calibration targets."""
+    rng = np.random.default_rng(11)
+    xPhys = tt(rng.uniform(0.0, 1.0, size=(4, 5)))
+    K_est = tt(rng.uniform(0.0, 0.8, size=20))
+    true_max = float(((1 - K_est) * xPhys.flatten() ** R).max())
+    aggregate = conductivity.SeverityLogSumExp(1e4, R)
+    assert float(aggregate(K_est, xPhys)) == pytest.approx(true_max, abs=5e-4)
+
+
+def test_severity_logsumexp_gradient_is_finite_at_zero_density_and_infinite_K():
+    x = tt(np.array([[0.0, 0.5, 1.0, 1.0]])).requires_grad_(True)
+    K_est = tt(np.array([0.2, 0.3, np.inf, 0.1])).requires_grad_(True)
+    value = conductivity.SeverityLogSumExp(25.0, R)(K_est, x)
+    d_K, d_x = torch.autograd.grad(value, (K_est, x))
+    assert torch.isfinite(value)
+    assert torch.isfinite(d_K).all() and torch.isfinite(d_x).all()

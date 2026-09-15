@@ -81,6 +81,7 @@ class Aggregation(StrEnum):
 
     P_MEAN = "p_mean"
     LOGSUMEXP = "logsumexp"
+    LOGSUMEXP_SEVERITY = "logsumexp_severity"
 
 
 def _stencil_offsets(rmin_cond: float) -> list[tuple[int, int, float]]:
@@ -394,7 +395,56 @@ class LogSumExp:
         # Infinitely shielded elements need no weight of their own: `exp(-inf) == 0`.
         numer = _weighted_logsumexp(1 - K_est, xPhys.flatten() ** self.s, self.beta)
         if recalibrate:
-            self.calibration = float(numer) - _max_severity(K_est, xPhys, self.r)
+            self.calibration = float(numer.detach()) - _max_severity(
+                K_est, xPhys, self.r
+            )
+        return numer - self.calibration
+
+
+class SeverityLogSumExp:
+    """`log(sum(exp(beta * T * x**r))) / beta`: a smooth maximum of the severity
+    `T * x**r` itself, the quantity `PMean` and the calibration both target, carried
+    onto the true maximum by a calibration offset.
+
+    Unlike `LogSumExp`, density enters through the severity rather than as a separate
+    weight, so void is not suppressed beyond scoring zero severity; its share of the
+    sum is `exp(-beta * max)` per element, which a sharp `beta` makes negligible.
+
+    The calibration is run state, refreshed in place by a call with `recalibrate`.
+    """
+
+    def __init__(self, beta: float, r: float):
+        self.beta = beta
+        self.r = r
+        self.calibration = 0.0
+
+    def __call__(
+        self,
+        K_est: Float[Tensor, " nel"],
+        xPhys: Float[Tensor, "nely nelx"],
+        recalibrate: bool = False,
+    ) -> Float[Tensor, ""]:
+        """The calibrated aggregate, differentiable in `K_est` and `xPhys`.
+
+        `x**r` differentiates to `inf` at `x == 0` for `r < 1`, so exact zeros take a
+        substitute input and a zero severity, and an infinitely shielded element takes
+        `-inf` severity through a finite substitute (safe-input-then-reselect, as in
+        `_safe_pmean`).
+
+        :param recalibrate: first refresh the calibration against this field's true
+            maximum.
+        """
+        x = xPhys.flatten()
+        shielded = torch.isinf(K_est)
+        solid = x > 0
+        x_r = torch.where(solid, torch.where(solid, x, torch.ones_like(x)) ** self.r, 0)
+        T = torch.where(shielded, torch.zeros_like(K_est), 1 - K_est)
+        severity = torch.where(shielded, -torch.inf, T * x_r)
+        numer = _weighted_logsumexp(severity, torch.ones_like(x), self.beta)
+        if recalibrate:
+            self.calibration = float(numer.detach()) - _max_severity(
+                K_est, xPhys, self.r
+            )
         return numer - self.calibration
 
 
@@ -404,7 +454,7 @@ def make_aggregation(
     r: float,
     beta: float,
     density_exponent: float | None,
-) -> PMean | LogSumExp:
+) -> PMean | LogSumExp | SeverityLogSumExp:
     """A fresh, uncalibrated aggregation for a run's settings.
 
     :param beta: `LogSumExp` sharpness; unused by `PMean`, which takes `p` instead.
@@ -416,6 +466,8 @@ def make_aggregation(
     elif aggregation == Aggregation.LOGSUMEXP:
         s = r * p if density_exponent is None else density_exponent
         return LogSumExp(beta, s, r)
+    elif aggregation == Aggregation.LOGSUMEXP_SEVERITY:
+        return SeverityLogSumExp(beta, r)
     else:
         raise ValueError(
             f"aggregation must be an Aggregation member, got {aggregation!r}"
