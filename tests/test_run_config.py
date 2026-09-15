@@ -62,18 +62,22 @@ def test_cosine_schedule_rejects_a_zero_length_decay():
         CosineSchedule(initial=1.0, decay_iterations=0, final=0.02)
 
 
-def test_seq_config_round_trips_a_cosine_weight():
+@pytest.mark.parametrize(
+    "cls,make_config",
+    [(RunConfig, default_run_config), (SeqRunConfig, default_seq_run_config)],
+)
+def test_config_round_trips_a_cosine_weight(cls, make_config):
     """JSON has no way to name a `CosineSchedule`, so a mapping in the field's place is
-    one -- and it has to survive the round trip a run directory's `seq_config.json`
-    depends on."""
-    scheduled = default_seq_run_config(
+    one -- and it has to survive the round trip a run directory's config JSON depends
+    on."""
+    scheduled = make_config(
         roughness_weight={"initial": 1.0, "decay_iterations": 300, "final": 0.02}
     )
     assert scheduled.roughness_weight == CosineSchedule(
         initial=1.0, decay_iterations=300, final=0.02
     )
 
-    revived = SeqRunConfig.from_dict(json.loads(json.dumps(scheduled.to_dict())))
+    revived = cls.from_dict(json.loads(json.dumps(scheduled.to_dict())))
     assert revived == scheduled
     assert weight_at(revived.roughness_weight, 1) == 1.0
     assert weight_at(revived.roughness_weight, 800) == pytest.approx(0.02)

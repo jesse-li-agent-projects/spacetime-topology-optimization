@@ -46,7 +46,9 @@ CONFIG = RunConfig(
     nStage=NSTAGE,
     enable_stage_volume=True,
     Theta=THETA,
-    Gamma=0.0,
+    uniformity_metric="gradient_cv",
+    uniformity_weight=0.0,
+    roughness_weight=0.0,
     Tcr=TCR,
     # The MATLAB source's hotspot formulation; beta and density_exponent are inert
     # under p_mean.
@@ -56,6 +58,9 @@ CONFIG = RunConfig(
     hotspot_density_exponent=None,
     print_base=PRINT_BASE,
     rmin=RMIN,
+    time_filter_rmin=RMIN,
+    enable_continuity=True,
+    continuity_tol=1e-6,
     lrmin=LRMIN,
     rmin_cond=RMIN_COND,
     beta_d_max=128.0,

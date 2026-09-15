@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import torch
 
+import sttopt.filters as filters
 import sttopt.seqopt as seqopt
 import sttopt.timefield as timefield
 import sttopt.torch_util as torch_util
@@ -43,7 +44,7 @@ def _state_from_raw(
 
 
 def test_init_state_is_geodesic_and_finite():
-    problem = _problem()
+    problem = _problem(void_extension="geodesic")
     state = seqopt.init_state(problem)
     assert state.t.shape == (NELY, NELX)
     assert torch.all(torch.isfinite(state.t))
@@ -52,6 +53,22 @@ def test_init_state_is_geodesic_and_finite():
         _geometry(), torch_util.to_numpy(problem.Nei)
     )
     np.testing.assert_allclose(torch_util.to_numpy(state.t), expected)
+
+
+def test_init_state_calibrates_tru_max_against_the_initial_field():
+    """`tru_max` reports the true maximum severity from iteration 1, not the aggregate's
+    bias until the first refresh."""
+    problem = _problem()
+    state = seqopt.init_state(problem)
+    _, K_est = seqopt.hotspot_value(
+        problem, seqopt.physical_timefield(problem, state.t)
+    )
+    finite = torch.isfinite(K_est)
+    xPhys = problem.xPhys.flatten()[finite]
+    true_max = float(((1 - K_est[finite]) * xPhys**problem.config.r).max())
+
+    _, record = seqopt.step(problem, state)
+    assert record.tru_max == pytest.approx(true_max, rel=1e-12)
 
 
 def test_build_problem_drops_solid_that_cannot_reach_the_plate():
@@ -140,7 +157,7 @@ def test_scheduled_roughness_weight_decays_during_the_run():
 # --- finite-difference check of df/dt and dg/dt ---------------------------------
 
 
-def test_sensitivities_match_finite_differences():
+def test_sensitivities_match_finite_differences(monkeypatch):
     """`step`'s `df`/`dg` against central differences of its own `f`/`g`, along random
     directions in the raw time field.
 
@@ -159,6 +176,23 @@ def test_sensitivities_match_finite_differences():
     _, record = seqopt.step(problem, state)
     assert np.abs(record.df).max() > 1e-6
     assert np.abs(record.dg).max(axis=1).min() > 1e-8
+
+    # `step`'s gradient treats the time field's scale as a constant, so the finite
+    # difference has to hold it at the unperturbed value too.
+    def unscaled_max(t):
+        t = torch_util.to_tensor(t, problem.device, problem.dtype)
+        if problem.H is not None:
+            t = filters.apply_density_filter(t, problem.H, problem.Hs)
+        return float(t.max())
+
+    base_scale = unscaled_max(t_raw)
+    scaled_physical_timefield = seqopt.physical_timefield
+
+    def physical_timefield_at_base_scale(problem, t):
+        tPhys = scaled_physical_timefield(problem, t)
+        return tPhys * unscaled_max(t.detach()) / base_scale
+
+    monkeypatch.setattr(seqopt, "physical_timefield", physical_timefield_at_base_scale)
 
     def values_at(t):
         _, rec = seqopt.step(problem, _state_from_raw(problem, t, base_state))
@@ -179,16 +213,16 @@ def test_sensitivities_match_finite_differences():
 # --- the optional filter on t ---------------------------------------------------
 
 
-def test_unfiltered_is_the_default_and_leaves_t_untouched():
-    """`tPhys is t` at radius 0, not merely equal to it: `seqopt`'s starting design is
-    that the design variable and the physical field are the same object, and a filter
-    that quietly copied would put a no-op in every gradient.
-    """
-    problem = _problem(nStage=0)
-    assert problem.config.time_filter_rmin == 0.0
+def test_unfiltered_time_field_is_only_scaled():
+    """At radius 0 the physical field is `t` scaled, not shifted, to end the build at 1:
+    a field that stops short of 1 is stretched, and a start at 0 stays at 0."""
+    problem = _problem(nStage=0, time_filter_rmin=0.0)
     assert problem.H is None
-    t = seqopt.init_state(problem).t
-    assert seqopt.physical_timefield(problem, t) is t
+    t = 0.6 * seqopt.init_state(problem).t
+
+    tPhys = seqopt.physical_timefield(problem, t)
+    assert float(tPhys.max()) == pytest.approx(1.0, rel=1e-14)
+    torch.testing.assert_close(tPhys, t / t.max(), rtol=1e-14, atol=0.0)
 
 
 def test_time_filter_attenuates_a_one_element_sawtooth():

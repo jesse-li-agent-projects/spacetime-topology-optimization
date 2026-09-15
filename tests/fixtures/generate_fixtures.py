@@ -69,6 +69,7 @@ CONFIG = dataclasses.replace(
     Tcr=TCR,
     print_base=TFIELD.name.lower(),
     rmin=RMIN,
+    time_filter_rmin=RMIN,
     lrmin=LRMIN,
     rmin_cond=RMIN_COND,
     nloop=NLOOP,
@@ -212,7 +213,7 @@ def main():
         # `stto.physical_fields` divides the filtered time field by this, a constant to
         # the gradient that the MATLAB-form oracles' chain rule does not include.
         t_scale_all[k] = float(
-            filters.apply_density_filter(state.t, problem.H, problem.Hs).max()
+            filters.apply_density_filter(state.t, problem.time_H, problem.time_Hs).max()
         )
 
         c_whole, dcx_whole = compliance_ref.whole_compliance(

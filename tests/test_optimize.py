@@ -43,7 +43,7 @@ def _problem(
     nStage=3,
     tfield=3,
     Theta=1.0,
-    Gamma=0.0,
+    uniformity_weight=0.0,
     enable_stage_volume=True,
     **kwargs,
 ):
@@ -54,10 +54,11 @@ def _problem(
         enable_stage_volume=enable_stage_volume,
         volfrac=VOLFRAC,
         Theta=Theta,
-        Gamma=Gamma,
+        uniformity_weight=uniformity_weight,
         Tcr=TCR,
         print_base=timefield.TimeField(tfield).name.lower(),
         rmin=RMIN,
+        time_filter_rmin=RMIN,
         lrmin=LRMIN,
         rmin_cond=RMIN_COND,
     )
@@ -273,7 +274,7 @@ def test_physical_time_field_is_scaled_to_a_maximum_of_one():
     problem = _problem()
     state = stto.init_state(problem, BETA_D)
     t_raw = 0.6 * state.t
-    filtered = filters.apply_density_filter(t_raw, problem.H, problem.Hs)
+    filtered = filters.apply_density_filter(t_raw, problem.time_H, problem.time_Hs)
     assert float(filtered.max()) < 0.7  # premise: the unscaled field ends early
 
     _, tPhys = stto.physical_fields(problem, state.x, t_raw, BETA_D)
@@ -342,9 +343,11 @@ def test_step_assembled_sensitivities_match_finite_differences(monkeypatch):
     x_raw, t_raw, state = _draw_well_conditioned_state(problem, rng)
     _, record = stto.step(problem, state)
 
-    # Row count follows from the stack `step` builds: volume, continuity, one row per
-    # print-start element, an upper and a lower bound per stage, and the hotspot row.
-    m = 1 + 1 + len(problem.Nei) + 2 * nStage + 1
+    # Row count follows from the stack `step` builds: volume, continuity (when enabled),
+    # one row per print-start element, an upper and a lower bound per stage, and the
+    # hotspot row.
+    n_continuity_rows = 1 if problem.config.enable_continuity else 0
+    m = 1 + n_continuity_rows + len(problem.Nei) + 2 * nStage + 1
     assert record.df.shape == (problem.n,)
     assert record.g.shape == (m,)
     assert record.dg.shape == (m, problem.n)
@@ -357,7 +360,7 @@ def test_step_assembled_sensitivities_match_finite_differences(monkeypatch):
     # difference has to hold it at the unperturbed value too.
     def filtered_max(t):
         t = torch_util.to_tensor(t, problem.device, problem.dtype)
-        return filters.apply_density_filter(t, problem.H, problem.Hs).max()
+        return filters.apply_density_filter(t, problem.time_H, problem.time_Hs).max()
 
     base_scale = filtered_max(t_raw)
     unscaled_physical_fields = stto.physical_fields
@@ -415,34 +418,41 @@ def test_step_objective_is_theta_weighted_sum_of_stage_compliances():
         problem = _problem(nelx=nelx, nely=nely, nStage=nStage, Theta=Theta)
         state = _state_from_raw(problem, x_raw, t_raw)
         _, rec = stto.step(problem, state)
-        return rec.f, rec.obj
+        return rec.f, rec
 
     base = _problem(nelx=nelx, nely=nely, nStage=nStage)
     x_raw, t_raw, _ = _draw_well_conditioned_state(base, rng)
 
-    f0_0, obj_0 = f_at(0.0)
+    f0_0, rec_0 = f_at(0.0)
     f0_1, _ = f_at(1.0)
     f0_3, _ = f_at(3.0)
 
     # At Theta = 0 the stage terms drop out and .f is the whole-structure compliance,
-    # which `IterationRecord.obj` reports separately at every Theta.
-    np.testing.assert_allclose(f0_0, obj_0, rtol=1e-12)
+    # which `IterationRecord.obj` reports separately at every Theta, plus the weighted
+    # time-field terms, which do not depend on Theta.
+    time_terms = (
+        base.config.uniformity_weight * rec_0.uniformity
+        + rec_0.roughness_weight * rec_0.roughness
+    )
+    np.testing.assert_allclose(f0_0, rec_0.obj + time_terms, rtol=1e-12)
     stage_sum = f0_1 - f0_0
     assert stage_sum > 1e-3  # non-vacuous: the stage terms actually contribute
     np.testing.assert_allclose(f0_3, f0_0 + 3.0 * stage_sum, rtol=1e-9)
 
 
-def test_step_objective_adds_the_gamma_weighted_gradient_uniformity_penalty():
-    """`IterationRecord.f` is affine in `Gamma` with slope `IterationRecord.uniformity`,
-    the density-weighted CV of the time field's gradient magnitude -- which pins both
-    that the penalty is wired into the objective with the right weight and that
-    `uniformity` reports the same quantity the weight multiplies.
+def test_step_objective_adds_the_weighted_uniformity_penalty():
+    """`IterationRecord.f` is affine in `uniformity_weight` with slope
+    `IterationRecord.uniformity` -- which pins both that the penalty is wired into the
+    objective with the right weight and that `uniformity` reports the same quantity the
+    weight multiplies.
     """
     nelx, nely, nStage = 10, 8, 3
     rng = np.random.default_rng(1)
 
-    def f_at(Gamma):
-        problem = _problem(nelx=nelx, nely=nely, nStage=nStage, Gamma=Gamma)
+    def f_at(weight):
+        problem = _problem(
+            nelx=nelx, nely=nely, nStage=nStage, uniformity_weight=weight
+        )
         state = _state_from_raw(problem, x_raw, t_raw)
         _, rec = stto.step(problem, state)
         return rec.f, rec.uniformity
@@ -458,15 +468,79 @@ def test_step_objective_adds_the_gamma_weighted_gradient_uniformity_penalty():
     np.testing.assert_allclose(f_100, f_0 + 100.0 * uniformity, rtol=1e-9)
 
 
+def test_init_state_calibrates_the_hotspot_row_against_the_seed():
+    """Iteration 1 already reports the seed's true maximum severity: the aggregate's
+    bias is calibrated out before the first step rather than at the first refresh."""
+    import sttopt.conductivity as conductivity
+
+    problem = _problem()
+    state = stto.init_state(problem, BETA_D)
+    xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, BETA_D)
+    _, K_est = stto.hotspot_value(problem, xPhys, tPhys)
+    finite = torch.isfinite(K_est)
+    true_max = float(
+        ((1 - K_est[finite]) * xPhys.flatten()[finite] ** problem.config.r).max()
+    )
+    aggregation = conductivity.Aggregation(problem.config.hotspot_aggregation)
+    assert state.hotspot_calibration != aggregation.uncalibrated  # non-vacuous
+
+    _, record = stto.step(problem, state)
+    assert record.tru_max == pytest.approx(true_max, rel=1e-12)
+
+
+def test_enable_continuity_false_drops_the_continuity_constraint_row():
+    """Disabling continuity removes its row rather than relaxing it, so the start-point
+    rows follow the volume row directly."""
+    base = _problem()
+    config = dataclasses.replace(base.config, enable_continuity=False)
+    problem = stto.build_problem(config)
+    _, record = stto.step(problem, stto.init_state(problem, BETA_D))
+    _, with_continuity = stto.step(base, stto.init_state(base, BETA_D))
+
+    assert record.g.shape == (with_continuity.g.shape[0] - 1,)
+    assert record.dg.shape == (with_continuity.g.shape[0] - 1, problem.n)
+    np.testing.assert_allclose(record.g[0], with_continuity.g[0], rtol=1e-12)
+    np.testing.assert_allclose(record.g[1:], with_continuity.g[2:], rtol=1e-12)
+
+
+def test_step_objective_adds_the_scheduled_roughness_term():
+    """`IterationRecord.f` moves by this iteration's roughness weight times
+    `IterationRecord.roughness`, and a schedule reaches the objective as its value at the
+    current iteration rather than as a constant."""
+    nelx, nely, nStage = 10, 8, 3
+    rng = np.random.default_rng(2)
+    base = _problem(nelx=nelx, nely=nely, nStage=nStage)
+    x_raw, t_raw, _ = _draw_well_conditioned_state(base, rng)
+
+    def record_at(roughness_weight):
+        config = dataclasses.replace(base.config, roughness_weight=roughness_weight)
+        problem = stto.build_problem(config)
+        _, rec = stto.step(problem, _state_from_raw(problem, x_raw, t_raw))
+        return rec
+
+    initial = 1000.0
+    schedule = {"initial": initial, "decay_iterations": 10, "final": 100.0}
+    unweighted, scheduled = record_at(0.0), record_at(schedule)
+
+    # The two records come from separate solves, which agree on `.f` only to the CG
+    # tolerance (PR #99).
+    noise = 10 * torch_solve.DEFAULT_CG_RTOL * abs(unweighted.f)
+    assert scheduled.roughness_weight == initial  # `_state_from_raw` steps iteration 1
+    assert initial * scheduled.roughness > 100 * noise  # non-vacuous
+    np.testing.assert_allclose(
+        scheduled.f, unweighted.f + initial * scheduled.roughness, rtol=0, atol=noise
+    )
+
+
 def test_step_gradient_of_the_penalty_matches_its_own_sensitivity():
-    """Raising `Gamma` changes `.df` by `Gamma` times the penalty's own sensitivity, in
-    both halves: the penalty reads `tPhys` and is weighted by `xPhys`, so it moves
-    material as well as print time.
+    """Raising `uniformity_weight` changes `.df` by the weight times the penalty's own
+    sensitivity, in both halves: the penalty reads `tPhys` and is weighted by `xPhys`, so
+    it moves material as well as print time.
 
     Both halves are isolated by differencing two separate `step` calls, so the
     compliance sensitivity has to cancel between them. It only cancels to the CG
     tolerance: the solve is iterative, and on CUDA its reduction order is not
-    reproducible, so two runs at the same `Gamma` land on different iterates within
+    reproducible, so two runs at the same weight land on different iterates within
     `rtol`. Tolerances here are keyed to that noise floor, not to a constant -- see
     PR #99.
     """
@@ -476,14 +550,14 @@ def test_step_gradient_of_the_penalty_matches_its_own_sensitivity():
     base = _problem(nelx=nelx, nely=nely)
     x_raw, t_raw, _ = _draw_well_conditioned_state(base, rng)
 
-    def df_at(Gamma):
-        problem = _problem(nelx=nelx, nely=nely, Gamma=Gamma)
+    def df_at(weight):
+        problem = _problem(nelx=nelx, nely=nely, uniformity_weight=weight)
         _, rec = stto.step(problem, _state_from_raw(problem, x_raw, t_raw))
         return rec.df, problem
 
     df_0, _ = df_at(0.0)
-    Gamma = 100.0
-    df_g, problem = df_at(Gamma)
+    weight = 100.0
+    df_g, problem = df_at(weight)
 
     def solve_noise(df_half):
         """How far two solves of the same problem may disagree on `df_half`."""
@@ -499,7 +573,7 @@ def test_step_gradient_of_the_penalty_matches_its_own_sensitivity():
     penalty = timefield.uniformity_penalty(
         tPhys, timefield.UniformityMetric.GRADIENT_CV, weights=xPhys
     )
-    expected = Gamma * np.concatenate(
+    expected = weight * np.concatenate(
         [
             torch_util.to_numpy(d).ravel()
             for d in torch.autograd.grad(penalty, (x_leaf, t_leaf))

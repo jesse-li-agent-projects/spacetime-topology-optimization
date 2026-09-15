@@ -67,6 +67,9 @@ class Problem:
     ndof: int
     H: torch_util.SymmetricCsr  # shape (nel, nel)
     Hs: Float[Tensor, " nel"]
+    # The density filter on `t`, or None when `config.time_filter_rmin` is 0.
+    time_H: torch_util.SymmetricCsr | None
+    time_Hs: Float[Tensor, " nel"] | None
     L: Tensor  # sparse CSR, shape (nel, nel)
     C: Tensor  # sparse CSR, shape ((nelx+1)*(nely+1), nel)
     e1: Int[Tensor, " npairs"]
@@ -98,7 +101,8 @@ class State:
     beta_d: float  # Heaviside projection sharpness
     # Carries the hotspot aggregate onto the true maximum severity the constraint is
     # written against; a ratio or an offset, whichever `config.hotspot_aggregation`'s
-    # bias calls for. Periodically refreshed -- `conductivity.Aggregation.calibration`.
+    # bias calls for. Set from the seed, then periodically refreshed --
+    # `conductivity.calibration_from`.
     hotspot_calibration: float
 
     # Batched FEM solution from this iteration's whole_compliance + gravity_compliance
@@ -116,8 +120,10 @@ class IterationRecord:
     obj: float  # whole-structure compliance (doesn't include intermediate structures)
     vol: float  # volume fraction (mean xPhys)
     tru_max: float  # calibrated hotspot severity, comparable across runs
-    uniformity: float  # layer-uniformity penalty (density-weighted CV), before Gamma
-    f: float  # objective (compliance terms plus the Gamma-weighted uniformity penalty)
+    uniformity: float  # layer-uniformity penalty, before uniformity_weight
+    roughness: float  # smoothness regularizer, as a fraction of a layer thickness
+    roughness_weight: float  # this iteration's weight, which a schedule may vary
+    f: float  # objective (compliance terms plus the weighted time-field terms)
     df: Float[np.ndarray, " n"]
     xmma: Float[np.ndarray, " n"]
     low: Float[np.ndarray, " n"]
@@ -188,6 +194,13 @@ def build_problem(
     freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)
 
     H, Hs = filters.density_filter(nelx, nely, config.rmin)
+    time_H = time_Hs = None
+    if config.time_filter_rmin > 0:
+        time_H_np, time_Hs_np = filters.density_filter(
+            nelx, nely, config.time_filter_rmin
+        )
+        time_H = torch_util.symmetric_csr_to_tensor(time_H_np, device, dtype)
+        time_Hs = torch_util.to_tensor(time_Hs_np, device, dtype)
     L = filters.continuity_filter(nelx, nely, config.lrmin)
     C = gravity.gravity_load_matrix(nelx, nely)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, config.rmin_cond)
@@ -221,6 +234,8 @@ def build_problem(
         free_mask=torch_fem.free_mask(ndof, int_fields["freedofs"], device=device),
         ndof=ndof,
         H=torch_util.symmetric_csr_to_tensor(H, device, dtype),
+        time_H=time_H,
+        time_Hs=time_Hs,
         L=torch_util.csr_to_tensor(L, device, dtype),
         C=torch_util.csr_to_tensor(C, device, dtype),
         hotspot_denom=hotspot_denom,
@@ -254,7 +269,11 @@ def physical_fields(
     """
     xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
     xPhys = filters.heaviside_projection(xTilde, beta_d, problem.config.eta)
-    tTilde = filters.apply_density_filter(t, problem.H, problem.Hs)
+    tTilde = (
+        t
+        if problem.time_H is None
+        else filters.apply_density_filter(t, problem.time_H, problem.time_Hs)
+    )
     tPhys = tTilde / tTilde.max().detach()
     return xPhys, tPhys
 
@@ -288,6 +307,16 @@ def init_state(problem: Problem, beta_d: float) -> State:
     # both take mmasub's `iteration < 2.5` reinit branch), reproduced anyway for fidelity.
     xold = torch.cat([x.flatten(), torch.zeros(nel, device=device, dtype=dtype)])
 
+    # Calibrated against the seed, so iteration 1's hotspot row bounds the true maximum
+    # rather than the aggregate's bias -- which at a low `hotspot_beta` is larger than
+    # the maximum itself.
+    aggregation = conductivity.Aggregation(config.hotspot_aggregation)
+    xPhys, tPhys = physical_fields(problem, x, t, beta_d)
+    numer, K_est = hotspot_value(problem, xPhys, tPhys)
+    calibration = conductivity.calibration_from(
+        aggregation, float(numer), K_est, xPhys, config.r, aggregation.uncalibrated
+    )
+
     return State(
         x=x,
         t=t,
@@ -298,9 +327,7 @@ def init_state(problem: Problem, beta_d: float) -> State:
         loop=0,
         beta_t=10.0,
         beta_d=beta_d,
-        hotspot_calibration=conductivity.Aggregation(
-            config.hotspot_aggregation
-        ).uncalibrated,
+        hotspot_calibration=calibration,
         U=None,
     )
 
@@ -414,7 +441,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     xPhys, tPhys = physical_fields(problem, x, t, beta_d)
 
     # -- Objective: whole-structure compliance + Theta-weighted per-stage gravity
-    # compliance + Gamma-weighted time-field gradient-uniformity penalty --
+    # compliance + weighted layer-uniformity penalty and roughness regularizer --
     # whole_compliance's solve and every gravity stage's go into one batched FemSolve
     # call; `torch_fem.pcg` retires each row as it converges, so the batch costs no more
     # row-iterations than solving the rows one at a time would.
@@ -443,14 +470,17 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     for cg_t in stage_cs:
         f_val_t = f_val_t + config.Theta * cg_t
 
-    # Layer-thickness-uniformity penalty on the time field (config.Gamma == 0 disables).
-    # Weighted by xPhys, so it measures the layers of the part, and its gradient moves
-    # material as well as print time. A CV, so shrinking the time field's range does not
-    # lower it.
+    # Layer-uniformity penalty on the time field. Weighted by xPhys, so it measures the
+    # layers of the part, and its gradient moves material as well as print time.
     uniformity_t = timefield.uniformity_penalty(
-        tPhys, timefield.UniformityMetric.GRADIENT_CV, weights=xPhys
+        tPhys, timefield.UniformityMetric(config.uniformity_metric), weights=xPhys
     )
-    f_val_t = f_val_t + config.Gamma * uniformity_t
+    f_val_t = f_val_t + config.uniformity_weight * uniformity_t
+    # The uniformity penalty alone rewards a sawtooth across the print direction
+    # (`timefield._gradient_cv`).
+    rough_t = timefield.relative_roughness(tPhys, weights=xPhys)
+    roughness_weight = run_config.weight_at(config.roughness_weight, loop)
+    f_val_t = f_val_t + roughness_weight * rough_t
 
     f_val = float(f_val_t.detach())
     df_dx = _sensitivity_rows(f_val_t[None], x, t)[0]
@@ -474,11 +504,14 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     g_vol_t = constraints.global_volume_fraction(xPhys, config.volfrac)
     vol_diag = float(xPhys.detach().sum() / (nelx * nely))
 
-    g_cont_t = constraints.time_field_continuity(tPhys, problem.L)
+    g_parts: list[Tensor] = [g_vol_t[None]]
+    if config.enable_continuity:
+        g_cont_t = constraints.time_field_continuity(
+            tPhys, problem.L, config.continuity_tol
+        )
+        g_parts.append(g_cont_t[None])
 
-    g_start_t = constraints.start_point(tPhys, problem.Nei)
-
-    g_parts: list[Tensor] = [g_vol_t[None], g_cont_t[None], g_start_t]
+    g_parts.append(constraints.start_point(tPhys, problem.Nei))
 
     if config.enable_stage_volume:
         stage_upper_t = [  # per-stage volume bounds
@@ -516,13 +549,14 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     numer = float(numer_t.detach())
     calibration = state.hotspot_calibration
     if loop % 25 == 0:
-        K_est = K_est_t.detach()
-        severity = (1 - K_est) * xPhys.detach().flatten() ** config.r
-        # An infinitely shielded element has no severity to take a maximum over.
-        max_g = float(torch.max(severity[torch.isfinite(K_est)]))
-        refreshed = aggregation.calibration(numer, max_g)
-        if refreshed is not None:
-            calibration = refreshed
+        calibration = conductivity.calibration_from(
+            aggregation,
+            numer,
+            K_est_t.detach(),
+            xPhys.detach(),
+            config.r,
+            calibration,
+        )
     tru_max = aggregation.calibrated(numer, calibration)
 
     if loop % 30 == 0 and beta_t < 50:
@@ -583,6 +617,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         vol=vol_diag,
         tru_max=tru_max,
         uniformity=float(uniformity_t.detach()),
+        roughness=float(rough_t.detach()),
+        roughness_weight=roughness_weight,
         f=float(f_val),
         df=torch_util.to_numpy(df_dx),
         xmma=torch_util.to_numpy(xmma),

@@ -462,8 +462,8 @@ def _load_seqopt_run(run_dir: Path, design_file: str = "final_design.npz") -> tu
 
     :param design_file: an artefact under `run_dir` holding a time field, either
         `final_design.npz` (`xPhys`/`tPhys`) or a periodic `design_it*.npz` checkpoint
-        (`t` alone -- `seqopt` never filters the time field, so `t` doubles as `tPhys`;
-        the fixed geometry comes from `run_dir/geometry.npz` instead).
+        (`tPhys`, or `t` alone in older checkpoints; the fixed geometry comes from
+        `run_dir/geometry.npz` instead).
     """
     import json
 
