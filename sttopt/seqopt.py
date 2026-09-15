@@ -96,8 +96,8 @@ class State:
     loop: int
     beta_t: float  # stage-mask sigmoid sharpness
     # Carries the hotspot aggregate onto the true maximum severity; a ratio or an
-    # offset, whichever `config.hotspot_aggregation`'s bias calls for. Periodically
-    # refreshed -- `conductivity.Aggregation.calibration`.
+    # offset, whichever `config.hotspot_aggregation`'s bias calls for. Set from the
+    # initial field, then periodically refreshed -- `conductivity.calibration_from`.
     hotspot_calibration: float
 
 
@@ -237,10 +237,10 @@ def physical_timefield(
 def init_state(problem: Problem) -> State:
     """Initial state: `t` is the normalized geodesic distance from the print-start
     element(s) through the material, with the void filled per `config.void_extension`
-    (`timefield.init_geometry_timefield`). Nothing else to set up -- both objective
-    terms are dimensionless and order 1
-    (`plans/archive/fixed_geometry_sequence_optimization.md`), so no scale is latched
-    from the initial field.
+    (`timefield.init_geometry_timefield`). Both objective terms are dimensionless and
+    order 1 (`plans/archive/fixed_geometry_sequence_optimization.md`), so no scale is
+    latched from the initial field; only the hotspot calibration is, so that `tru_max`
+    reports the true maximum from iteration 1.
     """
     xPhys_np = torch_util.to_numpy(problem.xPhys)
     Nei_np = torch_util.to_numpy(problem.Nei)
@@ -248,6 +248,18 @@ def init_state(problem: Problem) -> State:
         xPhys_np, Nei_np, timefield.VoidExtension(problem.config.void_extension)
     )
     t = torch_util.to_tensor(t0, problem.device, problem.dtype)
+
+    config = problem.config
+    aggregation = conductivity.Aggregation(config.hotspot_aggregation)
+    numer, K_est = hotspot_value(problem, physical_timefield(problem, t))
+    calibration = conductivity.calibration_from(
+        aggregation,
+        float(numer),
+        K_est,
+        problem.xPhys,
+        config.r,
+        aggregation.uncalibrated,
+    )
 
     xold = t.flatten().clone()
     return State(
@@ -258,9 +270,7 @@ def init_state(problem: Problem) -> State:
         upp=torch.zeros(problem.n, device=problem.device, dtype=problem.dtype),
         loop=0,
         beta_t=10.0,
-        hotspot_calibration=conductivity.Aggregation(
-            problem.config.hotspot_aggregation
-        ).uncalibrated,
+        hotspot_calibration=calibration,
     )
 
 
@@ -382,13 +392,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     aggregation = conductivity.Aggregation(config.hotspot_aggregation)
     calibration = state.hotspot_calibration
     if loop % 25 == 0:
-        K_est = K_est_t.detach()
-        severity = (1 - K_est) * xPhys.flatten() ** config.r
-        # An infinitely shielded element has no severity to take a maximum over.
-        max_g = float(torch.max(severity[torch.isfinite(K_est)]))
-        refreshed = aggregation.calibration(numer, max_g)
-        if refreshed is not None:
-            calibration = refreshed
+        calibration = conductivity.calibration_from(
+            aggregation, numer, K_est_t.detach(), xPhys, config.r, calibration
+        )
     tru_max = aggregation.calibrated(numer, calibration)
 
     if loop % 30 == 0 and beta_t < 50:

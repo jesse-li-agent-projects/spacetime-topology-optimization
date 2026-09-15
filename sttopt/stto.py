@@ -101,7 +101,8 @@ class State:
     beta_d: float  # Heaviside projection sharpness
     # Carries the hotspot aggregate onto the true maximum severity the constraint is
     # written against; a ratio or an offset, whichever `config.hotspot_aggregation`'s
-    # bias calls for. Periodically refreshed -- `conductivity.Aggregation.calibration`.
+    # bias calls for. Set from the seed, then periodically refreshed --
+    # `conductivity.calibration_from`.
     hotspot_calibration: float
 
     # Batched FEM solution from this iteration's whole_compliance + gravity_compliance
@@ -306,6 +307,16 @@ def init_state(problem: Problem, beta_d: float) -> State:
     # both take mmasub's `iteration < 2.5` reinit branch), reproduced anyway for fidelity.
     xold = torch.cat([x.flatten(), torch.zeros(nel, device=device, dtype=dtype)])
 
+    # Calibrated against the seed, so iteration 1's hotspot row bounds the true maximum
+    # rather than the aggregate's bias -- which at a low `hotspot_beta` is larger than
+    # the maximum itself.
+    aggregation = conductivity.Aggregation(config.hotspot_aggregation)
+    xPhys, tPhys = physical_fields(problem, x, t, beta_d)
+    numer, K_est = hotspot_value(problem, xPhys, tPhys)
+    calibration = conductivity.calibration_from(
+        aggregation, float(numer), K_est, xPhys, config.r, aggregation.uncalibrated
+    )
+
     return State(
         x=x,
         t=t,
@@ -316,9 +327,7 @@ def init_state(problem: Problem, beta_d: float) -> State:
         loop=0,
         beta_t=10.0,
         beta_d=beta_d,
-        hotspot_calibration=conductivity.Aggregation(
-            config.hotspot_aggregation
-        ).uncalibrated,
+        hotspot_calibration=calibration,
         U=None,
     )
 
@@ -540,13 +549,14 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     numer = float(numer_t.detach())
     calibration = state.hotspot_calibration
     if loop % 25 == 0:
-        K_est = K_est_t.detach()
-        severity = (1 - K_est) * xPhys.detach().flatten() ** config.r
-        # An infinitely shielded element has no severity to take a maximum over.
-        max_g = float(torch.max(severity[torch.isfinite(K_est)]))
-        refreshed = aggregation.calibration(numer, max_g)
-        if refreshed is not None:
-            calibration = refreshed
+        calibration = conductivity.calibration_from(
+            aggregation,
+            numer,
+            K_est_t.detach(),
+            xPhys.detach(),
+            config.r,
+            calibration,
+        )
     tru_max = aggregation.calibrated(numer, calibration)
 
     if loop % 30 == 0 and beta_t < 50:

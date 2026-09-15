@@ -468,6 +468,26 @@ def test_step_objective_adds_the_weighted_uniformity_penalty():
     np.testing.assert_allclose(f_100, f_0 + 100.0 * uniformity, rtol=1e-9)
 
 
+def test_init_state_calibrates_the_hotspot_row_against_the_seed():
+    """Iteration 1 already reports the seed's true maximum severity: the aggregate's
+    bias is calibrated out before the first step rather than at the first refresh."""
+    import sttopt.conductivity as conductivity
+
+    problem = _problem()
+    state = stto.init_state(problem, BETA_D)
+    xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, BETA_D)
+    _, K_est = stto.hotspot_value(problem, xPhys, tPhys)
+    finite = torch.isfinite(K_est)
+    true_max = float(
+        ((1 - K_est[finite]) * xPhys.flatten()[finite] ** problem.config.r).max()
+    )
+    aggregation = conductivity.Aggregation(problem.config.hotspot_aggregation)
+    assert state.hotspot_calibration != aggregation.uncalibrated  # non-vacuous
+
+    _, record = stto.step(problem, state)
+    assert record.tru_max == pytest.approx(true_max, rel=1e-12)
+
+
 def test_enable_continuity_false_drops_the_continuity_constraint_row():
     """Disabling continuity removes its row rather than relaxing it, so the start-point
     rows follow the volume row directly."""

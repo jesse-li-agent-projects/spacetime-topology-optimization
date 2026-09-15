@@ -132,6 +132,29 @@ class Aggregation(StrEnum):
         return numer - calibration
 
 
+def calibration_from(
+    aggregation: Aggregation,
+    numer: float,
+    K_est: Float[Tensor, " nel"],
+    xPhys: Float[Tensor, "nely nelx"],
+    r: float,
+    previous: float,
+) -> float:
+    """
+    `aggregation.calibration` against the field's own true maximum severity,
+    `(1 - K_est) * xPhys**r` over the elements with a finite `K_est` -- an infinitely
+    shielded element has no severity to take a maximum over.
+
+    :param numer: the aggregate `hotspot_value` reported for this field
+    :param previous: the calibration to keep where a new one is undefined
+    :return: the calibration
+    """
+    finite = torch.isfinite(K_est)
+    severity = (1 - K_est[finite]) * xPhys.flatten()[finite] ** r
+    refreshed = aggregation.calibration(numer, float(severity.max()))
+    return previous if refreshed is None else refreshed
+
+
 def _stencil_offsets(rmin_cond: float) -> list[tuple[int, int, float]]:
     """Every `(di, dj, w)` grid offset inside the conductivity stencil's radial cutoff.
 
