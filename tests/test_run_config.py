@@ -6,7 +6,13 @@ import json
 import pytest
 
 from conftest import default_run_config, default_seq_run_config
-from sttopt.run_config import CosineSchedule, RunConfig, SeqRunConfig, weight_at
+from sttopt.run_config import (
+    CosineSchedule,
+    PiecewiseSchedule,
+    RunConfig,
+    SeqRunConfig,
+    weight_at,
+)
 
 
 @pytest.mark.parametrize(
@@ -97,3 +103,32 @@ def test_seq_config_round_trips_a_constant_weight_as_a_number():
     assert config.to_dict()["roughness_weight"] == 0.2
     revived = SeqRunConfig.from_dict(json.loads(json.dumps(config.to_dict())))
     assert revived.roughness_weight == 0.2
+
+
+def test_piecewise_schedule_interpolates_and_holds_outside_its_points():
+    schedule = PiecewiseSchedule(points=[[100, 2.0], [300, 0.8]])
+    assert schedule.at(1) == 2.0
+    assert schedule.at(200) == pytest.approx(1.4)
+    assert schedule.at(10_000) == 0.8
+
+
+def test_piecewise_schedule_log_interpolates_geometrically():
+    schedule = PiecewiseSchedule(points=[[1, 1.0], [101, 100.0]], log=True)
+    assert schedule.at(51) == pytest.approx(10.0)
+
+
+def test_piecewise_schedule_rejects_unsorted_points():
+    with pytest.raises(ValueError, match="sorted by iteration"):
+        PiecewiseSchedule(points=[[300, 0.8], [100, 2.0]])
+
+
+def test_config_round_trips_a_piecewise_schedule():
+    """A mapping with `points` is a `PiecewiseSchedule`, in any schedulable field."""
+    config = default_run_config(
+        Tcr={"points": [[1, 5.0], [200, 0.8]]},
+        hotspot_beta={"points": [[1, 4.0], [400, 32.0]], "log": True},
+    )
+    assert isinstance(config.Tcr, PiecewiseSchedule)
+    revived = RunConfig.from_dict(json.loads(json.dumps(config.to_dict())))
+    assert revived == config
+    assert weight_at(revived.hotspot_beta, 400) == pytest.approx(32.0)
