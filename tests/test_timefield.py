@@ -426,12 +426,9 @@ def test_gradient_cv_zero_weight_returns_zero():
 
 def test_gradient_cv_zero_mean_gradient_returns_zero():
     field = torch.full((6, 6), 0.3, dtype=torch.float64)  # constant -> zero gradient
-    assert (
-        float(
-            timefield.uniformity_penalty(field, timefield.UniformityMetric.GRADIENT_CV)
-        )
-        == 0.0
-    )
+    cv = timefield.uniformity_penalty(field, timefield.UniformityMetric.GRADIENT_CV)
+    # Not exactly zero: the sqrt regularizer leaves a floor of sqrt(_GRAD_EPS).
+    assert float(cv) == pytest.approx(0.0, abs=1e-6)
 
 
 def test_gradient_cv_is_blind_to_a_sawtooth_across_the_print_direction():

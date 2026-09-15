@@ -798,7 +798,9 @@ def _gradient_cv(
     if mean == 0:
         return tPhys.new_zeros(())
     variance = torch.sum(w * (g - mean) ** 2) / torch.sum(w)
-    return torch.sqrt(variance) / mean
+    # Keeps sqrt's derivative finite at zero spread. Relative to mean**2, so this stays
+    # sqrt(CV**2 + eps) and scale-invariant; an absolute eps scores a flat field CV=1.
+    return torch.sqrt(variance + _GRAD_EPS * mean**2) / mean
 
 
 _UNIFORMITY_METRICS = {UniformityMetric.GRADIENT_CV: _gradient_cv}
