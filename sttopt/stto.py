@@ -119,8 +119,8 @@ class IterationRecord:
     obj: float  # whole-structure compliance (doesn't include intermediate structures)
     vol: float  # volume fraction (mean xPhys)
     tru_max: float  # calibrated hotspot severity, comparable across runs
-    uniformity: float  # layer-uniformity penalty (density-weighted CV), before Gamma
-    f: float  # objective (compliance terms plus the Gamma-weighted uniformity penalty)
+    uniformity: float  # layer-uniformity penalty, before uniformity_weight
+    f: float  # objective (compliance terms plus the weighted uniformity penalty)
     df: Float[np.ndarray, " n"]
     xmma: Float[np.ndarray, " n"]
     low: Float[np.ndarray, " n"]
@@ -430,7 +430,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     xPhys, tPhys = physical_fields(problem, x, t, beta_d)
 
     # -- Objective: whole-structure compliance + Theta-weighted per-stage gravity
-    # compliance + Gamma-weighted time-field gradient-uniformity penalty --
+    # compliance + weighted layer-uniformity penalty --
     # whole_compliance's solve and every gravity stage's go into one batched FemSolve
     # call; `torch_fem.pcg` retires each row as it converges, so the batch costs no more
     # row-iterations than solving the rows one at a time would.
@@ -459,14 +459,12 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     for cg_t in stage_cs:
         f_val_t = f_val_t + config.Theta * cg_t
 
-    # Layer-thickness-uniformity penalty on the time field (config.Gamma == 0 disables).
-    # Weighted by xPhys, so it measures the layers of the part, and its gradient moves
-    # material as well as print time. A CV, so shrinking the time field's range does not
-    # lower it.
+    # Layer-uniformity penalty on the time field. Weighted by xPhys, so it measures the
+    # layers of the part, and its gradient moves material as well as print time.
     uniformity_t = timefield.uniformity_penalty(
-        tPhys, timefield.UniformityMetric.GRADIENT_CV, weights=xPhys
+        tPhys, timefield.UniformityMetric(config.uniformity_metric), weights=xPhys
     )
-    f_val_t = f_val_t + config.Gamma * uniformity_t
+    f_val_t = f_val_t + config.uniformity_weight * uniformity_t
 
     f_val = float(f_val_t.detach())
     df_dx = _sensitivity_rows(f_val_t[None], x, t)[0]

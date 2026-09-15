@@ -43,7 +43,7 @@ def _problem(
     nStage=3,
     tfield=3,
     Theta=1.0,
-    Gamma=0.0,
+    uniformity_weight=0.0,
     enable_stage_volume=True,
     **kwargs,
 ):
@@ -54,7 +54,7 @@ def _problem(
         enable_stage_volume=enable_stage_volume,
         volfrac=VOLFRAC,
         Theta=Theta,
-        Gamma=Gamma,
+        uniformity_weight=uniformity_weight,
         Tcr=TCR,
         print_base=timefield.TimeField(tfield).name.lower(),
         rmin=RMIN,
@@ -433,17 +433,19 @@ def test_step_objective_is_theta_weighted_sum_of_stage_compliances():
     np.testing.assert_allclose(f0_3, f0_0 + 3.0 * stage_sum, rtol=1e-9)
 
 
-def test_step_objective_adds_the_gamma_weighted_gradient_uniformity_penalty():
-    """`IterationRecord.f` is affine in `Gamma` with slope `IterationRecord.uniformity`,
-    the density-weighted CV of the time field's gradient magnitude -- which pins both
-    that the penalty is wired into the objective with the right weight and that
-    `uniformity` reports the same quantity the weight multiplies.
+def test_step_objective_adds_the_weighted_uniformity_penalty():
+    """`IterationRecord.f` is affine in `uniformity_weight` with slope
+    `IterationRecord.uniformity` -- which pins both that the penalty is wired into the
+    objective with the right weight and that `uniformity` reports the same quantity the
+    weight multiplies.
     """
     nelx, nely, nStage = 10, 8, 3
     rng = np.random.default_rng(1)
 
-    def f_at(Gamma):
-        problem = _problem(nelx=nelx, nely=nely, nStage=nStage, Gamma=Gamma)
+    def f_at(weight):
+        problem = _problem(
+            nelx=nelx, nely=nely, nStage=nStage, uniformity_weight=weight
+        )
         state = _state_from_raw(problem, x_raw, t_raw)
         _, rec = stto.step(problem, state)
         return rec.f, rec.uniformity
@@ -460,14 +462,14 @@ def test_step_objective_adds_the_gamma_weighted_gradient_uniformity_penalty():
 
 
 def test_step_gradient_of_the_penalty_matches_its_own_sensitivity():
-    """Raising `Gamma` changes `.df` by `Gamma` times the penalty's own sensitivity, in
-    both halves: the penalty reads `tPhys` and is weighted by `xPhys`, so it moves
-    material as well as print time.
+    """Raising `uniformity_weight` changes `.df` by the weight times the penalty's own
+    sensitivity, in both halves: the penalty reads `tPhys` and is weighted by `xPhys`, so
+    it moves material as well as print time.
 
     Both halves are isolated by differencing two separate `step` calls, so the
     compliance sensitivity has to cancel between them. It only cancels to the CG
     tolerance: the solve is iterative, and on CUDA its reduction order is not
-    reproducible, so two runs at the same `Gamma` land on different iterates within
+    reproducible, so two runs at the same weight land on different iterates within
     `rtol`. Tolerances here are keyed to that noise floor, not to a constant -- see
     PR #99.
     """
@@ -477,14 +479,14 @@ def test_step_gradient_of_the_penalty_matches_its_own_sensitivity():
     base = _problem(nelx=nelx, nely=nely)
     x_raw, t_raw, _ = _draw_well_conditioned_state(base, rng)
 
-    def df_at(Gamma):
-        problem = _problem(nelx=nelx, nely=nely, Gamma=Gamma)
+    def df_at(weight):
+        problem = _problem(nelx=nelx, nely=nely, uniformity_weight=weight)
         _, rec = stto.step(problem, _state_from_raw(problem, x_raw, t_raw))
         return rec.df, problem
 
     df_0, _ = df_at(0.0)
-    Gamma = 100.0
-    df_g, problem = df_at(Gamma)
+    weight = 100.0
+    df_g, problem = df_at(weight)
 
     def solve_noise(df_half):
         """How far two solves of the same problem may disagree on `df_half`."""
@@ -500,7 +502,7 @@ def test_step_gradient_of_the_penalty_matches_its_own_sensitivity():
     penalty = timefield.uniformity_penalty(
         tPhys, timefield.UniformityMetric.GRADIENT_CV, weights=xPhys
     )
-    expected = Gamma * np.concatenate(
+    expected = weight * np.concatenate(
         [
             torch_util.to_numpy(d).ravel()
             for d in torch.autograd.grad(penalty, (x_leaf, t_leaf))
