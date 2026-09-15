@@ -167,16 +167,8 @@ def main():
 
     xPhys_traj = [N(state.xPhys)]
     tPhys_traj = [N(state.tPhys)]
+    records = []
     dx_all = np.zeros((NELY, NELX, NLOOP))
-    objf = np.zeros(NLOOP)
-    vol = np.zeros(NLOOP)
-    tru_max_all = np.zeros(NLOOP)
-    fval_all = np.zeros((problem.m, NLOOP))
-    dfdx_all = np.zeros((problem.m, problem.n, NLOOP))
-    xmma_all = np.zeros((problem.n, NLOOP))
-    low_all = np.zeros((problem.n, NLOOP))
-    upp_all = np.zeros((problem.n, NLOOP))
-    lam_all = np.zeros((problem.m, NLOOP))
     K_est_all = np.zeros((NELX * NELY, NLOOP))
     numer_all = np.zeros(NLOOP)
     factor_all = np.zeros(NLOOP)
@@ -208,12 +200,6 @@ def main():
     xold2_1 = N(state.xold2)
     low_1 = np.zeros(n)
     upp_1 = np.zeros(n)
-
-    # Overwritten on the k == 0 pass below; NLOOP > 0 guarantees that pass runs.
-    f0val_1 = 0.0
-    df0dx_1 = np.zeros(n)
-    fval_1 = np.zeros(problem.m)
-    dfdx_1 = np.zeros((problem.m, n))
 
     for k in range(NLOOP):
         dx = filters.heaviside_projection_derivative(
@@ -292,24 +278,25 @@ def main():
 
         xPhys_traj.append(N(state.xPhys))
         tPhys_traj.append(N(state.tPhys))
-        objf[k] = record.obj
-        vol[k] = record.vol
-        tru_max_all[k] = record.tru_max
-        fval_all[:, k] = record.g
-        dfdx_all[:, :, k] = record.dg
-        xmma_all[:, k] = record.xmma
-        low_all[:, k] = record.low
-        upp_all[:, k] = record.upp
-        lam_all[:, k] = record.lam
-
-        if k == 0:
-            f0val_1 = record.f
-            df0dx_1 = record.df
-            fval_1 = record.g
-            dfdx_1 = record.dg
+        records.append(record)
 
     xPhys_traj = np.stack(xPhys_traj, axis=-1)  # (nely, nelx, nloop+1)
     tPhys_traj = np.stack(tPhys_traj, axis=-1)
+
+    def per_iteration(field):
+        """`field` of every record, stacked along a trailing iteration axis."""
+        return np.stack([getattr(r, field) for r in records], axis=-1)
+
+    objf = per_iteration("obj")
+    vol = per_iteration("vol")
+    tru_max_all = per_iteration("tru_max")
+    fval_all = per_iteration("g")  # (m, nloop)
+    dfdx_all = per_iteration("dg")  # (m, n, nloop)
+    xmma_all = per_iteration("xmma")
+    low_all = per_iteration("low")
+    upp_all = per_iteration("upp")
+    lam_all = per_iteration("lam")
+    m = len(records[0].g)
 
     np.savez(
         OUT / "e2e.npz",
@@ -333,7 +320,7 @@ def main():
         OUT / "constraints.npz",
         fval_all=fval_all,
         dfdx_all=dfdx_all,
-        m=problem.m,
+        m=m,
         n=problem.n,
         nelx=NELX,
         nely=NELY,
@@ -350,13 +337,13 @@ def main():
         **{f"trust_{k}": N(v) for k, v in trust_1.items()},
         xold1_1=xold1_1,
         xold2_1=xold2_1,
-        f0val_1=f0val_1,
-        df0dx_1=df0dx_1,
-        fval_1=fval_1,
-        dfdx_1=dfdx_1,
+        f0val_1=records[0].f,
+        df0dx_1=records[0].df,
+        fval_1=records[0].g,
+        dfdx_1=records[0].dg,
         low_1=low_1,
         upp_1=upp_1,
-        m=problem.m,
+        m=m,
         n=problem.n,
         xmma_all=xmma_all,
         low_all=low_all,

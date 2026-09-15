@@ -86,22 +86,20 @@ def test_step_finite_and_design_vector_is_t_only(nStage):
     assert record.xmma.shape == (nel,)
     assert record.df.shape == (nel,)
 
-    assert problem.m == (
-        (1 if problem.config.enable_continuity else 0) + len(problem.Nei) + 2 * nStage
-    )
-    assert record.g.shape == (problem.m,)
-    assert record.dg.shape == (problem.m, nel)
+    m = (1 if problem.config.enable_continuity else 0) + len(problem.Nei) + 2 * nStage
+    assert record.g.shape == (m,)
+    assert record.dg.shape == (m, nel)
 
 
 def test_enable_continuity_false_drops_the_continuity_constraint_row():
     problem = _problem(nStage=0, enable_continuity=False)
     nel = NELX * NELY
-    assert problem.m == len(problem.Nei)
 
     state = seqopt.init_state(problem)
     _, record = seqopt.step(problem, state)
-    assert record.g.shape == (problem.m,)
-    assert record.dg.shape == (problem.m, nel)
+    m = len(problem.Nei)
+    assert record.g.shape == (m,)
+    assert record.dg.shape == (m, nel)
 
 
 def test_objective_is_the_weighted_sum_of_its_three_terms():
@@ -165,7 +163,7 @@ def test_sensitivities_match_finite_differences(nStage, time_filter_rmin):
         return rec.f, rec.g
 
     fd_f0 = np.zeros(nel)
-    fd_f = np.zeros((problem.m, nel))
+    fd_f = np.zeros((len(record.g), nel))
     for e in range(nel):
         j, i = e // NELX, e % NELX
         tp, tm = t_raw.copy(), t_raw.copy()

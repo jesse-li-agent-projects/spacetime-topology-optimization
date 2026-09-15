@@ -488,10 +488,10 @@ def test_step_assembled_sensitivities_match_finite_differences(
     # print-start element, an upper and a lower bound per stage (when enabled), and the
     # hotspot row.
     n_stage_rows = 2 * nStage if enable_stage_volume else 0
-    assert problem.m == 1 + 1 + len(problem.Nei) + n_stage_rows + 1
+    m = 1 + 1 + len(problem.Nei) + n_stage_rows + 1
     assert record.df.shape == (problem.n,)
-    assert record.g.shape == (problem.m,)
-    assert record.dg.shape == (problem.m, problem.n)
+    assert record.g.shape == (m,)
+    assert record.dg.shape == (m, problem.n)
 
     # Non-vacuity: an all-but-zero gradient would pass the comparison below regardless.
     assert np.abs(record.df).max() > 1e-3
@@ -502,7 +502,7 @@ def test_step_assembled_sensitivities_match_finite_differences(
         return rec.f, rec.g
 
     fd_f0 = np.zeros(problem.n)
-    fd_f = np.zeros((problem.m, problem.n))
+    fd_f = np.zeros((m, problem.n))
     for e in range(nel):
         j, i = e // nelx, e % nelx
 
@@ -531,13 +531,13 @@ def test_step_assembled_sensitivities_match_finite_differences(
     )
     # The constraint rows are purely algebraic in xPhys/tPhys (no linear solve), and
     # match ~1000x tighter than this.
-    for row in range(problem.m):
+    for row in range(m):
         np.testing.assert_allclose(
             record.dg[row],
             fd_f[row],
             rtol=1e-5,
             atol=1e-8,
-            err_msg=f"constraint row {row} of {problem.m}",
+            err_msg=f"constraint row {row} of {m}",
         )
 
 
