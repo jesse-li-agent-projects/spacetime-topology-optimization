@@ -1,13 +1,13 @@
-"""Hand-derived predecessor of `sttopt.conductivity.hotspot_value`'s sensitivity formula.
+"""Hand-derived predecessor of `sttopt.conductivity.PMean`'s sensitivity formula.
 
-`sttopt.conductivity.hotspot_value` computes `numer`'s (and hence the hotspot
-constraint's) sensitivity via autograd (Phase 3.4, `plans/torch_port_part2.md`).
+`sttopt.conductivity.PMean` gets `numer`'s (and hence the hotspot constraint's)
+sensitivity from autograd (Phase 3.4, `plans/torch_port_part2.md`).
 `hotspot_constraint` here is the hand-derived predecessor Phase 3.2 ported from the
 MATLAB source's inline per-element neighbor loop, kept only as a cross-check
 (`tests/test_reference_sweep.py`) and a timing baseline
 (`benchmarks/bench_sensitivities.py`). Nothing in `sttopt/` calls this module.
 
-Unlike `hotspot_value`, this also folds in the caller-owned `factor`/`Tcr` scaling and
+Unlike `PMean`, this also folds in the caller-owned `factor`/`Tcr` scaling and
 the density-filter chain rule (`H`/`Hs`/`dx`) directly into its returned sensitivities,
 matching the MATLAB source's inline block.
 """
@@ -128,7 +128,7 @@ def hotspot_constraint(
     stays below `Tcr`, smoothly bounding the worst-case local overheating risk.
 
     `factor` is a periodically-refreshed rescaling constant the main optimization loop
-    owns as persistent state (`stto.State.hotspot_calibration`) -- pass it through,
+    owns as persistent state (`stto.Problem.hotspot`'s calibration) -- pass it through,
     never recompute it here. `numer`/`K_est` are returned for the caller's periodic
     refresh (MATLAB's `rem(loop,25)==0` guard), which needs both but must not perturb
     this call's own `factor`-scaled result. Sensitivity algebra is hand-derived from the

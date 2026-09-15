@@ -27,7 +27,7 @@ constraints (`tests/reference/constraints.py`) and `hotspot_constraint`
 (`tests/reference/conductivity.py`) bake the density-filter/Heaviside-projection
 chain rule (`H`, `Hs`, `dx`) directly into their returned sensitivity -- they hand
 back a finished `dfdx` row in raw `x`/`t` space, not `d(.)/d(xPhys)`. Their
-production autograd counterparts (`sttopt.constraints`/`conductivity.hotspot_value`)
+production autograd counterparts (`sttopt.constraints`/`_hotspot_value` below)
 deliberately do not -- Decision 4 makes the filter/projection an ordinary forward op
 for the *caller* to differentiate through -- so a naive `backward()` on one of those
 stops one step short, at `d(.)/d(xPhys)` or `d(.)/d(tPhys)`. Timing that against the
@@ -55,7 +55,7 @@ Each `npairs`-sized float64 intermediate is therefore ~550 MB, not ~34 MB, and
 `hotspot_constraint`'s forward alone (hand-derived *or* naive autograd -- this is not
 an autograd-vs-hand difference) needs several of them live at once, which does not fit
 this benchmark's 8 GB card regardless of implementation. `bench_hotspot` below adds a
-third `"compiled"` mode (`torch.compile` on `hotspot_value`, Phase 3.4's escape hatch
+third `"compiled"` mode (`torch.compile` on `_hotspot_value`, Phase 3.4's escape hatch
 1) precisely because it is what resolves this -- fusion means the elementwise pair
 algebra never materializes most of those intermediates at all, cutting hotspot's own
 peak memory at 360x120 from OOM to ~100 MB over baseline in ad hoc testing. Any cell
@@ -520,19 +520,22 @@ def bench_constraints(s, device, repeats, warmup, rows):
             _cleanup(device)
 
 
+def _hotspot_value(xPhys, tPhys, e1, e2, w, p, q, r, rouf):
+    """The production P_MEAN hotspot aggregate, uncalibrated, as one function to time and
+    compile."""
+    K_est = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, rouf)
+    return conductivity.PMean(p, r)(K_est, xPhys)
+
+
 def bench_hotspot(s, device, repeats, warmup, rows):
     # "compiled" is escape hatch 1 from plans/torch_port_part2.md Phase 3.4
     # ("torch.compile the forward... try this before writing anything by hand"),
     # included here (not just "hand"/"autograd") because it is the thing that
     # actually resolves the 360x120 OOM below -- see this module's docstring.
-    compiled_hotspot_value = torch.compile(conductivity.hotspot_value)
+    compiled_hotspot_value = torch.compile(_hotspot_value)
     for mode in ("hand", "autograd", "compiled"):
         cell = Cell("hotspot_constraint", mode)
-        hotspot_fn = (
-            compiled_hotspot_value
-            if mode == "compiled"
-            else (conductivity.hotspot_value)
-        )
+        hotspot_fn = compiled_hotspot_value if mode == "compiled" else _hotspot_value
 
         def fwd(mode=mode, hotspot_fn=hotspot_fn):
             xPhys, tPhys = s["xPhys"].detach(), s["tPhys"].detach()
@@ -589,9 +592,7 @@ def bench_hotspot(s, device, repeats, warmup, rows):
                 )
             else:
                 xl, tl = xPhys.requires_grad_(True), tPhys.requires_grad_(True)
-                numer, _K_est = hotspot_fn(
-                    xl, tl, s["e1"], s["e2"], s["w"], P, Q, R, ROUF
-                )
+                numer = hotspot_fn(xl, tl, s["e1"], s["e2"], s["w"], P, Q, R, ROUF)
                 fval = 1.0 * numer / 0.8 - 1
                 d_xPhys, d_tPhys = torch.autograd.grad(fval, (xl, tl))
                 _finish_density_chain(d_xPhys, s["dx"], s["H"], s["Hs"])
