@@ -93,6 +93,11 @@ BETA_INIT = 1.0
 # The rest of RunConfig's hyperparameters, at the same values test_e2e_slow.py's
 # CONFIG hardcodes (not sourced from configs/default.json -- see that file's comment).
 _EXTRA_CONFIG_FIELDS = dict(
+    enable_stage_volume=True,
+    hotspot_normalization="neighborhood",
+    hotspot_aggregation="p_mean",
+    hotspot_beta=200.0,
+    hotspot_density_exponent=None,
     beta_d_max=128.0,
     Emin=1e-9,
     Emax=1.0,

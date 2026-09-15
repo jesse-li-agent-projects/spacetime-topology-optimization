@@ -4,6 +4,7 @@
   "nloop": 800,
   "volfrac": 0.5,
   "nStage": 8,
+  "enable_stage_volume": true,
   "Theta": 0.1,
   "Gamma": 0.0,
   "Tcr": 0.8,
