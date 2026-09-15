@@ -8,13 +8,13 @@ other, but the two `step`s are not shared: there is no FEM here (no `K U = F` so
 no `Emin`/`Emax`/`nu`/`penal`/`eta`/`beta_d`), and `xPhys` is a fixed input rather than
 a design variable, so `n = nel` (not `2*nel`) and `t` is the sole autograd leaf.
 
-**The filter on `t` is off by default: `tPhys = t` unless `config.time_filter_rmin`
-is set.** STTO reuses the density filter to smooth `tPhys`, which also smooths *across
-void* -- two branches separated by a gap get their print times mixed with no material
-between them to carry heat, and void `t`, which is pinned by nothing physical, bleeds
-into the `tPhys` of solid within `rmin` of the boundary. `seqopt` therefore starts from
-no filtering at all (see `plans/archive/fixed_geometry_sequence_optimization.md`), and
-`t` is then both the autograd leaf and the physical field.
+**The filter on `t` is off by default: `tPhys` is `t` scaled to a maximum of 1 unless
+`config.time_filter_rmin` is set.** STTO reuses the density filter to smooth `tPhys`,
+which also smooths *across void* -- two branches separated by a gap get their print
+times mixed with no material between them to carry heat, and void `t`, which is pinned
+by nothing physical, bleeds into the `tPhys` of solid within `rmin` of the boundary.
+`seqopt` therefore starts from no filtering at all (see
+`plans/archive/fixed_geometry_sequence_optimization.md`).
 
 The radius exists because the sawtooth the uniformity penalty rewards
 (`timefield._gradient_cv`) is a one-element mode, and the filter attenuates the
@@ -215,16 +215,23 @@ def build_problem(
 def physical_timefield(
     problem: Problem, t: Float[Tensor, "nely nelx"]
 ) -> Float[Tensor, "nely nelx"]:
-    """The physical time field the objective and the constraints read: `t` filtered,
-    or `t` itself when no radius is configured. Differentiable, so the chain rule back
-    to the design variable is autograd's.
+    """The physical time field the objective and the constraints read: `t`, filtered
+    when a radius is configured, then scaled so its maximum is 1. Differentiable, so the
+    chain rule back to the design variable is autograd's.
+
+    The stage times and the hotspot term read absolute print times, so the build must
+    end at 1, which filtering pulls below it. The start-point constraint already pins
+    the minimum to 0, so a scale is enough; the gradient treats it as a constant.
 
     Recomputed from `t` wherever it is needed rather than cached on `State`, so the two
     cannot drift apart.
     """
-    if problem.H is None:
-        return t
-    return filters.apply_density_filter(t, problem.H, problem.Hs)
+    tTilde = (
+        t
+        if problem.H is None
+        else filters.apply_density_filter(t, problem.H, problem.Hs)
+    )
+    return tTilde / tTilde.max().detach()
 
 
 def init_state(problem: Problem) -> State:
