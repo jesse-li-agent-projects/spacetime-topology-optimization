@@ -12,12 +12,13 @@ fighting the two apart rather than helping. Only the JSON round-trip
 `nloop` is also exposed as a CLI flag on each; every other field is reachable only via
 a `--config` JSON file or by constructing the dataclass directly in code. Run
 bookkeeping that isn't a `build_problem` hyperparameter (`--tag`, `--device`) lives on
-the CLI's `args`, not here. `configs/default.json`/`configs/seq_default.json` are the
-single source of default *settings*: a field carries a dataclass default only when a
-run record written before that field existed has a well-defined meaning, so that
-`viz.py` can still replay an old output directory. Such a default is what the field
-used to be implicitly, never what a new run should pick -- the config files carry
-that.
+the CLI's `args`, not here.
+
+Neither config has dataclass defaults: `configs/default.json`/`configs/seq_default.json`
+are the single source of default settings, so a run's values are never split between
+a config file and this module. That holds for a newly added field too, even though it
+means run records written before the field existed no longer load -- add the field to
+every config file instead.
 """
 
 import dataclasses
@@ -106,9 +107,7 @@ class RunConfig(_ConfigMixin):
         (`constraints.stage_volume_bounds`) are in the MMA constraint stack at all.
         `nStage` still sets the `Theta`-weighted stage compliances either way.
     :param hotspot_normalization: as in `SeqRunConfig`, as are the other `hotspot_*`
-        fields. The field defaults are the legacy MATLAB-source formulation only so that
-        run records written before these fields existed still load and replay as they
-        ran; `configs/default.json` sets the current one.
+        fields.
     """
 
     # Frequently varied -- also exposed as a CLI flag in stto_cli.py.
@@ -119,14 +118,14 @@ class RunConfig(_ConfigMixin):
     nely: int
     volfrac: float
     nStage: int
-    enable_stage_volume: bool = True
+    enable_stage_volume: bool
     Theta: float
     Gamma: float
     Tcr: float
-    hotspot_normalization: str = "neighborhood"
-    hotspot_aggregation: str = "p_mean"
-    hotspot_beta: float = 200.0
-    hotspot_density_exponent: float | None = None
+    hotspot_normalization: str
+    hotspot_aggregation: str
+    hotspot_beta: float
+    hotspot_density_exponent: float | None
     print_base: str
     rmin: float
     lrmin: float
@@ -186,11 +185,9 @@ class SeqRunConfig(_ConfigMixin):
     :param hotspot_normalization: a `conductivity.Normalization` member name, choosing
         what `K_est` measures shielding against. Not a tuning knob: `neighborhood`
         cannot see a free surface that lies on the mesh boundary, and lets void print
-        time drive the result (PR #98). It is the default only so that run records
-        written before this field existed still load and replay as they ran.
+        time drive the result (PR #98).
     :param hotspot_aggregation: a `conductivity.Aggregation` member name, choosing the
-        smooth maximum that collapses the severity field. Defaults to the legacy
-        variant for the same reason `hotspot_normalization` does.
+        smooth maximum that collapses the severity field.
     :param hotspot_beta: `logsumexp` sharpness. It sets where the sensitivity goes:
         high concentrates nearly all of it on the single hottest element, which is a
         sharp statement but makes MMA chatter as the argmax moves; low spreads it and
@@ -246,10 +243,10 @@ class SeqRunConfig(_ConfigMixin):
     time_filter_rmin: float
 
     hotspot_weight: float
-    hotspot_normalization: str = "neighborhood"
-    hotspot_aggregation: str = "p_mean"
-    hotspot_beta: float = 200.0
-    hotspot_density_exponent: float | None = None
+    hotspot_normalization: str
+    hotspot_aggregation: str
+    hotspot_beta: float
+    hotspot_density_exponent: float | None
     uniformity_metric: str
     uniformity_weight: float
     roughness_weight: float | CosineSchedule

@@ -44,9 +44,16 @@ CONFIG = RunConfig(
     nely=NELY,
     volfrac=VOLFRAC,
     nStage=NSTAGE,
+    enable_stage_volume=True,
     Theta=THETA,
     Gamma=0.0,
     Tcr=TCR,
+    # The MATLAB source's hotspot formulation; beta and density_exponent are inert
+    # under p_mean.
+    hotspot_normalization="neighborhood",
+    hotspot_aggregation="p_mean",
+    hotspot_beta=200.0,
+    hotspot_density_exponent=None,
     print_base=PRINT_BASE,
     rmin=RMIN,
     lrmin=LRMIN,
