@@ -55,9 +55,9 @@ def test_init_state_is_geodesic_and_finite():
     np.testing.assert_allclose(torch_util.to_numpy(state.t), expected)
 
 
-def test_init_state_calibrates_tru_max_against_the_initial_field():
-    """`tru_max` reports the true maximum severity from iteration 1, not the aggregate's
-    bias until the first refresh."""
+def test_init_state_calibrates_the_hotspot_term_against_the_initial_field():
+    """The hotspot term reports the true maximum severity from iteration 1, not the
+    aggregate's bias until the first refresh."""
     problem = _problem()
     state = seqopt.init_state(problem)
     _, K_est = seqopt.hotspot_value(
@@ -68,7 +68,7 @@ def test_init_state_calibrates_tru_max_against_the_initial_field():
     true_max = float(((1 - K_est[finite]) * xPhys**problem.config.r).max())
 
     _, record = seqopt.step(problem, state)
-    assert record.tru_max == pytest.approx(true_max, rel=1e-12)
+    assert record.hotspot == pytest.approx(true_max, rel=1e-12)
 
 
 def test_build_problem_drops_solid_that_cannot_reach_the_plate():

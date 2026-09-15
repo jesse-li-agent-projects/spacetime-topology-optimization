@@ -110,7 +110,6 @@ def iteration_diagnostics(
         "f": record.f,
         "hotspot": record.hotspot,
         "uniformity": record.uniformity,
-        "tru_max": record.tru_max,
         "roughness": record.roughness,
         "true_cv": record.true_cv,
         "sawtooth": record.sawtooth,
@@ -174,7 +173,7 @@ def main(args: argparse.Namespace) -> None:
             print(
                 f"It.: {state.loop:4d} f: {record.f:10.4f} "
                 f"hot: {record.hotspot:8.5f} unif: {record.uniformity:8.5f} "
-                f"Tm.: {record.tru_max:7.3f} rough: {record.roughness:7.4f} "
+                f"rough: {record.roughness:7.4f} "
                 f"true_cv: {record.true_cv:8.5f} saw: {record.sawtooth:7.4f}"
             )
             if args.log_every and state.loop % args.log_every == 0:
@@ -208,7 +207,6 @@ def main(args: argparse.Namespace) -> None:
         hotspot=record.hotspot,
         uniformity=record.uniformity,
         roughness=record.roughness,
-        tru_max=record.tru_max,
         true_cv=record.true_cv,
         sawtooth=record.sawtooth,
     )

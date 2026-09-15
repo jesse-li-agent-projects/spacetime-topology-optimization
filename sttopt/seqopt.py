@@ -106,10 +106,9 @@ class IterationRecord:
     """Per-iteration diagnostics and raw MMA outputs."""
 
     f: float  # objective: the weighted sum of the three raw terms below
-    hotspot: float  # raw hotspot p-mean (`numer`), before any rescaling
+    hotspot: float  # calibrated hotspot severity, comparable across runs
     uniformity: float  # raw layer-uniformity penalty
     roughness: float  # smoothness regularizer, as a fraction of a layer thickness
-    tru_max: float  # calibrated hotspot severity, comparable across runs
 
     # Diagnostics only -- nothing below enters the objective or a constraint. They exist
     # because `uniformity` cannot be taken at face value: it is blind to the transverse
@@ -317,10 +316,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     versus `t_stage`", the right statement once density is fixed rather than a design
     variable.
 
-    Both periodic updates (`beta_t += 5` every 30 iterations capped at 50, the hotspot
-    calibration refresh every 25 iterations) are deferred to take effect the *next*
-    iteration, matching `stto.step`'s convention. There is no Heaviside sharpening
-    here: there is no density projection to sharpen.
+    The `beta_t += 5` update (every 30 iterations, capped at 50) takes effect the
+    *next* iteration, and the hotspot calibration refresh (every 25 iterations) applies
+    to this iteration's objective, both matching `stto.step`. There is no Heaviside
+    sharpening here: there is no density projection to sharpen.
     """
     config = problem.config
     nely, nelx, nStage = problem.nely, problem.nelx, config.nStage
@@ -335,6 +334,14 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     tPhys = physical_timefield(problem, t)
 
     numer_t, K_est_t = hotspot_value(problem, tPhys)
+    numer = float(numer_t.detach())
+    aggregation = conductivity.Aggregation(config.hotspot_aggregation)
+    calibration = state.hotspot_calibration
+    if loop % 25 == 0:
+        calibration = conductivity.calibration_from(
+            aggregation, numer, K_est_t.detach(), xPhys, config.r, calibration
+        )
+    hotspot_t = aggregation.calibrated(numer_t, calibration)
     # The roughness regularizer is not optional garnish: uniformity alone rewards a
     # sawtooth across the print direction (`timefield._gradient_cv`).
     metric = timefield.UniformityMetric(config.uniformity_metric)
@@ -343,7 +350,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     roughness_weight = run_config.weight_at(config.roughness_weight, loop)
     f_val_t = (
-        config.hotspot_weight * numer_t
+        config.hotspot_weight * hotspot_t
         + config.uniformity_weight * penalty_t
         + roughness_weight * rough_t
     )
@@ -388,15 +395,6 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     dg_dt = torch.cat([sensitivity.jacobian_rows(g, (t,))[0] for g in g_parts], dim=0)
 
     # -- Periodic state updates, deferred to take effect starting *next* iteration. --
-    numer = float(numer_t.detach())
-    aggregation = conductivity.Aggregation(config.hotspot_aggregation)
-    calibration = state.hotspot_calibration
-    if loop % 25 == 0:
-        calibration = conductivity.calibration_from(
-            aggregation, numer, K_est_t.detach(), xPhys, config.r, calibration
-        )
-    tru_max = aggregation.calibrated(numer, calibration)
-
     if loop % 30 == 0 and beta_t < 50:
         beta_t += 5
 
@@ -449,10 +447,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     )
     record = IterationRecord(
         f=f_val,
-        hotspot=numer,
+        hotspot=float(hotspot_t.detach()),
         uniformity=float(penalty_t.detach()),
         roughness=float(rough_t.detach()),
-        tru_max=tru_max,
         true_cv=true_cv,
         sawtooth=sawtooth,
         sawtooth_raw=sawtooth_raw,
