@@ -44,59 +44,6 @@ requires_cuda = pytest.mark.skipif(
 )
 
 
-def _filter_field(problem, raw):
-    """`H @ raw / Hs`, on the (nely, nelx) grid -- the density filter's action.
-
-    `raw` may be a plain NumPy array (an FD test's perturbed design point) or a
-    `State` tensor field; `problem.H`/`.Hs` are always tensors. Returns a tensor,
-    matching what `stto.step`/`init_state` themselves compute.
-    """
-    device, dtype = problem.device, problem.dtype
-    flat = (problem.H @ torch_util.to_tensor(raw, device, dtype).flatten()) / problem.Hs
-    return flat.reshape((problem.config.nely, problem.config.nelx))
-
-
-# --- init_state: the initialization invariant ----------------------------------------
-#
-# `State` carries two fields per design variable, and their relationship is the whole
-# point of the split (see stto.py's module docstring): `x`/`t` are the *raw* design
-# variables MMA reads and writes, and `xTilde`/`xPhys`/`tPhys` are *derived* from them by
-# the density filter (and, for density, the Heaviside projection). Every iteration of
-# `step` maintains exactly that relationship on the state it emits:
-#
-#     xTilde = H @ x / Hs      xPhys = heaviside(xTilde)      tPhys = H @ t / Hs
-#
-# `init_state` seeds the raw fields and must therefore derive the physics fields from
-# them the same way, so that iteration 1 sees a state indistinguishable in kind from the
-# one iteration 2 sees. Anything else is a forward/backward inconsistency: `step`
-# differentiates through the filter it assumes produced `tPhys`, but at iteration 1 no
-# filter did.
-
-
-def _assert_state_fields_are_consistent(problem, state, beta_d):
-    """The invariant above, asserted on a `State` from any source."""
-    np.testing.assert_allclose(
-        torch_util.to_numpy(state.xTilde),
-        torch_util.to_numpy(_filter_field(problem, state.x)),
-        rtol=1e-12,
-        atol=1e-14,
-    )
-    np.testing.assert_allclose(
-        torch_util.to_numpy(state.xPhys),
-        torch_util.to_numpy(
-            filters.heaviside_projection(state.xTilde, beta_d, problem.config.eta)
-        ),
-        rtol=1e-12,
-        atol=1e-14,
-    )
-    np.testing.assert_allclose(
-        torch_util.to_numpy(state.tPhys),
-        torch_util.to_numpy(_filter_field(problem, state.t)),
-        rtol=1e-12,
-        atol=1e-14,
-    )
-
-
 def _problem(
     nelx=7,
     nely=5,
@@ -238,80 +185,13 @@ def test_init_state_seeds_the_raw_fields(tfield):
     )
 
 
-@pytest.mark.parametrize("tfield", [1, 2, 3])
-def test_init_state_density_half_is_derived_from_its_seed(tfield):
-    """The density half of the invariant. It holds today only because the seed is
-    uniform and `H @ 1 / Hs == 1` makes filtering a no-op -- but it holds *exactly*, so
-    it pins the intended relationship rather than tolerating it: `xTilde` must equal the
-    filtered raw field, and `xPhys` the projection of that."""
-    problem = _problem(tfield=tfield)
-    state = stto.init_state(problem, BETA_D)
-
-    np.testing.assert_allclose(
-        torch_util.to_numpy(state.xTilde),
-        torch_util.to_numpy(_filter_field(problem, state.x)),
-        rtol=1e-12,
-        atol=1e-14,
-    )
-    np.testing.assert_allclose(torch_util.to_numpy(state.xTilde), VOLFRAC, rtol=1e-14)
-    np.testing.assert_allclose(
-        torch_util.to_numpy(state.xPhys),
-        torch_util.to_numpy(
-            filters.heaviside_projection(state.xTilde, BETA_D, problem.config.eta)
-        ),
-        rtol=1e-12,
-        atol=1e-14,
-    )
-
-
-@pytest.mark.parametrize("tfield", [1, 2, 3])
-def test_init_state_time_half_is_derived_from_its_seed(tfield):
-    """The time half of the same invariant -- the half the MATLAB source got wrong.
-
-    It assigns `t = tPhys` unfiltered, so at iteration 1 the physics field was the raw
-    seed while `step` went on to differentiate it as though `tPhys = H @ t / Hs`.
-
-    Unlike the density half, this cannot be waved away by the filter's constant-field
-    fixed point: no `init_timefield` variant is constant (a constant print-time field
-    would mean the whole part is deposited at once), so `H @ t / Hs != t` here for real.
-    The premise assertion below pins exactly that, so the test cannot pass vacuously.
-    """
-    problem = _problem(tfield=tfield)
-    state = stto.init_state(problem, BETA_D)
-
-    seed = timefield.init_timefield(problem.config.nelx, problem.config.nely, tfield)
-    assert not np.allclose(torch_util.to_numpy(_filter_field(problem, seed)), seed), (
-        "premise: the seed is not a fixed point of the density filter, so filtering it "
-        "is observable"
-    )
-    np.testing.assert_allclose(
-        torch_util.to_numpy(state.tPhys),
-        torch_util.to_numpy(_filter_field(problem, state.t)),
-        rtol=1e-12,
-        atol=1e-14,
-    )
-
-
-@pytest.mark.parametrize("tfield", [1, 3])
-def test_step_output_state_is_self_consistent(tfield):
-    """The same invariant on the state `step` emits -- which does hold, at every
-    iteration. This is the behaviour `init_state` is being specified against above, so
-    pinning it here keeps the target from drifting."""
-    problem = _problem(tfield=tfield)
-    state = stto.init_state(problem, BETA_D)
-    for _ in range(3):
-        state, _ = stto.step(problem, state)
-        _assert_state_fields_are_consistent(problem, state, state.beta_d)
-
-
 # --- step: finite-difference check of the assembled sensitivities ---------------------
 
 
 def _state_from_raw(
     problem, x_raw, t_raw, *, beta_d=BETA_D, calibration=1.0, beta_t=10.0
 ):
-    """A `State` at raw design point `[x_raw; t_raw]`, with the physics fields derived
-    per the invariant above -- i.e. the state `step` itself would have produced.
+    """A `State` at raw design point `[x_raw; t_raw]`.
 
     `loop` is left at 0 so the ensuing `step` runs as iteration 1, which is none of
     30/50/25: `beta_t`, `beta_d` and the hotspot calibration all stay fixed across the
@@ -320,15 +200,10 @@ def _state_from_raw(
     gradient deliberately does not account for that -- a different question from the
     one this test asks.)
     """
-    nely, nelx = problem.config.nely, problem.config.nelx
     device, dtype = problem.device, problem.dtype
-    xTilde = _filter_field(problem, x_raw)
     return stto.State(
         x=torch_util.to_tensor(x_raw, device, dtype),
-        xTilde=xTilde,
-        xPhys=filters.heaviside_projection(xTilde, beta_d, problem.config.eta),
         t=torch_util.to_tensor(t_raw, device, dtype),
-        tPhys=_filter_field(problem, t_raw),
         xold1=torch.zeros(problem.n, device=device, dtype=dtype),
         xold2=torch.zeros(problem.n, device=device, dtype=dtype),
         low=torch.zeros(problem.n, device=device, dtype=dtype),
@@ -368,10 +243,11 @@ def _well_conditioned(problem, state, beta_t):
     edofMat = torch_util.to_numpy(p.edofMat)
     freedofs = torch_util.to_numpy(p.freedofs)
 
-    fields = [state.xPhys]
+    xPhys, tPhys = stto.physical_fields(p, state.x, state.t, state.beta_d)
+    fields = [xPhys]
     tP = np.linspace(0, 1, p.config.nStage + 1)
     for i in range(1, p.config.nStage + 1):
-        fields.append(state.xPhys * compliance.time_mask(state.tPhys, tP[i], beta_t))
+        fields.append(xPhys * compliance.time_mask(tPhys, tP[i], beta_t))
     for field in fields:
         K = fem_ref.assemble_stiffness(
             KE,
@@ -396,6 +272,21 @@ def _draw_well_conditioned_state(problem, rng, *, beta_t=10.0, max_tries=50):
         if _well_conditioned(problem, state, beta_t):
             return x_raw, t_raw, state
     raise AssertionError(f"no well-conditioned draw in {max_tries} tries")
+
+
+def test_physical_time_field_is_scaled_to_a_maximum_of_one():
+    """A raw time field whose filtered maximum falls short of 1 is scaled, not shifted,
+    so that the build ends at 1 and a start at 0 stays at 0."""
+    problem = _problem()
+    state = stto.init_state(problem, BETA_D)
+    t_raw = 0.6 * state.t
+    filtered = filters.apply_density_filter(t_raw, problem.H, problem.Hs)
+    assert float(filtered.max()) < 0.7  # premise: the unscaled field ends early
+
+    _, tPhys = stto.physical_fields(problem, state.x, t_raw, BETA_D)
+    assert float(tPhys.max()) == pytest.approx(1.0, rel=1e-14)
+    ratio = torch_util.to_numpy(tPhys / filtered)
+    np.testing.assert_allclose(ratio, ratio.flat[0], rtol=1e-12)
 
 
 def test_sensitivity_rows_multi_row_matches_single_row_calls():
@@ -441,7 +332,7 @@ def test_sensitivity_rows_multi_row_matches_single_row_calls():
     ],
 )
 def test_step_assembled_sensitivities_match_finite_differences(
-    nStage, tfield, Theta, enable_stage_volume
+    nStage, tfield, Theta, enable_stage_volume, monkeypatch
 ):
     """`step`'s stacked `IterationRecord.df` and `.dg` against central differences of
     its own `.f`/`.g`, w.r.t. the raw design vector `[x; t]`.
@@ -496,6 +387,21 @@ def test_step_assembled_sensitivities_match_finite_differences(
     # Non-vacuity: an all-but-zero gradient would pass the comparison below regardless.
     assert np.abs(record.df).max() > 1e-3
     assert np.abs(record.dg).max(axis=1).min() > 1e-3
+
+    # `step`'s gradient treats the time field's scale as a constant, so the finite
+    # difference has to hold it at the unperturbed value too.
+    def filtered_max(t):
+        t = torch_util.to_tensor(t, problem.device, problem.dtype)
+        return filters.apply_density_filter(t, problem.H, problem.Hs).max()
+
+    base_scale = filtered_max(t_raw)
+    unscaled_physical_fields = stto.physical_fields
+
+    def physical_fields_at_base_scale(problem, x, t, beta_d):
+        xPhys, tPhys = unscaled_physical_fields(problem, x, t, beta_d)
+        return xPhys, tPhys * filtered_max(t) / base_scale
+
+    monkeypatch.setattr(stto, "physical_fields", physical_fields_at_base_scale)
 
     def values_at(x_raw, t_raw):
         _, rec = stto.step(problem, _state_from_raw(problem, x_raw, t_raw))
@@ -574,10 +480,10 @@ def test_step_objective_is_theta_weighted_sum_of_stage_compliances():
 
 
 def test_step_objective_adds_the_gamma_weighted_gradient_uniformity_penalty():
-    """`IterationRecord.f` is affine in `Gamma` with slope `IterationRecord.grad_std`,
-    the unweighted spread of the time field's gradient magnitude -- which pins both that
-    the penalty is wired into the objective with the right weight and that `grad_std`
-    reports the same quantity the weight multiplies.
+    """`IterationRecord.f` is affine in `Gamma` with slope `IterationRecord.uniformity`,
+    the density-weighted CV of the time field's gradient magnitude -- which pins both
+    that the penalty is wired into the objective with the right weight and that
+    `uniformity` reports the same quantity the weight multiplies.
     """
     nelx, nely, nStage = 10, 8, 3
     rng = np.random.default_rng(1)
@@ -586,23 +492,23 @@ def test_step_objective_adds_the_gamma_weighted_gradient_uniformity_penalty():
         problem = _problem(nelx=nelx, nely=nely, nStage=nStage, Gamma=Gamma)
         state = _state_from_raw(problem, x_raw, t_raw)
         _, rec = stto.step(problem, state)
-        return rec.f, rec.grad_std
+        return rec.f, rec.uniformity
 
     base = _problem(nelx=nelx, nely=nely, nStage=nStage)
     x_raw, t_raw, _ = _draw_well_conditioned_state(base, rng)
 
-    f_0, grad_std = f_at(0.0)
-    f_100, grad_std_100 = f_at(100.0)
+    f_0, uniformity = f_at(0.0)
+    f_100, uniformity_100 = f_at(100.0)
 
-    assert grad_std > 1e-4  # non-vacuous: the field is not already uniform
-    np.testing.assert_allclose(grad_std_100, grad_std, rtol=1e-12)
-    np.testing.assert_allclose(f_100, f_0 + 100.0 * grad_std, rtol=1e-9)
+    assert uniformity > 1e-4  # non-vacuous: the field is not already uniform
+    np.testing.assert_allclose(uniformity_100, uniformity, rtol=1e-12)
+    np.testing.assert_allclose(f_100, f_0 + 100.0 * uniformity, rtol=1e-9)
 
 
-def test_step_gradient_of_the_penalty_reaches_the_time_half_only():
-    """Raising `Gamma` changes `.df`'s time half and leaves its density half untouched:
-    the penalty reads `tPhys` alone, and the difference of the two gradients must be
-    `Gamma` times the penalty's own sensitivity.
+def test_step_gradient_of_the_penalty_matches_its_own_sensitivity():
+    """Raising `Gamma` changes `.df` by `Gamma` times the penalty's own sensitivity, in
+    both halves: the penalty reads `tPhys` and is weighted by `xPhys`, so it moves
+    material as well as print time.
 
     Both halves are isolated by differencing two separate `step` calls, so the
     compliance sensitivity has to cancel between them. It only cancels to the CG
@@ -630,24 +536,30 @@ def test_step_gradient_of_the_penalty_reaches_the_time_half_only():
         """How far two solves of the same problem may disagree on `df_half`."""
         return 10 * torch_solve.DEFAULT_CG_RTOL * np.abs(df_half).max()
 
-    np.testing.assert_allclose(
-        df_g[:nel], df_0[:nel], rtol=0, atol=solve_noise(df_0[:nel])
+    # The expected difference, assembled apart from step()'s objective: the penalty's
+    # autograd sensitivity w.r.t. both raw fields.
+    x_leaf, t_leaf = (
+        torch_util.to_tensor(raw, problem.device, problem.dtype).requires_grad_(True)
+        for raw in (x_raw, t_raw)
     )
-
-    # The expected difference, assembled independently: the penalty's autograd
-    # sensitivity w.r.t. tPhys, pushed back through the filter as step() does.
-    t_leaf = torch_util.to_tensor(t_raw, problem.device, problem.dtype).requires_grad_(
-        True
+    xPhys, tPhys = stto.physical_fields(problem, x_leaf, t_leaf, BETA_D)
+    penalty = timefield.uniformity_penalty(
+        tPhys, timefield.UniformityMetric.GRADIENT_CV, weights=xPhys
     )
-    tPhys = ((problem.H @ t_leaf.flatten()) / problem.Hs).reshape(nely, nelx)
-    (d_tPhys,) = torch.autograd.grad(timefield.gradient_magnitude_std(tPhys), t_leaf)
-    expected = Gamma * torch_util.to_numpy(d_tPhys).ravel()
-    # Non-vacuous: the penalty's own contribution has to clear the noise it is
-    # recovered through, or this asserts nothing.
-    assert np.abs(expected).max() > 100 * solve_noise(df_0[nel:])
-    np.testing.assert_allclose(
-        df_g[nel:] - df_0[nel:], expected, rtol=1e-4, atol=solve_noise(df_0[nel:])
+    expected = Gamma * np.concatenate(
+        [
+            torch_util.to_numpy(d).ravel()
+            for d in torch.autograd.grad(penalty, (x_leaf, t_leaf))
+        ]
     )
+    for half in (slice(None, nel), slice(nel, None)):
+        noise = solve_noise(df_0[half])
+        # Non-vacuous: the penalty's own contribution has to clear the noise it is
+        # recovered through, or this asserts nothing.
+        assert np.abs(expected[half]).max() > 100 * noise
+        np.testing.assert_allclose(
+            df_g[half] - df_0[half], expected[half], rtol=1e-4, atol=noise
+        )
 
 
 # --- Batched FEM solves inside step() -------------------------------------------------
@@ -746,15 +658,12 @@ def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
         rmin_cond=6.0,
     )
     problem = stto.build_problem(config)
-    xPhys = torch_util.to_tensor(x, problem.device, problem.dtype)
-    tPhys = torch_util.to_tensor(t, problem.device, problem.dtype)
-    xval = torch.cat([xPhys.flatten(), tPhys.flatten()])
+    x = torch_util.to_tensor(x, problem.device, problem.dtype)
+    t = torch_util.to_tensor(t, problem.device, problem.dtype)
+    xval = torch.cat([x.flatten(), t.flatten()])
     state = stto.State(
-        x=xPhys,
-        xTilde=xPhys,
-        xPhys=xPhys,
-        t=tPhys,
-        tPhys=tPhys,
+        x=x,
+        t=t,
         xold1=xval,
         xold2=xval.clone(),
         low=xval - 0.1,

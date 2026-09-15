@@ -5,17 +5,16 @@ Every module this file calls already owns its own math and its own fixture/FD te
 this file's only job is *wiring* -- building the stacked objective/constraint arrays
 MMA expects, in the exact row order the MATLAB main loop uses, and threading the
 iteration-dependent state (`beta_d`, `beta_t`, `hotspot_calibration`, `xold1`/`xold2`,
-`low`/`upp`, and the raw-vs-filtered x/t fields) from one call to the next. See
+`low`/`upp`, and the raw x/t fields) from one call to the next. See
 `conventions.md` for array-order conventions and `tests/matlab_reference_loop.py` (a
 literal transliteration of the MATLAB source this ports) for the authoritative
 iteration order.
 
-Two field pairs are threaded per design variable, and must not be conflated: `x`/`t`
-are each iteration's *raw* MMA output (unfiltered, unprojected -- what next
-iteration's move-limit bounds read); `xTilde`/`xPhys`/`tPhys` are the *filtered* (and,
-for density, Heaviside-projected) fields the physics uses.
-`xTilde` alone is carried an extra step (needed for the Heaviside-derivative chain rule
-at the *start* of the next iteration, before that iteration's own update).
+Two field pairs exist per design variable, and must not be conflated: `x`/`t` are each
+iteration's *raw* MMA output (unfiltered, unprojected -- what next iteration's
+move-limit bounds read); `xPhys`/`tPhys` are the *filtered* fields the physics uses
+(density also Heaviside-projected, time also scaled to a maximum of 1). `State` carries only the raw pair;
+`physical_fields` derives the other wherever it is needed.
 
 **The tensor boundary (`plans/torch_port_part2.md`).** `Problem` and `State` hold torch
 tensors -- `Problem.device`/`.dtype` say where -- and so does every leaf module `step`
@@ -89,10 +88,7 @@ class State:
     """Iteration-dependent state carried from one `step` call to the next."""
 
     x: Float[Tensor, "nely nelx"]  # raw density (unfiltered MMA output)
-    xTilde: Float[Tensor, "nely nelx"]  # density-filtered x
-    xPhys: Float[Tensor, "nely nelx"]  # density for physics purposes
     t: Float[Tensor, "nely nelx"]  # raw time field (unfiltered MMA output)
-    tPhys: Float[Tensor, "nely nelx"]  # time for physics purposes
     xold1: Float[Tensor, " n"]
     xold2: Float[Tensor, " n"]
     low: Float[Tensor, " n"]
@@ -120,7 +116,7 @@ class IterationRecord:
     obj: float  # whole-structure compliance (doesn't include intermediate structures)
     vol: float  # volume fraction (mean xPhys)
     tru_max: float  # calibrated hotspot severity, comparable across runs
-    grad_std: float  # spread of |grad tPhys|, the layer-uniformity penalty, unweighted
+    uniformity: float  # layer-uniformity penalty (density-weighted CV), before Gamma
     f: float  # objective (compliance terms plus the Gamma-weighted uniformity penalty)
     df: Float[np.ndarray, " n"]
     xmma: Float[np.ndarray, " n"]
@@ -235,16 +231,41 @@ def build_problem(
     )
 
 
+def physical_fields(
+    problem: Problem,
+    x: Float[Tensor, "nely nelx"],
+    t: Float[Tensor, "nely nelx"],
+    beta_d: float,
+) -> tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]]:
+    """The density and time fields the physics reads, from the raw design variables:
+    `x` filtered and Heaviside-projected at sharpness `beta_d`, and `t` filtered and
+    scaled so its maximum is 1.
+
+    The one definition of that map, so a trajectory or a saved design cannot disagree
+    with what `step` optimized. Differentiable: `step` gets the chain rule back to
+    `x`/`t` from autograd.
+
+    Filtering pulls the time field's maximum below 1, but the stage times and the
+    hotspot term read absolute print times, so the build must end at 1. The start-point
+    constraint already pins the minimum to 0, so a scale is enough. The gradient treats
+    that scale as a constant.
+
+    :return: `(xPhys, tPhys)`
+    """
+    xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
+    xPhys = filters.heaviside_projection(xTilde, beta_d, problem.config.eta)
+    tTilde = filters.apply_density_filter(t, problem.H, problem.Hs)
+    tPhys = tTilde / tTilde.max().detach()
+    return xPhys, tPhys
+
+
 def init_state(problem: Problem, beta_d: float) -> State:
     """Initial state: `x`/`t` are the raw seed (uniform `problem.config.volfrac`, time
-    field per `problem.config.print_base`); the physics fields are derived from them
-    exactly as in `step`.
+    field per `problem.config.print_base`).
 
-    The MATLAB source instead assigns `xTilde = x` and `t = tPhys` unfiltered here. For
-    the density half that is a numeric no-op -- `x` is uniform and the filter fixes
-    constants -- but no `init_timefield` variant is constant, so leaving `tPhys`
-    unfiltered made iteration 1 the one iteration whose forward map disagreed with the
-    `tPhys = H @ t / Hs` that `step`'s chain rule differentiates. See PR #26.
+    The MATLAB source leaves `tPhys` unfiltered at initialization, so its iteration 1
+    reads a different forward map from every later one (PR #26). Here every iteration,
+    the first included, derives the physical fields through `physical_fields`.
     """
     config = problem.config
     nely, nelx = config.nely, config.nelx
@@ -252,8 +273,6 @@ def init_state(problem: Problem, beta_d: float) -> State:
     device, dtype = problem.device, problem.dtype
 
     x = torch.full((nely, nelx), config.volfrac, device=device, dtype=dtype)
-    xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
-    xPhys = filters.heaviside_projection(xTilde, beta_d, config.eta)
 
     # init_timefield is a NumPy builder (plans/torch_port_part2.md Phase 3.2 item 2);
     # converted once here, at the tensor boundary.
@@ -264,7 +283,6 @@ def init_state(problem: Problem, beta_d: float) -> State:
         device,
         dtype,
     )
-    tPhys = filters.apply_density_filter(t, problem.H, problem.Hs)
 
     # MATLAB's xold1=xold2=[x(:); zeros(nel,1)] -- provably unread (iterations 1 and 2
     # both take mmasub's `iteration < 2.5` reinit branch), reproduced anyway for fidelity.
@@ -272,10 +290,7 @@ def init_state(problem: Problem, beta_d: float) -> State:
 
     return State(
         x=x,
-        xTilde=xTilde,
-        xPhys=xPhys,
         t=t,
-        tPhys=tPhys,
         xold1=xold,
         xold2=xold.clone(),
         low=torch.zeros(problem.n, device=device, dtype=dtype),
@@ -376,14 +391,6 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     not accompanied by a hand-derived `dx` chain-rule factor), call `mma.mmasub`, and
     unpack the result into the next state.
 
-    Recomputing `xTilde`/`xPhys`/`tPhys` from this iteration's own `x`/`t` (rather than
-    reading `state.xPhys`/`state.tPhys`, which the hand-derived predecessor did) is a
-    deliberate side effect of Decision 4, not a separate change: it makes the value
-    autograd differentiates and the value MMA optimizes the same expression, and it is
-    the invariant `_assert_state_fields_are_consistent` (test_optimize.py) pins at
-    every iteration -- `state.xPhys`/`state.tPhys` always equal what filtering
-    `state.x`/`state.t` at `state.beta_d` produces.
-
     All three periodic state updates (`beta_t += 5` at loop%30==0, `beta_d *= 2` at
     loop%50==0, the hotspot calibration refresh at loop%25==0) happen at the tail, next
     to each other, and take effect starting the *next* iteration's `step` call rather
@@ -404,9 +411,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     # -- Gradient region begins: x/t become autograd leaves. --
     x = state.x.clone().requires_grad_(True)
     t = state.t.clone().requires_grad_(True)
-    xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
-    xPhys = filters.heaviside_projection(xTilde, beta_d, config.eta)
-    tPhys = filters.apply_density_filter(t, problem.H, problem.Hs)
+    xPhys, tPhys = physical_fields(problem, x, t, beta_d)
 
     # -- Objective: whole-structure compliance + Theta-weighted per-stage gravity
     # compliance + Gamma-weighted time-field gradient-uniformity penalty --
@@ -439,8 +444,13 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         f_val_t = f_val_t + config.Theta * cg_t
 
     # Layer-thickness-uniformity penalty on the time field (config.Gamma == 0 disables).
-    grad_std_t = timefield.gradient_magnitude_std(tPhys)
-    f_val_t = f_val_t + config.Gamma * grad_std_t
+    # Weighted by xPhys, so it measures the layers of the part, and its gradient moves
+    # material as well as print time. A CV, so shrinking the time field's range does not
+    # lower it.
+    uniformity_t = timefield.uniformity_penalty(
+        tPhys, timefield.UniformityMetric.GRADIENT_CV, weights=xPhys
+    )
+    f_val_t = f_val_t + config.Gamma * uniformity_t
 
     f_val = float(f_val_t.detach())
     df_dx = _sensitivity_rows(f_val_t[None], x, t)[0]
@@ -552,19 +562,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         **mma_trust,
     )
 
-    x_new = xmma[:nel].reshape(nely, nelx)
-    t_new = xmma[nel:].reshape(nely, nelx)
-
-    xTilde_new = filters.apply_density_filter(x_new, problem.H, problem.Hs)
-    xPhys_new = filters.heaviside_projection(xTilde_new, beta_d, config.eta)
-    tPhys_new = filters.apply_density_filter(t_new, problem.H, problem.Hs)
-
     new_state = State(
-        x=x_new,
-        xTilde=xTilde_new,
-        xPhys=xPhys_new,
-        t=t_new,
-        tPhys=tPhys_new,
+        x=xmma[:nel].reshape(nely, nelx),
+        t=xmma[nel:].reshape(nely, nelx),
         xold1=xval,
         xold2=state.xold1,
         low=low,
@@ -582,7 +582,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         obj=obj_final_only,
         vol=vol_diag,
         tru_max=tru_max,
-        grad_std=float(grad_std_t.detach()),
+        uniformity=float(uniformity_t.detach()),
         f=float(f_val),
         df=torch_util.to_numpy(df_dx),
         xmma=torch_util.to_numpy(xmma),
@@ -616,16 +616,21 @@ def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
     choice -- warm-starting from a previous run's final state, or entering at a
     trajectory recorded elsewhere.
     """
-    xPhys_traj = [state.xPhys.clone()]
-    tPhys_traj = [state.tPhys.clone()]
+    xPhys_traj, tPhys_traj = [], []
+
+    def record_fields(state: State) -> None:
+        xPhys, tPhys = physical_fields(problem, state.x, state.t, state.beta_d)
+        xPhys_traj.append(xPhys)
+        tPhys_traj.append(tPhys)
+
+    record_fields(state)
     x_traj = [state.x.clone()]
     t_traj = [state.t.clone()]
     records: list[IterationRecord] = []
 
     for _ in range(nloop):
         state, record = step(problem, state)
-        xPhys_traj.append(state.xPhys.clone())
-        tPhys_traj.append(state.tPhys.clone())
+        record_fields(state)
         x_traj.append(state.x.clone())
         t_traj.append(state.t.clone())
         records.append(record)

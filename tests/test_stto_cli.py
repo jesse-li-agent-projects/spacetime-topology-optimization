@@ -21,7 +21,17 @@ _DEFAULT_CONFIG = RunConfig.from_dict(
     json.loads((Path(__file__).parent.parent / "configs" / "default.json").read_text())
 )
 _FIXTURE_CONFIG = dataclasses.replace(
-    _DEFAULT_CONFIG, nelx=7, nely=5, nStage=2, rmin=2, lrmin=2, rmin_cond=3, nloop=2
+    _DEFAULT_CONFIG,
+    nelx=7,
+    nely=5,
+    nStage=2,
+    rmin=2,
+    lrmin=2,
+    rmin_cond=3,
+    nloop=2,
+    # Per-step volume change scales with `move`; the obj/vol test needs it clear of
+    # what the printed "Vol." can resolve.
+    move=0.03,
 )
 
 
@@ -64,28 +74,31 @@ def _reference_run(config):
 def test_cli_prints_full_objective_and_post_update_volume(
     capsys, tmp_path, monkeypatch
 ):
-    """Regression test for the Phase 9 review findings: "Obj." must be the full MMA
-    objective (IterationRecord.f), not whole-structure-compliance-only
-    (IterationRecord.obj); "Vol." must be this iteration's post-update xPhys, not
-    IterationRecord.vol (pre-update).
+    """
+    "Obj." must print the full MMA objective (`IterationRecord.f`), not the
+    whole-structure compliance (`.obj`); "Vol." must print this iteration's post-update
+    volume, not the pre-update `.vol`.
     """
     monkeypatch.chdir(tmp_path)
     args = stto_cli.parse_args(_argv(tmp_path, "obj_vol"))
-    _, _, records, states = _reference_run(stto_cli.resolve_config(args))
+    problem, _, records, states = _reference_run(stto_cli.resolve_config(args))
 
     stto_cli.main(args)
     out = capsys.readouterr().out
 
     it_lines = [line for line in out.splitlines() if line.startswith("It.:")]
     assert len(it_lines) == _FIXTURE_CONFIG.nloop
+    # Printed rounding: "Obj." is %10.4f, "Vol." is %6.3f.
+    obj_rounding, vol_rounding = 5e-5, 5e-4
+    obj_rtol, vol_atol = 1e-6, 6e-4
     for line, record, state in zip(it_lines, records, states):
         obj = float(re.search(r"Obj\.:\s*([\d.-]+)", line).group(1))
         vol = float(re.search(r"Vol\.:\s*([\d.-]+)", line).group(1))
-        np.testing.assert_allclose(obj, record.f, rtol=1e-6)
-        # atol matches the printed field's own rounding (%6.3f -> max rounding error
-        # 5e-4); rtol=1e-6 alone would be far tighter than the print format supports.
-        np.testing.assert_allclose(vol, float(state.xPhys.mean()), atol=6e-4, rtol=0)
-        # Guard against vacuous passes: .f/.obj and pre-/post-update volume must
-        # actually differ here, or this test wouldn't catch printing the wrong one.
-        assert abs(record.f - record.obj) > 1e-3
-        assert abs(float(state.xPhys.mean()) - record.vol) > 1e-3
+        xPhys, _ = stto.physical_fields(problem, state.x, state.t, state.beta_d)
+        post_update_vol = float(xPhys.mean())
+        np.testing.assert_allclose(obj, record.f, rtol=obj_rtol)
+        np.testing.assert_allclose(vol, post_update_vol, atol=vol_atol, rtol=0)
+        # Guard against vacuous passes: the wrong quantity is only certain to fail the
+        # checks above if it sits further off than their tolerance plus the rounding.
+        assert abs(record.f - record.obj) > obj_rtol * abs(record.f) + obj_rounding
+        assert abs(post_update_vol - record.vol) > vol_atol + vol_rounding

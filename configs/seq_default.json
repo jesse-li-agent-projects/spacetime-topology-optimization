@@ -10,7 +10,7 @@
   "hotspot_weight": 1.0,
   "hotspot_normalization": "half_stencil",
   "hotspot_aggregation": "logsumexp",
-  "hotspot_beta": 200.0,
+  "hotspot_beta": 4.0,
   "hotspot_density_exponent": 1.25,
   "uniformity_metric": "gradient_cv",
   "uniformity_weight": 1.0,

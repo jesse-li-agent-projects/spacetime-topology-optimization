@@ -10,7 +10,7 @@
   "Tcr": 0.8,
   "hotspot_normalization": "half_stencil",
   "hotspot_aggregation": "logsumexp",
-  "hotspot_beta": 200.0,
+  "hotspot_beta": 4.0,
   "hotspot_density_exponent": 1.25,
   "print_base": "opposite_corner",
   "rmin": 4.0,

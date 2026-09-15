@@ -82,7 +82,6 @@ import torch
 
 import sttopt.compliance as compliance
 import sttopt.conductivity as conductivity
-import sttopt.filters as filters
 import sttopt.mma as mma
 import sttopt.stto as stto
 import sttopt.run_config as run_config
@@ -119,25 +118,18 @@ def build_realistic_state(
 
     `x_snapshot`/`t_snapshot` must be the *raw* MMA output (`RunResult.x_traj`/`t_traj`
     from `tests/fixtures/generate_torch_port_designs.py`, not `xPhys_traj`/`tPhys_traj`):
-    `step` re-derives `xTilde`/`xPhys`/`tPhys` from `state.x`/`state.t` every call, so
-    seeding the raw slots with an already-filtered field would double-apply the density
-    filter and Heaviside projection, blurring interfaces `step` never actually sees in
-    production. See PR #52's description for how this was found.
+    `step` derives `xPhys`/`tPhys` from `state.x`/`state.t` every call, so seeding the
+    raw slots with an already-filtered field would double-apply the density filter and
+    Heaviside projection, blurring interfaces `step` never actually sees in production.
+    See PR #52's description for how this was found.
     """
-    nelx, nely = problem.config.nelx, problem.config.nely
     device, dtype = problem.device, problem.dtype
     x_t = torch.as_tensor(x_snapshot, device=device, dtype=dtype)
     t_t = torch.as_tensor(t_snapshot, device=device, dtype=dtype)
-    xTilde = ((problem.H @ x_t.flatten()) / problem.Hs).reshape(nely, nelx)
-    xPhys = filters.heaviside_projection(xTilde, BETA_D, problem.config.eta)
-    tPhys = ((problem.H @ t_t.flatten()) / problem.Hs).reshape(nely, nelx)
     xval = torch.cat([x_t.flatten(), t_t.flatten()])
     return stto.State(
         x=x_t.clone(),
-        xTilde=xTilde,
-        xPhys=xPhys,
         t=t_t.clone(),
-        tPhys=tPhys,
         xold1=xval.clone(),
         xold2=xval.clone(),
         low=xval - 0.1,
@@ -145,7 +137,7 @@ def build_realistic_state(
         loop=LOOP,
         beta_t=BETA_T,
         beta_d=BETA_D,
-        factor=1.0,
+        hotspot_calibration=1.0,
         U=None,
     )
 

@@ -50,7 +50,9 @@ def test_constraints_match_fixture():
         fval_all = fx["fval_all"][:, k]
         dfdx_all = fx["dfdx_all"][:, :, k]
         dfdx_x = dfdx_all[:, :nel]
-        dfdx_t = dfdx_all[:, nel:]
+        # `stto` scales the filtered time field by a constant 1/t_scale, which the
+        # oracles' time chain rule does not include.
+        dfdx_t = dfdx_all[:, nel:] * fx["t_scale_all"][k]
 
         # (1) global volume
         fval, dfx, dft = constraints_ref.global_volume_fraction(
