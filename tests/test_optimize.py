@@ -343,9 +343,11 @@ def test_step_assembled_sensitivities_match_finite_differences(monkeypatch):
     x_raw, t_raw, state = _draw_well_conditioned_state(problem, rng)
     _, record = stto.step(problem, state)
 
-    # Row count follows from the stack `step` builds: volume, continuity, one row per
-    # print-start element, an upper and a lower bound per stage, and the hotspot row.
-    m = 1 + 1 + len(problem.Nei) + 2 * nStage + 1
+    # Row count follows from the stack `step` builds: volume, continuity (when enabled),
+    # one row per print-start element, an upper and a lower bound per stage, and the
+    # hotspot row.
+    n_continuity_rows = 1 if problem.config.enable_continuity else 0
+    m = 1 + n_continuity_rows + len(problem.Nei) + 2 * nStage + 1
     assert record.df.shape == (problem.n,)
     assert record.g.shape == (m,)
     assert record.dg.shape == (m, problem.n)
@@ -464,6 +466,21 @@ def test_step_objective_adds_the_weighted_uniformity_penalty():
     assert uniformity > 1e-4  # non-vacuous: the field is not already uniform
     np.testing.assert_allclose(uniformity_100, uniformity, rtol=1e-12)
     np.testing.assert_allclose(f_100, f_0 + 100.0 * uniformity, rtol=1e-9)
+
+
+def test_enable_continuity_false_drops_the_continuity_constraint_row():
+    """Disabling continuity removes its row rather than relaxing it, so the start-point
+    rows follow the volume row directly."""
+    base = _problem()
+    config = dataclasses.replace(base.config, enable_continuity=False)
+    problem = stto.build_problem(config)
+    _, record = stto.step(problem, stto.init_state(problem, BETA_D))
+    _, with_continuity = stto.step(base, stto.init_state(base, BETA_D))
+
+    assert record.g.shape == (with_continuity.g.shape[0] - 1,)
+    assert record.dg.shape == (with_continuity.g.shape[0] - 1, problem.n)
+    np.testing.assert_allclose(record.g[0], with_continuity.g[0], rtol=1e-12)
+    np.testing.assert_allclose(record.g[1:], with_continuity.g[2:], rtol=1e-12)
 
 
 def test_step_objective_adds_the_scheduled_roughness_term():

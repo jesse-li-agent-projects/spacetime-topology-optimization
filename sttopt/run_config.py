@@ -123,6 +123,8 @@ class RunConfig(_ConfigMixin):
     :param time_filter_rmin: density-filter radius applied to `t`, in elements, as in
         `SeqRunConfig`; separate from `rmin` so the two fields can be smoothed
         differently. 0 leaves `t` unfiltered.
+    :param enable_continuity: whether the time-field continuity constraint is in the
+        MMA constraint stack at all, as in `SeqRunConfig`, as is `continuity_tol`.
     """
 
     # Frequently varied -- also exposed as a CLI flag in stto_cli.py.
@@ -146,6 +148,8 @@ class RunConfig(_ConfigMixin):
     print_base: str
     rmin: float
     time_filter_rmin: float
+    enable_continuity: bool
+    continuity_tol: float
     lrmin: float
     rmin_cond: float
     beta_d_max: float

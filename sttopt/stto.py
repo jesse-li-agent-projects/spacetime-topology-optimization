@@ -495,11 +495,14 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     g_vol_t = constraints.global_volume_fraction(xPhys, config.volfrac)
     vol_diag = float(xPhys.detach().sum() / (nelx * nely))
 
-    g_cont_t = constraints.time_field_continuity(tPhys, problem.L)
+    g_parts: list[Tensor] = [g_vol_t[None]]
+    if config.enable_continuity:
+        g_cont_t = constraints.time_field_continuity(
+            tPhys, problem.L, config.continuity_tol
+        )
+        g_parts.append(g_cont_t[None])
 
-    g_start_t = constraints.start_point(tPhys, problem.Nei)
-
-    g_parts: list[Tensor] = [g_vol_t[None], g_cont_t[None], g_start_t]
+    g_parts.append(constraints.start_point(tPhys, problem.Nei))
 
     if config.enable_stage_volume:
         stage_upper_t = [  # per-stage volume bounds
