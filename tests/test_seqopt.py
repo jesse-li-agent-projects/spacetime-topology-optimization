@@ -43,7 +43,7 @@ def _state_from_raw(
 
 
 def test_init_state_is_geodesic_and_finite():
-    problem = _problem()
+    problem = _problem(void_extension="geodesic")
     state = seqopt.init_state(problem)
     assert state.t.shape == (NELY, NELX)
     assert torch.all(torch.isfinite(state.t))
@@ -179,13 +179,12 @@ def test_sensitivities_match_finite_differences():
 # --- the optional filter on t ---------------------------------------------------
 
 
-def test_unfiltered_is_the_default_and_leaves_t_untouched():
-    """`tPhys is t` at radius 0, not merely equal to it: `seqopt`'s starting design is
-    that the design variable and the physical field are the same object, and a filter
-    that quietly copied would put a no-op in every gradient.
+def test_unfiltered_leaves_t_untouched():
+    """`tPhys is t` at radius 0, not merely equal to it: the design variable and the
+    physical field are the same object, and a filter that quietly copied would put a
+    no-op in every gradient.
     """
-    problem = _problem(nStage=0)
-    assert problem.config.time_filter_rmin == 0.0
+    problem = _problem(nStage=0, time_filter_rmin=0.0)
     assert problem.H is None
     t = seqopt.init_state(problem).t
     assert seqopt.physical_timefield(problem, t) is t

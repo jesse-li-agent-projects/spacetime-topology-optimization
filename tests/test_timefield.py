@@ -88,11 +88,14 @@ def test_uniform_ramp_has_zero_gradient_spread():
         indexing="ij",
     )
     weights = torch.rand((ny, nx), dtype=torch.float64)
+    # Zero spread still scores the sqrt regularizer's floor, sqrt(_GRAD_EPS), plus
+    # roundoff -- so the bound has to sit clear of the floor, not on it.
+    floor = timefield._GRAD_EPS**0.5
     for ramp in (0.3 * xs, 0.7 * ys, 0.2 * xs - 0.5 * ys):
         cv = timefield.uniformity_penalty(
             ramp, timefield.UniformityMetric.GRADIENT_CV, weights=weights
         )
-        assert float(cv) == pytest.approx(0.0, abs=1e-6)
+        assert float(cv) == pytest.approx(0.0, abs=2 * floor)
 
 
 def test_gradient_cv_matches_numpy_gauss_reference():
