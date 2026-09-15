@@ -385,11 +385,14 @@ def test_warm_start_matches_cold_and_uses_fewer_iterations():
     starts loop 800's), agreeing with a cold start to `solved` tier and converging in
     fewer iterations.
     """
-    nelx, nely = (int(v) for v in NEAR_BINARY_MESH.split("x"))
-    setup = calib.mesh_setup(nelx, nely)
+    # Every third element of the pair, for runtime; `_mg_kw` keeps it on real
+    # coarsening, where a direct solve would converge in one iteration warm or cold.
     with np.load(calib.FIXTURES) as data:
-        x799 = data[f"x_{NEAR_BINARY_MESH}_it0799"]
-        x800 = data[f"x_{NEAR_BINARY_MESH}_it0800"]
+        x799 = data[f"x_{NEAR_BINARY_MESH}_it0799"][1::3, 1::3]
+        x800 = data[f"x_{NEAR_BINARY_MESH}_it0800"][1::3, 1::3]
+    nely, nelx = x800.shape
+    setup = calib.mesh_setup(nelx, nely)
+    mg_kw = _mg_kw(nelx, nely)
 
     density799 = torch_fem.simp_density(
         torch.tensor(x799.ravel(), dtype=torch.float64), EMIN, EMAX, PENAL
@@ -406,12 +409,30 @@ def test_warm_start_matches_cold_and_uses_fewer_iterations():
 
     info_799 = {}
     U799 = torch_solve.femsolve(
-        density799, F, edofMat, KE, mask, nelx, nely, rtol=1e-11, info=info_799
+        density799,
+        F,
+        edofMat,
+        KE,
+        mask,
+        nelx,
+        nely,
+        rtol=1e-11,
+        info=info_799,
+        **mg_kw,
     )
 
     info_cold = {}
     U_cold = torch_solve.femsolve(
-        density800, F, edofMat, KE, mask, nelx, nely, rtol=1e-11, info=info_cold
+        density800,
+        F,
+        edofMat,
+        KE,
+        mask,
+        nelx,
+        nely,
+        rtol=1e-11,
+        info=info_cold,
+        **mg_kw,
     )
     info_warm = {}
     U_warm = torch_solve.femsolve(
@@ -425,6 +446,7 @@ def test_warm_start_matches_cold_and_uses_fewer_iterations():
         rtol=1e-11,
         x0=U799.detach(),
         info=info_warm,
+        **mg_kw,
     )
 
     assert info_warm["forward_n_iter"] < info_cold["forward_n_iter"]
