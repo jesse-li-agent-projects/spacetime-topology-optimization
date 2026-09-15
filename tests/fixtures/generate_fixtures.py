@@ -164,9 +164,10 @@ def main():
     # recomputing each module's own intermediate outputs alongside stto.step's
     # so per-module fixtures agree with the trajectory by construction. -------------
     state = stto.init_state(problem, BETA_D_INIT)
+    xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, state.beta_d)
 
-    xPhys_traj = [N(state.xPhys)]
-    tPhys_traj = [N(state.tPhys)]
+    xPhys_traj = [N(xPhys)]
+    tPhys_traj = [N(tPhys)]
     records = []
     dx_all = np.zeros((NELY, NELX, NLOOP))
     K_est_all = np.zeros((NELX * NELY, NLOOP))
@@ -202,13 +203,14 @@ def main():
     upp_1 = np.zeros(n)
 
     for k in range(NLOOP):
+        xTilde = filters.apply_density_filter(state.x, problem.H, problem.Hs)
         dx = filters.heaviside_projection_derivative(
-            state.xTilde, state.beta_d, problem.config.eta
+            xTilde, state.beta_d, problem.config.eta
         )
         dx_all[:, :, k] = N(dx)
 
         c_whole, dcx_whole = compliance_ref.whole_compliance(
-            state.xPhys,
+            xPhys,
             problem.KE,
             problem.edofMat,
             EMIN,
@@ -223,8 +225,8 @@ def main():
 
         for i, ti in enumerate(np.linspace(0, 1, NSTAGE + 1)[1:]):
             c_grav, dcx_grav, dct_grav = compliance_ref.gravity_compliance(
-                state.xPhys,
-                state.tPhys,
+                xPhys,
+                tPhys,
                 problem.KE,
                 problem.edofMat,
                 EMIN,
@@ -244,8 +246,8 @@ def main():
         # normalization, P_MEAN at factor 1), evaluated along whatever trajectory the
         # default config produces -- not the run's own hotspot term.
         K_est = conductivity.estimated_conductivity(
-            state.xPhys,
-            state.tPhys,
+            xPhys,
+            tPhys,
             problem.e1,
             problem.e2,
             problem.w,
@@ -253,8 +255,8 @@ def main():
             problem.config.rouf,
         )
         hotspot = conductivity_ref.hotspot_constraint(
-            state.xPhys,
-            state.tPhys,
+            xPhys,
+            tPhys,
             problem.e1,
             problem.e2,
             problem.w,
@@ -275,9 +277,10 @@ def main():
         dt1_all[:, k] = N(hotspot.dt1)
 
         state, record = stto.step(problem, state)
+        xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, state.beta_d)
 
-        xPhys_traj.append(N(state.xPhys))
-        tPhys_traj.append(N(state.tPhys))
+        xPhys_traj.append(N(xPhys))
+        tPhys_traj.append(N(tPhys))
         records.append(record)
 
     xPhys_traj = np.stack(xPhys_traj, axis=-1)  # (nely, nelx, nloop+1)

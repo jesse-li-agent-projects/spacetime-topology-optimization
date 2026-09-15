@@ -71,7 +71,7 @@ def test_cli_prints_full_objective_and_post_update_volume(
     """
     monkeypatch.chdir(tmp_path)
     args = stto_cli.parse_args(_argv(tmp_path, "obj_vol"))
-    _, _, records, states = _reference_run(stto_cli.resolve_config(args))
+    problem, _, records, states = _reference_run(stto_cli.resolve_config(args))
 
     stto_cli.main(args)
     out = capsys.readouterr().out
@@ -81,11 +81,13 @@ def test_cli_prints_full_objective_and_post_update_volume(
     for line, record, state in zip(it_lines, records, states):
         obj = float(re.search(r"Obj\.:\s*([\d.-]+)", line).group(1))
         vol = float(re.search(r"Vol\.:\s*([\d.-]+)", line).group(1))
+        xPhys, _ = stto.physical_fields(problem, state.x, state.t, state.beta_d)
+        post_update_vol = float(xPhys.mean())
         np.testing.assert_allclose(obj, record.f, rtol=1e-6)
         # atol matches the printed field's own rounding (%6.3f -> max rounding error
         # 5e-4); rtol=1e-6 alone would be far tighter than the print format supports.
-        np.testing.assert_allclose(vol, float(state.xPhys.mean()), atol=6e-4, rtol=0)
+        np.testing.assert_allclose(vol, post_update_vol, atol=6e-4, rtol=0)
         # Guard against vacuous passes: .f/.obj and pre-/post-update volume must
         # actually differ here, or this test wouldn't catch printing the wrong one.
         assert abs(record.f - record.obj) > 1e-3
-        assert abs(float(state.xPhys.mean()) - record.vol) > 1e-3
+        assert abs(post_update_vol - record.vol) > 1e-3

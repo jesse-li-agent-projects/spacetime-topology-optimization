@@ -44,59 +44,6 @@ requires_cuda = pytest.mark.skipif(
 )
 
 
-def _filter_field(problem, raw):
-    """`H @ raw / Hs`, on the (nely, nelx) grid -- the density filter's action.
-
-    `raw` may be a plain NumPy array (an FD test's perturbed design point) or a
-    `State` tensor field; `problem.H`/`.Hs` are always tensors. Returns a tensor,
-    matching what `stto.step`/`init_state` themselves compute.
-    """
-    device, dtype = problem.device, problem.dtype
-    flat = (problem.H @ torch_util.to_tensor(raw, device, dtype).flatten()) / problem.Hs
-    return flat.reshape((problem.config.nely, problem.config.nelx))
-
-
-# --- init_state: the initialization invariant ----------------------------------------
-#
-# `State` carries two fields per design variable, and their relationship is the whole
-# point of the split (see stto.py's module docstring): `x`/`t` are the *raw* design
-# variables MMA reads and writes, and `xTilde`/`xPhys`/`tPhys` are *derived* from them by
-# the density filter (and, for density, the Heaviside projection). Every iteration of
-# `step` maintains exactly that relationship on the state it emits:
-#
-#     xTilde = H @ x / Hs      xPhys = heaviside(xTilde)      tPhys = H @ t / Hs
-#
-# `init_state` seeds the raw fields and must therefore derive the physics fields from
-# them the same way, so that iteration 1 sees a state indistinguishable in kind from the
-# one iteration 2 sees. Anything else is a forward/backward inconsistency: `step`
-# differentiates through the filter it assumes produced `tPhys`, but at iteration 1 no
-# filter did.
-
-
-def _assert_state_fields_are_consistent(problem, state, beta_d):
-    """The invariant above, asserted on a `State` from any source."""
-    np.testing.assert_allclose(
-        torch_util.to_numpy(state.xTilde),
-        torch_util.to_numpy(_filter_field(problem, state.x)),
-        rtol=1e-12,
-        atol=1e-14,
-    )
-    np.testing.assert_allclose(
-        torch_util.to_numpy(state.xPhys),
-        torch_util.to_numpy(
-            filters.heaviside_projection(state.xTilde, beta_d, problem.config.eta)
-        ),
-        rtol=1e-12,
-        atol=1e-14,
-    )
-    np.testing.assert_allclose(
-        torch_util.to_numpy(state.tPhys),
-        torch_util.to_numpy(_filter_field(problem, state.t)),
-        rtol=1e-12,
-        atol=1e-14,
-    )
-
-
 def _problem(
     nelx=7,
     nely=5,
@@ -238,80 +185,13 @@ def test_init_state_seeds_the_raw_fields(tfield):
     )
 
 
-@pytest.mark.parametrize("tfield", [1, 2, 3])
-def test_init_state_density_half_is_derived_from_its_seed(tfield):
-    """The density half of the invariant. It holds today only because the seed is
-    uniform and `H @ 1 / Hs == 1` makes filtering a no-op -- but it holds *exactly*, so
-    it pins the intended relationship rather than tolerating it: `xTilde` must equal the
-    filtered raw field, and `xPhys` the projection of that."""
-    problem = _problem(tfield=tfield)
-    state = stto.init_state(problem, BETA_D)
-
-    np.testing.assert_allclose(
-        torch_util.to_numpy(state.xTilde),
-        torch_util.to_numpy(_filter_field(problem, state.x)),
-        rtol=1e-12,
-        atol=1e-14,
-    )
-    np.testing.assert_allclose(torch_util.to_numpy(state.xTilde), VOLFRAC, rtol=1e-14)
-    np.testing.assert_allclose(
-        torch_util.to_numpy(state.xPhys),
-        torch_util.to_numpy(
-            filters.heaviside_projection(state.xTilde, BETA_D, problem.config.eta)
-        ),
-        rtol=1e-12,
-        atol=1e-14,
-    )
-
-
-@pytest.mark.parametrize("tfield", [1, 2, 3])
-def test_init_state_time_half_is_derived_from_its_seed(tfield):
-    """The time half of the same invariant -- the half the MATLAB source got wrong.
-
-    It assigns `t = tPhys` unfiltered, so at iteration 1 the physics field was the raw
-    seed while `step` went on to differentiate it as though `tPhys = H @ t / Hs`.
-
-    Unlike the density half, this cannot be waved away by the filter's constant-field
-    fixed point: no `init_timefield` variant is constant (a constant print-time field
-    would mean the whole part is deposited at once), so `H @ t / Hs != t` here for real.
-    The premise assertion below pins exactly that, so the test cannot pass vacuously.
-    """
-    problem = _problem(tfield=tfield)
-    state = stto.init_state(problem, BETA_D)
-
-    seed = timefield.init_timefield(problem.config.nelx, problem.config.nely, tfield)
-    assert not np.allclose(torch_util.to_numpy(_filter_field(problem, seed)), seed), (
-        "premise: the seed is not a fixed point of the density filter, so filtering it "
-        "is observable"
-    )
-    np.testing.assert_allclose(
-        torch_util.to_numpy(state.tPhys),
-        torch_util.to_numpy(_filter_field(problem, state.t)),
-        rtol=1e-12,
-        atol=1e-14,
-    )
-
-
-@pytest.mark.parametrize("tfield", [1, 3])
-def test_step_output_state_is_self_consistent(tfield):
-    """The same invariant on the state `step` emits -- which does hold, at every
-    iteration. This is the behaviour `init_state` is being specified against above, so
-    pinning it here keeps the target from drifting."""
-    problem = _problem(tfield=tfield)
-    state = stto.init_state(problem, BETA_D)
-    for _ in range(3):
-        state, _ = stto.step(problem, state)
-        _assert_state_fields_are_consistent(problem, state, state.beta_d)
-
-
 # --- step: finite-difference check of the assembled sensitivities ---------------------
 
 
 def _state_from_raw(
     problem, x_raw, t_raw, *, beta_d=BETA_D, calibration=1.0, beta_t=10.0
 ):
-    """A `State` at raw design point `[x_raw; t_raw]`, with the physics fields derived
-    per the invariant above -- i.e. the state `step` itself would have produced.
+    """A `State` at raw design point `[x_raw; t_raw]`.
 
     `loop` is left at 0 so the ensuing `step` runs as iteration 1, which is none of
     30/50/25: `beta_t`, `beta_d` and the hotspot calibration all stay fixed across the
@@ -320,15 +200,10 @@ def _state_from_raw(
     gradient deliberately does not account for that -- a different question from the
     one this test asks.)
     """
-    nely, nelx = problem.config.nely, problem.config.nelx
     device, dtype = problem.device, problem.dtype
-    xTilde = _filter_field(problem, x_raw)
     return stto.State(
         x=torch_util.to_tensor(x_raw, device, dtype),
-        xTilde=xTilde,
-        xPhys=filters.heaviside_projection(xTilde, beta_d, problem.config.eta),
         t=torch_util.to_tensor(t_raw, device, dtype),
-        tPhys=_filter_field(problem, t_raw),
         xold1=torch.zeros(problem.n, device=device, dtype=dtype),
         xold2=torch.zeros(problem.n, device=device, dtype=dtype),
         low=torch.zeros(problem.n, device=device, dtype=dtype),
@@ -368,10 +243,11 @@ def _well_conditioned(problem, state, beta_t):
     edofMat = torch_util.to_numpy(p.edofMat)
     freedofs = torch_util.to_numpy(p.freedofs)
 
-    fields = [state.xPhys]
+    xPhys, tPhys = stto.physical_fields(p, state.x, state.t, state.beta_d)
+    fields = [xPhys]
     tP = np.linspace(0, 1, p.config.nStage + 1)
     for i in range(1, p.config.nStage + 1):
-        fields.append(state.xPhys * compliance.time_mask(state.tPhys, tP[i], beta_t))
+        fields.append(xPhys * compliance.time_mask(tPhys, tP[i], beta_t))
     for field in fields:
         K = fem_ref.assemble_stiffness(
             KE,
@@ -746,15 +622,12 @@ def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
         rmin_cond=6.0,
     )
     problem = stto.build_problem(config)
-    xPhys = torch_util.to_tensor(x, problem.device, problem.dtype)
-    tPhys = torch_util.to_tensor(t, problem.device, problem.dtype)
-    xval = torch.cat([xPhys.flatten(), tPhys.flatten()])
+    x = torch_util.to_tensor(x, problem.device, problem.dtype)
+    t = torch_util.to_tensor(t, problem.device, problem.dtype)
+    xval = torch.cat([x.flatten(), t.flatten()])
     state = stto.State(
-        x=xPhys,
-        xTilde=xPhys,
-        xPhys=xPhys,
-        t=tPhys,
-        tPhys=tPhys,
+        x=x,
+        t=t,
         xold1=xval,
         xold2=xval.clone(),
         low=xval - 0.1,

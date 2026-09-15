@@ -105,9 +105,10 @@ def main(args: argparse.Namespace) -> None:
 
     for _ in range(config.nloop):
         state, record = stto.step(problem, state)
+        xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, state.beta_d)
         print(
             f"It.: {state.loop:4d} Obj.: {record.f:10.4f} "
-            f"Vol.: {state.xPhys.mean():6.3f} Tm.: {record.tru_max:7.3f} "
+            f"Vol.: {xPhys.mean():6.3f} Tm.: {record.tru_max:7.3f} "
             f"dTstd.: {record.grad_std:8.5f}"
         )
         if state.loop % 50 == 0:
@@ -121,10 +122,9 @@ def main(args: argparse.Namespace) -> None:
         output_dir / "final_design.npz",
         loop=state.loop,
         x=torch_util.to_numpy(state.x),
-        xTilde=torch_util.to_numpy(state.xTilde),
-        xPhys=torch_util.to_numpy(state.xPhys),
+        xPhys=torch_util.to_numpy(xPhys),
         t=torch_util.to_numpy(state.t),
-        tPhys=torch_util.to_numpy(state.tPhys),
+        tPhys=torch_util.to_numpy(tPhys),
         f=record.f,
         vol=record.vol,
         tru_max=record.tru_max,
