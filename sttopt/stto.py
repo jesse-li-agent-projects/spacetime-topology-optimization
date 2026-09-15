@@ -418,13 +418,12 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     not accompanied by a hand-derived `dx` chain-rule factor), call `mma.mmasub`, and
     unpack the result into the next state.
 
-    All three periodic state updates (`beta_t += 5` at loop%30==0, `beta_d *= 2` at
-    loop%50==0, the hotspot calibration refresh at loop%25==0) happen at the tail, next
-    to each other, and take effect starting the *next* iteration's `step` call rather
-    than rescaling this iteration's own `g_all`/`dg_dx`/`xPhys` mid-loop -- a deliberate
-    simplification, not a fidelity gap. None of the three trigger against the small
-    E2E fixture (`nloop=3`) -- unexercised by that fixture, not unimplemented or
-    worked around.
+    The `beta_t += 5` (loop%30==0) and `beta_d *= 2` (loop%50==0) updates happen at the
+    tail and take effect starting the *next* iteration's `step` call rather than
+    rescaling this iteration's own `g_all`/`dg_dx`/`xPhys` mid-loop -- a deliberate
+    simplification, not a fidelity gap. The hotspot calibration refresh (loop%25==0)
+    instead applies to this iteration's hotspot row, as in the MATLAB source. None of
+    the three trigger against the small E2E fixture (`nloop=3`).
     """
     config = problem.config
     nely, nelx, nStage = config.nely, config.nelx, config.nStage
@@ -527,25 +526,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             torch.stack([stage_upper_t, -stage_upper_t - 1.0e-5], dim=1).flatten()
         )
 
-    # Hotspot constraint, evaluated at this iteration's (possibly stale) calibration.
-    # That is refreshed every 25 iterations from this same call's `numer`/`K_est` (both
-    # independent of it), but the refresh only takes effect starting next iteration's
-    # `step` call -- `fv`/the hotspot row below are never recalibrated mid-iteration.
+    # Hotspot constraint. A refresh recalibrates before the row is built, so the row's
+    # value and its gradient share one calibration.
     aggregation = conductivity.Aggregation(config.hotspot_aggregation)
     numer_t, K_est_t = hotspot_value(problem, xPhys, tPhys)
-    g_hotspot_t = (
-        aggregation.calibrated(numer_t, state.hotspot_calibration) / config.Tcr - 1
-    )
-
-    g_parts.append(g_hotspot_t[None])
-    g_all = torch.cat(g_parts)
-    dg_dx = torch.cat(
-        [_sensitivity_rows(g, x, t) for g in g_parts],
-        dim=0,
-    )
-
-    # -- Periodic state updates, all deferred to take effect starting *next*
-    # iteration's step() call, never rescaling this iteration's own g_all/dg_dx mid-loop. --
     numer = float(numer_t.detach())
     calibration = state.hotspot_calibration
     if loop % 25 == 0:
@@ -557,8 +541,18 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             config.r,
             calibration,
         )
+    g_hotspot_t = aggregation.calibrated(numer_t, calibration) / config.Tcr - 1
     tru_max = aggregation.calibrated(numer, calibration)
 
+    g_parts.append(g_hotspot_t[None])
+    g_all = torch.cat(g_parts)
+    dg_dx = torch.cat(
+        [_sensitivity_rows(g, x, t) for g in g_parts],
+        dim=0,
+    )
+
+    # -- Periodic state updates, deferred to take effect starting *next* iteration's
+    # step() call, never rescaling this iteration's own g_all/dg_dx mid-loop. --
     if loop % 30 == 0 and beta_t < 50:
         beta_t += 5
     if loop % 50 == 0 and beta_d <= config.beta_d_max:
