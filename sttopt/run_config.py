@@ -109,6 +109,9 @@ class RunConfig(_ConfigMixin):
         `nStage` still sets the `Theta`-weighted stage compliances either way.
     :param hotspot_normalization: as in `SeqRunConfig`, as are the other `hotspot_*`
         fields.
+    :param time_filter_rmin: density-filter radius applied to `t`, in elements, as in
+        `SeqRunConfig`; separate from `rmin` so the two fields can be smoothed
+        differently. 0 leaves `t` unfiltered.
     """
 
     # Frequently varied -- also exposed as a CLI flag in stto_cli.py.
@@ -129,6 +132,7 @@ class RunConfig(_ConfigMixin):
     hotspot_density_exponent: float | None
     print_base: str
     rmin: float
+    time_filter_rmin: float
     lrmin: float
     rmin_cond: float
     beta_d_max: float

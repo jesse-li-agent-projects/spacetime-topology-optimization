@@ -56,6 +56,7 @@ CONFIG = RunConfig(
     hotspot_density_exponent=None,
     print_base=PRINT_BASE,
     rmin=RMIN,
+    time_filter_rmin=RMIN,
     lrmin=LRMIN,
     rmin_cond=RMIN_COND,
     beta_d_max=128.0,

@@ -58,6 +58,7 @@ def _problem(
         Tcr=TCR,
         print_base=timefield.TimeField(tfield).name.lower(),
         rmin=RMIN,
+        time_filter_rmin=RMIN,
         lrmin=LRMIN,
         rmin_cond=RMIN_COND,
     )
@@ -273,7 +274,7 @@ def test_physical_time_field_is_scaled_to_a_maximum_of_one():
     problem = _problem()
     state = stto.init_state(problem, BETA_D)
     t_raw = 0.6 * state.t
-    filtered = filters.apply_density_filter(t_raw, problem.H, problem.Hs)
+    filtered = filters.apply_density_filter(t_raw, problem.time_H, problem.time_Hs)
     assert float(filtered.max()) < 0.7  # premise: the unscaled field ends early
 
     _, tPhys = stto.physical_fields(problem, state.x, t_raw, BETA_D)
@@ -357,7 +358,7 @@ def test_step_assembled_sensitivities_match_finite_differences(monkeypatch):
     # difference has to hold it at the unperturbed value too.
     def filtered_max(t):
         t = torch_util.to_tensor(t, problem.device, problem.dtype)
-        return filters.apply_density_filter(t, problem.H, problem.Hs).max()
+        return filters.apply_density_filter(t, problem.time_H, problem.time_Hs).max()
 
     base_scale = filtered_max(t_raw)
     unscaled_physical_fields = stto.physical_fields

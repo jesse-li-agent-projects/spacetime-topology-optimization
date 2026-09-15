@@ -14,6 +14,7 @@
   "hotspot_density_exponent": 1.25,
   "print_base": "opposite_corner",
   "rmin": 4.0,
+  "time_filter_rmin": 4.0,
   "lrmin": 2.0,
   "rmin_cond": 12.0,
   "beta_d_max": 128.0,

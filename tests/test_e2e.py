@@ -37,6 +37,7 @@ CONFIG = default_run_config(
     Tcr=TCR,
     print_base=PRINT_BASE,
     rmin=RMIN,
+    time_filter_rmin=RMIN,
     lrmin=LRMIN,
     rmin_cond=RMIN_COND,
     nloop=NLOOP,

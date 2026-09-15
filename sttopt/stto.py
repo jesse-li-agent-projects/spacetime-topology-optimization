@@ -67,6 +67,9 @@ class Problem:
     ndof: int
     H: torch_util.SymmetricCsr  # shape (nel, nel)
     Hs: Float[Tensor, " nel"]
+    # The density filter on `t`, or None when `config.time_filter_rmin` is 0.
+    time_H: torch_util.SymmetricCsr | None
+    time_Hs: Float[Tensor, " nel"] | None
     L: Tensor  # sparse CSR, shape (nel, nel)
     C: Tensor  # sparse CSR, shape ((nelx+1)*(nely+1), nel)
     e1: Int[Tensor, " npairs"]
@@ -188,6 +191,13 @@ def build_problem(
     freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)
 
     H, Hs = filters.density_filter(nelx, nely, config.rmin)
+    time_H = time_Hs = None
+    if config.time_filter_rmin > 0:
+        time_H_np, time_Hs_np = filters.density_filter(
+            nelx, nely, config.time_filter_rmin
+        )
+        time_H = torch_util.symmetric_csr_to_tensor(time_H_np, device, dtype)
+        time_Hs = torch_util.to_tensor(time_Hs_np, device, dtype)
     L = filters.continuity_filter(nelx, nely, config.lrmin)
     C = gravity.gravity_load_matrix(nelx, nely)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, config.rmin_cond)
@@ -221,6 +231,8 @@ def build_problem(
         free_mask=torch_fem.free_mask(ndof, int_fields["freedofs"], device=device),
         ndof=ndof,
         H=torch_util.symmetric_csr_to_tensor(H, device, dtype),
+        time_H=time_H,
+        time_Hs=time_Hs,
         L=torch_util.csr_to_tensor(L, device, dtype),
         C=torch_util.csr_to_tensor(C, device, dtype),
         hotspot_denom=hotspot_denom,
@@ -254,7 +266,11 @@ def physical_fields(
     """
     xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
     xPhys = filters.heaviside_projection(xTilde, beta_d, problem.config.eta)
-    tTilde = filters.apply_density_filter(t, problem.H, problem.Hs)
+    tTilde = (
+        t
+        if problem.time_H is None
+        else filters.apply_density_filter(t, problem.time_H, problem.time_Hs)
+    )
     tPhys = tTilde / tTilde.max().detach()
     return xPhys, tPhys
 
