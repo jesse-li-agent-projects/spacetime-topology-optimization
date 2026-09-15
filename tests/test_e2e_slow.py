@@ -48,6 +48,7 @@ CONFIG = RunConfig(
     Theta=THETA,
     uniformity_metric="gradient_cv",
     uniformity_weight=0.0,
+    roughness_weight=0.0,
     Tcr=TCR,
     # The MATLAB source's hotspot formulation; beta and density_exponent are inert
     # under p_mean.

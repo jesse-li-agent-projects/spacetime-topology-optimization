@@ -120,7 +120,9 @@ class IterationRecord:
     vol: float  # volume fraction (mean xPhys)
     tru_max: float  # calibrated hotspot severity, comparable across runs
     uniformity: float  # layer-uniformity penalty, before uniformity_weight
-    f: float  # objective (compliance terms plus the weighted uniformity penalty)
+    roughness: float  # smoothness regularizer, as a fraction of a layer thickness
+    roughness_weight: float  # this iteration's weight, which a schedule may vary
+    f: float  # objective (compliance terms plus the weighted time-field terms)
     df: Float[np.ndarray, " n"]
     xmma: Float[np.ndarray, " n"]
     low: Float[np.ndarray, " n"]
@@ -430,7 +432,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     xPhys, tPhys = physical_fields(problem, x, t, beta_d)
 
     # -- Objective: whole-structure compliance + Theta-weighted per-stage gravity
-    # compliance + weighted layer-uniformity penalty --
+    # compliance + weighted layer-uniformity penalty and roughness regularizer --
     # whole_compliance's solve and every gravity stage's go into one batched FemSolve
     # call; `torch_fem.pcg` retires each row as it converges, so the batch costs no more
     # row-iterations than solving the rows one at a time would.
@@ -465,6 +467,11 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         tPhys, timefield.UniformityMetric(config.uniformity_metric), weights=xPhys
     )
     f_val_t = f_val_t + config.uniformity_weight * uniformity_t
+    # The uniformity penalty alone rewards a sawtooth across the print direction
+    # (`timefield._gradient_cv`).
+    rough_t = timefield.relative_roughness(tPhys, weights=xPhys)
+    roughness_weight = run_config.weight_at(config.roughness_weight, loop)
+    f_val_t = f_val_t + roughness_weight * rough_t
 
     f_val = float(f_val_t.detach())
     df_dx = _sensitivity_rows(f_val_t[None], x, t)[0]
@@ -597,6 +604,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         vol=vol_diag,
         tru_max=tru_max,
         uniformity=float(uniformity_t.detach()),
+        roughness=float(rough_t.detach()),
+        roughness_weight=roughness_weight,
         f=float(f_val),
         df=torch_util.to_numpy(df_dx),
         xmma=torch_util.to_numpy(xmma),

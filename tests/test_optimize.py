@@ -416,18 +416,23 @@ def test_step_objective_is_theta_weighted_sum_of_stage_compliances():
         problem = _problem(nelx=nelx, nely=nely, nStage=nStage, Theta=Theta)
         state = _state_from_raw(problem, x_raw, t_raw)
         _, rec = stto.step(problem, state)
-        return rec.f, rec.obj
+        return rec.f, rec
 
     base = _problem(nelx=nelx, nely=nely, nStage=nStage)
     x_raw, t_raw, _ = _draw_well_conditioned_state(base, rng)
 
-    f0_0, obj_0 = f_at(0.0)
+    f0_0, rec_0 = f_at(0.0)
     f0_1, _ = f_at(1.0)
     f0_3, _ = f_at(3.0)
 
     # At Theta = 0 the stage terms drop out and .f is the whole-structure compliance,
-    # which `IterationRecord.obj` reports separately at every Theta.
-    np.testing.assert_allclose(f0_0, obj_0, rtol=1e-12)
+    # which `IterationRecord.obj` reports separately at every Theta, plus the weighted
+    # time-field terms, which do not depend on Theta.
+    time_terms = (
+        base.config.uniformity_weight * rec_0.uniformity
+        + rec_0.roughness_weight * rec_0.roughness
+    )
+    np.testing.assert_allclose(f0_0, rec_0.obj + time_terms, rtol=1e-12)
     stage_sum = f0_1 - f0_0
     assert stage_sum > 1e-3  # non-vacuous: the stage terms actually contribute
     np.testing.assert_allclose(f0_3, f0_0 + 3.0 * stage_sum, rtol=1e-9)
@@ -459,6 +464,35 @@ def test_step_objective_adds_the_weighted_uniformity_penalty():
     assert uniformity > 1e-4  # non-vacuous: the field is not already uniform
     np.testing.assert_allclose(uniformity_100, uniformity, rtol=1e-12)
     np.testing.assert_allclose(f_100, f_0 + 100.0 * uniformity, rtol=1e-9)
+
+
+def test_step_objective_adds_the_scheduled_roughness_term():
+    """`IterationRecord.f` moves by this iteration's roughness weight times
+    `IterationRecord.roughness`, and a schedule reaches the objective as its value at the
+    current iteration rather than as a constant."""
+    nelx, nely, nStage = 10, 8, 3
+    rng = np.random.default_rng(2)
+    base = _problem(nelx=nelx, nely=nely, nStage=nStage)
+    x_raw, t_raw, _ = _draw_well_conditioned_state(base, rng)
+
+    def record_at(roughness_weight):
+        config = dataclasses.replace(base.config, roughness_weight=roughness_weight)
+        problem = stto.build_problem(config)
+        _, rec = stto.step(problem, _state_from_raw(problem, x_raw, t_raw))
+        return rec
+
+    initial = 1000.0
+    schedule = {"initial": initial, "decay_iterations": 10, "final": 100.0}
+    unweighted, scheduled = record_at(0.0), record_at(schedule)
+
+    # The two records come from separate solves, which agree on `.f` only to the CG
+    # tolerance (PR #99).
+    noise = 10 * torch_solve.DEFAULT_CG_RTOL * abs(unweighted.f)
+    assert scheduled.roughness_weight == initial  # `_state_from_raw` steps iteration 1
+    assert initial * scheduled.roughness > 100 * noise  # non-vacuous
+    np.testing.assert_allclose(
+        scheduled.f, unweighted.f + initial * scheduled.roughness, rtol=0, atol=noise
+    )
 
 
 def test_step_gradient_of_the_penalty_matches_its_own_sensitivity():

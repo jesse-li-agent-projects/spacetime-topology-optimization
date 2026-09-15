@@ -34,6 +34,13 @@ class _ConfigMixin:
     """Shared JSON round-trip for `RunConfig`/`SeqRunConfig`. Not a dataclass itself --
     each subclass declares its own fields."""
 
+    def __post_init__(self) -> None:
+        # JSON has no way to say "a CosineSchedule", so a mapping in a scheduled
+        # field's place is one. Done here rather than in `from_dict` so that a config
+        # assembled in code from parsed JSON fragments coerces identically.
+        if isinstance(self.roughness_weight, dict):
+            self.roughness_weight = CosineSchedule(**self.roughness_weight)
+
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)
 
@@ -105,6 +112,9 @@ class RunConfig(_ConfigMixin):
         `SeqRunConfig`; the penalty is weighted by `xPhys`.
     :param uniformity_weight: weight of the layer-uniformity objective term; 0 disables
         it. The term is dimensionless, so this weight is on the scale of the compliance.
+    :param roughness_weight: weight on `timefield.relative_roughness`, a number or a
+        `CosineSchedule`, as in `SeqRunConfig` -- whose docstring explains why the
+        uniformity term needs it.
     :param enable_stage_volume: whether the per-stage volume bounds
         (`constraints.stage_volume_bounds`) are in the MMA constraint stack at all.
         `nStage` still sets the `Theta`-weighted stage compliances either way.
@@ -127,6 +137,7 @@ class RunConfig(_ConfigMixin):
     Theta: float
     uniformity_metric: str
     uniformity_weight: float
+    roughness_weight: float | CosineSchedule
     Tcr: float
     hotspot_normalization: str
     hotspot_aggregation: str
@@ -271,10 +282,3 @@ class SeqRunConfig(_ConfigMixin):
     asyclamp_max_ratio: float
     asyincr: float
     asydecr: float
-
-    def __post_init__(self) -> None:
-        # JSON has no way to say "a CosineSchedule", so a mapping in a scheduled
-        # field's place is one. Done here rather than in `from_dict` so that a config
-        # assembled in code from parsed JSON fragments coerces identically.
-        if isinstance(self.roughness_weight, dict):
-            self.roughness_weight = CosineSchedule(**self.roughness_weight)
