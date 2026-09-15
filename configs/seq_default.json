@@ -1,7 +1,7 @@
 {
-  "nloop": 800,
+  "nloop": 500,
   "print_base": "bottom_edge",
-  "void_extension": "geodesic",
+  "void_extension": "harmonic",
   "enable_continuity": true,
   "continuity_tol": 1e-06,
   "lrmin": 2.0,
@@ -14,8 +14,12 @@
   "hotspot_density_exponent": 1.25,
   "uniformity_metric": "gradient_cv",
   "uniformity_weight": 1.0,
-  "roughness_weight": 0.2,
-  "nStage": 8,
+  "roughness_weight": {
+    "initial": 0.2,
+    "decay_iterations": 500,
+    "final": 0.02
+  },
+  "nStage": 0,
   "p": 25.0,
   "q": 3.0,
   "r": 0.05,
