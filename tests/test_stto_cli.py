@@ -102,3 +102,33 @@ def test_cli_prints_full_objective_and_post_update_volume(
         # checks above if it sits further off than their tolerance plus the rounding.
         assert abs(record.f - record.obj) > obj_rtol * abs(record.f) + obj_rounding
         assert abs(post_update_vol - record.vol) > vol_atol + vol_rounding
+
+
+def test_cli_logs_scheduled_continuation(tmp_path, monkeypatch):
+    """Every scheduled setting reaches the iteration it is scheduled for, and the
+    per-iteration log records it."""
+    monkeypatch.chdir(tmp_path)
+    config = dataclasses.replace(
+        _FIXTURE_CONFIG,
+        nloop=3,
+        hotspot_aggregation="logsumexp_severity",
+        hotspot_beta={"points": [[1, 4.0], [3, 16.0]], "log": True},
+        penal={"points": [[1, 1.0], [3, 3.0]]},
+        Tcr={"points": [[1, 5.0], [3, 0.8]]},
+        beta_d_schedule={"points": [[1, 1.0], [3, 4.0]], "log": True},
+        beta_t_schedule=20.0,
+    )
+    config_path = tmp_path / "scheduled.json"
+    config_path.write_text(json.dumps(config.to_dict()))
+    stto_cli.main(stto_cli.parse_args(["--config", str(config_path), "--tag", "sched"]))
+
+    lines = (tmp_path / "output" / "sched" / "iterations.jsonl").read_text()
+    log = [json.loads(line) for line in lines.splitlines()]
+    assert [e["loop"] for e in log] == [1, 2, 3]
+    np.testing.assert_allclose([e["hotspot_beta"] for e in log], [4.0, 8.0, 16.0])
+    np.testing.assert_allclose([e["penal"] for e in log], [1.0, 2.0, 3.0])
+    np.testing.assert_allclose([e["Tcr"] for e in log], [5.0, 2.9, 0.8])
+    np.testing.assert_allclose([e["beta_d"] for e in log], [1.0, 2.0, 4.0])
+    assert all(e["beta_t"] == 20.0 for e in log)
+    # A change in the aggregate's sharpness refreshes its calibration.
+    assert all(e["recalibrated"] for e in log[1:])

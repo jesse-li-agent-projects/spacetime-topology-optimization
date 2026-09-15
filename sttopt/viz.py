@@ -421,7 +421,7 @@ def _load_stto_run(run_dir: Path, design_file: str = "final_design.npz") -> tupl
     import sttopt.stto as stto
     import sttopt.timefield as timefield
     import sttopt.torch_util as torch_util
-    from sttopt.run_config import RunConfig
+    from sttopt.run_config import RunConfig, final_value
 
     config = RunConfig.from_dict(json.loads((run_dir / "config.json").read_text()))
     design = np.load(run_dir / design_file)
@@ -442,7 +442,7 @@ def _load_stto_run(run_dir: Path, design_file: str = "final_design.npz") -> tupl
         problem.edofMat,
         config.Emin,
         config.Emax,
-        config.penal,
+        final_value(config.penal),
         problem.freedofs,
         problem.F,
         problem.ndof,

@@ -27,6 +27,8 @@ import warnings
 from dataclasses import dataclass
 from typing import TypeVar
 
+import numpy as np
+
 _T = TypeVar("_T", bound="_ConfigMixin")
 
 
@@ -35,11 +37,13 @@ class _ConfigMixin:
     each subclass declares its own fields."""
 
     def __post_init__(self) -> None:
-        # JSON has no way to say "a CosineSchedule", so a mapping in a scheduled
-        # field's place is one. Done here rather than in `from_dict` so that a config
-        # assembled in code from parsed JSON fragments coerces identically.
-        if isinstance(self.roughness_weight, dict):
-            self.roughness_weight = CosineSchedule(**self.roughness_weight)
+        # JSON has no way to name a schedule class, so a mapping in a field's place is
+        # one, told apart by its keys. Done here rather than in `from_dict` so that a
+        # config assembled in code from parsed JSON fragments coerces identically.
+        for f in dataclasses.fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, dict):
+                setattr(self, f.name, schedule_from_dict(value))
 
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)
@@ -95,9 +99,58 @@ class CosineSchedule:
         return self.final + (self.initial - self.final) * taper
 
 
-def weight_at(setting: "float | CosineSchedule", loop: int) -> float:
+@dataclass(kw_only=True)
+class PiecewiseSchedule:
+    """A scalar hyperparameter interpolated between `(iteration, value)` points, and held
+    at the first/last value outside them.
+
+    Use it for continuation that a single decay cannot express: a delayed start, a ramp
+    up, or several phases tied to one timeline. `log` interpolates in log space, which
+    suits multiplicative settings such as a projection or aggregation sharpness.
+    """
+
+    points: list[list[float]]
+    log: bool = False
+
+    def __post_init__(self) -> None:
+        loops = [p[0] for p in self.points]
+        if not loops or loops != sorted(loops):
+            raise ValueError(
+                f"points must be non-empty and sorted by iteration, got {self.points}"
+            )
+        if self.log and any(p[1] <= 0 for p in self.points):
+            raise ValueError(
+                f"log interpolation needs positive values, got {self.points}"
+            )
+
+    def at(self, loop: int) -> float:
+        """The value at 1-indexed iteration `loop`."""
+        loops = [p[0] for p in self.points]
+        values = [p[1] for p in self.points]
+        if self.log:
+            return math.exp(float(np.interp(loop, loops, np.log(values))))
+        return float(np.interp(loop, loops, values))
+
+
+Scheduled = float | CosineSchedule | PiecewiseSchedule
+
+
+def schedule_from_dict(d: dict) -> CosineSchedule | PiecewiseSchedule:
+    """The schedule a JSON mapping describes, told apart by its keys."""
+    return PiecewiseSchedule(**d) if "points" in d else CosineSchedule(**d)
+
+
+def weight_at(setting: Scheduled, loop: int) -> float:
     """The value of a possibly-scheduled scalar at 1-indexed iteration `loop`."""
-    return setting.at(loop) if isinstance(setting, CosineSchedule) else float(setting)
+    if isinstance(setting, (CosineSchedule, PiecewiseSchedule)):
+        return setting.at(loop)
+    return float(setting)
+
+
+def final_value(setting: Scheduled) -> float:
+    """The value a possibly-scheduled scalar settles on, for tooling that reads a
+    finished run rather than one iteration of it."""
+    return weight_at(setting, 2**62)
 
 
 @dataclass(kw_only=True)
@@ -138,12 +191,12 @@ class RunConfig(_ConfigMixin):
     enable_stage_volume: bool
     Theta: float
     uniformity_metric: str
-    uniformity_weight: float
-    roughness_weight: float | CosineSchedule
-    Tcr: float
+    uniformity_weight: Scheduled
+    roughness_weight: Scheduled
+    Tcr: Scheduled
     hotspot_normalization: str
     hotspot_aggregation: str
-    hotspot_beta: float
+    hotspot_beta: Scheduled
     hotspot_density_exponent: float | None
     print_base: str
     rmin: float
@@ -156,16 +209,25 @@ class RunConfig(_ConfigMixin):
     Emin: float
     Emax: float
     nu: float
-    penal: float
+    penal: Scheduled
     eta: float
     p: float  # p-mean exponent for hotspot severity aggregation (p_mean only)
     q: float  # hotspot conductivity SIMP exponent
     r: float  # density exponent for hotspot severity
-    rouf: float
+    rouf: Scheduled
     a0: float
     mma_c: float
     move: float
     tmove: float
+
+    # Continuation. Defaulted, unlike every field above, so run records written before
+    # these existed still load. `None` keeps the legacy schedules: `beta_d` doubling
+    # every 50 iterations up to `beta_d_max`, `beta_t` from 10 by 5 every 30 up to 50.
+    beta_d_schedule: Scheduled | None = None
+    beta_t_schedule: Scheduled | None = None
+    # Iterations between hotspot calibration refreshes. A change in a scheduled
+    # `hotspot_beta` or `rouf` also refreshes it, since both move the aggregate's bias.
+    hotspot_refresh_period: int = 25
 
 
 @dataclass(kw_only=True)
