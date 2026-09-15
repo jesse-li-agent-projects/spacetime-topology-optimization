@@ -100,8 +100,9 @@ class RunConfig(_ConfigMixin):
 
     :param print_base: 3D-printing base/start location, naming a
         `timefield.TimeField` member (case-insensitively) for JSON.
-    :param Gamma: weight of the layer-thickness-uniformity objective term
-        (`timefield.gradient_magnitude_std`); 0 disables it.
+    :param Gamma: weight of the layer-thickness-uniformity objective term, the
+        density-weighted `gradient_cv` of `timefield.uniformity_penalty`; 0 disables it.
+        The term is dimensionless, so this weight is on the scale of the compliance.
     :param enable_stage_volume: whether the per-stage volume bounds
         (`constraints.stage_volume_bounds`) are in the MMA constraint stack at all.
         `nStage` still sets the `Theta`-weighted stage compliances either way.

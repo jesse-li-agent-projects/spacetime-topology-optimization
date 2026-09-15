@@ -473,9 +473,9 @@ def gradient_magnitude(
     cell of the dual grid.
 
     The magnitude is the reciprocal of the local deposited-layer thickness, so this is
-    the pointwise view of what `gradient_magnitude_std` and `_gradient_cv` reduce to one
-    number. Both consume these samples directly; `gradient_magnitude_elements` scatters
-    them back onto elements for plotting.
+    the pointwise view of what `_gradient_cv` reduces to one number. It consumes these
+    samples directly; `gradient_magnitude_elements` scatters them back onto elements
+    for plotting.
 
     Full 2x2 quadrature, not the cheaper single evaluation at the cell centre: the
     centre alone is blind to the `(-1)^(i+j)` hourglass mode, and a checkerboard the
@@ -533,29 +533,6 @@ def gradient_magnitude_elements(
         total[rows, cols] += sample
         count[rows, cols] += 1
     return total / count.clamp(min=1)
-
-
-def gradient_magnitude_std(tPhys: Float[Tensor, "nely nelx"]) -> Float[Tensor, ""]:
-    """Spread of the time field's spatial gradient magnitude over the mesh.
-
-    The print-time gradient sets the local deposited-layer thickness (thickness goes as
-    the reciprocal of the gradient magnitude), so a field whose gradient magnitude
-    varies across the domain prints layers of uneven thickness. Penalizing the standard
-    deviation of that magnitude -- rather than the magnitude itself -- pushes toward
-    uniform layer thickness without prescribing what that thickness should be.
-
-    The magnitude is per unit length (`_unit_length`), so a weight on this carries
-    across mesh resolutions of the same design domain.
-
-    :param tPhys: filtered time field
-    :return: standard deviation of `gradient_magnitude(tPhys)`; zero when there are
-        fewer than two samples, since a standard deviation over fewer than two samples
-        has no spread to measure
-    """
-    magnitude = gradient_magnitude(tPhys)
-    if magnitude.numel() < 2:
-        return tPhys.new_zeros(())
-    return torch.std(magnitude)
 
 
 def roughness(

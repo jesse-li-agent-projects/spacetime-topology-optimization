@@ -450,10 +450,10 @@ def test_step_objective_is_theta_weighted_sum_of_stage_compliances():
 
 
 def test_step_objective_adds_the_gamma_weighted_gradient_uniformity_penalty():
-    """`IterationRecord.f` is affine in `Gamma` with slope `IterationRecord.grad_std`,
-    the unweighted spread of the time field's gradient magnitude -- which pins both that
-    the penalty is wired into the objective with the right weight and that `grad_std`
-    reports the same quantity the weight multiplies.
+    """`IterationRecord.f` is affine in `Gamma` with slope `IterationRecord.uniformity`,
+    the density-weighted CV of the time field's gradient magnitude -- which pins both
+    that the penalty is wired into the objective with the right weight and that
+    `uniformity` reports the same quantity the weight multiplies.
     """
     nelx, nely, nStage = 10, 8, 3
     rng = np.random.default_rng(1)
@@ -462,23 +462,23 @@ def test_step_objective_adds_the_gamma_weighted_gradient_uniformity_penalty():
         problem = _problem(nelx=nelx, nely=nely, nStage=nStage, Gamma=Gamma)
         state = _state_from_raw(problem, x_raw, t_raw)
         _, rec = stto.step(problem, state)
-        return rec.f, rec.grad_std
+        return rec.f, rec.uniformity
 
     base = _problem(nelx=nelx, nely=nely, nStage=nStage)
     x_raw, t_raw, _ = _draw_well_conditioned_state(base, rng)
 
-    f_0, grad_std = f_at(0.0)
-    f_100, grad_std_100 = f_at(100.0)
+    f_0, uniformity = f_at(0.0)
+    f_100, uniformity_100 = f_at(100.0)
 
-    assert grad_std > 1e-4  # non-vacuous: the field is not already uniform
-    np.testing.assert_allclose(grad_std_100, grad_std, rtol=1e-12)
-    np.testing.assert_allclose(f_100, f_0 + 100.0 * grad_std, rtol=1e-9)
+    assert uniformity > 1e-4  # non-vacuous: the field is not already uniform
+    np.testing.assert_allclose(uniformity_100, uniformity, rtol=1e-12)
+    np.testing.assert_allclose(f_100, f_0 + 100.0 * uniformity, rtol=1e-9)
 
 
-def test_step_gradient_of_the_penalty_reaches_the_time_half_only():
-    """Raising `Gamma` changes `.df`'s time half and leaves its density half untouched:
-    the penalty reads `tPhys` alone, and the difference of the two gradients must be
-    `Gamma` times the penalty's own sensitivity.
+def test_step_gradient_of_the_penalty_matches_its_own_sensitivity():
+    """Raising `Gamma` changes `.df` by `Gamma` times the penalty's own sensitivity, in
+    both halves: the penalty reads `tPhys` and is weighted by `xPhys`, so it moves
+    material as well as print time.
 
     Both halves are isolated by differencing two separate `step` calls, so the
     compliance sensitivity has to cancel between them. It only cancels to the CG
@@ -506,24 +506,30 @@ def test_step_gradient_of_the_penalty_reaches_the_time_half_only():
         """How far two solves of the same problem may disagree on `df_half`."""
         return 10 * torch_solve.DEFAULT_CG_RTOL * np.abs(df_half).max()
 
-    np.testing.assert_allclose(
-        df_g[:nel], df_0[:nel], rtol=0, atol=solve_noise(df_0[:nel])
+    # The expected difference, assembled apart from step()'s objective: the penalty's
+    # autograd sensitivity w.r.t. both raw fields.
+    x_leaf, t_leaf = (
+        torch_util.to_tensor(raw, problem.device, problem.dtype).requires_grad_(True)
+        for raw in (x_raw, t_raw)
     )
-
-    # The expected difference, assembled independently: the penalty's autograd
-    # sensitivity w.r.t. tPhys, pushed back through the filter as step() does.
-    t_leaf = torch_util.to_tensor(t_raw, problem.device, problem.dtype).requires_grad_(
-        True
+    xPhys, tPhys = stto.physical_fields(problem, x_leaf, t_leaf, BETA_D)
+    penalty = timefield.uniformity_penalty(
+        tPhys, timefield.UniformityMetric.GRADIENT_CV, weights=xPhys
     )
-    tPhys = ((problem.H @ t_leaf.flatten()) / problem.Hs).reshape(nely, nelx)
-    (d_tPhys,) = torch.autograd.grad(timefield.gradient_magnitude_std(tPhys), t_leaf)
-    expected = Gamma * torch_util.to_numpy(d_tPhys).ravel()
-    # Non-vacuous: the penalty's own contribution has to clear the noise it is
-    # recovered through, or this asserts nothing.
-    assert np.abs(expected).max() > 100 * solve_noise(df_0[nel:])
-    np.testing.assert_allclose(
-        df_g[nel:] - df_0[nel:], expected, rtol=1e-4, atol=solve_noise(df_0[nel:])
+    expected = Gamma * np.concatenate(
+        [
+            torch_util.to_numpy(d).ravel()
+            for d in torch.autograd.grad(penalty, (x_leaf, t_leaf))
+        ]
     )
+    for half in (slice(None, nel), slice(nel, None)):
+        noise = solve_noise(df_0[half])
+        # Non-vacuous: the penalty's own contribution has to clear the noise it is
+        # recovered through, or this asserts nothing.
+        assert np.abs(expected[half]).max() > 100 * noise
+        np.testing.assert_allclose(
+            df_g[half] - df_0[half], expected[half], rtol=1e-4, atol=noise
+        )
 
 
 # --- Batched FEM solves inside step() -------------------------------------------------

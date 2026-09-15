@@ -78,7 +78,8 @@ def test_lone_one_mesh_is_finite(nelx, nely, variant):
 
 def test_uniform_ramp_has_zero_gradient_spread():
     """A linear ramp has the same gradient magnitude everywhere -- the ideal the penalty
-    drives toward -- so its spread is zero regardless of the ramp's direction or slope.
+    drives toward -- so its spread is zero regardless of the ramp's direction or slope,
+    and of how the samples are weighted.
     """
     ny, nx = 9, 11
     ys, xs = torch.meshgrid(
@@ -86,31 +87,46 @@ def test_uniform_ramp_has_zero_gradient_spread():
         torch.arange(nx, dtype=torch.float64),
         indexing="ij",
     )
+    weights = torch.rand((ny, nx), dtype=torch.float64)
     for ramp in (0.3 * xs, 0.7 * ys, 0.2 * xs - 0.5 * ys):
-        assert timefield.gradient_magnitude_std(ramp) == pytest.approx(0.0, abs=1e-6)
+        cv = timefield.uniformity_penalty(
+            ramp, timefield.UniformityMetric.GRADIENT_CV, weights=weights
+        )
+        assert float(cv) == pytest.approx(0.0, abs=1e-6)
 
 
-def test_gradient_magnitude_std_matches_numpy_gauss_reference():
-    """Value check against an independent NumPy computation, pinning both the Q4
-    Gauss-point stencil and which samples are counted."""
+def test_gradient_cv_matches_numpy_gauss_reference():
+    """Value check against an independent NumPy computation, pinning the Q4 Gauss-point
+    stencil, the weights interpolated to those points, and that the mean and the
+    spread are both weighted."""
     rng = np.random.default_rng(0)
     field = rng.random((8, 6))
+    weights = rng.random((8, 6))
     a = 3.0**-0.5
-    lo_lo, lo_hi, hi_lo, hi_hi = (
-        field[:-1, :-1],
-        field[:-1, 1:],
-        field[1:, :-1],
-        field[1:, 1:],
-    )
-    samples = []
-    for eta, xi in itertools.product((-a, a), (-a, a)):
-        gx = (1 - eta) / 2 * (lo_hi - lo_lo) + (1 + eta) / 2 * (hi_hi - hi_lo)
-        gy = (1 - xi) / 2 * (hi_lo - lo_lo) + (1 + xi) / 2 * (hi_hi - lo_hi)
-        samples.append(np.sqrt(gx**2 + gy**2))
-    magnitude = np.stack(samples) * np.sqrt(field.size)  # per unit length
 
-    value = timefield.gradient_magnitude_std(torch.from_numpy(field))
-    assert float(value) == pytest.approx(magnitude.std(ddof=1), rel=1e-9)
+    def corners(f):
+        return f[:-1, :-1], f[:-1, 1:], f[1:, :-1], f[1:, 1:]
+
+    t00, t01, t10, t11 = corners(field)
+    w00, w01, w10, w11 = corners(weights)
+    samples, gauss_weights = [], []
+    for eta, xi in itertools.product((-a, a), (-a, a)):
+        r0, r1 = (1 - eta) / 2, (1 + eta) / 2
+        c0, c1 = (1 - xi) / 2, (1 + xi) / 2
+        gx = r0 * (t01 - t00) + r1 * (t11 - t10)
+        gy = c0 * (t10 - t00) + c1 * (t11 - t01)
+        samples.append(np.sqrt(gx**2 + gy**2))
+        gauss_weights.append(r0 * (c0 * w00 + c1 * w01) + r1 * (c0 * w10 + c1 * w11))
+    g, w = np.stack(samples).ravel(), np.stack(gauss_weights).ravel()
+    mean = np.sum(w * g) / np.sum(w)
+    std = np.sqrt(np.sum(w * (g - mean) ** 2) / np.sum(w))
+
+    value = timefield.uniformity_penalty(
+        torch.from_numpy(field),
+        timefield.UniformityMetric.GRADIENT_CV,
+        weights=torch.from_numpy(weights),
+    )
+    assert float(value) == pytest.approx(std / mean, rel=1e-9)
 
 
 def test_gradient_stencil_only_null_space_is_the_constant_field():
@@ -184,50 +200,65 @@ def test_gradient_magnitude_elements_covers_every_element():
     assert float((per_element - 3.0).abs().max()) == pytest.approx(0.0, abs=1e-12)
 
 
-def test_gradient_magnitude_std_is_differentiable_at_a_flat_field():
+def test_gradient_cv_is_differentiable_at_a_flat_field():
     """A constant field makes every gradient vanish, where an unregularized sqrt would
-    return a NaN derivative -- the field the optimizer would drive toward."""
+    return a NaN derivative -- and a uniform field is what the optimizer drives
+    toward."""
     flat = torch.full((7, 7), 0.4, dtype=torch.float64, requires_grad=True)
-    (grad,) = torch.autograd.grad(timefield.gradient_magnitude_std(flat), flat)
-    assert torch.all(torch.isfinite(grad))
+    weights = torch.rand((7, 7), dtype=torch.float64, requires_grad=True)
+    cv = timefield.uniformity_penalty(
+        flat, timefield.UniformityMetric.GRADIENT_CV, weights=weights
+    )
+    for grad in torch.autograd.grad(cv, (flat, weights)):
+        assert torch.all(torch.isfinite(grad))
 
 
 @pytest.mark.parametrize("nelx,nely", [(1, 9), (9, 1), (1, 1)])
-def test_gradient_magnitude_std_degenerate_mesh(nelx, nely):
+def test_gradient_cv_degenerate_mesh(nelx, nely):
     """A mesh one element wide in either direction has no cell to put Gauss points in,
     leaving no spread to measure: zero, not NaN. Two elements in each direction is
     already enough for a cell, so nothing larger is degenerate."""
     field = torch.rand((nely, nelx), dtype=torch.float64)
-    assert float(timefield.gradient_magnitude_std(field)) == 0.0
+    cv = timefield.uniformity_penalty(
+        field, timefield.UniformityMetric.GRADIENT_CV, weights=torch.ones_like(field)
+    )
+    assert float(cv) == 0.0
 
 
-def test_gradient_magnitude_std_sensitivity_matches_finite_differences():
-    """Autograd's gradient of the penalty against central differences of its own value
-    -- the penalty enters the objective through autograd, so this is what the optimizer
-    actually descends."""
+def test_gradient_cv_sensitivity_matches_finite_differences():
+    """Autograd's gradient of the penalty, w.r.t. both the time field and the weights,
+    against central differences of its own value -- `stto` weights by the density
+    design field, so the optimizer descends both."""
     ny, nx = 6, 7
     rng = np.random.default_rng(2)
-    field = rng.random((ny, nx))
-    leaf = torch.from_numpy(field).requires_grad_(True)
-    (grad,) = torch.autograd.grad(timefield.gradient_magnitude_std(leaf), leaf)
+    inputs = [rng.random((ny, nx)), rng.uniform(0.2, 1.0, (ny, nx))]
+
+    def cv(field, weights):
+        return timefield.uniformity_penalty(
+            torch.as_tensor(field),
+            timefield.UniformityMetric.GRADIENT_CV,
+            weights=torch.as_tensor(weights),
+        )
+
+    leaves = [torch.from_numpy(a).requires_grad_(True) for a in inputs]
+    grads = torch.autograd.grad(cv(*leaves), leaves)
 
     h = 1e-6
-    fd = np.zeros_like(field)
-    for j in range(ny):
-        for i in range(nx):
-            plus, minus = field.copy(), field.copy()
-            plus[j, i] += h
-            minus[j, i] -= h
-            fd[j, i] = float(
-                timefield.gradient_magnitude_std(torch.from_numpy(plus))
-                - timefield.gradient_magnitude_std(torch.from_numpy(minus))
-            ) / (2 * h)
+    for k, grad in enumerate(grads):
+        fd = np.zeros((ny, nx))
+        for j in range(ny):
+            for i in range(nx):
+                plus = [a.copy() for a in inputs]
+                minus = [a.copy() for a in inputs]
+                plus[k][j, i] += h
+                minus[k][j, i] -= h
+                fd[j, i] = float(cv(*plus) - cv(*minus)) / (2 * h)
 
-    np.testing.assert_allclose(torch_util.to_numpy(grad), fd, rtol=1e-5, atol=1e-8)
-    # Non-vacuity, and a check that the border is not silently frozen out of the
-    # gradient: a border element still enters an interior element's stencil.
-    assert np.abs(fd).max() > 1e-3
-    assert np.abs(fd[0]).max() > 1e-3
+        np.testing.assert_allclose(torch_util.to_numpy(grad), fd, rtol=1e-5, atol=1e-8)
+        # Non-vacuity, and a check that the border is not silently frozen out of the
+        # gradient: a border element still enters an interior element's stencil.
+        assert np.abs(fd).max() > 1e-3
+        assert np.abs(fd[0]).max() > 1e-3
 
 
 # --- BOTTOM_EDGE -----------------------------------------------------------------

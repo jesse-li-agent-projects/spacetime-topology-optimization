@@ -116,7 +116,7 @@ class IterationRecord:
     obj: float  # whole-structure compliance (doesn't include intermediate structures)
     vol: float  # volume fraction (mean xPhys)
     tru_max: float  # calibrated hotspot severity, comparable across runs
-    grad_std: float  # spread of |grad tPhys|, the layer-uniformity penalty, unweighted
+    uniformity: float  # layer-uniformity penalty (density-weighted CV), before Gamma
     f: float  # objective (compliance terms plus the Gamma-weighted uniformity penalty)
     df: Float[np.ndarray, " n"]
     xmma: Float[np.ndarray, " n"]
@@ -437,8 +437,13 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         f_val_t = f_val_t + config.Theta * cg_t
 
     # Layer-thickness-uniformity penalty on the time field (config.Gamma == 0 disables).
-    grad_std_t = timefield.gradient_magnitude_std(tPhys)
-    f_val_t = f_val_t + config.Gamma * grad_std_t
+    # Weighted by xPhys, so it measures the layers of the part, and its gradient moves
+    # material as well as print time. A CV, so shrinking the time field's range does not
+    # lower it.
+    uniformity_t = timefield.uniformity_penalty(
+        tPhys, timefield.UniformityMetric.GRADIENT_CV, weights=xPhys
+    )
+    f_val_t = f_val_t + config.Gamma * uniformity_t
 
     f_val = float(f_val_t.detach())
     df_dx = _sensitivity_rows(f_val_t[None], x, t)[0]
@@ -570,7 +575,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         obj=obj_final_only,
         vol=vol_diag,
         tru_max=tru_max,
-        grad_std=float(grad_std_t.detach()),
+        uniformity=float(uniformity_t.detach()),
         f=float(f_val),
         df=torch_util.to_numpy(df_dx),
         xmma=torch_util.to_numpy(xmma),
