@@ -74,10 +74,10 @@ def _reference_run(config):
 def test_cli_prints_full_objective_and_post_update_volume(
     capsys, tmp_path, monkeypatch
 ):
-    """Regression test for the Phase 9 review findings: "Obj." must be the full MMA
-    objective (IterationRecord.f), not whole-structure-compliance-only
-    (IterationRecord.obj); "Vol." must be this iteration's post-update xPhys, not
-    IterationRecord.vol (pre-update).
+    """
+    "Obj." must print the full MMA objective (`IterationRecord.f`), not the
+    whole-structure compliance (`.obj`); "Vol." must print this iteration's post-update
+    volume, not the pre-update `.vol`.
     """
     monkeypatch.chdir(tmp_path)
     args = stto_cli.parse_args(_argv(tmp_path, "obj_vol"))
