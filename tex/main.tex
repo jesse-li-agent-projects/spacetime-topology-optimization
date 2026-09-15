@@ -1,0 +1,61 @@
+\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+\usepackage{amsmath, amssymb}
+\usepackage{multirow, makecell}
+
+\usepackage{textcomp} % for copyright/registered symbols
+
+\usepackage{bm} % for bold math symbols
+
+\usepackage[a4paper, margin=2.5cm]{geometry} % change paper size
+\usepackage{subcaption}
+
+\usepackage{booktabs}
+\usepackage{placeins} % for \FloatBarrier
+
+\usepackage{float} % better image postioning wrt to txt
+
+\usepackage{todonotes} % for TODOs
+\let\oldtodo\todo % make \todo default to use inline
+\renewcommand{\todo}[1]{\oldtodo[inline]{\detokenize{#1}}}
+
+
+\usepackage{siunitx} % for units
+\sisetup{per-mode=symbol}
+
+ % for better tables/vertical centering
+% https://tex.stackexchange.com/questions/7208/how-to-vertically-center-the-text-of-the-cells/611601#611601
+\usepackage{tabularray}
+
+\usepackage{textcomp} % for textrightarrow
+
+\usepackage{xcolor} % for code blocks with color
+
+% Code formatting
+\definecolor{light-gray}{gray}{0.95}
+\newcommand{\code}[1]{\colorbox{light-gray}{\texttt{\detokenize{#1}}}}
+
+\usepackage{appendix}
+
+% Enable links for figure numbers
+\usepackage{hyperref} % note - hyperref likes to be last package
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+}
+
+\title{Research project}
+
+\author{Jesse Li (6399053)}
+\date{2026}
+
+
+\begin{document}
+
+\maketitle
+
+\section{Background and Motivation}
+
+\[\kappa = \frac{\sum_{j \in S_e} \rho_j w_j \lambda_j }{\sum_{j \in S_e} w_j / 2}\]
+
+\end{document}
