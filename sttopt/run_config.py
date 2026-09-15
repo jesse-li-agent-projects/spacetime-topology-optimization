@@ -136,9 +136,9 @@ class RunConfig(_ConfigMixin):
     nu: float
     penal: float
     eta: float
-    p: float
-    q: float
-    r: float
+    p: float  # p-mean exponent for hotspot severity aggregation (p_mean only)
+    q: float  # hotspot conductivity SIMP exponent
+    r: float  # density exponent for hotspot severity
     rouf: float
     a0: float
     mma_c: float
@@ -252,9 +252,9 @@ class SeqRunConfig(_ConfigMixin):
     roughness_weight: float | CosineSchedule
 
     nStage: int
-    p: float
-    q: float
-    r: float
+    p: float  # p-mean exponent for hotspot severity aggregation (p_mean only)
+    q: float  # hotspot conductivity SIMP exponent
+    r: float  # density exponent for hotspot severity
     rouf: float
 
     a0: float
