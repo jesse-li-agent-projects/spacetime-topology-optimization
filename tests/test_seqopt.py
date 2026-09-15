@@ -140,15 +140,17 @@ def test_scheduled_roughness_weight_decays_during_the_run():
 # --- finite-difference check of df/dt and dg/dt ---------------------------------
 
 
-@pytest.mark.parametrize("nStage", [0, 2])
-@pytest.mark.parametrize("time_filter_rmin", [0.0, 2.0])
-def test_sensitivities_match_finite_differences(nStage, time_filter_rmin):
-    """Covers the filtered case too, where the gradient has to carry the filter's chain
-    rule back to the design variable -- a term autograd supplies but nothing else
-    checks."""
+def test_sensitivities_match_finite_differences():
+    """`step`'s `df`/`dg` against central differences of its own `f`/`g`, along random
+    directions in the raw time field.
+
+    Autograd builds every row, so this checks what autograd cannot see: a graph cut by
+    a stray `.detach()` or host round-trip, which moves the gradient along a generic
+    direction. Stage rows and the time filter are both on, so every row and the filter's
+    chain rule are in the graph.
+    """
     h = 1e-5
-    problem = _problem(nStage=nStage, time_filter_rmin=time_filter_rmin)
-    nel = NELX * NELY
+    problem = _problem(nStage=2, time_filter_rmin=2.0)
     rng = np.random.default_rng(0)
     t_raw = rng.uniform(0.1, 0.9, size=(NELY, NELX))
     base_state = seqopt.init_state(problem)
@@ -162,20 +164,16 @@ def test_sensitivities_match_finite_differences(nStage, time_filter_rmin):
         _, rec = seqopt.step(problem, _state_from_raw(problem, t, base_state))
         return rec.f, rec.g
 
-    fd_f0 = np.zeros(nel)
-    fd_f = np.zeros((len(record.g), nel))
-    for e in range(nel):
-        j, i = e // NELX, e % NELX
-        tp, tm = t_raw.copy(), t_raw.copy()
-        tp[j, i] += h
-        tm[j, i] -= h
-        f0_p, f_p = values_at(tp)
-        f0_m, f_m = values_at(tm)
-        fd_f0[e] = (f0_p - f0_m) / (2 * h)
-        fd_f[:, e] = (f_p - f_m) / (2 * h)
-
-    np.testing.assert_allclose(record.df, fd_f0, rtol=1e-4, atol=1e-6)
-    np.testing.assert_allclose(record.dg, fd_f, rtol=1e-4, atol=1e-6)
+    for _ in range(2):
+        v = rng.standard_normal((NELY, NELX))
+        f_p, g_p = values_at(t_raw + h * v)
+        f_m, g_m = values_at(t_raw - h * v)
+        np.testing.assert_allclose(
+            record.df @ v.ravel(), (f_p - f_m) / (2 * h), rtol=1e-4
+        )
+        np.testing.assert_allclose(
+            record.dg @ v.ravel(), (g_p - g_m) / (2 * h), rtol=1e-4, atol=1e-6
+        )
 
 
 # --- the optional filter on t ---------------------------------------------------
