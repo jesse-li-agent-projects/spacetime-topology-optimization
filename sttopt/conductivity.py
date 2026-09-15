@@ -83,7 +83,10 @@ class Aggregation(StrEnum):
     `Normalization.HALF_STENCIL` has pinned the scale against a physical reference:
     `exp` is defined on all of R, so `K_est > 1` needs no clamp. Its bias is additive
     and bounded by `log(nel_weighted)/beta` rather than multiplicative -- +0.001 at
-    `beta=200` where P_MEAN at `p=25` is -26%. Sharpness (`beta`) and density
+    `beta=200` where P_MEAN at `p=25` is -26%. The bound grows as `beta` falls: a
+    `beta` low enough to spread the sensitivity past a handful of hot elements pays a
+    bias larger than the maximum itself (+1.9 at `beta=4` on a 120x100 c-shape), which
+    `calibration` carries back onto the true maximum. Sharpness (`beta`) and density
     suppression (`s`) are independent knobs.
     """
 
