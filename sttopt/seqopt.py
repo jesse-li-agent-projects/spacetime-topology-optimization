@@ -80,7 +80,6 @@ class Problem:
     hotspot_base: Int[Tensor, " k"] | None
     Nei: Int[Tensor, " k"]  # print-start element(s), already filtered to solid ones
 
-    m: int  # number of MMA constraint rows: continuity + start-point(s) + 2*nStage
     n: int  # number of MMA design variables: nel (t alone -- xPhys is fixed)
 
 
@@ -165,7 +164,6 @@ def build_problem(
     :param dtype: floating dtype every real-valued tensor field is cast to
     """
     nely, nelx = xPhys.shape
-    nStage = config.nStage
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
@@ -191,7 +189,6 @@ def build_problem(
         Hs = torch_util.to_tensor(Hs_np, device, dtype)
 
     n = nelx * nely
-    m = (1 if config.enable_continuity else 0) + len(Nei) + 2 * nStage
 
     xPhys_t = torch_util.to_tensor(xPhys, device, dtype)
     int_fields = torch_util.to_tensors(
@@ -210,7 +207,6 @@ def build_problem(
         w=torch_util.to_tensor(w, device, dtype),
         hotspot_denom=hotspot_denom,
         hotspot_base=None if hotspot_base is None else int_fields["Nei"],
-        m=m,
         n=n,
         **int_fields,
     )
@@ -398,11 +394,12 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         sawtooth_raw = float(timefield.relative_sawtooth_amplitude(raw, xPhys))
 
     # -- Gradient region ends: mmasub is not part of the autograd graph. --
-    mma_a = torch.zeros(problem.m, device=device, dtype=dtype)
-    mma_c = torch.full((problem.m,), config.mma_c, device=device, dtype=dtype)
-    mma_d = torch.zeros(problem.m, device=device, dtype=dtype)
+    m = len(g_all)
+    mma_a = torch.zeros(m, device=device, dtype=dtype)
+    mma_c = torch.full((m,), config.mma_c, device=device, dtype=dtype)
+    mma_d = torch.zeros(m, device=device, dtype=dtype)
     xmma, ymma, zmma, lam, xsi, mma_eta, mu, zet, s, low, upp = mma.mmasub(
-        problem.m,
+        m,
         problem.n,
         loop,
         xval,

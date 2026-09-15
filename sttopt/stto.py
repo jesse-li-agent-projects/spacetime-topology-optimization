@@ -81,7 +81,6 @@ class Problem:
     hotspot_base: Int[Tensor, " k"] | None
     Nei: Int[Tensor, " k"]
 
-    m: int  # number of MMA constraint rows: vol + continuity + start-point(s) + 2*nStage + hotspot
     n: int  # number of MMA design variables: 2*nelx*nely (density half + time half)
 
 
@@ -164,7 +163,7 @@ def build_problem(
     :param dtype: floating dtype every real-valued tensor field is cast to; integer
         (index/mask) fields keep their own integer/bool dtype regardless.
     """
-    nelx, nely, nStage = config.nelx, config.nely, config.nStage
+    nelx, nely = config.nelx, config.nely
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
@@ -207,9 +206,6 @@ def build_problem(
     )
 
     n = 2 * nelx * nely
-    # MATLAB hardcodes `m = 1 + 1 + nely + 2*nStage + 1` -- only self-consistent when
-    # tfield != CORNER (Nei has nely rows); computing from len(Nei) generalizes correctly.
-    m = 1 + 1 + len(Nei) + 2 * nStage + 1
 
     # Batch every float-valued and every int-valued raw array into one boundary crossing
     # each, rather than a `to_tensor` call per field (plans/torch_port_review_followup.md
@@ -233,7 +229,6 @@ def build_problem(
         C=torch_util.csr_to_tensor(C, device, dtype),
         hotspot_denom=hotspot_denom,
         hotspot_base=None if hotspot_base is None else int_fields["Nei"],
-        m=m,
         n=n,
         **float_fields,
         **int_fields,
@@ -473,18 +468,21 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     g_start_t = constraints.start_point(tPhys, problem.Nei)
 
-    stage_upper_t = [  # per-stage volume bounds
-        constraints.stage_volume_bounds(
-            xPhys, tPhys, float(t_stage), config.volfrac, beta_t
-        )
-        for t_stage in stage_times
-    ]
-    stage_upper_t = torch.stack(stage_upper_t)
+    g_parts: list[Tensor] = [g_vol_t[None], g_cont_t[None], g_start_t]
 
-    # Interleaves upper_0, lower_0, upper_1, lower_1, ...
-    g_stage_rows_t = torch.stack(
-        [stage_upper_t, -stage_upper_t - 1.0e-5], dim=1
-    ).flatten()
+    if config.enable_stage_volume:
+        stage_upper_t = [  # per-stage volume bounds
+            constraints.stage_volume_bounds(
+                xPhys, tPhys, float(t_stage), config.volfrac, beta_t
+            )
+            for t_stage in stage_times
+        ]
+        stage_upper_t = torch.stack(stage_upper_t)
+
+        # Interleaves upper_0, lower_0, upper_1, lower_1, ...
+        g_parts.append(
+            torch.stack([stage_upper_t, -stage_upper_t - 1.0e-5], dim=1).flatten()
+        )
 
     # Hotspot constraint, evaluated at this iteration's (possibly stale) calibration.
     # That is refreshed every 25 iterations from this same call's `numer`/`K_est` (both
@@ -496,13 +494,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         aggregation.calibrated(numer_t, state.hotspot_calibration) / config.Tcr - 1
     )
 
-    g_parts: list[Tensor] = [
-        g_vol_t[None],
-        g_cont_t[None],
-        g_start_t,
-        g_stage_rows_t,
-        g_hotspot_t[None],
-    ]
+    g_parts.append(g_hotspot_t[None])
     g_all = torch.cat(g_parts)
     dg_dx = torch.cat(
         [_sensitivity_rows(g, x, t) for g in g_parts],
@@ -534,11 +526,12 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     # dg_dx are the last gradient-carrying values, detached here on their way in.
     # xval/xmin/xmax never required grad -- they're built from state.x/state.t, the
     # detached fields, not the x/t leaves above.
-    mma_a = torch.zeros(problem.m, device=device, dtype=dtype)
-    mma_c = torch.full((problem.m,), config.mma_c, device=device, dtype=dtype)
-    mma_d = torch.zeros(problem.m, device=device, dtype=dtype)
+    m = len(g_all)
+    mma_a = torch.zeros(m, device=device, dtype=dtype)
+    mma_c = torch.full((m,), config.mma_c, device=device, dtype=dtype)
+    mma_d = torch.zeros(m, device=device, dtype=dtype)
     xmma, ymma, zmma, lam, xsi, mma_eta, mu, zet, s, low, upp = mma.mmasub(
-        problem.m,
+        m,
         problem.n,
         loop,
         xval,

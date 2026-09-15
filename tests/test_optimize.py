@@ -97,11 +97,21 @@ def _assert_state_fields_are_consistent(problem, state, beta_d):
     )
 
 
-def _problem(nelx=7, nely=5, nStage=3, tfield=3, Theta=1.0, Gamma=0.0, **kwargs):
+def _problem(
+    nelx=7,
+    nely=5,
+    nStage=3,
+    tfield=3,
+    Theta=1.0,
+    Gamma=0.0,
+    enable_stage_volume=True,
+    **kwargs,
+):
     config = default_run_config(
         nelx=nelx,
         nely=nely,
         nStage=nStage,
+        enable_stage_volume=enable_stage_volume,
         volfrac=VOLFRAC,
         Theta=Theta,
         Gamma=Gamma,
@@ -422,14 +432,17 @@ def test_sensitivity_rows_multi_row_matches_single_row_calls():
 
 
 @pytest.mark.parametrize(
-    "nStage,tfield,Theta",
+    "nStage,tfield,Theta,enable_stage_volume",
     [
-        (3, 3, 1.0),
-        (2, 1, 0.35),  # tfield==1 shrinks Nei to a singleton, changing m
-        (4, 2, 2.5),
+        (3, 3, 1.0, True),
+        (2, 1, 0.35, True),  # tfield==1 shrinks Nei to a singleton, changing m
+        (4, 2, 2.5, True),
+        (3, 3, 1.0, False),  # no stage rows, so the hotspot row follows start-point
     ],
 )
-def test_step_assembled_sensitivities_match_finite_differences(nStage, tfield, Theta):
+def test_step_assembled_sensitivities_match_finite_differences(
+    nStage, tfield, Theta, enable_stage_volume
+):
     """`step`'s stacked `IterationRecord.df` and `.dg` against central differences of
     its own `.f`/`.g`, w.r.t. the raw design vector `[x; t]`.
 
@@ -456,7 +469,14 @@ def test_step_assembled_sensitivities_match_finite_differences(nStage, tfield, T
     # regime in reach. 1e-5 is the best of them. The constraint rows are O(0.1) and match
     # to ~1e-11 at every h in that sweep.
     h = 1e-5
-    problem = _problem(nelx=nelx, nely=nely, nStage=nStage, tfield=tfield, Theta=Theta)
+    problem = _problem(
+        nelx=nelx,
+        nely=nely,
+        nStage=nStage,
+        tfield=tfield,
+        Theta=Theta,
+        enable_stage_volume=enable_stage_volume,
+    )
     nel = nelx * nely
     assert problem.n == 2 * nel
 
@@ -465,11 +485,13 @@ def test_step_assembled_sensitivities_match_finite_differences(nStage, tfield, T
     _, record = stto.step(problem, state)
 
     # Row count follows from the stack `step` builds: volume, continuity, one row per
-    # print-start element, an upper and a lower bound per stage, and the hotspot row.
-    assert problem.m == 1 + 1 + len(problem.Nei) + 2 * nStage + 1
+    # print-start element, an upper and a lower bound per stage (when enabled), and the
+    # hotspot row.
+    n_stage_rows = 2 * nStage if enable_stage_volume else 0
+    m = 1 + 1 + len(problem.Nei) + n_stage_rows + 1
     assert record.df.shape == (problem.n,)
-    assert record.g.shape == (problem.m,)
-    assert record.dg.shape == (problem.m, problem.n)
+    assert record.g.shape == (m,)
+    assert record.dg.shape == (m, problem.n)
 
     # Non-vacuity: an all-but-zero gradient would pass the comparison below regardless.
     assert np.abs(record.df).max() > 1e-3
@@ -480,7 +502,7 @@ def test_step_assembled_sensitivities_match_finite_differences(nStage, tfield, T
         return rec.f, rec.g
 
     fd_f0 = np.zeros(problem.n)
-    fd_f = np.zeros((problem.m, problem.n))
+    fd_f = np.zeros((m, problem.n))
     for e in range(nel):
         j, i = e // nelx, e % nelx
 
@@ -509,13 +531,13 @@ def test_step_assembled_sensitivities_match_finite_differences(nStage, tfield, T
     )
     # The constraint rows are purely algebraic in xPhys/tPhys (no linear solve), and
     # match ~1000x tighter than this.
-    for row in range(problem.m):
+    for row in range(m):
         np.testing.assert_allclose(
             record.dg[row],
             fd_f[row],
             rtol=1e-5,
             atol=1e-8,
-            err_msg=f"constraint row {row} of {problem.m}",
+            err_msg=f"constraint row {row} of {m}",
         )
 
 

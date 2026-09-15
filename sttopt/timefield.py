@@ -390,9 +390,22 @@ def init_geometry_timefield(
 
 
 # Keeps d|grad t|/d(grad t) finite where the gradient vanishes; small enough (relative
-# to the squared gradients themselves, order (1/nelx)^2) to leave the magnitude
+# to the squared gradients themselves, order 1 per unit length) to leave the magnitude
 # unchanged to many digits wherever it is nonzero.
 _GRAD_EPS = 1e-12
+
+
+def _unit_length(tPhys: Float[Tensor, "nely nelx"]) -> float:
+    """The nondimensional unit length, in elements: the square root of the design
+    domain's area.
+
+    Every gradient here is taken per unit length rather than per element, so the same
+    physical field reads the same at any mesh resolution of the same domain, and a
+    weight on a gradient statistic carries across resolutions.
+    """
+    nely, nelx = tPhys.shape
+    return (nelx * nely) ** 0.5
+
 
 # Natural-coordinate offset of a 2x2 Gauss point, and the four points as
 # (eta, xi) sign pairs ordered to match `_GAUSS_CORNERS`.
@@ -429,7 +442,8 @@ def _q4_blends(
 def _q4_gauss_gradient(
     tPhys: Float[Tensor, "nely nelx"],
 ) -> tuple[Float[Tensor, "4 nely-1 nelx-1"], Float[Tensor, "4 nely-1 nelx-1"]]:
-    """`(dt/dx, dt/dy)` at the 2x2 Gauss points of every cell, in element units.
+    """`(dt/dx, dt/dy)` at the 2x2 Gauss points of every cell, per unit length
+    (`_unit_length`).
 
     Cells are the dual grid: cell `(i, j)` has the four elements `tPhys[i:i+2, j:j+2]`
     as its corner nodes, so `tPhys` is read as a bilinear (Q4) nodal field and the
@@ -448,7 +462,8 @@ def _q4_gauss_gradient(
         (row_lo, row_hi), (col_lo, col_hi) = _q4_blends(eta_sign, xi_sign)
         dt_dx.append(row_lo * (lo_hi - lo_lo) + row_hi * (hi_hi - hi_lo))
         dt_dy.append(col_lo * (hi_lo - lo_lo) + col_hi * (hi_hi - lo_hi))
-    return torch.stack(dt_dx), torch.stack(dt_dy)
+    unit = _unit_length(tPhys)
+    return torch.stack(dt_dx) * unit, torch.stack(dt_dy) * unit
 
 
 def gradient_magnitude(
@@ -529,6 +544,9 @@ def gradient_magnitude_std(tPhys: Float[Tensor, "nely nelx"]) -> Float[Tensor, "
     deviation of that magnitude -- rather than the magnitude itself -- pushes toward
     uniform layer thickness without prescribing what that thickness should be.
 
+    The magnitude is per unit length (`_unit_length`), so a weight on this carries
+    across mesh resolutions of the same design domain.
+
     :param tPhys: filtered time field
     :return: standard deviation of `gradient_magnitude(tPhys)`; zero when there are
         fewer than two samples, since a standard deviation over fewer than two samples
@@ -583,10 +601,12 @@ def _weighted_gradient_mean(
     """Weighted mean of `|grad tPhys|` over the Gauss points, with the samples and the
     weights it was taken over.
 
-    This mean is the reciprocal of the mean deposited-layer thickness, so dividing by it
-    turns a quantity in units of `t` into one in units of a layer -- which is what makes
-    a weight on that quantity portable across mesh resolutions. Both penalties here
-    divide by it, so a weight *between* them is free of it entirely.
+    This mean is the reciprocal of the mean deposited-layer thickness. Over the unit
+    length it is the mean time step across one element -- a "layer" in the sense the
+    relative measures quote -- so dividing a quantity in units of `t` by that turns it
+    into one in layers, which is what makes a weight on it portable across mesh
+    resolutions. Both penalties here divide by it, so a weight *between* them is free
+    of it entirely.
 
     :param tPhys: physical time field
     :param weights: per-element weight, interpolated to the Gauss points; `None` weights
@@ -619,7 +639,7 @@ def relative_roughness(
     mean, _, _ = _weighted_gradient_mean(tPhys, weights)
     if mean == 0:
         return tPhys.new_zeros(())
-    return roughness(tPhys, weights) / mean
+    return roughness(tPhys, weights) / (mean / _unit_length(tPhys))
 
 
 def sawtooth_amplitude(
@@ -672,8 +692,9 @@ def _central_difference_gradient(
     :param xPhys: density field, to locate the fully-solid stencils
     :return: the qualifying samples, flattened; empty if no stencil qualifies
     """
-    dx = (tPhys[1:-1, 2:] - tPhys[1:-1, :-2]) / 2
-    dy = (tPhys[2:, 1:-1] - tPhys[:-2, 1:-1]) / 2
+    half_step = _unit_length(tPhys) / 2
+    dx = (tPhys[1:-1, 2:] - tPhys[1:-1, :-2]) * half_step
+    dy = (tPhys[2:, 1:-1] - tPhys[:-2, 1:-1]) * half_step
     g = torch.sqrt(dx**2 + dy**2 + _GRAD_EPS)
 
     solid = xPhys > geometry.SOLID_THRESHOLD
@@ -707,7 +728,7 @@ def relative_sawtooth_amplitude(
     g = _central_difference_gradient(tPhys, xPhys)
     if g.numel() == 0 or g.mean() == 0:
         return tPhys.new_zeros(())
-    return sawtooth_amplitude(tPhys, xPhys) / g.mean()
+    return sawtooth_amplitude(tPhys, xPhys) / (g.mean() / _unit_length(tPhys))
 
 
 def central_difference_cv(
@@ -757,11 +778,8 @@ def _gradient_cv(
     Weighted, so the statistic is taken over the part rather than the bounding box --
     `t` over void is pinned by nothing physical, so unweighted gradients there would be
     noise dominating the spread on any part that doesn't fill its box. Divided by the
-    mean, so the measure is resolution-invariant: `gradient_magnitude` is a difference
-    in element units, so `|grad t|` (and its raw spread) scale as `1/nelx`/`1/nely` for
-    a field spanning `[0, 1]`, but the ratio does not. That keeps a `uniformity_weight`
-    meaningful across resolutions of the same component, and makes the value directly
-    interpretable: 0.1 means layer thickness varies by about 10% of its own mean.
+    mean, so the value is directly interpretable: 0.1 means layer thickness varies by
+    about 10% of its own mean.
 
     **Not a smoothness measure, and not usable alone.** A sawtooth across the print
     direction is invisible here (see `gradient_magnitude`) and worse than free: it
