@@ -12,8 +12,8 @@ iteration order.
 
 Two field pairs exist per design variable, and must not be conflated: `x`/`t` are each
 iteration's *raw* MMA output (unfiltered, unprojected -- what next iteration's
-move-limit bounds read); `xPhys`/`tPhys` are the *filtered* (and, for density,
-Heaviside-projected) fields the physics uses. `State` carries only the raw pair;
+move-limit bounds read); `xPhys`/`tPhys` are the *filtered* fields the physics uses
+(density also Heaviside-projected, time also scaled to a maximum of 1). `State` carries only the raw pair;
 `physical_fields` derives the other wherever it is needed.
 
 **The tensor boundary (`plans/torch_port_part2.md`).** `Problem` and `State` hold torch
@@ -238,17 +238,24 @@ def physical_fields(
     beta_d: float,
 ) -> tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]]:
     """The density and time fields the physics reads, from the raw design variables:
-    `x` filtered and Heaviside-projected at sharpness `beta_d`, and `t` filtered.
+    `x` filtered and Heaviside-projected at sharpness `beta_d`, and `t` filtered and
+    scaled so its maximum is 1.
 
     The one definition of that map, so a trajectory or a saved design cannot disagree
     with what `step` optimized. Differentiable: `step` gets the chain rule back to
     `x`/`t` from autograd.
 
+    Filtering pulls the time field's maximum below 1, but the stage times and the
+    hotspot term read absolute print times, so the build must end at 1. The start-point
+    constraint already pins the minimum to 0, so a scale is enough. The gradient treats
+    that scale as a constant.
+
     :return: `(xPhys, tPhys)`
     """
     xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
     xPhys = filters.heaviside_projection(xTilde, beta_d, problem.config.eta)
-    tPhys = filters.apply_density_filter(t, problem.H, problem.Hs)
+    tTilde = filters.apply_density_filter(t, problem.H, problem.Hs)
+    tPhys = tTilde / tTilde.max().detach()
     return xPhys, tPhys
 
 

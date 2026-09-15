@@ -117,8 +117,8 @@ equal print times would walk straight into.
 
 ## Time-field treatment: `stto` vs. `seqopt`
 
-`stto` filters the time field exactly like density: `tPhys = H @ t / Hs`, reusing the
-density filter. `seqopt` does not filter it at all -- `tPhys` is simply `t`. This is a
+`stto` filters the time field exactly like density, reusing the density filter, then
+scales it so its maximum is 1 (`stto.physical_fields`). `seqopt` does not filter it at all -- `tPhys` is simply `t`. This is a
 real difference in what the two problems optimize, not an oversight: the density
 filter smooths *across void*, mixing two geometrically-close but materially
 disconnected regions' print times purely because nothing in the filter knows there is

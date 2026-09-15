@@ -170,6 +170,7 @@ def main():
     tPhys_traj = [N(tPhys)]
     records = []
     dx_all = np.zeros((NELY, NELX, NLOOP))
+    t_scale_all = np.zeros(NLOOP)
     K_est_all = np.zeros((NELX * NELY, NLOOP))
     numer_all = np.zeros(NLOOP)
     factor_all = np.zeros(NLOOP)
@@ -208,6 +209,11 @@ def main():
             xTilde, state.beta_d, problem.config.eta
         )
         dx_all[:, :, k] = N(dx)
+        # `stto.physical_fields` divides the filtered time field by this, a constant to
+        # the gradient that the MATLAB-form oracles' chain rule does not include.
+        t_scale_all[k] = float(
+            filters.apply_density_filter(state.t, problem.H, problem.Hs).max()
+        )
 
         c_whole, dcx_whole = compliance_ref.whole_compliance(
             xPhys,
@@ -323,6 +329,7 @@ def main():
         OUT / "constraints.npz",
         fval_all=fval_all,
         dfdx_all=dfdx_all,
+        t_scale_all=t_scale_all,
         m=m,
         n=problem.n,
         nelx=NELX,

@@ -274,6 +274,21 @@ def _draw_well_conditioned_state(problem, rng, *, beta_t=10.0, max_tries=50):
     raise AssertionError(f"no well-conditioned draw in {max_tries} tries")
 
 
+def test_physical_time_field_is_scaled_to_a_maximum_of_one():
+    """A raw time field whose filtered maximum falls short of 1 is scaled, not shifted,
+    so that the build ends at 1 and a start at 0 stays at 0."""
+    problem = _problem()
+    state = stto.init_state(problem, BETA_D)
+    t_raw = 0.6 * state.t
+    filtered = filters.apply_density_filter(t_raw, problem.H, problem.Hs)
+    assert float(filtered.max()) < 0.7  # premise: the unscaled field ends early
+
+    _, tPhys = stto.physical_fields(problem, state.x, t_raw, BETA_D)
+    assert float(tPhys.max()) == pytest.approx(1.0, rel=1e-14)
+    ratio = torch_util.to_numpy(tPhys / filtered)
+    np.testing.assert_allclose(ratio, ratio.flat[0], rtol=1e-12)
+
+
 def test_sensitivity_rows_multi_row_matches_single_row_calls():
     """A `k`-row `_sensitivity_rows` call must agree with `k` independent single-row
     calls: the rows are independent, so assembling them together must not couple them.
@@ -317,7 +332,7 @@ def test_sensitivity_rows_multi_row_matches_single_row_calls():
     ],
 )
 def test_step_assembled_sensitivities_match_finite_differences(
-    nStage, tfield, Theta, enable_stage_volume
+    nStage, tfield, Theta, enable_stage_volume, monkeypatch
 ):
     """`step`'s stacked `IterationRecord.df` and `.dg` against central differences of
     its own `.f`/`.g`, w.r.t. the raw design vector `[x; t]`.
@@ -372,6 +387,21 @@ def test_step_assembled_sensitivities_match_finite_differences(
     # Non-vacuity: an all-but-zero gradient would pass the comparison below regardless.
     assert np.abs(record.df).max() > 1e-3
     assert np.abs(record.dg).max(axis=1).min() > 1e-3
+
+    # `step`'s gradient treats the time field's scale as a constant, so the finite
+    # difference has to hold it at the unperturbed value too.
+    def filtered_max(t):
+        t = torch_util.to_tensor(t, problem.device, problem.dtype)
+        return filters.apply_density_filter(t, problem.H, problem.Hs).max()
+
+    base_scale = filtered_max(t_raw)
+    unscaled_physical_fields = stto.physical_fields
+
+    def physical_fields_at_base_scale(problem, x, t, beta_d):
+        xPhys, tPhys = unscaled_physical_fields(problem, x, t, beta_d)
+        return xPhys, tPhys * filtered_max(t) / base_scale
+
+    monkeypatch.setattr(stto, "physical_fields", physical_fields_at_base_scale)
 
     def values_at(x_raw, t_raw):
         _, rec = stto.step(problem, _state_from_raw(problem, x_raw, t_raw))
