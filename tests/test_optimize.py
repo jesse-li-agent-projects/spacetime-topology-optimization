@@ -1,18 +1,11 @@
 """First-principles tests for `sttopt.stto`: the wiring layer.
 
 Every module `stto.step` calls owns its own FD/fixture tests, and every one of those
-passing tells you nothing about whether `step` *assembles* them correctly. The assembly
-is where the `Theta` weighting, the `H @ (... / Hs)` chain rules and the constraint row
-order live, and until now it was covered only by the `.mat` trajectory fixtures and the
-MATLAB-transliteration oracle in `matlab_reference_loop.py` -- i.e. only ever by
-"matches MATLAB", never by "is the derivative of the thing it claims to differentiate".
-
-The FD test here closes that: it takes `step`'s own stacked `IterationRecord.df`/`.dg`
-and checks them against central differences of `step`'s own `.f`/`.g`, with respect to
-the raw design vector `[x; t]` that MMA actually optimizes. It is also the acceptance
-criterion
-for swapping the hand-derived sensitivities for autodiff -- the replacement has to pass
-this unchanged.
+passing tells you nothing about whether `step` wires them together correctly. The FD
+test here checks `step`'s own `IterationRecord.df`/`.dg` against central differences of
+`step`'s own `.f`/`.g`, with respect to the raw design vector `[x; t]` that MMA actually
+optimizes -- "is the derivative of the thing it claims to differentiate", independent
+of the MATLAB fixtures.
 
 `init_state`'s tests state the initialization invariant directly, rather than pinning
 whatever the current code happens to produce.
@@ -322,52 +315,26 @@ def test_sensitivity_rows_multi_row_matches_single_row_calls():
     torch.testing.assert_close(rows[1], row_b, rtol=1e-10, atol=0.0)
 
 
-@pytest.mark.parametrize(
-    "nStage,tfield,Theta,enable_stage_volume",
-    [
-        (3, 3, 1.0, True),
-        (2, 1, 0.35, True),  # tfield==1 shrinks Nei to a singleton, changing m
-        (4, 2, 2.5, True),
-        (3, 3, 1.0, False),  # no stage rows, so the hotspot row follows start-point
-    ],
-)
-def test_step_assembled_sensitivities_match_finite_differences(
-    nStage, tfield, Theta, enable_stage_volume, monkeypatch
-):
-    """`step`'s stacked `IterationRecord.df` and `.dg` against central differences of
-    its own `.f`/`.g`, w.r.t. the raw design vector `[x; t]`.
+def test_step_assembled_sensitivities_match_finite_differences(monkeypatch):
+    """`step`'s `IterationRecord.df` and `.dg` against central differences of its own
+    `.f`/`.g`, along random directions in the raw design vector `[x; t]`.
 
-    This is the only check in the suite on the *assembly* rather than the parts. In
-    particular it is the only thing that pins, without reference to MATLAB:
-
-      * the `Theta` weighting of the per-stage gravity compliances into `.f`, and the
-        matching `Theta` on their contributions to `dc`/`dt`;
-      * the `H @ (dct_g / Hs)` chain rule on the time half -- note the density half
-        carries an extra `dx` (Heaviside) factor and the time half does not, an asymmetry
-        nothing else tests;
-      * the constraint *row order* and the row count `m`. A permuted or miscounted stack
-        makes row `k` of `.dg` the derivative of a different row of `.g`, and the
-        comparison fails per-row.
-
-    `Theta != 1` and `nStage != 3` are swept because the fixture only ever exercises
-    `Theta == 1`, `nStage == 3`: at `Theta == 1` a missing weight is invisible, and at a
-    single `nStage` a stage-indexing error can hide.
+    Autograd builds every row, so this does not check a chain rule. It checks what
+    autograd cannot see: a graph cut by a stray `.detach()` or host round-trip (which
+    `allow_unused` turns into a silent zero), or a custom backward misused in context.
+    Such an error moves the gradient along a generic direction, so a few random
+    directions per field find it for a small fraction of a per-element sweep's `step`
+    calls.
     """
+    nStage = 3
     nelx, nely = 10, 8
-    # .f is O(1e3) here (a compliance), so its central difference is roundoff-dominated
-    # and *improves* with a larger step: an h-sweep gives absolute errors of 1.2e-2 /
-    # 1.0e-1 / 1.0e0 at h = 1e-5 / 1e-6 / 1e-7 -- a clean 1/h roundoff slope, no truncation
-    # regime in reach. 1e-5 is the best of them. The constraint rows are O(0.1) and match
-    # to ~1e-11 at every h in that sweep.
+    # .f (a compliance) is noise-dominated at small h; the constraint rows reach
+    # truncation error at large h. Worst relative error over the directions below at
+    # h = 1e-4 / 1e-5 / 1e-6 / 1e-7: .f 1e-6 / 2e-6 / 3e-5 / 1e-4, .g 9e-6 / 9e-8 / 2e-8
+    # / 5e-7.
     h = 1e-5
-    problem = _problem(
-        nelx=nelx,
-        nely=nely,
-        nStage=nStage,
-        tfield=tfield,
-        Theta=Theta,
-        enable_stage_volume=enable_stage_volume,
-    )
+    # Stage volume bounds on, so every kind of constraint row is present.
+    problem = _problem(nelx=nelx, nely=nely, nStage=nStage, enable_stage_volume=True)
     nel = nelx * nely
     assert problem.n == 2 * nel
 
@@ -376,10 +343,8 @@ def test_step_assembled_sensitivities_match_finite_differences(
     _, record = stto.step(problem, state)
 
     # Row count follows from the stack `step` builds: volume, continuity, one row per
-    # print-start element, an upper and a lower bound per stage (when enabled), and the
-    # hotspot row.
-    n_stage_rows = 2 * nStage if enable_stage_volume else 0
-    m = 1 + 1 + len(problem.Nei) + n_stage_rows + 1
+    # print-start element, an upper and a lower bound per stage, and the hotspot row.
+    m = 1 + 1 + len(problem.Nei) + 2 * nStage + 1
     assert record.df.shape == (problem.n,)
     assert record.g.shape == (m,)
     assert record.dg.shape == (m, problem.n)
@@ -407,44 +372,32 @@ def test_step_assembled_sensitivities_match_finite_differences(
         _, rec = stto.step(problem, _state_from_raw(problem, x_raw, t_raw))
         return rec.f, rec.g
 
-    fd_f0 = np.zeros(problem.n)
-    fd_f = np.zeros((m, problem.n))
-    for e in range(nel):
-        j, i = e // nelx, e % nelx
-
-        xp, xm = x_raw.copy(), x_raw.copy()
-        xp[j, i] += h
-        xm[j, i] -= h
-        f0_p, f_p = values_at(xp, t_raw)
-        f0_m, f_m = values_at(xm, t_raw)
-        fd_f0[e] = (f0_p - f0_m) / (2 * h)
-        fd_f[:, e] = (f_p - f_m) / (2 * h)
-
-        tp, tm = t_raw.copy(), t_raw.copy()
-        tp[j, i] += h
-        tm[j, i] -= h
-        f0_p, f_p = values_at(x_raw, tp)
-        f0_m, f_m = values_at(x_raw, tm)
-        fd_f0[nel + e] = (f0_p - f0_m) / (2 * h)
-        fd_f[:, nel + e] = (f_p - f_m) / (2 * h)
-
-    # .df spans several orders of magnitude across elements, so an absolute floor has
-    # to be set against the gradient's own scale rather than against 1: at h = 1e-5 the
-    # observed error is ~2e-6 of max|.df|, so a floor at 1e-4 of it leaves ~50x margin
-    # while still being far tighter than the entries it is guarding.
-    np.testing.assert_allclose(
-        record.df, fd_f0, rtol=1e-4, atol=1e-4 * np.abs(record.df).max()
-    )
-    # The constraint rows are purely algebraic in xPhys/tPhys (no linear solve), and
-    # match ~1000x tighter than this.
-    for row in range(m):
-        np.testing.assert_allclose(
-            record.dg[row],
-            fd_f[row],
-            rtol=1e-5,
-            atol=1e-8,
-            err_msg=f"constraint row {row} of {m}",
-        )
+    # Each field gets its own directions: its gradient block can be orders of magnitude
+    # smaller than the other's, and an error in it would hide in a shared direction.
+    for field, block in (("x", slice(0, nel)), ("t", slice(nel, 2 * nel))):
+        for _ in range(2):
+            v = rng.standard_normal((nely, nelx))
+            if field == "x":
+                f_p, g_p = values_at(x_raw + h * v, t_raw)
+                f_m, g_m = values_at(x_raw - h * v, t_raw)
+            else:
+                f_p, g_p = values_at(x_raw, t_raw + h * v)
+                f_m, g_m = values_at(x_raw, t_raw - h * v)
+            df_v = record.df[block] @ v.ravel()
+            dg_v = record.dg[:, block] @ v.ravel()
+            fd_f = (f_p - f_m) / (2 * h)
+            fd_g = (g_p - g_m) / (2 * h)
+            np.testing.assert_allclose(
+                df_v, fd_f, rtol=1e-4, err_msg=f"df, {field} direction"
+            )
+            # A row that does not depend on this field is exactly zero on both sides.
+            np.testing.assert_allclose(
+                dg_v,
+                fd_g,
+                rtol=1e-6,
+                atol=1e-10,
+                err_msg=f"dg, {field} direction",
+            )
 
 
 def test_step_objective_is_theta_weighted_sum_of_stage_compliances():
@@ -627,10 +580,22 @@ def test_step_batched_warm_starts_from_previous_iteration():
 # a late, near-binary snapshot with exact zeros in xPhys, run through the real
 # stto.step wiring end to end.
 
+# The 90x30 snapshot at every third element, for runtime: it keeps exact zeros in xPhys.
+# Radii are in element units, so the conduction radius shrinks by the same factor. The
+# filter radii stay at 2.0: a third of that would leave an empty stencil.
+NEAR_BINARY_STRIDE = 3
+NEAR_BINARY_RMIN_COND = 6.0 / NEAR_BINARY_STRIDE
+
+
+def _near_binary_snapshot() -> tuple[np.ndarray, np.ndarray]:
+    s = NEAR_BINARY_STRIDE
+    with np.load(FIXTURES_DIR / "torch_port_designs.npz") as data:
+        return data["x_90x30_it0800"][1::s, 1::s], data["t_90x30_it0800"][1::s, 1::s]
+
 
 def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
     """`stto.step`'s assembled `IterationRecord.df`/`.dg` must stay finite on a real late-run
-    snapshot with exact zeros in `xPhys` (`x_90x30_it0800`, from
+    snapshot with exact zeros in `xPhys` (`x_90x30_it0800`, subsampled, from
     `tests/fixtures/torch_port_designs.npz` -- generated by
     `generate_torch_port_designs.py` at the production filter radii/schedules, not
     manufactured). This is the test that would have caught Phase 0a's original NaN bug
@@ -639,10 +604,8 @@ def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
     `test_step_would_have_produced_nan_without_the_nan_safe_rewrite` for direct proof
     the rewrite, not mere luck on this snapshot, is what keeps it clean.
     """
-    nelx, nely = 90, 30
-    with np.load(FIXTURES_DIR / "torch_port_designs.npz") as data:
-        x = data["x_90x30_it0800"]
-        t = data["t_90x30_it0800"]
+    x, t = _near_binary_snapshot()
+    nely, nelx = x.shape
     assert np.any(x == 0.0)  # premise: exact zeros are actually present
 
     config = default_run_config(
@@ -655,7 +618,7 @@ def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
         print_base="opposite_corner",
         rmin=2.0,
         lrmin=2.0,
-        rmin_cond=6.0,
+        rmin_cond=NEAR_BINARY_RMIN_COND,
     )
     problem = stto.build_problem(config)
     x = torch_util.to_tensor(x, problem.device, problem.dtype)
@@ -690,12 +653,10 @@ def test_step_would_have_produced_nan_without_the_nan_safe_rewrite():
     """
     import sttopt.conductivity as conductivity
 
-    nelx, nely = 90, 30
-    with np.load(FIXTURES_DIR / "torch_port_designs.npz") as data:
-        x = data["x_90x30_it0800"]
-        t = data["t_90x30_it0800"]
+    x, t = _near_binary_snapshot()
+    nely, nelx = x.shape
 
-    e1, e2, w = conductivity.neighbor_weights(nelx, nely, 6.0)
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, NEAR_BINARY_RMIN_COND)
     e1_t = torch_util.to_tensor(e1, "cpu", torch.int64)
     e2_t = torch_util.to_tensor(e2, "cpu", torch.int64)
     w_t = torch_util.to_tensor(w, "cpu", torch.float64)

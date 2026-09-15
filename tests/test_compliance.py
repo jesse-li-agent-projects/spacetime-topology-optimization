@@ -4,6 +4,8 @@ checks, and closed-form elasticity solutions.
 See conftest.py/conventions.md for fixture format and tolerance policy.
 """
 
+import functools
+
 import numpy as np
 import pytest
 import scipy.sparse as sp
@@ -148,6 +150,8 @@ def test_whole_compliance_axial_bar_patch(t, Emax):
     np.testing.assert_allclose(c, c_analytic, rtol=1e-9)
 
 
+# Cached: the convergence and scaling tests reuse the solves of the per-resolution tests.
+@functools.cache
 def _cantilever_beam_compliance(
     nely: int, P: float = 1.0, Emax: float = 1.0
 ) -> tuple[float, float]:
@@ -595,11 +599,14 @@ def test_time_mask_derivative_matches_fd():
 from benchmarks import calibrate_cg_rtol as calib  # noqa: E402
 
 
-def _near_binary_snapshot(mesh="90x30"):
-    nelx, nely = (int(v) for v in mesh.split("x"))
+def _near_binary_snapshot(mesh="90x30", stride=1):
+    """`stride > 1` keeps every `stride`-th element: a smaller design that still has exact
+    zeros, for checks that do not depend on the mesh."""
+    s = stride
     with np.load(calib.FIXTURES) as data:
-        x = data[f"x_{mesh}_it0800"]
-        t = data[f"t_{mesh}_it0800"]
+        x = data[f"x_{mesh}_it0800"][s // 2 :: s, s // 2 :: s]
+        t = data[f"t_{mesh}_it0800"][s // 2 :: s, s // 2 :: s]
+    nely, nelx = x.shape
     return calib.mesh_setup(nelx, nely), x, t
 
 
@@ -701,7 +708,9 @@ def test_batched_whole_and_gravity_compliance_value_matches_sequential():
     one `FemSolve` call each -- `stto.step` runs only the batched path, so this is
     what keeps it equivalent to the single-solve functions it is built out of.
     """
-    setup, x, t = _near_binary_snapshot()
+    # Small enough for a direct coarse solve: batched PCG itself, with row retirement
+    # under real coarsening, is `test_torch_solve.py`'s batched-vs-sequential test.
+    setup, x, t = _near_binary_snapshot(stride=3)
     nstage = 3
     stage_times = [0.3, 0.6, 1.0]
 
