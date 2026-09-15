@@ -182,9 +182,7 @@ def test_init_state_seeds_the_raw_fields(tfield):
 # --- step: finite-difference check of the assembled sensitivities ---------------------
 
 
-def _state_from_raw(
-    problem, x_raw, t_raw, *, beta_d=BETA_D, calibration=1.0, beta_t=10.0
-):
+def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, beta_t=10.0):
     """A `State` at raw design point `[x_raw; t_raw]`.
 
     `loop` is left at 0 so the ensuing `step` runs as iteration 1, which is none of
@@ -205,7 +203,6 @@ def _state_from_raw(
         loop=0,
         beta_t=beta_t,
         beta_d=beta_d,
-        hotspot_calibration=calibration,
         U=None,
     )
 
@@ -471,18 +468,16 @@ def test_step_objective_adds_the_weighted_uniformity_penalty():
 def test_init_state_calibrates_the_hotspot_row_against_the_seed():
     """Iteration 1 already reports the seed's true maximum severity: the aggregate's
     bias is calibrated out before the first step rather than at the first refresh."""
-    import sttopt.conductivity as conductivity
-
     problem = _problem()
+    uncalibrated = problem.hotspot.calibration
     state = stto.init_state(problem, BETA_D)
     xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, BETA_D)
-    _, K_est = stto.hotspot_value(problem, xPhys, tPhys)
+    K_est = stto.estimated_conductivity(problem, xPhys, tPhys)
     finite = torch.isfinite(K_est)
     true_max = float(
         ((1 - K_est[finite]) * xPhys.flatten()[finite] ** problem.config.r).max()
     )
-    aggregation = conductivity.Aggregation(problem.config.hotspot_aggregation)
-    assert state.hotspot_calibration != aggregation.uncalibrated  # non-vacuous
+    assert problem.hotspot.calibration != uncalibrated  # non-vacuous
 
     _, record = stto.step(problem, state)
     assert record.tru_max == pytest.approx(true_max, rel=1e-12)
@@ -674,7 +669,7 @@ def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
     `generate_torch_port_designs.py` at the production filter radii/schedules, not
     manufactured). This is the test that would have caught Phase 0a's original NaN bug
     (`hotspot_constraint`'s un-cancelled `x**(r-1)` diagonal term) and would catch its
-    resurrection under autograd (`hotspot_value`'s NaN-safe rewrite, Phase 3.4) -- see
+    resurrection under autograd (`conductivity.PMean`'s NaN-safe rewrite, Phase 3.4) -- see
     `test_step_would_have_produced_nan_without_the_nan_safe_rewrite` for direct proof
     the rewrite, not mere luck on this snapshot, is what keeps it clean.
     """
@@ -708,7 +703,6 @@ def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
         loop=800,
         beta_t=50.0,
         beta_d=128.0,
-        hotspot_calibration=1.0,
         U=None,
     )
 
@@ -720,8 +714,8 @@ def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
 
 
 def test_step_would_have_produced_nan_without_the_nan_safe_rewrite():
-    """Proof the test above is meaningful, not merely lucky: `conductivity.hotspot_value`
-    called on the *same* snapshot but through the naive, algebraically equivalent
+    """Proof the test above is meaningful, not merely lucky: `conductivity.PMean`
+    evaluated on the *same* snapshot but through the naive, algebraically equivalent
     `(T_val * x**r) ** p` form (what a mechanical port would have written) produces a
     `nan` gradient, at exactly the exact-zero elements the safe rewrite fixes.
     """

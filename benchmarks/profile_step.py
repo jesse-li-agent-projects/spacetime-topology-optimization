@@ -5,7 +5,7 @@ Ported for `plans/torch_port_part2.md` Phase 3.7 -- the NumPy/SciPy predecessor 
 script used to profile (`fem.assemble_stiffness`, `scipy.sparse.linalg.spsolve`,
 `conductivity.hotspot_constraint`, `mma.mmasub`) has been replaced end to end by torch
 equivalents (`sttopt/torch_fem.py`/`torch_mg.py`/`torch_solve.py`'s matrix-free MGCG,
-`conductivity.hotspot_value`, a torch `mma.mmasub`), so the patch points below target
+`conductivity.estimated_conductivity`, a torch `mma.mmasub`), so the patch points below target
 those instead. Assembly has no separate cost any more -- the solve is matrix-free (part
 1's `torch_fem.py`), so that row is reported as exactly 0 rather than measured.
 
@@ -22,7 +22,7 @@ docstring and PR #52.
 
 Measurement approach: wall-clock timers installed by monkeypatching the exact
 functions of interest (`compliance._solve_fe`/`_solve_fe_batched`,
-`conductivity.hotspot_value`, `mma.mmasub`), with `torch.cuda.synchronize()` calls
+`conductivity.estimated_conductivity`, `mma.mmasub`), with `torch.cuda.synchronize()` calls
 bracketing each timed region so the numbers reflect actual device time rather than
 kernel-launch return time. No file under `sttopt/` is modified.
 """
@@ -137,7 +137,6 @@ def build_realistic_state(
         loop=LOOP,
         beta_t=BETA_T,
         beta_d=BETA_D,
-        hotspot_calibration=1.0,
         U=None,
     )
 
@@ -173,7 +172,7 @@ class _Timer:
 def install_timers(device: torch.device) -> tuple[dict[str, _Timer], "callable"]:
     """Monkeypatch the suspects with timing wrappers; return the timers and a restore
     function. Patches `compliance._solve_fe`/`_solve_fe_batched` (the FEM solve),
-    `conductivity.hotspot_value`, and `mma.mmasub`.
+    `conductivity.estimated_conductivity`, and `mma.mmasub`.
     """
     timers = {
         "fem_solve": _Timer(device),
@@ -183,18 +182,18 @@ def install_timers(device: torch.device) -> tuple[dict[str, _Timer], "callable"]
 
     orig_solve_fe = compliance._solve_fe
     orig_solve_fe_batched = compliance._solve_fe_batched
-    orig_hotspot = conductivity.hotspot_value
+    orig_hotspot = conductivity.estimated_conductivity
     orig_mmasub = mma.mmasub
 
     compliance._solve_fe = timers["fem_solve"].wrap(orig_solve_fe)
     compliance._solve_fe_batched = timers["fem_solve"].wrap(orig_solve_fe_batched)
-    conductivity.hotspot_value = timers["hotspot"].wrap(orig_hotspot)
+    conductivity.estimated_conductivity = timers["hotspot"].wrap(orig_hotspot)
     mma.mmasub = timers["mmasub"].wrap(orig_mmasub)
 
     def restore():
         compliance._solve_fe = orig_solve_fe
         compliance._solve_fe_batched = orig_solve_fe_batched
-        conductivity.hotspot_value = orig_hotspot
+        conductivity.estimated_conductivity = orig_hotspot
         mma.mmasub = orig_mmasub
 
     return timers, restore

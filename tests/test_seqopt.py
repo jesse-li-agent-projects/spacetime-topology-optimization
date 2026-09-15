@@ -60,7 +60,7 @@ def test_init_state_calibrates_the_hotspot_term_against_the_initial_field():
     aggregate's bias until the first refresh."""
     problem = _problem()
     state = seqopt.init_state(problem)
-    _, K_est = seqopt.hotspot_value(
+    K_est = seqopt.estimated_conductivity(
         problem, seqopt.physical_timefield(problem, state.t)
     )
     finite = torch.isfinite(K_est)

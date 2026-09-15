@@ -448,7 +448,7 @@ def _load_stto_run(run_dir: Path, design_file: str = "final_design.npz") -> tupl
         problem.ndof,
     )
     obj = float(obj)
-    _, K_est_t = stto.hotspot_value(problem, xPhys_t, tPhys_t)
+    K_est_t = stto.estimated_conductivity(problem, xPhys_t, tPhys_t)
     K_est = torch_util.to_numpy(K_est_t).reshape(config.nely, config.nelx)
     hotspot_severity = _hotspot_severity(xPhys, K_est)
     grad_magnitude = torch_util.to_numpy(timefield.gradient_magnitude_elements(tPhys_t))
@@ -487,7 +487,7 @@ def _load_seqopt_run(run_dir: Path, design_file: str = "final_design.npz") -> tu
 
     problem = seqopt.build_problem(config, xPhys, device="cpu", dtype=torch.float64)
     tPhys_t = torch_util.to_tensor(tPhys, device="cpu", dtype=torch.float64)
-    _, K_est_t = seqopt.hotspot_value(problem, tPhys_t)
+    K_est_t = seqopt.estimated_conductivity(problem, tPhys_t)
     xPhys = torch_util.to_numpy(problem.xPhys)  # what the run optimized, post-cleanup
     K_est = torch_util.to_numpy(K_est_t).reshape(xPhys.shape)
     hotspot_severity = _hotspot_severity(xPhys, K_est)

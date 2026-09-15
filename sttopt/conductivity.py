@@ -3,11 +3,10 @@ constraint bounding its worst-case value.
 
 `estimated_conductivity` scores each element by how strongly its already-printed
 (cooler, earlier-`tPhys`) neighborhood shields it from residual heat -- a proxy for
-overheating risk during additive deposition. `hotspot_value` aggregates `1 - K_est`
-(weighted toward already-dense, hot regions) into the smooth maximum that the hotspot
-constraint bounds below a critical threshold `Tcr`; the caller (`stto.step`) applies
-the `Aggregation.calibrated`/`Tcr` scaling and gets the sensitivity from autograd
-through this (Phase 3.4, `plans/torch_port_part2.md`).
+overheating risk during additive deposition. A `PMean` or `LogSumExp` aggregation
+collapses the severity `1 - K_est` (weighted toward already-dense, hot regions) into
+the calibrated smooth maximum that the hotspot term reports, and the caller gets the
+sensitivity from autograd through both (Phase 3.4, `plans/torch_port_part2.md`).
 
 Two orthogonal choices shape that number, both selectable per run: `Normalization`
 sets what `K_est` measures shielding against, and `Aggregation` sets how the field
@@ -60,7 +59,7 @@ class Normalization(StrEnum):
     exactly what an equal-sized internal void costs, and void print time drops out
     entirely (it only ever multiplies a zero density). `K_est` is no longer an average
     and may exceed 1, meaning "better shielded than an infinite uniform layer" -- see
-    `Aggregation` for what tolerates that.
+    `PMean`/`LogSumExp` for what tolerates that.
     """
 
     NEIGHBORHOOD = "neighborhood"
@@ -69,90 +68,19 @@ class Normalization(StrEnum):
 
 class Aggregation(StrEnum):
     """Names for how the per-element severity field collapses to the one scalar the
-    hotspot term reports, selectable per run.
+    hotspot term reports, selectable per run: `PMean` or `LogSumExp`, as built by
+    `make_aggregation`.
 
-    P_MEAN takes `mean(T**p * x**(r*p)) ** (1/p)`, a scale-equivariant smooth maximum.
-    It is built on powers, so it needs a non-negative field, and it approaches the
-    true maximum from below by a factor `nel**(-1/p)` that worsens as the mesh grows
-    -- 0.687 at `p=25` on a 120x100 mesh, a quarter low. Its density weight is
-    `x**(r*p)`, so `p` cannot be changed without also changing how hard void is
-    suppressed, and `r*p <= 1` silently makes the gradient diverge at `x == 0`.
-
-    LOGSUMEXP takes `log(sum(x**s * exp(beta*T))) / beta`. It is translation
-    equivariant rather than scale equivariant, which is the property that fits once
-    `Normalization.HALF_STENCIL` has pinned the scale against a physical reference:
-    `exp` is defined on all of R, so `K_est > 1` needs no clamp. Its bias is additive
-    and bounded by `log(nel_weighted)/beta` rather than multiplicative -- +0.001 at
-    `beta=200` where P_MEAN at `p=25` is -26%. The bound grows as `beta` falls: a
-    `beta` low enough to spread the sensitivity past a handful of hot elements pays a
-    bias larger than the maximum itself (+1.9 at `beta=4` on a 120x100 c-shape), which
-    `calibration` carries back onto the true maximum. Sharpness (`beta`) and density
-    suppression (`s`) are independent knobs.
+    Each aggregate is biased in the shape its own algebra gives it, which decides the
+    shape of its calibration. With `N` elements sharing the maximum and the rest
+    negligible, P_MEAN reads `true_max * (N/nel)**(1/p)` and LOGSUMEXP reads
+    `true_max + log(N)/beta`: a ratio to undo in one case, a difference in the other.
+    Correcting either one in the other's shape holds only at the instant it is measured
+    and drifts everywhere else.
     """
 
     P_MEAN = "p_mean"
     LOGSUMEXP = "logsumexp"
-
-    @property
-    def uncalibrated(self) -> float:
-        """The `calibration` that leaves an aggregate where it is, for a run that has
-        not refreshed one yet.
-        """
-        return 1.0 if self is Aggregation.P_MEAN else 0.0
-
-    def calibration(self, numer: float, true_max: float) -> float | None:
-        """The constant carrying this aggregate onto `true_max`, or `None` where it is
-        undefined.
-
-        Each aggregate is biased in the shape its own algebra gives it, which is what
-        decides the shape of the correction. With `N` elements sharing the maximum and
-        the rest negligible, `P_MEAN` reads `true_max * (N/nel)**(1/p)` and `LOGSUMEXP`
-        reads `true_max + log(N)/beta`: a ratio to undo in one case, a difference in the
-        other. Correcting either one in the other's shape holds only at the instant it
-        is measured and drifts everywhere else.
-
-        :return: `None` for `P_MEAN` at `numer == 0`, where the ratio has no value --
-            every element contributed zero, so the aggregate says nothing about the
-            maximum. `LOGSUMEXP` always has one, negative severity included.
-        """
-        if self is Aggregation.P_MEAN:
-            return None if numer == 0 else true_max / numer
-        return numer - true_max
-
-    def calibrated(
-        self, numer: Float[Tensor, ""] | float, calibration: float
-    ) -> Float[Tensor, ""] | float:
-        """`numer` carried onto the true weighted maximum by a `calibration`, as an
-        estimate of the maximum severity the smooth maximum stands in for.
-
-        Differentiable in `numer`, for the constraint rows built on it.
-        """
-        if self is Aggregation.P_MEAN:
-            return calibration * numer
-        return numer - calibration
-
-
-def calibration_from(
-    aggregation: Aggregation,
-    numer: float,
-    K_est: Float[Tensor, " nel"],
-    xPhys: Float[Tensor, "nely nelx"],
-    r: float,
-    previous: float,
-) -> float:
-    """
-    `aggregation.calibration` against the field's own true maximum severity,
-    `(1 - K_est) * xPhys**r` over the elements with a finite `K_est` -- an infinitely
-    shielded element has no severity to take a maximum over.
-
-    :param numer: the aggregate `hotspot_value` reported for this field
-    :param previous: the calibration to keep where a new one is undefined
-    :return: the calibration
-    """
-    finite = torch.isfinite(K_est)
-    severity = (1 - K_est[finite]) * xPhys.flatten()[finite] ** r
-    refreshed = aggregation.calibration(numer, float(severity.max()))
-    return previous if refreshed is None else refreshed
 
 
 def _stencil_offsets(rmin_cond: float) -> list[tuple[int, int, float]]:
@@ -368,80 +296,130 @@ def _weighted_logsumexp(
     return shift + torch.log(total) / beta
 
 
-def hotspot_value(
-    xPhys: Float[Tensor, "nely nelx"],
-    tPhys: Float[Tensor, "nely nelx"],
-    e1: Int[Tensor, " npairs"],
-    e2: Int[Tensor, " npairs"],
-    w: Float[Tensor, " npairs"],
-    p: float,
-    q: float,
-    r: float,
-    rouf: float,
-    denom: float | None = None,
-    base: Int[Tensor, " k"] | None = None,
-    aggregation: Aggregation = Aggregation.P_MEAN,
-    beta: float = 200.0,
-    density_exponent: float | None = None,
-) -> tuple[Float[Tensor, ""], Float[Tensor, " nely*nelx"]]:
-    """`hotspot_constraint`'s value alone (`numer`, `K_est`), differentiable end to end
-    w.r.t. `xPhys`/`tPhys` (autograd sensitivity path, `plans/torch_port_part2.md`
-    Phase 3.4 -- see `hotspot_constraint` for the hand-derived predecessor
-    `bench_sensitivities.py` times this against).
-
-    Written in the NaN-safe form the plan's Risks section requires: `cond_p =
-    (T_val * x**r) ** p` differentiates to `inf` at `x == 0` (density does reach exact
-    zero once the Heaviside projection saturates), so this computes the algebraically
-    identical `T_val**p * x**(r*p)` instead, whose gradient is finite because
-    `r*p > 1` at production settings (`r=0.05, p=25`). Also guards `_safe_pmean`'s
-    input against the (rarer) fully-solid-part singularity. Callers needing the caller
-    owned calibration/`Tcr` scaling and the constraint value build them from `numer`
-    directly, as `hotspot_constraint` does.
-
-    :param denom: `constant_denominator` for the run's `Normalization`. Note that
-        `T_val` can go negative under a constant denominator, which the `**p` here
-        only tolerates while `p` is integral -- `Aggregation.LOGSUMEXP` is the pairing
-        that does not care.
-    :param base: `infinite_base`'s print base, whose infinite density takes every
-        element within stencil reach of it out of the aggregate.
-    :param aggregation: which smooth maximum collapses the severity field.
-    :param beta: LOGSUMEXP sharpness; unused by P_MEAN, which takes `p` instead.
-    :param density_exponent: LOGSUMEXP's void-suppression exponent (`Aggregation` for
-        what it has to satisfy), defaulting to P_MEAN's implicit `r * p`. Unused by
-        P_MEAN, whose exponent is not separable.
-    :raises ValueError: if no element carrying density is left with a finite `K_est`,
-        the whole part being within stencil reach of the print base
+def _max_severity(
+    K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"], r: float
+) -> float:
+    """The true maximum severity `(1 - K_est) * xPhys**r` that a smooth maximum stands
+    in for, over the elements with a finite `K_est` -- an infinitely shielded element
+    has no severity to take a maximum over.
     """
-    nely, nelx = xPhys.shape
-    nel = nely * nelx
-    x = xPhys.flatten()
-    t = tPhys.flatten()
+    with torch.no_grad():
+        finite = torch.isfinite(K_est)
+        return float(((1 - K_est[finite]) * xPhys.flatten()[finite] ** r).max())
 
-    core = _conductivity_core(x, t, e1, e2, w, q, rouf, denom, base)
-    K_est = core.K_est
-    T_val = 1 - K_est
-    infinitely_shielded = torch.isinf(K_est)
-    if base is not None and not bool((~infinitely_shielded & (x > 0)).any()):
-        raise ValueError(
-            "every element carrying density has infinite K_est, being within the conductivity stencil's reach of the print base, so the hotspot measure has nothing left to aggregate over; shrink rmin_cond or use a normalization that needs no print base (infinite_base)"
-        )
 
-    if aggregation == Aggregation.P_MEAN:
+class PMean:
+    """`mean(T**p * x**(r*p)) ** (1/p)`, a scale-equivariant smooth maximum, carried
+    onto the true maximum by a calibration ratio.
+
+    It is built on powers, so it needs a non-negative field: `T` can go negative under
+    a constant denominator, which `**p` only tolerates while `p` is integral. It
+    approaches the true maximum from below by a factor `nel**(-1/p)` that worsens as the
+    mesh grows -- 0.687 at `p=25` on a 120x100 mesh, a quarter low. Its density weight
+    is `x**(r*p)`, so `p` cannot be changed without also changing how hard void is
+    suppressed, and `r*p <= 1` silently makes the gradient diverge at `x == 0`.
+
+    The calibration is run state, refreshed in place by a call with `recalibrate`.
+    """
+
+    def __init__(self, p: float, r: float):
+        self.p = p
+        self.r = r
+        self.calibration = 1.0
+
+    def __call__(
+        self,
+        K_est: Float[Tensor, " nel"],
+        xPhys: Float[Tensor, "nely nelx"],
+        recalibrate: bool = False,
+    ) -> Float[Tensor, ""]:
+        """The calibrated aggregate, differentiable in `K_est` and `xPhys`.
+
+        Written in a NaN-safe form: `(T * x**r) ** p` differentiates to `inf` at
+        `x == 0` (density does reach exact zero once the Heaviside projection
+        saturates), so this computes the algebraically identical `T**p * x**(r*p)`,
+        whose gradient is finite while `r*p > 1`.
+
+        :param recalibrate: first refresh the calibration against this field's true
+            maximum. Kept as it is where every element contributes zero, since the
+            aggregate then says nothing about the maximum.
+        """
+        x = xPhys.flatten()
         # An infinitely shielded element contributes nothing, which `(-inf)**p` is not
         # a way to say.
-        T_p = torch.where(infinitely_shielded, torch.zeros_like(T_val), T_val)
-        cond_p = T_p**p * x ** (r * p)
-        numer = _safe_pmean(torch.sum(cond_p) / nel, p)
+        T = torch.where(torch.isinf(K_est), torch.zeros_like(K_est), 1 - K_est)
+        numer = _safe_pmean(torch.mean(T**self.p * x ** (self.r * self.p)), self.p)
+        if recalibrate and float(numer) != 0:
+            self.calibration = _max_severity(K_est, xPhys, self.r) / float(numer)
+        return self.calibration * numer
+
+
+class LogSumExp:
+    """`log(sum(x**s * exp(beta*T))) / beta`, a translation-equivariant smooth maximum,
+    carried onto the true maximum by a calibration offset.
+
+    Translation rather than scale equivariance is the property that fits once
+    `Normalization.HALF_STENCIL` has pinned the scale against a physical reference:
+    `exp` is defined on all of R, so `K_est > 1` needs no clamp. Its bias is additive
+    and bounded by `log(nel_weighted)/beta` rather than multiplicative -- +0.001 at
+    `beta=200` where `PMean` at `p=25` is -26%. The bound grows as `beta` falls: a
+    `beta` low enough to spread the sensitivity past a handful of hot elements pays a
+    bias larger than the maximum itself (+1.9 at `beta=4` on a 120x100 c-shape), which
+    the calibration carries back onto the true maximum. Sharpness (`beta`) and density
+    suppression (`s`) are independent knobs.
+
+    The calibration is run state, refreshed in place by a call with `recalibrate`.
+    """
+
+    def __init__(self, beta: float, s: float, r: float):
+        """
+        :param r: the density exponent of the severity the calibration targets
+        """
+        self.beta = beta
+        self.s = s
+        self.r = r
+        self.calibration = 0.0
+
+    def __call__(
+        self,
+        K_est: Float[Tensor, " nel"],
+        xPhys: Float[Tensor, "nely nelx"],
+        recalibrate: bool = False,
+    ) -> Float[Tensor, ""]:
+        """The calibrated aggregate, differentiable in `K_est` and `xPhys`.
+
+        :param recalibrate: first refresh the calibration against this field's true
+            maximum.
+        """
+        # Infinitely shielded elements need no weight of their own: `exp(-inf) == 0`.
+        numer = _weighted_logsumexp(1 - K_est, xPhys.flatten() ** self.s, self.beta)
+        if recalibrate:
+            self.calibration = float(numer) - _max_severity(K_est, xPhys, self.r)
+        return numer - self.calibration
+
+
+def make_aggregation(
+    aggregation: Aggregation,
+    p: float,
+    r: float,
+    beta: float,
+    density_exponent: float | None,
+) -> PMean | LogSumExp:
+    """A fresh, uncalibrated aggregation for a run's settings.
+
+    :param beta: `LogSumExp` sharpness; unused by `PMean`, which takes `p` instead.
+    :param density_exponent: `LogSumExp`'s void-suppression exponent, defaulting to
+        `PMean`'s implicit `r * p`. Unused by `PMean`, whose exponent is not separable.
+    """
+    if aggregation == Aggregation.P_MEAN:
+        return PMean(p, r)
     elif aggregation == Aggregation.LOGSUMEXP:
         s = r * p if density_exponent is None else density_exponent
-        weight = x**s
-        # Infinitely shielded elements need no weight of their own: `exp(-inf) == 0`.
-        numer = _weighted_logsumexp(T_val, weight, beta)
+        return LogSumExp(beta, s, r)
     else:
         raise ValueError(
             f"aggregation must be an Aggregation member, got {aggregation!r}"
         )
-    return numer, K_est
 
 
 def estimated_conductivity(
@@ -457,9 +435,17 @@ def estimated_conductivity(
 ) -> Float[Tensor, " nely*nelx"]:
     """Local estimated conductivity: how strongly each element's neighborhood has
     already solidified (cooler, earlier `tPhys`) around it, used as an overheating
-    proxy by `hotspot_value`. `Normalization` sets what it is measured relative to,
+    proxy by `PMean`/`LogSumExp`. `Normalization` sets what it is measured relative to,
     via `denom`, and `infinite_base`'s `base` is infinite wherever it is in reach.
+
+    :raises ValueError: if no element carrying density is left with a finite `K_est`,
+        the whole part being within stencil reach of the print base
     """
     x = xPhys.flatten()
     t = tPhys.flatten()
-    return _conductivity_core(x, t, e1, e2, w, q, rouf, denom, base).K_est
+    K_est = _conductivity_core(x, t, e1, e2, w, q, rouf, denom, base).K_est
+    if base is not None and not bool((torch.isfinite(K_est) & (x > 0)).any()):
+        raise ValueError(
+            "every element carrying density has infinite K_est, being within the conductivity stencil's reach of the print base, so the hotspot measure has nothing left to aggregate over; shrink rmin_cond or use a normalization that needs no print base (infinite_base)"
+        )
+    return K_est

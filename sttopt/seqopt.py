@@ -51,9 +51,11 @@ import sttopt.torch_util as torch_util
 
 @dataclass(frozen=True)
 class Problem:
-    """Fixed problem setup: everything that doesn't change across iterations.
+    """Fixed problem setup: everything that doesn't change across iterations, except
+    `hotspot`'s calibration.
 
-    Built once by `build_problem` and passed unchanged to every `step` call.
+    Built once by `build_problem` and passed to every `step` call. `step` refreshes that
+    calibration in place, so it is not a pure function of `State`.
     """
 
     config: run_config.SeqRunConfig
@@ -78,6 +80,8 @@ class Problem:
     # Print base elements the hotspot measure treats as infinitely dense, or None where
     # the normalization needs no print base -- `conductivity.infinite_base`.
     hotspot_base: Int[Tensor, " k"] | None
+    # Smooth maximum of the hotspot severity, holding its own calibration.
+    hotspot: conductivity.PMean | conductivity.LogSumExp
     Nei: Int[Tensor, " k"]  # print-start element(s), already filtered to solid ones
 
     n: int  # number of MMA design variables: nel (t alone -- xPhys is fixed)
@@ -95,10 +99,6 @@ class State:
     upp: Float[Tensor, " n"]
     loop: int
     beta_t: float  # stage-mask sigmoid sharpness
-    # Carries the hotspot aggregate onto the true maximum severity; a ratio or an
-    # offset, whichever `config.hotspot_aggregation`'s bias calls for. Set from the
-    # initial field, then periodically refreshed -- `conductivity.calibration_from`.
-    hotspot_calibration: float
 
 
 @dataclass(frozen=True)
@@ -206,6 +206,13 @@ def build_problem(
         w=torch_util.to_tensor(w, device, dtype),
         hotspot_denom=hotspot_denom,
         hotspot_base=None if hotspot_base is None else int_fields["Nei"],
+        hotspot=conductivity.make_aggregation(
+            conductivity.Aggregation(config.hotspot_aggregation),
+            config.p,
+            config.r,
+            config.hotspot_beta,
+            config.hotspot_density_exponent,
+        ),
         n=n,
         **int_fields,
     )
@@ -238,8 +245,8 @@ def init_state(problem: Problem) -> State:
     element(s) through the material, with the void filled per `config.void_extension`
     (`timefield.init_geometry_timefield`). Both objective terms are dimensionless and
     order 1 (`plans/archive/fixed_geometry_sequence_optimization.md`), so no scale is
-    latched from the initial field; only the hotspot calibration is, so that `tru_max`
-    reports the true maximum from iteration 1.
+    latched from the initial field; only the hotspot calibration is, so that the hotspot
+    term reports the true maximum from iteration 1.
     """
     xPhys_np = torch_util.to_numpy(problem.xPhys)
     Nei_np = torch_util.to_numpy(problem.Nei)
@@ -248,17 +255,8 @@ def init_state(problem: Problem) -> State:
     )
     t = torch_util.to_tensor(t0, problem.device, problem.dtype)
 
-    config = problem.config
-    aggregation = conductivity.Aggregation(config.hotspot_aggregation)
-    numer, K_est = hotspot_value(problem, physical_timefield(problem, t))
-    calibration = conductivity.calibration_from(
-        aggregation,
-        float(numer),
-        K_est,
-        problem.xPhys,
-        config.r,
-        aggregation.uncalibrated,
-    )
+    K_est = estimated_conductivity(problem, physical_timefield(problem, t))
+    problem.hotspot(K_est, problem.xPhys, recalibrate=True)
 
     xold = t.flatten().clone()
     return State(
@@ -269,36 +267,30 @@ def init_state(problem: Problem) -> State:
         upp=torch.zeros(problem.n, device=problem.device, dtype=problem.dtype),
         loop=0,
         beta_t=10.0,
-        hotspot_calibration=calibration,
     )
 
 
-def hotspot_value(
+def estimated_conductivity(
     problem: Problem, tPhys: Float[Tensor, "nely nelx"]
-) -> tuple[Float[Tensor, ""], Float[Tensor, " nel"]]:
-    """The run's hotspot term and the `K_est` field behind it, with every conductivity
-    setting taken from `problem`.
+) -> Float[Tensor, " nel"]:
+    """The `K_est` field behind the run's hotspot term, with every conductivity setting
+    taken from `problem`.
 
     The one path to that field, so offline tooling cannot report a hotspot measure the
     run never optimized -- rebuilding this call by hand once plotted the print base as
     the worst hotspot in the domain (PR #98).
     """
     config = problem.config
-    return conductivity.hotspot_value(
+    return conductivity.estimated_conductivity(
         problem.xPhys,
         tPhys,
         problem.e1,
         problem.e2,
         problem.w,
-        config.p,
         config.q,
-        config.r,
         config.rouf,
         problem.hotspot_denom,
         problem.hotspot_base,
-        conductivity.Aggregation(config.hotspot_aggregation),
-        config.hotspot_beta,
-        config.hotspot_density_exponent,
     )
 
 
@@ -333,15 +325,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     t = state.t.clone().requires_grad_(True)
     tPhys = physical_timefield(problem, t)
 
-    numer_t, K_est_t = hotspot_value(problem, tPhys)
-    numer = float(numer_t.detach())
-    aggregation = conductivity.Aggregation(config.hotspot_aggregation)
-    calibration = state.hotspot_calibration
-    if loop % 25 == 0:
-        calibration = conductivity.calibration_from(
-            aggregation, numer, K_est_t.detach(), xPhys, config.r, calibration
-        )
-    hotspot_t = aggregation.calibrated(numer_t, calibration)
+    hotspot_t = problem.hotspot(
+        estimated_conductivity(problem, tPhys), xPhys, recalibrate=loop % 25 == 0
+    )
     # The roughness regularizer is not optional garnish: uniformity alone rewards a
     # sawtooth across the print direction (`timefield._gradient_cv`).
     metric = timefield.UniformityMetric(config.uniformity_metric)
@@ -443,7 +429,6 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         upp=upp,
         loop=loop,
         beta_t=beta_t,
-        hotspot_calibration=calibration,
     )
     record = IterationRecord(
         f=f_val,

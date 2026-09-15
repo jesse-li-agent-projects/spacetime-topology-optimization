@@ -1024,18 +1024,28 @@ def test_hotspot_constraint_fd_density_near_binary():
     np.testing.assert_allclose(df1, fd_x, rtol=1e-3, atol=1e-4)
 
 
-# --- Phase 3.4 (plans/torch_port_part2.md): hotspot_value, autograd sensitivities ----
+# --- Phase 3.4 (plans/torch_port_part2.md): PMean, autograd sensitivities -------------
 #
-# hotspot_constraint's df1/dt1 are hand-derived; hotspot_value returns only (numer,
-# K_est), differentiable end to end w.r.t. xPhys/tPhys, and its sensitivity is meant to
-# come from autograd instead. These tests build the same H/Hs/dx chain by hand (the
-# density filter's own adjoint, plus the Heaviside chain rule stto.step's autograd
-# path threads automatically) so the comparison lines up with hotspot_constraint's
-# already-chained df1/dt1.
+# hotspot_constraint's df1/dt1 are hand-derived; the production aggregate is
+# differentiable end to end w.r.t. xPhys/tPhys, and its sensitivity is meant to come
+# from autograd instead. These tests build the same H/Hs/dx chain by hand (the density
+# filter's own adjoint, plus the Heaviside chain rule stto.step's autograd path threads
+# automatically) so the comparison lines up with hotspot_constraint's already-chained
+# df1/dt1.
 
 
-def test_hotspot_value_matches_hand_derived_sensitivities_on_fixture():
-    """Autograd sensitivity of `hotspot_value`'s `numer` (`d(numer)/d(xPhys)`,
+def _hotspot_value(xPhys, tPhys, e1, e2, w, aggregation=None, denom=None, base=None):
+    """The uncalibrated hotspot aggregate (`PMean` unless given) and the `K_est` behind
+    it."""
+    K_est = conductivity.estimated_conductivity(
+        xPhys, tPhys, e1, e2, w, Q, ROUF, denom, base
+    )
+    aggregation = conductivity.PMean(P, R) if aggregation is None else aggregation
+    return aggregation(K_est, xPhys), K_est
+
+
+def test_p_mean_matches_hand_derived_sensitivities_on_fixture():
+    """Autograd sensitivity of the `PMean` aggregate `numer` (`d(numer)/d(xPhys)`,
     `d(numer)/d(tPhys)`) against the hand-derived `df1`/`dt1`, at the fixture's 3
     snapshots -- `algebraic` tier (no FE solve involved). Reuses the fixture's own
     `dx` (the Heaviside-derivative field, `heaviside_projection_derivative`'s output
@@ -1061,9 +1071,7 @@ def test_hotspot_value_matches_hand_derived_sensitivities_on_fixture():
         dx = tt(e2e["dx_all"][:, :, k]).flatten()
         factor = float(factor_all[k])
 
-        numer, _ = conductivity.hotspot_value(
-            xPhys, tPhys, e1_t, e2_t, w_t, P, Q, R, ROUF
-        )
+        numer, _ = _hotspot_value(xPhys, tPhys, e1_t, e2_t, w_t)
         fval = factor * numer / TCR - 1
         d_xPhys, d_tPhys = torch.autograd.grad(fval, (xPhys, tPhys))
 
@@ -1074,10 +1082,9 @@ def test_hotspot_value_matches_hand_derived_sensitivities_on_fixture():
         assert_close(dt1, fx["dt1_all"][:, k], tier="algebraic")
 
 
-def test_hotspot_value_fd_density_and_time():
-    """`hotspot_value`'s autograd sensitivity against central differences, at a small
-    mesh -- an oracle-free check independent of both `hotspot_value` and
-    `hotspot_constraint`.
+def test_p_mean_fd_density_and_time():
+    """`PMean`'s autograd sensitivity against central differences, at a small mesh --
+    an oracle-free check independent of both `PMean` and `hotspot_constraint`.
     """
     nelx, nely = 8, 6
     nel = nelx * nely
@@ -1090,14 +1097,12 @@ def test_hotspot_value_fd_density_and_time():
     tPhys0 = rng.uniform(0.0, 1.0, size=(nely, nelx))
 
     def numer_of(xPhys, tPhys):
-        n, _ = conductivity.hotspot_value(
-            tt(xPhys), tt(tPhys), e1, e2, w, P, Q, R, ROUF
-        )
+        n, _ = _hotspot_value(tt(xPhys), tt(tPhys), e1, e2, w)
         return float(n)
 
     xPhys_t = tt(xPhys0).requires_grad_(True)
     tPhys_t = tt(tPhys0).requires_grad_(True)
-    numer, _ = conductivity.hotspot_value(xPhys_t, tPhys_t, e1, e2, w, P, Q, R, ROUF)
+    numer, _ = _hotspot_value(xPhys_t, tPhys_t, e1, e2, w)
     d_x, d_t = torch.autograd.grad(numer, (xPhys_t, tPhys_t))
     d_x, d_t = d_x.numpy().flatten(), d_t.numpy().flatten()
 
@@ -1119,8 +1124,8 @@ def test_hotspot_value_fd_density_and_time():
     np.testing.assert_allclose(d_t, fd_t, rtol=1e-4, atol=1e-7)
 
 
-def test_hotspot_value_finite_at_exact_zero_density():
-    """`hotspot_value`'s autograd gradient must stay finite at exact-zero `xPhys`
+def test_p_mean_finite_at_exact_zero_density():
+    """`PMean`'s autograd gradient must stay finite at exact-zero `xPhys`
     (reached routinely once `beta_d` saturates), the autograd counterpart of
     `test_hotspot_constraint_finite_at_exact_zero_density`. Before the NaN-safe
     rewrite (`cond_p = T_val**p * x**(r*p)` instead of `(T_val * x**r)**p`), this
@@ -1137,17 +1142,17 @@ def test_hotspot_value_finite_at_exact_zero_density():
 
     xPhys_t = tt(xPhys).requires_grad_(True)
     tPhys_t = tt(tPhys).requires_grad_(True)
-    numer, _ = conductivity.hotspot_value(xPhys_t, tPhys_t, e1, e2, w, P, Q, R, ROUF)
+    numer, _ = _hotspot_value(xPhys_t, tPhys_t, e1, e2, w)
     d_x, d_t = torch.autograd.grad(numer, (xPhys_t, tPhys_t))
     assert torch.all(torch.isfinite(d_x))
     assert torch.all(torch.isfinite(d_t))
 
 
-def test_hotspot_value_naive_form_would_have_produced_nan():
+def test_p_mean_naive_form_would_have_produced_nan():
     """Demonstrates the NaN-safe rewrite is load-bearing: the naive, algebraically
     equivalent `(T_val * x**r) ** p` form (the transliteration a mechanical port would
     produce) gives a `nan` gradient at the same exact-zero density where
-    `hotspot_value`'s rewritten form stays finite -- proof the regression test above
+    `PMean`'s rewritten form stays finite -- proof the regression test above
     would actually have caught Phase 0a's bug resurrected under autograd, not merely
     that finite gradients happen to occur here.
     """
@@ -1170,10 +1175,10 @@ def test_hotspot_value_naive_form_would_have_produced_nan():
     assert torch.any(torch.isnan(d_x))
 
 
-def test_hotspot_value_fully_solid_part_gradient_is_finite():
+def test_p_mean_fully_solid_part_gradient_is_finite():
     """`sum_cond == 0` (every element `T_val == 0`, i.e. a fully solid, maximally
     "cool" part) makes the naive `u**(1/p)` gradient diverge (`1/p - 1 < 0`);
-    `_safe_pmean` gives it, and hence `hotspot_value`, a `0` gradient there instead --
+    `_safe_pmean` gives it, and hence `PMean`, a `0` gradient there instead --
     the analytic limit `hotspot_constraint`'s own `scale = 0.0 if sum_cond == 0` comment
     already derives for the hand-derived path.
     """
@@ -1183,7 +1188,7 @@ def test_hotspot_value_fully_solid_part_gradient_is_finite():
     xPhys = torch.ones(nely, nelx, dtype=torch.float64, requires_grad=True)
     tPhys = torch.rand(nely, nelx, dtype=torch.float64)
 
-    numer, K_est = conductivity.hotspot_value(xPhys, tPhys, e1, e2, w, P, Q, R, ROUF)
+    numer, K_est = _hotspot_value(xPhys, tPhys, e1, e2, w)
     assert float(numer.detach()) == 0.0
     assert torch.all(K_est == 1.0)
     (d_x,) = torch.autograd.grad(numer, (xPhys,))
@@ -1238,11 +1243,7 @@ def test_half_stencil_is_blind_to_void_print_time():
     def numer_with_void_time(fill, denom):
         t = tPhys.copy()
         t[void] = fill
-        return float(
-            conductivity.hotspot_value(
-                tt(xPhys), tt(t), e1, e2, w, P, Q, R, ROUF, denom
-            )[0]
-        )
+        return float(_hotspot_value(tt(xPhys), tt(t), e1, e2, w, denom=denom)[0])
 
     assert_close(numer_with_void_time(-1e3, denom), numer_with_void_time(1e3, denom))
     # ... and the same swap does move NEIGHBORHOOD, so the test above is not vacuous.
@@ -1343,15 +1344,13 @@ def test_infinite_base_rejects_a_wholly_shielded_part():
         conductivity.Normalization.HALF_STENCIL, rmin_cond
     )
     with pytest.raises(ValueError, match="nothing left to aggregate over"):
-        conductivity.hotspot_value(
+        conductivity.estimated_conductivity(
             tt(np.ones((nely, nelx))),
             tt(np.zeros((nely, nelx))),
             tti(e1),
             tti(e2),
             tt(w),
-            P,
             Q,
-            R,
             ROUF,
             denom,
             tti(base),
@@ -1391,11 +1390,9 @@ def test_infinite_base_removes_the_first_layer_false_hotspot():
     assert np.isneginf(with_base[-1]).all()
     assert with_base[np.isfinite(with_base)].max() < bare[-1].max()
 
-    numer_bare, _ = conductivity.hotspot_value(
-        tt(xPhys), tt(tPhys), e1, e2, w, P, Q, R, ROUF, denom
-    )
-    numer_base, _ = conductivity.hotspot_value(
-        tt(xPhys), tt(tPhys), e1, e2, w, P, Q, R, ROUF, denom, base
+    numer_bare, _ = _hotspot_value(tt(xPhys), tt(tPhys), e1, e2, w, denom=denom)
+    numer_base, _ = _hotspot_value(
+        tt(xPhys), tt(tPhys), e1, e2, w, denom=denom, base=base
     )
     assert float(numer_base) < float(numer_bare)
 
@@ -1421,21 +1418,15 @@ def test_infinite_base_leaves_gradients_finite(aggregation):
         True
     )
     tPhys_t = tt(rng.uniform(0.0, 1.0, size=(nely, nelx))).requires_grad_(True)
-    numer, _ = conductivity.hotspot_value(
+    numer, _ = _hotspot_value(
         xPhys_t,
         tPhys_t,
         e1,
         e2,
         w,
-        P,
-        Q,
-        R,
-        ROUF,
+        conductivity.make_aggregation(aggregation, P, R, 200.0, 1.25),
         denom,
         base,
-        aggregation,
-        200.0,
-        1.25,
     )
     assert torch.isfinite(numer)
     d_x, d_t = torch.autograd.grad(numer, (xPhys_t, tPhys_t))
@@ -1473,21 +1464,8 @@ def test_logsumexp_brackets_the_true_max_from_above(beta):
     solid = xPhys.flatten() > 0.5
     true_max = severity[solid].max()
 
-    numer, _ = conductivity.hotspot_value(
-        tt(xPhys),
-        tt(tPhys),
-        e1,
-        e2,
-        w,
-        P,
-        Q,
-        R,
-        ROUF,
-        denom,
-        None,
-        conductivity.Aggregation.LOGSUMEXP,
-        beta,
-        1.25,
+    numer, _ = _hotspot_value(
+        tt(xPhys), tt(tPhys), e1, e2, w, conductivity.LogSumExp(beta, 1.25, R), denom
     )
     bound = np.log(solid.sum()) / beta
     assert true_max <= float(numer) <= true_max + bound
@@ -1520,29 +1498,16 @@ def test_logsumexp_admits_severity_below_zero():
 
     xPhys_t = tt(xPhys).requires_grad_(True)
     tPhys_t = tt(tPhys).requires_grad_(True)
-    numer, _ = conductivity.hotspot_value(
-        xPhys_t,
-        tPhys_t,
-        e1,
-        e2,
-        w,
-        P,
-        Q,
-        R,
-        ROUF,
-        denom,
-        None,
-        conductivity.Aggregation.LOGSUMEXP,
-        200.0,
-        1.25,
+    numer, _ = _hotspot_value(
+        xPhys_t, tPhys_t, e1, e2, w, conductivity.LogSumExp(200.0, 1.25, R), denom
     )
     assert torch.isfinite(numer)
     d_x, d_t = torch.autograd.grad(numer, (xPhys_t, tPhys_t))
     assert torch.all(torch.isfinite(d_x)) and torch.all(torch.isfinite(d_t))
 
     # Non-integral `p` is what P_MEAN cannot survive on the same field.
-    naive, _ = conductivity.hotspot_value(
-        tt(xPhys), tt(tPhys), e1, e2, w, 25.5, Q, R, ROUF, denom
+    naive, _ = _hotspot_value(
+        tt(xPhys), tt(tPhys), e1, e2, w, conductivity.PMean(25.5, R), denom
     )
     assert torch.isnan(naive)
 
@@ -1564,15 +1529,15 @@ def test_logsumexp_gradient_matches_finite_differences():
     rng = np.random.default_rng(201)
     xPhys0 = rng.uniform(0.2, 0.9, size=(nely, nelx))
     tPhys0 = rng.uniform(0.0, 1.0, size=(nely, nelx))
-    args = (P, Q, R, ROUF, denom, None, conductivity.Aggregation.LOGSUMEXP, 20.0, 1.25)
+    lse = conductivity.LogSumExp(20.0, 1.25, R)
 
     def numer_of(xPhys, tPhys):
-        n, _ = conductivity.hotspot_value(tt(xPhys), tt(tPhys), e1, e2, w, *args)
+        n, _ = _hotspot_value(tt(xPhys), tt(tPhys), e1, e2, w, lse, denom)
         return float(n)
 
     xPhys_t = tt(xPhys0).requires_grad_(True)
     tPhys_t = tt(tPhys0).requires_grad_(True)
-    numer, _ = conductivity.hotspot_value(xPhys_t, tPhys_t, e1, e2, w, *args)
+    numer, _ = _hotspot_value(xPhys_t, tPhys_t, e1, e2, w, lse, denom)
     d_x, d_t = torch.autograd.grad(numer, (xPhys_t, tPhys_t))
 
     fd_x, fd_t = np.zeros(nel), np.zeros(nel)
@@ -1595,91 +1560,77 @@ def test_logsumexp_density_exponent_defaults_to_the_p_mean_one():
     """`null` means "whatever P_MEAN was implicitly using", so a config that does not
     mention the exponent does not silently change how hard void is suppressed.
     """
-    nelx, nely = 14, 10
-    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
-    e1, e2, w = tti(e1), tti(e2), tt(w)
-    rng = np.random.default_rng(202)
-    xPhys = rng.uniform(0.1, 1.0, size=(nely, nelx))
-    tPhys = rng.uniform(0.0, 1.0, size=(nely, nelx))
-    common = (e1, e2, w, P, Q, R, ROUF, None, None, conductivity.Aggregation.LOGSUMEXP)
-
-    implicit, _ = conductivity.hotspot_value(tt(xPhys), tt(tPhys), *common, 200.0, None)
-    explicit, _ = conductivity.hotspot_value(
-        tt(xPhys), tt(tPhys), *common, 200.0, R * P
+    aggregation = conductivity.make_aggregation(
+        conductivity.Aggregation.LOGSUMEXP, P, R, 200.0, None
     )
-    assert_close(float(implicit), float(explicit))
+    assert aggregation.s == R * P
 
 
-def test_hotspot_value_rejects_an_unknown_aggregation():
-    nelx, nely = 6, 5
-    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+def test_make_aggregation_rejects_an_unknown_aggregation():
     with pytest.raises(ValueError, match="Aggregation member"):
-        conductivity.hotspot_value(
-            tt(np.ones((nely, nelx))),
-            tt(np.zeros((nely, nelx))),
-            tti(e1),
-            tti(e2),
-            tt(w),
-            P,
-            Q,
-            R,
-            ROUF,
-            None,
-            None,
-            "nonsense",
-        )
+        conductivity.make_aggregation("nonsense", P, R, 200.0, None)
 
 
 def test_calibration_takes_the_shape_of_each_aggregates_bias():
     """With `N` elements sharing the maximum and the rest negligible, the count
     multiplies P_MEAN and adds to LOGSUMEXP, which is what makes one calibration a
-    ratio and the other a difference.
+    ratio and the other a difference. Before any refresh, each reports its biased
+    aggregate unaltered.
     """
     nel, beta, true_max = 12000, 200.0, 0.45
+    xPhys = torch.ones(nel, 1, dtype=torch.float64)
     for N in (1, 10, 100, 1000):
-        T = torch.full((nel,), -1e3, dtype=torch.float64)
-        T[:N] = true_max
-        p_mean = float(
-            conductivity._safe_pmean(torch.sum(torch.clamp(T, min=0.0) ** P) / nel, P)
+        # P_MEAN needs a non-negative field, so its negligible elements sit at zero.
+        K_p_mean = torch.ones(nel, dtype=torch.float64)
+        K_p_mean[:N] = 1 - true_max
+        K_lse = torch.full((nel,), 1 + 1e3, dtype=torch.float64)
+        K_lse[:N] = 1 - true_max
+
+        p_mean = conductivity.PMean(P, R)
+        assert float(p_mean(K_p_mean, xPhys)) == pytest.approx(
+            true_max * (N / nel) ** (1 / P)
         )
-        lse = float(conductivity._weighted_logsumexp(T, torch.ones_like(T), beta))
-        assert p_mean == pytest.approx(true_max * (N / nel) ** (1 / P))
-        assert lse == pytest.approx(true_max + np.log(N) / beta)
+        assert float(p_mean(K_p_mean, xPhys, recalibrate=True)) == pytest.approx(
+            true_max
+        )
+        assert p_mean.calibration == pytest.approx((nel / N) ** (1 / P))
 
-        assert conductivity.Aggregation.P_MEAN.calibration(
-            p_mean, true_max
-        ) == pytest.approx((nel / N) ** (1 / P))
-        assert conductivity.Aggregation.LOGSUMEXP.calibration(
-            lse, true_max
-        ) == pytest.approx(np.log(N) / beta)
-
-
-@pytest.mark.parametrize("aggregation", list(conductivity.Aggregation))
-def test_calibrated_recovers_the_true_max_it_was_calibrated_against(aggregation):
-    numer, true_max = 0.6231, 0.4508
-    calibration = aggregation.calibration(numer, true_max)
-    assert float(aggregation.calibrated(numer, calibration)) == pytest.approx(true_max)
-    # Before any refresh, an aggregate stands unaltered.
-    assert float(
-        aggregation.calibrated(numer, aggregation.uncalibrated)
-    ) == pytest.approx(numer)
+        lse = conductivity.LogSumExp(beta, 1.0, R)
+        assert float(lse(K_lse, xPhys)) == pytest.approx(true_max + np.log(N) / beta)
+        assert float(lse(K_lse, xPhys, recalibrate=True)) == pytest.approx(true_max)
+        assert lse.calibration == pytest.approx(np.log(N) / beta)
 
 
 @pytest.mark.parametrize("aggregation", list(conductivity.Aggregation))
-def test_calibrated_is_differentiable_in_the_aggregate(aggregation):
-    """`stto`'s hotspot constraint row is built on it."""
-    numer = torch.tensor(0.6231, dtype=torch.float64, requires_grad=True)
-    calibration = aggregation.calibration(0.6231, 0.4508)
-    (grad,) = torch.autograd.grad(aggregation.calibrated(numer, calibration), numer)
-    assert torch.isfinite(grad)
+def test_calibration_holds_until_the_next_refresh(aggregation):
+    """A call without `recalibrate` corrects its own field by the calibration the last
+    refresh measured on another one, in the shape of its aggregate's bias."""
+    rng = np.random.default_rng(204)
+    xPhys = tt(rng.uniform(0.5, 1.0, size=(4, 5)))
+    K_measured, K_later = tt(rng.uniform(0.0, 0.5, size=(2, 20)))
+    aggregate = conductivity.make_aggregation(aggregation, P, R, 200.0, None)
 
-
-def test_calibration_is_undefined_only_where_the_ratio_is():
-    """A zero P_MEAN says nothing about the maximum -- every element contributed zero
-    -- so there is no ratio to take. LOGSUMEXP's difference always has a value, at
-    negative severity included.
-    """
-    assert conductivity.Aggregation.P_MEAN.calibration(0.0, 0.5) is None
-    assert conductivity.Aggregation.LOGSUMEXP.calibration(-0.2, -0.3) == pytest.approx(
-        0.1
+    raw = float(aggregate(K_later, xPhys))
+    aggregate(K_measured, xPhys, recalibrate=True)
+    expected = (
+        raw * aggregate.calibration
+        if aggregation == conductivity.Aggregation.P_MEAN
+        else raw - aggregate.calibration
     )
+    assert float(aggregate(K_later, xPhys)) == pytest.approx(expected)
+
+
+def test_p_mean_keeps_its_calibration_where_the_ratio_is_undefined():
+    """A zero P_MEAN says nothing about the maximum -- every element contributed zero
+    -- so a refresh there leaves the calibration as it was. LOGSUMEXP's difference
+    always has a value, at negative severity included.
+    """
+    xPhys = torch.ones(4, 5, dtype=torch.float64)
+    p_mean = conductivity.PMean(P, R)
+    p_mean.calibration = 1.3
+    p_mean(torch.ones(20, dtype=torch.float64), xPhys, recalibrate=True)
+    assert p_mean.calibration == 1.3
+
+    lse = conductivity.LogSumExp(200.0, 1.0, R)
+    K_est = torch.full((20,), 1.3, dtype=torch.float64)
+    assert float(lse(K_est, xPhys, recalibrate=True)) == pytest.approx(-0.3)
