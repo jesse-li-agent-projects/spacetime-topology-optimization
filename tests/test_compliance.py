@@ -4,6 +4,8 @@ checks, and closed-form elasticity solutions.
 See conftest.py/conventions.md for fixture format and tolerance policy.
 """
 
+import functools
+
 import numpy as np
 import pytest
 import scipy.sparse as sp
@@ -148,6 +150,8 @@ def test_whole_compliance_axial_bar_patch(t, Emax):
     np.testing.assert_allclose(c, c_analytic, rtol=1e-9)
 
 
+# Cached: the convergence and scaling tests reuse the solves of the per-resolution tests.
+@functools.cache
 def _cantilever_beam_compliance(
     nely: int, P: float = 1.0, Emax: float = 1.0
 ) -> tuple[float, float]:
