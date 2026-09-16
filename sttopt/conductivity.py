@@ -390,19 +390,15 @@ class LogSumExp:
     ) -> Float[Tensor, ""]:
         """The calibrated aggregate, differentiable in `K_est` and `xPhys`.
 
-        `x**r` differentiates to `inf` at `x == 0` for `r < 1`, so exact zeros take a
-        substitute input and a zero severity, and an infinitely shielded element takes
-        `-inf` severity through a finite substitute (safe-input-then-reselect, as in
-        `_safe_pmean`).
-
         :param recalibrate: first refresh the calibration against this field's true
             maximum.
         """
         x = xPhys.flatten()
         shielded = torch.isinf(K_est)
         solid = x > 0
-        x_safe = torch.where(solid, x, torch.ones_like(x))
-        x_r = torch.where(solid, x_safe**self.r, 0)
+        # not torch.where(solid, x**self.r, 0): the dead branch backprops 0 * inf = nan
+        x_r = solid * torch.where(solid, x, torch.ones_like(x)) ** self.r
+        # `1 - inf` would poison the `-inf` reselect below through `inf * 0`.
         T = torch.where(shielded, torch.zeros_like(K_est), 1 - K_est)
         severity = torch.where(shielded, -torch.inf, T * x_r)
         numer = _weighted_logsumexp(severity, torch.ones_like(x), self.beta)
