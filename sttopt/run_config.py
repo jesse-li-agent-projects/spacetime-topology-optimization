@@ -14,18 +14,19 @@ a `--config` JSON file or by constructing the dataclass directly in code. Run
 bookkeeping that isn't a `build_problem` hyperparameter (`--tag`, `--device`) lives on
 the CLI's `args`, not here.
 
-Settings have no dataclass defaults: `configs/default.json`/`configs/seq_default.json`
+Neither config has dataclass defaults: `configs/default.json`/`configs/seq_default.json`
 are the single source of default settings, so a run's values are never split between
 a config file and this module. That holds for a newly added field too, even though it
 means run records written before the field existed no longer load -- add the field to
-every config file instead. `RunConfig`'s continuation fields are the exception, defaulted
-so that run records written before they existed still load.
+every config file instead.
 """
 
+import bisect
 import dataclasses
 import math
 import warnings
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TypeVar
 
 import numpy as np
@@ -100,18 +101,30 @@ class CosineSchedule:
         return self.final + (self.initial - self.final) * taper
 
 
+class Interpolation(StrEnum):
+    """How a `PiecewiseSchedule` fills the gaps between its points.
+
+    LOG interpolates in log space, which suits multiplicative settings such as a
+    projection or aggregation sharpness. STEP does not interpolate at all: each point's
+    value holds until the next point's iteration, for a continuation that jumps.
+    """
+
+    LINEAR = "linear"
+    LOG = "log"
+    STEP = "step"
+
+
 @dataclass(kw_only=True)
 class PiecewiseSchedule:
-    """A scalar hyperparameter interpolated between `(iteration, value)` points, and held
-    at the first/last value outside them.
+    """A scalar hyperparameter defined by `(iteration, value)` points, held at the first
+    /last value outside them and filled between them per `mode`.
 
     Use it for continuation that a single decay cannot express: a delayed start, a ramp
-    up, or several phases tied to one timeline. `log` interpolates in log space, which
-    suits multiplicative settings such as a projection or aggregation sharpness.
+    up, a jump, or several phases tied to one timeline.
     """
 
     points: list[list[float]]
-    log: bool = False
+    mode: str = Interpolation.LINEAR
 
     def __post_init__(self) -> None:
         loops = [p[0] for p in self.points]
@@ -119,7 +132,10 @@ class PiecewiseSchedule:
             raise ValueError(
                 f"points must be non-empty and sorted by iteration, got {self.points}"
             )
-        if self.log and any(p[1] <= 0 for p in self.points):
+        # Raises on an unknown mode, so a typo fails at load rather than silently
+        # interpolating.
+        mode = Interpolation(self.mode)
+        if mode is Interpolation.LOG and any(p[1] <= 0 for p in self.points):
             raise ValueError(
                 f"log interpolation needs positive values, got {self.points}"
             )
@@ -128,7 +144,10 @@ class PiecewiseSchedule:
         """The value at 1-indexed iteration `loop`."""
         loops = [p[0] for p in self.points]
         values = [p[1] for p in self.points]
-        if self.log:
+        mode = Interpolation(self.mode)
+        if mode is Interpolation.STEP:
+            return float(values[max(bisect.bisect_right(loops, loop) - 1, 0)])
+        if mode is Interpolation.LOG:
             return math.exp(float(np.interp(loop, loops, np.log(values))))
         return float(np.interp(loop, loops, values))
 
@@ -205,7 +224,6 @@ class RunConfig(_ConfigMixin):
     continuity_tol: float
     lrmin: float
     rmin_cond: float
-    beta_d_max: float
     Emin: float
     Emax: float
     nu: float
@@ -220,14 +238,13 @@ class RunConfig(_ConfigMixin):
     move: float
     tmove: float
 
-    # Continuation. Defaulted, unlike every field above, so run records written before
-    # these existed still load. `None` keeps the legacy schedules: `beta_d` doubling
-    # every 50 iterations up to `beta_d_max`, `beta_t` from 10 by 5 every 30 up to 50.
-    beta_d_schedule: Scheduled | None = None
-    beta_t_schedule: Scheduled | None = None
+    # The density/time projection sharpnesses, scheduled like any other setting; the
+    # long-standing ramps are `Interpolation.STEP` schedules in the config files.
+    beta_d_schedule: Scheduled
+    beta_t_schedule: Scheduled
     # Iterations between hotspot calibration refreshes. A change in a scheduled
     # `hotspot_beta` or `rouf` also refreshes it, since both move the aggregate's bias.
-    hotspot_refresh_period: int = 25
+    hotspot_refresh_period: int
 
 
 @dataclass(kw_only=True)

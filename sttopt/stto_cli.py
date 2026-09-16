@@ -1,6 +1,6 @@
 """Command-line entry point for the space-time topology optimization loop -- the
 argparse equivalent of `conductivity_estimation_stto_main.m`'s hardcoded constants at
-the top of that script (`nelx`, `nely`, `nloop`, ... through `beta_d_max`), with the same
+the top of that script (`nelx`, `nely`, `nloop`, ... through the projection ramps), with the same
 default values (the original *full-scale* script's constants, not the smaller ones the
 fixture harness/tests use for speed).
 
@@ -32,7 +32,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="path to a RunConfig JSON file (e.g. a previous run's output/<tag>/"
         "config.json). Fields (nelx, nely, nloop, volfrac, nStage, Theta, Tcr, "
-        "print_base, rmin, lrmin, rmin_cond, beta_d_max, and the rest of "
+        "print_base, rmin, lrmin, rmin_cond, beta_d_schedule, and the rest of "
         "build_problem's hyperparameters) are settable only through this file",
     )
     parser.add_argument(
@@ -108,7 +108,7 @@ def main(args: argparse.Namespace) -> None:
     (output_dir / "config.json").write_text(json.dumps(config.to_dict(), indent=2))
 
     problem = stto.build_problem(config, device=args.device)
-    state = stto.init_state(problem, beta_d=1.0)
+    state = stto.init_state(problem)
 
     start = time.perf_counter()
     with (output_dir / "iterations.jsonl").open("w") as log:
@@ -116,9 +116,10 @@ def main(args: argparse.Namespace) -> None:
             state, record = stto.step(problem, state)
             xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, state.beta_d)
             diag = record.diagnostics
+            vol = float(xPhys.mean())
             print(
                 f"It.: {state.loop:4d} Obj.: {record.f:10.4f} "
-                f"Vol.: {xPhys.mean():6.3f} Tm.: {record.tru_max:7.3f} "
+                f"Vol.: {vol:6.3f} Tm.: {record.tru_max:7.3f} "
                 f"Unif.: {record.uniformity:8.5f} c: {record.obj:9.3f} "
                 f"TmTrue: {diag['true_max']:6.3f} neff: {diag['n_eff']:7.1f}"
             )
@@ -127,7 +128,7 @@ def main(args: argparse.Namespace) -> None:
                 elapsed=time.perf_counter() - start,
                 f=record.f,
                 obj=record.obj,
-                vol=float(xPhys.mean()),
+                vol=vol,
                 tru_max=record.tru_max,
                 uniformity=record.uniformity,
                 roughness=record.roughness,

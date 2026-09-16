@@ -97,11 +97,8 @@ CONFIG = run_config.RunConfig.from_dict(
     json.loads((Path(__file__).parent.parent / "configs" / "default.json").read_text())
 )
 
-# beta_t and beta_d as of loop 800, per stto.step's continuation schedules
-# (beta_t += 5 every 30 loops while < 50; beta_d *= 2 every 50 loops, capped at
-# beta_d_max=128). Both schedules saturate before loop 800 (beta_t at loop 350,
-# beta_d at loop 350 too since 2**7 == 128 at loop 350) -- confirmed by simulating
-# the exact update in stto.step against BETA_INIT=1.0/beta_t0=10.0 for 800 loops.
+# beta_t and beta_d as of loop 800: both of the default config's step schedules have
+# saturated by then (beta_d at loop 351, beta_t at loop 241).
 LOOP = 800
 BETA_T = 50.0
 BETA_D = 128.0

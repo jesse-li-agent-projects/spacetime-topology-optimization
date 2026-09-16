@@ -40,6 +40,8 @@ import torch
 from jaxtyping import Float, Int
 from torch import Tensor
 
+from sttopt import run_config
+
 
 class Normalization(StrEnum):
     """Names for what `K_est` measures shielding *against*, selectable per run.
@@ -277,35 +279,26 @@ def _safe_pmean(u: Float[Tensor, ""], p: float) -> Float[Tensor, ""]:
     return torch.where(u == 0, torch.zeros_like(val), val)
 
 
-def _weighted_logsumexp(
-    T_val: Float[Tensor, " nel"], weight: Float[Tensor, " nel"], beta: float
-) -> Float[Tensor, ""]:
-    """`log(sum(weight * exp(beta * T_val))) / beta`, shifted by `max(T_val)` so the
-    exponential cannot overflow at the large `beta` a sharp maximum needs.
+def severity(
+    K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"], r: float
+) -> Float[Tensor, " nel"]:
+    """The per-element overheating severity `(1 - K_est) * xPhys**r`, `-inf` where an
+    element is infinitely shielded and so has no severity to compare.
 
-    Shifting by a detached maximum is exact, not an approximation: the shift cancels
-    between the sum and the added-back constant, and the gradient it produces,
-    `weight * softmax(beta * T_val)`, is the same either way.
-
-    :param weight: per-element weight, zero wherever an element takes no part
-    :param beta: sharpness; the result exceeds `max(T_val)` over the weighted
-        elements by at most `log(sum(weight))/beta`
+    The one no-grad statement of the quantity the aggregations smooth-max and the
+    calibration targets, so a reading of the field cannot drift from the optimized one.
+    The aggregations build their own gradient-safe variants of it.
     """
-    shift = T_val.max().detach()
-    total = torch.sum(weight * torch.exp(beta * (T_val - shift)))
-    return shift + torch.log(total) / beta
+    with torch.no_grad():
+        finite = torch.isfinite(K_est)
+        return torch.where(finite, (1 - K_est) * xPhys.flatten() ** r, -torch.inf)
 
 
 def _max_severity(
     K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"], r: float
 ) -> float:
-    """The true maximum severity `(1 - K_est) * xPhys**r` that a smooth maximum stands
-    in for, over the elements with a finite `K_est` -- an infinitely shielded element
-    has no severity to take a maximum over.
-    """
-    with torch.no_grad():
-        finite = torch.isfinite(K_est)
-        return float(((1 - K_est[finite]) * xPhys.flatten()[finite] ** r).max())
+    """The true maximum severity a smooth maximum stands in for."""
+    return float(severity(K_est, xPhys, r).max())
 
 
 class PMean:
@@ -326,6 +319,10 @@ class PMean:
         self.p = p
         self.r = r
         self.calibration = 1.0
+
+    def resolve(self, loop: int) -> bool:
+        """No scheduled parameters to adopt, so nothing that stales the calibration."""
+        return False
 
     def __call__(
         self,
@@ -374,13 +371,22 @@ class LogSumExp:
     The calibration is run state, refreshed in place by a call with `recalibrate`.
     """
 
-    def __init__(self, beta: float, r: float):
+    def __init__(self, beta: "run_config.Scheduled", r: float):
         """
+        :param beta: sharpness, possibly scheduled; `resolve` adopts one iteration's.
         :param r: the density exponent of the severity the calibration targets
         """
-        self.beta = beta
+        self.beta_schedule = beta
+        self.beta = run_config.weight_at(beta, 1)
         self.r = r
         self.calibration = 0.0
+
+    def resolve(self, loop: int) -> bool:
+        """Adopt iteration `loop`'s scheduled sharpness, reporting whether it moved --
+        which stales the calibration, since `beta` sets the aggregate's bias.
+        """
+        beta, self.beta = self.beta, run_config.weight_at(self.beta_schedule, loop)
+        return beta != self.beta
 
     def __call__(
         self,
@@ -400,21 +406,20 @@ class LogSumExp:
         x_r = solid * torch.where(solid, x, torch.ones_like(x)) ** self.r
         # `1 - inf` would poison the `-inf` reselect below through `inf * 0`.
         T = torch.where(shielded, torch.zeros_like(K_est), 1 - K_est)
-        severity = torch.where(shielded, -torch.inf, T * x_r)
-        numer = _weighted_logsumexp(severity, torch.ones_like(x), self.beta)
+        sev = torch.where(shielded, -torch.inf, T * x_r)
+        numer = torch.logsumexp(self.beta * sev, dim=0) / self.beta
         if recalibrate:
-            self.calibration = float(numer.detach()) - _max_severity(
-                K_est, xPhys, self.r
-            )
+            self.calibration = float(numer.detach()) - float(sev.detach().max())
         return numer - self.calibration
 
 
 def make_aggregation(
-    aggregation: Aggregation, p: float, r: float, beta: float
+    aggregation: Aggregation, p: float, r: float, beta: "run_config.Scheduled"
 ) -> PMean | LogSumExp:
     """A fresh, uncalibrated aggregation for a run's settings.
 
-    :param beta: `LogSumExp` sharpness; unused by `PMean`, which takes `p` instead.
+    :param beta: `LogSumExp` sharpness, possibly scheduled; unused by `PMean`, which
+        takes `p` instead.
     """
     if aggregation == Aggregation.P_MEAN:
         return PMean(p, r)

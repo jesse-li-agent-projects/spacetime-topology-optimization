@@ -24,6 +24,7 @@ run's logged checkpoints.
 import argparse
 from collections.abc import Callable
 from collections.abc import Sequence
+from functools import lru_cache
 from pathlib import Path
 
 import matplotlib
@@ -443,6 +444,22 @@ def _hotspot_severity(
     return severity
 
 
+@lru_cache(maxsize=1)
+def _stto_problem(run_dir: Path) -> tuple:
+    """The `(config, Problem)` a run directory's `config.json` builds.
+
+    Cached because it depends on the run, not the design: an animation over a run's
+    checkpoints would otherwise rebuild the conductivity stencil once per frame.
+    """
+    import json
+
+    import sttopt.stto as stto
+    from sttopt.run_config import RunConfig
+
+    config = RunConfig.from_dict(json.loads((run_dir / "config.json").read_text()))
+    return config, stto.build_problem(config)
+
+
 def _load_stto_run(run_dir: Path, design_file: str = "final_design.npz") -> tuple:
     """Loads an `stto` run directory's plotting inputs: `xPhys`, `tPhys`, whole-
     structure compliance, hotspot severity, `|grad tPhys|`, and `nStage`.
@@ -452,15 +469,13 @@ def _load_stto_run(run_dir: Path, design_file: str = "final_design.npz") -> tupl
         written before those carried the filtered fields hold only raw `x`/`t` and are
         rejected.
     """
-    import json
-
     import sttopt.compliance as compliance
     import sttopt.stto as stto
     import sttopt.timefield as timefield
     import sttopt.torch_util as torch_util
-    from sttopt.run_config import RunConfig, final_value
+    from sttopt.run_config import final_value
 
-    config = RunConfig.from_dict(json.loads((run_dir / "config.json").read_text()))
+    config, problem = _stto_problem(run_dir)
     design = np.load(run_dir / design_file)
     if "xPhys" not in design or "tPhys" not in design:
         raise SystemExit(
@@ -470,7 +485,6 @@ def _load_stto_run(run_dir: Path, design_file: str = "final_design.npz") -> tupl
         )
     xPhys, tPhys = design["xPhys"], design["tPhys"]
 
-    problem = stto.build_problem(config)
     xPhys_t = torch_util.to_tensor(xPhys, device=problem.device, dtype=problem.dtype)
     tPhys_t = torch_util.to_tensor(tPhys, device=problem.device, dtype=problem.dtype)
     obj, _ = compliance.whole_compliance(

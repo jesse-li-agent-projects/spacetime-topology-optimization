@@ -37,6 +37,35 @@ PRINT_BASE = "opposite_corner"
 NLOOP = 800
 RMIN, LRMIN, RMIN_COND = 4.0, 2.0, 12.0
 BETA_INIT = 1.0
+# The MATLAB source's projection ramps: `beta_d` doubling every 50 iterations to 128,
+# `beta_t` rising by 5 every 30 to 50.
+STEP_BETA_D = {
+    "points": [
+        [1, 1.0],
+        [51, 2.0],
+        [101, 4.0],
+        [151, 8.0],
+        [201, 16.0],
+        [251, 32.0],
+        [301, 64.0],
+        [351, 128.0],
+    ],
+    "mode": "step",
+}
+STEP_BETA_T = {
+    "points": [
+        [1, 10.0],
+        [31, 15.0],
+        [61, 20.0],
+        [91, 25.0],
+        [121, 30.0],
+        [151, 35.0],
+        [181, 40.0],
+        [211, 45.0],
+        [241, 50.0],
+    ],
+    "mode": "step",
+}
 
 CONFIG = RunConfig(
     nloop=NLOOP,
@@ -54,6 +83,9 @@ CONFIG = RunConfig(
     hotspot_normalization="neighborhood",
     hotspot_aggregation="p_mean",
     hotspot_beta=200.0,
+    hotspot_refresh_period=25,
+    beta_d_schedule=STEP_BETA_D,
+    beta_t_schedule=STEP_BETA_T,
     print_base=PRINT_BASE,
     rmin=RMIN,
     time_filter_rmin=RMIN,
@@ -61,7 +93,6 @@ CONFIG = RunConfig(
     continuity_tol=1e-6,
     lrmin=LRMIN,
     rmin_cond=RMIN_COND,
-    beta_d_max=128.0,
     Emin=1e-9,
     Emax=1.0,
     nu=0.3,

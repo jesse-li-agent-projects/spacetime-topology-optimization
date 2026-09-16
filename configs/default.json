@@ -20,6 +20,14 @@
   "hotspot_aggregation": "logsumexp",
   "hotspot_beta": 100.0,
   "hotspot_refresh_period": 1,
+  "beta_d_schedule": {
+    "points": [[1, 1.0], [51, 2.0], [101, 4.0], [151, 8.0], [201, 16.0], [251, 32.0], [301, 64.0], [351, 128.0]],
+    "mode": "step"
+  },
+  "beta_t_schedule": {
+    "points": [[1, 10.0], [31, 15.0], [61, 20.0], [91, 25.0], [121, 30.0], [151, 35.0], [181, 40.0], [211, 45.0], [241, 50.0]],
+    "mode": "step"
+  },
   "print_base": "opposite_corner",
   "rmin": 4.0,
   "time_filter_rmin": 4.0,
@@ -27,7 +35,6 @@
   "continuity_tol": 1e-06,
   "lrmin": 2.0,
   "rmin_cond": 12.0,
-  "beta_d_max": 128.0,
   "Emin": 1e-09,
   "Emax": 1.0,
   "nu": 0.3,

@@ -48,7 +48,7 @@ CONFIG = default_run_config(
 
 def _run():
     problem = stto.build_problem(CONFIG)
-    return stto.run_from_state(problem, stto.init_state(problem, BETA_INIT), NLOOP)
+    return stto.run_from_state(problem, stto.init_state(problem), NLOOP)
 
 
 @pytest.mark.xfail(
@@ -63,7 +63,7 @@ def test_iteration1_assembly_matches_fixture():
     """
     fx = load_fixture_npz("mma")
     problem = stto.build_problem(CONFIG)
-    state = stto.init_state(problem, BETA_INIT)
+    state = stto.init_state(problem)
 
     _, record = stto.step(problem, state)
 
@@ -92,7 +92,7 @@ def test_constraints_stacking_matches_fixture():
     """
     fx = load_fixture_npz("constraints")
     problem = stto.build_problem(CONFIG)
-    state = stto.init_state(problem, BETA_INIT)
+    state = stto.init_state(problem)
 
     _, record = stto.step(problem, state)
     assert_close(record.g, fx["fval_all"][:, 0], tier="e2e", iteration=1)

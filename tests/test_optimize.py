@@ -45,19 +45,14 @@ def _problem(
     Theta=1.0,
     uniformity_weight=0.0,
     enable_stage_volume=True,
-    hotspot_refresh_period=None,
+    config_overrides=None,
     **kwargs,
 ):
     """A small `Problem` at production defaults bar the arguments named here.
 
-    :param hotspot_refresh_period: overrides the default when given -- a period longer
-        than the run freezes the hotspot calibration.
+    :param config_overrides: further `RunConfig` fields to override, for a test that
+        needs one the parameters above do not name.
     """
-    refresh = (
-        {}
-        if hotspot_refresh_period is None
-        else {"hotspot_refresh_period": hotspot_refresh_period}
-    )
     config = default_run_config(
         nelx=nelx,
         nely=nely,
@@ -72,7 +67,7 @@ def _problem(
         time_filter_rmin=RMIN,
         lrmin=LRMIN,
         rmin_cond=RMIN_COND,
-        **refresh,
+        **(config_overrides or {}),
     )
     return stto.build_problem(config, **kwargs)
 
@@ -126,7 +121,7 @@ def test_init_state_and_step_output_are_tensors_on_problem_device_and_dtype():
     `step` must land back on `problem.device`/`.dtype`, not wherever the (still-NumPy)
     leaf math happened to leave its output."""
     problem = _problem()
-    state = stto.init_state(problem, BETA_D)
+    state = stto.init_state(problem)
     for name, t in _tensor_fields(state):
         assert t.device.type == problem.device.type, name
         assert t.dtype == problem.dtype, name
@@ -180,7 +175,7 @@ def test_init_state_seeds_the_raw_fields(tfield):
     print time. These are the variables MMA's move limits are measured against, so they
     are what "initial design" means."""
     problem = _problem(tfield=tfield)
-    state = stto.init_state(problem, BETA_D)
+    state = stto.init_state(problem)
 
     np.testing.assert_allclose(torch_util.to_numpy(state.x), VOLFRAC, rtol=1e-14)
     np.testing.assert_allclose(
@@ -281,7 +276,7 @@ def test_physical_time_field_is_scaled_to_a_maximum_of_one():
     """A raw time field whose filtered maximum falls short of 1 is scaled, not shifted,
     so that the build ends at 1 and a start at 0 stays at 0."""
     problem = _problem()
-    state = stto.init_state(problem, BETA_D)
+    state = stto.init_state(problem)
     t_raw = 0.6 * state.t
     filtered = filters.apply_density_filter(t_raw, problem.time_H, problem.time_Hs)
     assert float(filtered.max()) < 0.7  # premise: the unscaled field ends early
@@ -353,7 +348,7 @@ def test_step_assembled_sensitivities_match_finite_differences(monkeypatch):
         nely=nely,
         nStage=nStage,
         enable_stage_volume=True,
-        hotspot_refresh_period=2**62,
+        config_overrides={"hotspot_refresh_period": 2**62},
     )
     nel = nelx * nely
     assert problem.n == 2 * nel
@@ -492,7 +487,7 @@ def test_init_state_calibrates_the_hotspot_row_against_the_seed():
     bias is calibrated out before the first step rather than at the first refresh."""
     problem = _problem()
     uncalibrated = problem.hotspot.calibration
-    state = stto.init_state(problem, BETA_D)
+    state = stto.init_state(problem)
     xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, BETA_D)
     K_est = stto.estimated_conductivity(problem, xPhys, tPhys)
     finite = torch.isfinite(K_est)
@@ -516,8 +511,8 @@ def test_enable_continuity_false_drops_the_continuity_constraint_row():
         dataclasses.replace(base_config, enable_continuity=False)
     )
     base = stto.build_problem(dataclasses.replace(base_config, enable_continuity=True))
-    _, record = stto.step(problem, stto.init_state(problem, BETA_D))
-    _, with_continuity = stto.step(base, stto.init_state(base, BETA_D))
+    _, record = stto.step(problem, stto.init_state(problem))
+    _, with_continuity = stto.step(base, stto.init_state(base))
 
     assert record.g.shape == (with_continuity.g.shape[0] - 1,)
     assert record.dg.shape == (with_continuity.g.shape[0] - 1, problem.n)
@@ -630,7 +625,7 @@ def test_step_state_U_does_not_carry_grad_across_iterations():
     guard.
     """
     problem = _problem(nelx=6, nely=4, nStage=3)
-    state = stto.init_state(problem, BETA_D)
+    state = stto.init_state(problem)
 
     for _ in range(3):
         state, _ = stto.step(problem, state)
@@ -647,7 +642,7 @@ def test_step_batched_warm_starts_from_previous_iteration():
     import sttopt.torch_mg as torch_mg
 
     problem = _problem(nelx=10, nely=8, nStage=3)
-    state = stto.init_state(problem, BETA_D)
+    state = stto.init_state(problem)
 
     counts = []
     orig_pcg = torch_mg.torch_fem.pcg

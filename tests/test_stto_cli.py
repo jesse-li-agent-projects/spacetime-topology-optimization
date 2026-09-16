@@ -67,7 +67,7 @@ def _reference_run(config):
     are NOT what MATLAB's disp actually prints; see stto_cli.py's module docstring).
     """
     problem = stto.build_problem(config)
-    state = stto.init_state(problem, beta_d=1.0)
+    state = stto.init_state(problem)
     records, states = [], []
     for _ in range(config.nloop):
         state, record = stto.step(problem, state)
@@ -117,10 +117,10 @@ def test_cli_logs_scheduled_continuation(tmp_path, monkeypatch):
         _FIXTURE_CONFIG,
         nloop=3,
         hotspot_aggregation="logsumexp",
-        hotspot_beta={"points": [[1, 4.0], [3, 16.0]], "log": True},
+        hotspot_beta={"points": [[1, 4.0], [3, 16.0]], "mode": "log"},
         penal={"points": [[1, 1.0], [3, 3.0]]},
         Tcr={"points": [[1, 5.0], [3, 0.8]]},
-        beta_d_schedule={"points": [[1, 1.0], [3, 4.0]], "log": True},
+        beta_d_schedule={"points": [[1, 1.0], [3, 4.0]], "mode": "log"},
         beta_t_schedule=20.0,
     )
     config_path = tmp_path / "scheduled.json"

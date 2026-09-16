@@ -113,8 +113,27 @@ def test_piecewise_schedule_interpolates_and_holds_outside_its_points():
 
 
 def test_piecewise_schedule_log_interpolates_geometrically():
-    schedule = PiecewiseSchedule(points=[[1, 1.0], [101, 100.0]], log=True)
+    schedule = PiecewiseSchedule(points=[[1, 1.0], [101, 100.0]], mode="log")
     assert schedule.at(51) == pytest.approx(10.0)
+
+
+def test_piecewise_step_schedule_holds_each_value_until_the_next_point():
+    """`step` does not interpolate: the value jumps at a point's own iteration, which is
+    what the projection sharpness ramps have always done."""
+    schedule = PiecewiseSchedule(points=[[1, 1.0], [51, 2.0], [101, 4.0]], mode="step")
+    assert [schedule.at(loop) for loop in (1, 50, 51, 100, 101, 10_000)] == [
+        1.0,
+        1.0,
+        2.0,
+        2.0,
+        4.0,
+        4.0,
+    ]
+
+
+def test_piecewise_schedule_rejects_an_unknown_mode():
+    with pytest.raises(ValueError, match="not a valid Interpolation"):
+        PiecewiseSchedule(points=[[1, 1.0]], mode="quadratic")
 
 
 def test_piecewise_schedule_rejects_unsorted_points():
@@ -126,7 +145,7 @@ def test_config_round_trips_a_piecewise_schedule():
     """A mapping with `points` is a `PiecewiseSchedule`, in any schedulable field."""
     config = default_run_config(
         Tcr={"points": [[1, 5.0], [200, 0.8]]},
-        hotspot_beta={"points": [[1, 4.0], [400, 32.0]], "log": True},
+        hotspot_beta={"points": [[1, 4.0], [400, 32.0]], "mode": "log"},
     )
     assert isinstance(config.Tcr, PiecewiseSchedule)
     revived = RunConfig.from_dict(json.loads(json.dumps(config.to_dict())))
