@@ -14,11 +14,12 @@ a `--config` JSON file or by constructing the dataclass directly in code. Run
 bookkeeping that isn't a `build_problem` hyperparameter (`--tag`, `--device`) lives on
 the CLI's `args`, not here.
 
-Neither config has dataclass defaults: `configs/default.json`/`configs/seq_default.json`
+Settings have no dataclass defaults: `configs/default.json`/`configs/seq_default.json`
 are the single source of default settings, so a run's values are never split between
 a config file and this module. That holds for a newly added field too, even though it
 means run records written before the field existed no longer load -- add the field to
-every config file instead.
+every config file instead. `RunConfig`'s continuation fields are the exception, defaulted
+so that run records written before they existed still load.
 """
 
 import dataclasses

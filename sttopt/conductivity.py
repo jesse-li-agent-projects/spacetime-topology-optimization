@@ -366,10 +366,10 @@ class LogSumExp:
     enough to spread the sensitivity past a handful of hot elements pays a bias larger
     than the maximum itself, which the calibration carries back onto the true maximum.
 
-    It aggregates exactly the quantity `PMean` and the calibration both target, so
-    density enters through the severity rather than as a separate weight and void is
-    not suppressed beyond scoring zero severity; a void element's share of the sum is
-    `exp(-beta * max)`, which a sharp `beta` makes negligible.
+    It aggregates exactly the quantity `PMean` and the calibration both target: density
+    enters through the severity, so void is not suppressed beyond scoring zero severity
+    -- a void element's share of the sum is `exp(-beta * max)`, which a sharp `beta`
+    makes negligible.
 
     The calibration is run state, refreshed in place by a call with `recalibrate`.
     """
@@ -401,7 +401,8 @@ class LogSumExp:
         x = xPhys.flatten()
         shielded = torch.isinf(K_est)
         solid = x > 0
-        x_r = torch.where(solid, torch.where(solid, x, torch.ones_like(x)) ** self.r, 0)
+        x_safe = torch.where(solid, x, torch.ones_like(x))
+        x_r = torch.where(solid, x_safe**self.r, 0)
         T = torch.where(shielded, torch.zeros_like(K_est), 1 - K_est)
         severity = torch.where(shielded, -torch.inf, T * x_r)
         numer = _weighted_logsumexp(severity, torch.ones_like(x), self.beta)

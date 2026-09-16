@@ -50,10 +50,8 @@ def _problem(
 ):
     """A small `Problem` at production defaults bar the arguments named here.
 
-    :param hotspot_refresh_period: overrides the default when given -- pass a period
-        longer than the run to freeze the hotspot calibration, which a test comparing
-        the hotspot row across two designs needs (see
-        `test_step_assembled_sensitivities_match_finite_differences`).
+    :param hotspot_refresh_period: overrides the default when given -- a period longer
+        than the run freezes the hotspot calibration.
     """
     refresh = (
         {}

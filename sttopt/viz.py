@@ -546,13 +546,17 @@ def _design_checkpoints(run_dir: Path) -> list[str]:
 
 
 def _animate_timefield_filled_contour(
-    run_dir: Path, plot_dir: Path, n_contours: int, fps: float, load_run: Callable
+    run_dir: Path,
+    plot_dir: Path,
+    n_contours: int,
+    fps: float,
+    load_run: Callable[[Path, str], tuple],
 ) -> None:
     """Renders `timefield_filled_contour_plot` for every design checkpoint in `run_dir`
     and stitches the frames into a GIF.
 
-    The frame spacing is whatever the run checkpointed at, so a coarse
-    `--snapshot-every` is what makes an animation jumpy, not this.
+    Frame spacing is whatever the run checkpointed at (`--snapshot-every`), not a
+    setting here.
 
     :param load_run: the run type's loader, `_load_stto_run` or `_load_seqopt_run`.
     """

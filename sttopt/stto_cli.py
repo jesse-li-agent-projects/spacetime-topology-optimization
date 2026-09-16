@@ -110,43 +110,43 @@ def main(args: argparse.Namespace) -> None:
     problem = stto.build_problem(config, device=args.device)
     state = stto.init_state(problem, beta_d=1.0)
 
-    log = (output_dir / "iterations.jsonl").open("w")
     start = time.perf_counter()
-    for _ in range(config.nloop):
-        state, record = stto.step(problem, state)
-        xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, state.beta_d)
-        diag = record.diagnostics
-        print(
-            f"It.: {state.loop:4d} Obj.: {record.f:10.4f} "
-            f"Vol.: {xPhys.mean():6.3f} Tm.: {record.tru_max:7.3f} "
-            f"Unif.: {record.uniformity:8.5f} c: {record.obj:9.3f} "
-            f"TmTrue: {diag['true_max']:6.3f} neff: {diag['n_eff']:7.1f}"
-        )
-        entry = dict(
-            loop=state.loop,
-            elapsed=time.perf_counter() - start,
-            f=record.f,
-            obj=record.obj,
-            vol=float(xPhys.mean()),
-            tru_max=record.tru_max,
-            uniformity=record.uniformity,
-            roughness=record.roughness,
-            roughness_weight=record.roughness_weight,
-            g=record.g.tolist(),
-            lam=record.lam.tolist(),
-            **diag,
-        )
-        log.write(json.dumps(entry) + "\n")
-        log.flush()
-        if state.loop % args.snapshot_every == 0:
-            np.savez_compressed(
-                output_dir / f"design_it{state.loop:04d}.npz",
-                x=torch_util.to_numpy(state.x),
-                t=torch_util.to_numpy(state.t),
-                xPhys=torch_util.to_numpy(xPhys),
-                tPhys=torch_util.to_numpy(tPhys),
+    with (output_dir / "iterations.jsonl").open("w") as log:
+        for _ in range(config.nloop):
+            state, record = stto.step(problem, state)
+            xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, state.beta_d)
+            diag = record.diagnostics
+            print(
+                f"It.: {state.loop:4d} Obj.: {record.f:10.4f} "
+                f"Vol.: {xPhys.mean():6.3f} Tm.: {record.tru_max:7.3f} "
+                f"Unif.: {record.uniformity:8.5f} c: {record.obj:9.3f} "
+                f"TmTrue: {diag['true_max']:6.3f} neff: {diag['n_eff']:7.1f}"
             )
-    log.close()
+            entry = dict(
+                loop=state.loop,
+                elapsed=time.perf_counter() - start,
+                f=record.f,
+                obj=record.obj,
+                vol=float(xPhys.mean()),
+                tru_max=record.tru_max,
+                uniformity=record.uniformity,
+                roughness=record.roughness,
+                roughness_weight=record.roughness_weight,
+                g=record.g.tolist(),
+                lam=record.lam.tolist(),
+                **diag,
+            )
+            # Flushed per iteration so a running optimization can be followed live.
+            log.write(json.dumps(entry) + "\n")
+            log.flush()
+            if state.loop % args.snapshot_every == 0:
+                np.savez_compressed(
+                    output_dir / f"design_it{state.loop:04d}.npz",
+                    x=torch_util.to_numpy(state.x),
+                    t=torch_util.to_numpy(state.t),
+                    xPhys=torch_util.to_numpy(xPhys),
+                    tPhys=torch_util.to_numpy(tPhys),
+                )
 
     np.savez(
         output_dir / "final_design.npz",
