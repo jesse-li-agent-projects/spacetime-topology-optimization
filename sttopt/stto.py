@@ -545,7 +545,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     # value and its gradient share one calibration. A scheduled change in the
     # aggregate's sharpness or in `rouf` moves its bias, so it refreshes too.
     recalibrate = loop % config.hotspot_refresh_period == 0
-    recalibrate |= loop > 0 and rouf != run_config.weight_at(config.rouf, loop - 1)
+    recalibrate |= rouf != run_config.weight_at(config.rouf, loop - 1)
     recalibrate |= problem.hotspot.resolve(loop)
     K_est_t = estimated_conductivity(problem, xPhys, tPhys, loop)
     hotspot_t = problem.hotspot(K_est_t, xPhys, recalibrate=recalibrate)
