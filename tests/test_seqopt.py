@@ -33,11 +33,16 @@ def _problem(**overrides) -> seqopt.Problem:
     return seqopt.build_problem(config, _geometry(), device="cpu")
 
 
+# An iteration that refreshes nothing: not 0 (which always recalibrates the hotspot),
+# and not a multiple of 25 or 30.
+QUIET_LOOP = 1
+
+
 def _state_from_raw(
     problem: seqopt.Problem, t_raw: np.ndarray, base: seqopt.State
 ) -> seqopt.State:
     t = torch_util.to_tensor(t_raw, problem.device, problem.dtype)
-    return dataclasses.replace(base, t=t)
+    return dataclasses.replace(base, t=t, loop=QUIET_LOOP)
 
 
 # --- init_state ----------------------------------------------------------------

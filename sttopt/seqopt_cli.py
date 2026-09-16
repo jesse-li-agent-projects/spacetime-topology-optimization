@@ -167,27 +167,25 @@ def main(args: argparse.Namespace) -> None:
 
     log_path = output_dir / "iterations.jsonl"
     with open(log_path, "w") as log:
-        for _ in range(config.nloop):
+        for it in range(config.nloop):
             previous_t = state.t
             state, record = seqopt.step(problem, state)
             print(
-                f"It.: {state.loop:4d} f: {record.f:10.4f} "
+                f"It.: {it:4d} f: {record.f:10.4f} "
                 f"hot: {record.hotspot:8.5f} unif: {record.uniformity:8.5f} "
                 f"rough: {record.roughness:7.4f} "
                 f"true_cv: {record.true_cv:8.5f} saw: {record.sawtooth:7.4f}"
             )
-            if args.log_every and state.loop % args.log_every == 0:
+            if args.log_every and it % args.log_every == 0:
                 step = torch_util.to_numpy(
                     (state.t - previous_t).flatten().to(torch.float64)
                 )
-                entry = {"loop": state.loop} | iteration_diagnostics(
-                    record, step, config.tmove
-                )
+                entry = {"loop": it} | iteration_diagnostics(record, step, config.tmove)
                 log.write(json.dumps(entry) + "\n")
                 log.flush()
-            if args.snapshot_every and state.loop % args.snapshot_every == 0:
+            if args.snapshot_every and it % args.snapshot_every == 0:
                 np.savez(
-                    output_dir / f"design_it{state.loop:04d}.npz",
+                    output_dir / f"design_it{it:04d}.npz",
                     t=torch_util.to_numpy(state.t),
                     tPhys=torch_util.to_numpy(
                         seqopt.physical_timefield(problem, state.t)
