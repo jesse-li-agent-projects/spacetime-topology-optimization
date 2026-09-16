@@ -23,6 +23,7 @@ run's logged checkpoints.
 
 import argparse
 from collections.abc import Callable
+from collections.abc import Sequence
 from pathlib import Path
 
 import matplotlib
@@ -69,6 +70,15 @@ def _cell_verts(
     ).astype(float)
 
 
+# `stto.physical_fields` scales the time field so the build ends at 1, and the
+# start-point constraint pins its start at 0, so every plot of it shares this scale
+# rather than deriving one from the data. A derived scale would stop at the hottest
+# *solid* element, which reads as the end of the build without being it, and would move
+# from run to run and frame to frame.
+TIMEFIELD_RANGE = (0.0, 1.0)
+TIMEFIELD_TICKS = (0.0, 0.25, 0.5, 0.75, 1.0)
+
+
 def combination_plot(
     xPhys: Float[np.ndarray, "nely nelx"],
     values: Float[np.ndarray, "nely nelx"],
@@ -76,6 +86,8 @@ def combination_plot(
     *,
     cmap: str | Colormap = "viridis",
     colorbar_label: str | None = None,
+    clim: tuple[float, float] | None = None,
+    colorbar_ticks: Sequence[float] | None = None,
     ax: Axes | None = None,
 ) -> Axes:
     """Draws only the elements with density `>= eps`, each colored by `values` (flat
@@ -89,6 +101,9 @@ def combination_plot(
     :param cmap: colormap name or object; callers below pick one that suits `values`.
     :param colorbar_label: if given, adds a horizontal colorbar below `ax` labelled with
         this string; omitted (the default) draws no colorbar.
+    :param clim: fixed color limits, for a quantity whose scale is known independently
+        of the data; `None` scales to the values passed.
+    :param colorbar_ticks: fixed colorbar ticks; `None` leaves matplotlib's choice.
     """
     if ax is None:
         ax = _new_axes()
@@ -97,12 +112,18 @@ def combination_plot(
     verts = _cell_verts(rows, cols)
     values = values[rows, cols]
 
-    coll = PolyCollection(verts, array=values, cmap=cmap, edgecolors="none")
+    coll = PolyCollection(verts, array=values, cmap=cmap, edgecolors="none", clim=clim)
     ax.add_collection(coll)
     ax.set_aspect("equal")
     ax.autoscale_view()
     if colorbar_label is not None:
-        ax.figure.colorbar(coll, ax=ax, orientation="horizontal", label=colorbar_label)
+        ax.figure.colorbar(
+            coll,
+            ax=ax,
+            orientation="horizontal",
+            label=colorbar_label,
+            ticks=colorbar_ticks,
+        )
     return ax
 
 
@@ -215,7 +236,14 @@ def timefield_plot(
     """
     XPhys = (xPhys > 0.5).astype(xPhys.dtype)
     ax = combination_plot(
-        XPhys, tPhys, eps=1.0e-1, cmap="viridis", colorbar_label="Time field", ax=ax
+        XPhys,
+        tPhys,
+        eps=1.0e-1,
+        cmap="viridis",
+        colorbar_label="Time field",
+        clim=TIMEFIELD_RANGE,
+        colorbar_ticks=TIMEFIELD_TICKS,
+        ax=ax,
     )
     ax.set_title(_timefield_title(compliance))
     return ax
@@ -272,7 +300,14 @@ def timefield_contour_plot(
     # y in [-(row+1), -row].
     X, Y = np.meshgrid(np.arange(nelx) + 0.5, -(np.arange(nely) + 0.5))
     masked_tPhys = np.where(xPhys > 0.5, tPhys, np.nan)
-    ax.contour(X, Y, masked_tPhys, levels=nContours, colors="black", linewidths=0.5)
+    ax.contour(
+        X,
+        Y,
+        masked_tPhys,
+        levels=np.linspace(*TIMEFIELD_RANGE, nContours + 1),
+        colors="black",
+        linewidths=0.5,
+    )
     return ax
 
 
@@ -283,7 +318,6 @@ def timefield_filled_contour_plot(
     *,
     compliance: float | None = None,
     show_void: bool = False,
-    levels: Float[np.ndarray, "nContours+1"] | None = None,
     colorbar: bool = True,
     ax: Axes | None = None,
 ) -> Axes:
@@ -301,13 +335,10 @@ def timefield_filled_contour_plot(
     :param compliance: whole-structure compliance to report in the title, if known.
     :param show_void: cover the void with translucent gray instead of opaque white, so
         the time field there stays readable while still reading as "not printed".
-    :param levels: contour level boundaries; defaults to `nContours` even bins spanning
-        `tPhys`'s own range, e.g. pass a range spanning several `tPhys` fields to keep
-        the color scale consistent across an animation's frames.
     :param colorbar: draw a colorbar. `fig.colorbar(ax=ax)` shrinks `ax` to make room
-        for it, so redrawing into the same `ax` across an animation's frames (with
-        shared `levels`, whose mapping never changes) should pass `False` after the
-        first frame -- otherwise the shrink compounds frame over frame.
+        for it, so redrawing into the same `ax` across an animation's frames (whose
+        color mapping never changes) should pass `False` after the first frame --
+        otherwise the shrink compounds frame over frame.
     :return: the `Axes` drawn into.
     """
     if ax is None:
@@ -317,13 +348,18 @@ def timefield_filled_contour_plot(
     # Cell centers, in combination_plot's coordinate frame: x in [col, col+1],
     # y in [-(row+1), -row].
     X, Y = np.meshgrid(np.arange(nelx) + 0.5, -(np.arange(nely) + 0.5))
-    if levels is None:
-        levels = np.linspace(tPhys.min(), tPhys.max(), nContours + 1)
+    levels = np.linspace(*TIMEFIELD_RANGE, nContours + 1)
 
     filled = ax.contourf(X, Y, tPhys, levels=levels, cmap="viridis")
     ax.contour(X, Y, tPhys, levels=levels, colors="black", linewidths=0.5)
     if colorbar:
-        ax.figure.colorbar(filled, ax=ax, orientation="horizontal", label="Time field")
+        ax.figure.colorbar(
+            filled,
+            ax=ax,
+            orientation="horizontal",
+            label="Time field",
+            ticks=TIMEFIELD_TICKS,
+        )
 
     rows, cols = np.nonzero(xPhys <= 0.5)
     empty = PolyCollection(
@@ -513,8 +549,7 @@ def _animate_timefield_filled_contour(
     run_dir: Path, plot_dir: Path, n_contours: int, fps: float, load_run: Callable
 ) -> None:
     """Renders `timefield_filled_contour_plot` for every design checkpoint in `run_dir`
-    and stitches the frames into a GIF, with one shared color scale spanning every
-    frame's `tPhys` range.
+    and stitches the frames into a GIF.
 
     The frame spacing is whatever the run checkpointed at, so a coarse
     `--snapshot-every` is what makes an animation jumpy, not this.
@@ -525,11 +560,6 @@ def _animate_timefield_filled_contour(
 
     design_files = _design_checkpoints(run_dir)
     frames = [load_run(run_dir, design_file) for design_file in design_files]
-    levels = np.linspace(
-        min(tPhys.min() for _, tPhys, *_ in frames),
-        max(tPhys.max() for _, tPhys, *_ in frames),
-        n_contours + 1,
-    )
 
     fig = Figure()
     ax = fig.add_subplot()
@@ -540,15 +570,14 @@ def _animate_timefield_filled_contour(
             zip(design_files, frames)
         ):
             ax.clear()
-            # Only the first frame draws a colorbar: `levels` (and so the color
-            # mapping) is shared across every frame, so it never needs redrawing --
-            # and redrawing it would reshrink ax, which ax.clear() does not undo.
+            # Only the first frame draws a colorbar: the color mapping is the same
+            # fixed one in every frame, so it never needs redrawing -- and redrawing it
+            # would reshrink ax, which ax.clear() does not undo.
             timefield_filled_contour_plot(
                 xPhys,
                 tPhys,
                 n_contours,
                 compliance=obj,
-                levels=levels,
                 colorbar=(i == 0),
                 ax=ax,
             )

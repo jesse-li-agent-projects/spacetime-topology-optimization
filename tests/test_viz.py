@@ -62,6 +62,35 @@ def test_gradient_magnitude_plot_draws_every_solid_element():
     assert len(coll.get_paths()) == NELY * NELX
 
 
+def test_timefield_plots_hold_the_full_scale_on_a_partial_field():
+    """Every plot of the time field is on `[0, 1]`, the range the normalization gives
+    it, not on the range of the elements that happen to be drawn. A field covering only
+    part of the build must not stretch to fill the colorbar -- that would read as a
+    complete build, and would move the scale from run to run.
+    """
+    xPhys = np.ones((NELY, NELX))
+    # A build that ends barely past halfway, and never reaches either end of the scale.
+    tPhys = np.linspace(0.2, 0.55, NELY * NELX).reshape(NELY, NELX)
+
+    ax = viz.timefield_plot(xPhys, tPhys)
+    assert ax.collections[0].get_clim() == viz.TIMEFIELD_RANGE
+
+    ax = viz.timefield_filled_contour_plot(xPhys, tPhys, nContours=4)
+    filled = ax.collections[0]
+    assert (min(filled.levels), max(filled.levels)) == viz.TIMEFIELD_RANGE
+
+
+def test_timefield_contour_lines_sit_on_the_filled_contour_boundaries():
+    """The line and filled contour plots bin the same scale the same way, so the lines
+    one draws land on the edges the other fills between."""
+    xPhys = np.ones((NELY, NELX))
+    tPhys = np.linspace(0.0, 1.0, NELY * NELX).reshape(NELY, NELX)
+
+    lines = viz.timefield_contour_plot(xPhys, tPhys, nContours=4).collections[-1]
+    filled = viz.timefield_filled_contour_plot(xPhys, tPhys, nContours=4).collections[0]
+    np.testing.assert_allclose(lines.levels, filled.levels)
+
+
 def test_combination_and_boundary_compose_on_one_axes():
     """The CLI overlays both plots on one Axes; check that composition actually works
     (the `ax` passed to `stage_boundary_plot` is reused, not replaced).
