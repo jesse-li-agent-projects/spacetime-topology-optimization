@@ -2,7 +2,7 @@
   "nloop": 500,
   "print_base": "bottom_edge",
   "void_extension": "harmonic",
-  "enable_continuity": true,
+  "enable_continuity": false,
   "continuity_tol": 1e-06,
   "lrmin": 2.0,
   "rmin_cond": 12.0,
