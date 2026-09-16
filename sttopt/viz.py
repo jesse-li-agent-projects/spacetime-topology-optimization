@@ -567,7 +567,9 @@ def _animate_timefield_filled_contour(
     load_run: Callable[[Path, str], tuple],
 ) -> None:
     """Renders `timefield_filled_contour_plot` for every design checkpoint in `run_dir`
-    and stitches the frames into a GIF.
+    and stitches the frames into a GIF. The void is drawn translucent (`show_void`), so
+    a frame shows both where the density has reached and how the time field behind it
+    moves.
 
     Frame spacing is whatever the run checkpointed at (`--snapshot-every`), not a
     setting here.
@@ -596,6 +598,7 @@ def _animate_timefield_filled_contour(
                 tPhys,
                 n_contours,
                 compliance=obj,
+                show_void=True,
                 colorbar=(i == 0),
                 ax=ax,
             )
