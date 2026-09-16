@@ -18,10 +18,11 @@ its `output/<tag>/` artefacts, without rerunning the optimization. This reads
 `final_design.npz`'s `xPhys`/`tPhys` -- the state *after* the last MMA update -- whereas
 `stto_cli.py`'s own end-of-run plot uses `prev_state` (the state entering that last update).
 Pass `--animate` to instead render the time field filled contour as a GIF across a
-seqopt run's logged checkpoints.
+run's logged checkpoints.
 """
 
 import argparse
+from collections.abc import Callable
 from pathlib import Path
 
 import matplotlib
@@ -379,7 +380,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="instead of the usual plots, animate the time field filled contour "
         "across every output/<tag>/design_it*.npz checkpoint plus final_design.npz "
-        "(seqopt runs only, saved as timefield_filled_contour_animation.gif)",
+        "(saved as timefield_filled_contour_animation.gif); --snapshot-every on the "
+        "run that produced them sets how smooth it is",
     )
     parser.add_argument(
         "--fps",
@@ -409,11 +411,10 @@ def _load_stto_run(run_dir: Path, design_file: str = "final_design.npz") -> tupl
     """Loads an `stto` run directory's plotting inputs: `xPhys`, `tPhys`, whole-
     structure compliance, hotspot severity, `|grad tPhys|`, and `nStage`.
 
-    :param design_file: an artefact under `run_dir` holding `xPhys`/`tPhys`, e.g.
-        `final_design.npz`. The periodic `design_it*.npz` checkpoints save only the raw
-        `x`/`t` design variables (no filtering/projection), so they can't be plotted
-        this way -- rerunning with denser checkpointing of `xPhys`/`tPhys` is the fix
-        if an intermediate `stto` frame is needed.
+    :param design_file: an artefact under `run_dir` holding `xPhys`/`tPhys`, either
+        `final_design.npz` or a periodic `design_it*.npz` checkpoint. Checkpoints
+        written before those carried the filtered fields hold only raw `x`/`t` and are
+        rejected.
     """
     import json
 
@@ -509,26 +510,21 @@ def _design_checkpoints(run_dir: Path) -> list[str]:
 
 
 def _animate_timefield_filled_contour(
-    run_dir: Path, plot_dir: Path, n_contours: int, fps: float, is_seqopt: bool
+    run_dir: Path, plot_dir: Path, n_contours: int, fps: float, load_run: Callable
 ) -> None:
     """Renders `timefield_filled_contour_plot` for every design checkpoint in `run_dir`
     and stitches the frames into a GIF, with one shared color scale spanning every
     frame's `tPhys` range.
 
-    Only seqopt runs are supported: `stto`'s `design_it*.npz` checkpoints save raw,
-    unfiltered `x`/`t` rather than `xPhys`/`tPhys` (see `_load_stto_run`), so they can't
-    be plotted this way.
+    The frame spacing is whatever the run checkpointed at, so a coarse
+    `--snapshot-every` is what makes an animation jumpy, not this.
+
+    :param load_run: the run type's loader, `_load_stto_run` or `_load_seqopt_run`.
     """
     from matplotlib.animation import PillowWriter
 
-    if not is_seqopt:
-        raise SystemExit(
-            "--animate only supports seqopt runs -- stto's design_it*.npz checkpoints "
-            "don't carry filtered xPhys/tPhys (see _load_stto_run)"
-        )
-
     design_files = _design_checkpoints(run_dir)
-    frames = [_load_seqopt_run(run_dir, design_file) for design_file in design_files]
+    frames = [load_run(run_dir, design_file) for design_file in design_files]
     levels = np.linspace(
         min(tPhys.min() for _, tPhys, *_ in frames),
         max(tPhys.max() for _, tPhys, *_ in frames),
@@ -569,7 +565,11 @@ def _main(args: argparse.Namespace) -> None:
         plot_dir = args.plot_dir / args.tag
         plot_dir.mkdir(parents=True, exist_ok=True)
         _animate_timefield_filled_contour(
-            run_dir, plot_dir, args.n_contours, args.fps, is_seqopt
+            run_dir,
+            plot_dir,
+            args.n_contours,
+            args.fps,
+            _load_seqopt_run if is_seqopt else _load_stto_run,
         )
         return
 
