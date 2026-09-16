@@ -32,6 +32,11 @@ _FIXTURE_CONFIG = dataclasses.replace(
     # Per-step volume change scales with `move`; the obj/vol test needs it clear of
     # what the printed "Vol." can resolve.
     move=0.03,
+    # Set here rather than left to the default, which has been `false`: without the
+    # stage volume rows the global volume constraint pins the mean from the first
+    # iteration, and a volume that no longer moves within an iteration is one the
+    # obj/vol test cannot read either quantity from. `move` alone does not recover it.
+    enable_stage_volume=True,
 )
 
 

@@ -510,9 +510,14 @@ def test_init_state_calibrates_the_hotspot_row_against_the_seed():
 def test_enable_continuity_false_drops_the_continuity_constraint_row():
     """Disabling continuity removes its row rather than relaxing it, so the start-point
     rows follow the volume row directly."""
-    base = _problem()
-    config = dataclasses.replace(base.config, enable_continuity=False)
-    problem = stto.build_problem(config)
+    # Both ends of the comparison are set here rather than left to the default, which
+    # the row count would otherwise silently follow -- it has been `false`, which makes
+    # this a config compared against itself.
+    base_config = _problem().config
+    problem = stto.build_problem(
+        dataclasses.replace(base_config, enable_continuity=False)
+    )
+    base = stto.build_problem(dataclasses.replace(base_config, enable_continuity=True))
     _, record = stto.step(problem, stto.init_state(problem, BETA_D))
     _, with_continuity = stto.step(base, stto.init_state(base, BETA_D))
 
