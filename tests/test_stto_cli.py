@@ -117,10 +117,10 @@ def test_cli_logs_scheduled_continuation(tmp_path, monkeypatch):
         _FIXTURE_CONFIG,
         nloop=3,
         hotspot_aggregation="logsumexp",
-        hotspot_beta={"points": [[1, 4.0], [3, 16.0]], "mode": "log"},
-        penal={"points": [[1, 1.0], [3, 3.0]]},
-        Tcr={"points": [[1, 5.0], [3, 0.8]]},
-        beta_d_schedule={"points": [[1, 1.0], [3, 4.0]], "mode": "log"},
+        hotspot_beta={"points": [[0, 4.0], [2, 16.0]], "mode": "log"},
+        penal={"points": [[0, 1.0], [2, 3.0]]},
+        Tcr={"points": [[0, 5.0], [2, 0.8]]},
+        beta_d_schedule={"points": [[0, 1.0], [2, 4.0]], "mode": "log"},
         beta_t_schedule=20.0,
     )
     config_path = tmp_path / "scheduled.json"
@@ -129,7 +129,7 @@ def test_cli_logs_scheduled_continuation(tmp_path, monkeypatch):
 
     lines = (tmp_path / "output" / "sched" / "iterations.jsonl").read_text()
     log = [json.loads(line) for line in lines.splitlines()]
-    assert [e["loop"] for e in log] == [1, 2, 3]
+    assert [e["loop"] for e in log] == [0, 1, 2]
     np.testing.assert_allclose([e["hotspot_beta"] for e in log], [4.0, 8.0, 16.0])
     np.testing.assert_allclose([e["penal"] for e in log], [1.0, 2.0, 3.0])
     np.testing.assert_allclose([e["Tcr"] for e in log], [5.0, 2.9, 0.8])

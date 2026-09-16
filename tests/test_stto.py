@@ -19,6 +19,7 @@ import torch
 
 import sttopt.compliance as compliance
 import sttopt.filters as filters
+import sttopt.run_config as run_config
 import sttopt.stto as stto
 import sttopt.timefield as timefield
 import sttopt.torch_solve as torch_solve
@@ -188,16 +189,20 @@ def test_init_state_seeds_the_raw_fields(tfield):
 
 # --- step: finite-difference check of the assembled sensitivities ---------------------
 
+# An iteration that refreshes nothing: not 0, and not a multiple of any refresh period
+# these tests use.
+QUIET_LOOP = 1
+
 
 def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, beta_t=10.0):
     """A `State` at raw design point `[x_raw; t_raw]`.
 
-    `loop` is left at 0 so the ensuing `step` runs as iteration 1, which is none of
-    30/50/25: `beta_t`, `beta_d` and the hotspot calibration all stay fixed across the
-    call, so `.f`/`.g` are smooth functions of the raw variables alone. (At a refresh
-    iteration the calibration jumps as a function of the design, and the reported
-    gradient deliberately does not account for that -- a different question from the
-    one this test asks.)
+    `loop` is `QUIET_LOOP`, not 0, so the ensuing `step` runs an iteration that refreshes
+    nothing: iteration 0 always recalibrates the hotspot, and a refresh multiple would too.
+    `beta_t`, `beta_d` and the calibration then stay fixed across the call, so `.f`/`.g`
+    are smooth functions of the raw variables alone. (At a refresh iteration the
+    calibration jumps as a function of the design, and the reported gradient deliberately
+    does not account for that -- a different question from the one this test asks.)
     """
     device, dtype = problem.device, problem.dtype
     return stto.State(
@@ -207,7 +212,7 @@ def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, beta_t=10.0):
         xold2=torch.zeros(problem.n, device=device, dtype=dtype),
         low=torch.zeros(problem.n, device=device, dtype=dtype),
         upp=torch.zeros(problem.n, device=device, dtype=dtype),
-        loop=0,
+        loop=QUIET_LOOP,
         beta_t=beta_t,
         beta_d=beta_d,
         U=None,
@@ -482,9 +487,10 @@ def test_step_objective_adds_the_weighted_uniformity_penalty():
     np.testing.assert_allclose(f_100, f_0 + 100.0 * uniformity, rtol=1e-9)
 
 
-def test_init_state_calibrates_the_hotspot_row_against_the_seed():
-    """Iteration 1 already reports the seed's true maximum severity: the aggregate's
-    bias is calibrated out before the first step rather than at the first refresh."""
+def test_the_first_step_calibrates_the_hotspot_row_against_the_seed():
+    """Iteration 0 already reports the seed's true maximum severity: it is a refresh
+    iteration, so the aggregate's bias is calibrated out before the first hotspot row is
+    built rather than some periods into the run."""
     problem = _problem()
     uncalibrated = problem.hotspot.calibration
     state = stto.init_state(problem)
@@ -494,9 +500,9 @@ def test_init_state_calibrates_the_hotspot_row_against_the_seed():
     true_max = float(
         ((1 - K_est[finite]) * xPhys.flatten()[finite] ** problem.config.r).max()
     )
-    assert problem.hotspot.calibration != uncalibrated  # non-vacuous
 
     _, record = stto.step(problem, state)
+    assert problem.hotspot.calibration != uncalibrated  # non-vacuous
     assert record.tru_max == pytest.approx(true_max, rel=1e-12)
 
 
@@ -535,17 +541,19 @@ def test_step_objective_adds_the_scheduled_roughness_term():
         _, rec = stto.step(problem, _state_from_raw(problem, x_raw, t_raw))
         return rec
 
-    initial = 1000.0
-    schedule = {"initial": initial, "decay_iterations": 10, "final": 100.0}
+    schedule = {"initial": 1000.0, "decay_iterations": 10, "final": 100.0}
     unweighted, scheduled = record_at(0.0), record_at(schedule)
 
     # The two records come from separate solves, which agree on `.f` only to the CG
     # tolerance (PR #99).
     noise = 10 * torch_solve.DEFAULT_CG_RTOL * abs(unweighted.f)
-    assert scheduled.roughness_weight == initial  # `_state_from_raw` steps iteration 1
-    assert initial * scheduled.roughness > 100 * noise  # non-vacuous
+    # The weight is the schedule's value at the iteration `_state_from_raw` steps, not
+    # its `initial` -- that is the part worth pinning.
+    applied = run_config.weight_at(run_config.schedule_from_dict(schedule), QUIET_LOOP)
+    assert scheduled.roughness_weight == applied
+    assert applied * scheduled.roughness > 100 * noise  # non-vacuous
     np.testing.assert_allclose(
-        scheduled.f, unweighted.f + initial * scheduled.roughness, rtol=0, atol=noise
+        scheduled.f, unweighted.f + applied * scheduled.roughness, rtol=0, atol=noise
     )
 
 
