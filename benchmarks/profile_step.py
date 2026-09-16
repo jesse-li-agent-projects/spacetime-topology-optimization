@@ -98,7 +98,7 @@ CONFIG = run_config.RunConfig.from_dict(
 )
 
 # beta_t and beta_d as of loop 800: both of the default config's step schedules have
-# saturated by then (beta_d at loop 351, beta_t at loop 241).
+# saturated by then (beta_d at loop 350, beta_t at loop 240).
 LOOP = 800
 BETA_T = 50.0
 BETA_D = 128.0

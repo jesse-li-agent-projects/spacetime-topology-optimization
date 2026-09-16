@@ -112,19 +112,19 @@ def main(args: argparse.Namespace) -> None:
 
     start = time.perf_counter()
     with (output_dir / "iterations.jsonl").open("w") as log:
-        for _ in range(config.nloop):
+        for it in range(config.nloop):
             state, record = stto.step(problem, state)
             xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, state.beta_d)
             diag = record.diagnostics
             vol = float(xPhys.mean())
             print(
-                f"It.: {state.loop:4d} Obj.: {record.f:10.4f} "
+                f"It.: {it:4d} Obj.: {record.f:10.4f} "
                 f"Vol.: {vol:6.3f} Tm.: {record.tru_max:7.3f} "
                 f"Unif.: {record.uniformity:8.5f} c: {record.obj:9.3f} "
                 f"TmTrue: {diag['true_max']:6.3f} neff: {diag['n_eff']:7.1f}"
             )
             entry = dict(
-                loop=state.loop,
+                loop=it,
                 elapsed=time.perf_counter() - start,
                 f=record.f,
                 obj=record.obj,
@@ -140,9 +140,9 @@ def main(args: argparse.Namespace) -> None:
             # Flushed per iteration so a running optimization can be followed live.
             log.write(json.dumps(entry) + "\n")
             log.flush()
-            if state.loop % args.snapshot_every == 0:
+            if it % args.snapshot_every == 0:
                 np.savez_compressed(
-                    output_dir / f"design_it{state.loop:04d}.npz",
+                    output_dir / f"design_it{it:04d}.npz",
                     x=torch_util.to_numpy(state.x),
                     t=torch_util.to_numpy(state.t),
                     xPhys=torch_util.to_numpy(xPhys),

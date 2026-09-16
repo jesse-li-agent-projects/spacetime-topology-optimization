@@ -97,7 +97,7 @@ class State:
     xold2: Float[Tensor, " n"]
     low: Float[Tensor, " n"]
     upp: Float[Tensor, " n"]
-    loop: int
+    loop: int  # iterations already done, i.e. the index of the one `step` runs next
     beta_t: float  # stage-mask sigmoid sharpness
 
 
@@ -139,7 +139,7 @@ class RunResult:
     t_traj: list[
         Float[Tensor, "nely nelx"]
     ]  # length nloop+1, index 0 the initial field
-    records: list[IterationRecord]  # length nloop
+    records: list[IterationRecord]  # length nloop; `records[i]` is iteration `i`
 
 
 def build_problem(
@@ -244,8 +244,9 @@ def init_state(problem: Problem) -> State:
     element(s) through the material, with the void filled per `config.void_extension`
     (`timefield.init_geometry_timefield`). Both objective terms are dimensionless and
     order 1 (`plans/archive/fixed_geometry_sequence_optimization.md`), so no scale is
-    latched from the initial field; only the hotspot calibration is, so that the hotspot
-    term reports the true maximum from iteration 1.
+    latched from the initial field. Nor is the hotspot calibration: iteration 0 is a
+    refresh iteration, so it calibrates against this same seed before building its own
+    hotspot term.
     """
     xPhys_np = torch_util.to_numpy(problem.xPhys)
     Nei_np = torch_util.to_numpy(problem.Nei)
@@ -253,9 +254,6 @@ def init_state(problem: Problem) -> State:
         xPhys_np, Nei_np, timefield.VoidExtension(problem.config.void_extension)
     )
     t = torch_util.to_tensor(t0, problem.device, problem.dtype)
-
-    K_est = estimated_conductivity(problem, physical_timefield(problem, t))
-    problem.hotspot(K_est, problem.xPhys, recalibrate=True)
 
     xold = t.flatten().clone()
     return State(
@@ -307,16 +305,17 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     versus `t_stage`", the right statement once density is fixed rather than a design
     variable.
 
-    The `beta_t += 5` update (every 30 iterations, capped at 50) takes effect the
-    *next* iteration, and the hotspot calibration refresh (every 25 iterations) applies
-    to this iteration's objective, both matching `stto.step`. There is no Heaviside
+    Iterations are 0-indexed, as in `stto.step`. The `beta_t += 5` update (every 30
+    iterations after the first, capped at 50) takes effect the *next* iteration, and the
+    hotspot calibration refresh (every 25 iterations, starting at iteration 0) applies to
+    this iteration's objective, both matching `stto.step`. There is no Heaviside
     sharpening here: there is no density projection to sharpen.
     """
     config = problem.config
     nely, nelx, nStage = problem.nely, problem.nelx, config.nStage
     device, dtype = problem.device, problem.dtype
 
-    loop = state.loop + 1
+    loop = state.loop
     beta_t = state.beta_t
     xPhys = problem.xPhys
 
@@ -380,7 +379,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     dg_dt = torch.cat([sensitivity.jacobian_rows(g, (t,))[0] for g in g_parts], dim=0)
 
     # -- Periodic state updates, deferred to take effect starting *next* iteration. --
-    if loop % 30 == 0 and beta_t < 50:
+    if loop > 0 and loop % 30 == 0 and beta_t < 50:
         beta_t += 5
 
     with torch.no_grad():
@@ -426,7 +425,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         xold2=state.xold1,
         low=low,
         upp=upp,
-        loop=loop,
+        loop=loop + 1,
         beta_t=beta_t,
     )
     record = IterationRecord(

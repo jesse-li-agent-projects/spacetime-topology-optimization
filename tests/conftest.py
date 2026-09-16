@@ -148,7 +148,7 @@ def e2e_rtol(
     capped at `max_rtol`; tune `base_rtol`/`max_rtol` per test if this default doesn't
     match observed behavior.
     """
-    return min(max_rtol, base_rtol * 10 ** (iteration - 1))
+    return min(max_rtol, base_rtol * 10**iteration)
 
 
 def assert_close(

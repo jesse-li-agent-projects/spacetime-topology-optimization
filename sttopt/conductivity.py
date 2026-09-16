@@ -377,7 +377,7 @@ class LogSumExp:
         :param r: the density exponent of the severity the calibration targets
         """
         self.beta_schedule = beta
-        self.beta = run_config.weight_at(beta, 1)
+        self.beta = run_config.weight_at(beta, 0)
         self.r = r
         self.calibration = 0.0
 

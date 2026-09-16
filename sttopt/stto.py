@@ -100,7 +100,7 @@ class State:
     xold2: Float[Tensor, " n"]
     low: Float[Tensor, " n"]
     upp: Float[Tensor, " n"]
-    loop: int
+    loop: int  # iterations already done, i.e. the index of the one `step` runs next
     beta_t: float  # gravity/stage-mask sigmoid sharpness
     beta_d: float  # Heaviside projection sharpness
 
@@ -146,7 +146,7 @@ class RunResult:
     # reproduce that loop's xPhys/tPhys, not the fields themselves
     x_traj: list[Float[Tensor, "nely nelx"]]
     t_traj: list[Float[Tensor, "nely nelx"]]  # length nloop+1
-    records: list[IterationRecord]  # length nloop
+    records: list[IterationRecord]  # length nloop; `records[i]` is iteration `i`
 
 
 def build_problem(
@@ -290,7 +290,7 @@ def init_state(problem: Problem) -> State:
     """Initial state: `x`/`t` are the raw seed (uniform `problem.config.volfrac`, time
     field per `problem.config.print_base`).
 
-    The MATLAB source leaves `tPhys` unfiltered at initialization, so its iteration 1
+    The MATLAB source leaves `tPhys` unfiltered at initialization, so its first iteration
     reads a different forward map from every later one (PR #26). Here every iteration,
     the first included, derives the physical fields through `physical_fields`.
     """
@@ -311,19 +311,16 @@ def init_state(problem: Problem) -> State:
         dtype,
     )
 
-    # MATLAB's xold1=xold2=[x(:); zeros(nel,1)] -- provably unread (iterations 1 and 2
-    # both take mmasub's `iteration < 2.5` reinit branch), reproduced anyway for fidelity.
+    # MATLAB's xold1=xold2=[x(:); zeros(nel,1)] -- provably unread (the first two
+    # iterations both take mmasub's `iteration < 2` reinit branch), reproduced anyway
+    # for fidelity.
     xold = torch.cat([x.flatten(), torch.zeros(nel, device=device, dtype=dtype)])
 
-    # Calibrated against the seed, so iteration 1's hotspot row bounds the true maximum
-    # rather than the aggregate's bias -- which at a low `hotspot_beta` is larger than
-    # the maximum itself.
-    beta_d = run_config.weight_at(config.beta_d_schedule, 1)
-    beta_t = run_config.weight_at(config.beta_t_schedule, 1)
-    xPhys, tPhys = physical_fields(problem, x, t, beta_d)
-    problem.hotspot(
-        estimated_conductivity(problem, xPhys, tPhys, loop=1), xPhys, recalibrate=True
-    )
+    # The hotspot calibration is not seeded here: iteration 0 satisfies `step`'s
+    # `loop % hotspot_refresh_period == 0`, so it calibrates against this same seed
+    # before building its own hotspot row.
+    beta_d = run_config.weight_at(config.beta_d_schedule, 0)
+    beta_t = run_config.weight_at(config.beta_t_schedule, 0)
 
     return State(
         x=x,
@@ -429,19 +426,21 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     not accompanied by a hand-derived `dx` chain-rule factor), call `mma.mmasub`, and
     unpack the result into the next state.
 
-    The `beta_t += 5` (loop%30==0) and `beta_d *= 2` (loop%50==0) updates happen at the
-    tail and take effect starting the *next* iteration's `step` call rather than
-    rescaling this iteration's own `g_all`/`dg_dx`/`xPhys` mid-loop -- a deliberate
-    simplification, not a fidelity gap. The hotspot calibration refresh (loop%25==0)
-    instead applies to this iteration's hotspot row, as in the MATLAB source. None of
-    the three trigger against the small E2E fixture (`nloop=3`).
+    Iterations are 0-indexed: `state.loop` counts the iterations already done, so it is
+    also the index of the one this call runs.
+
+    The projection sharpnesses `beta_t`/`beta_d` are read at the *next* index and stored
+    on the returned state, so a scheduled change takes effect starting the next `step`
+    call rather than rescaling this iteration's own `g_all`/`dg_dx`/`xPhys` mid-loop --
+    a deliberate simplification, not a fidelity gap. The hotspot calibration refresh
+    instead applies to this iteration's own hotspot row, as in the MATLAB source.
     """
     config = problem.config
     nely, nelx, nStage = config.nely, config.nelx, config.nStage
     nel = nelx * nely
     device, dtype = problem.device, problem.dtype
 
-    loop = state.loop + 1
+    loop = state.loop
     beta_t = state.beta_t
     beta_d = state.beta_d
     penal = run_config.weight_at(config.penal, loop)
@@ -616,7 +615,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         xold2=state.xold1,
         low=low,
         upp=upp,
-        loop=loop,
+        loop=loop + 1,
         beta_t=beta_t,
         beta_d=beta_d,
         # Required: femsolve() asserts its x0 argument arrives already detached (the

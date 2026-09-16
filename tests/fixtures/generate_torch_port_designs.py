@@ -100,28 +100,28 @@ _EXTRA_CONFIG_FIELDS = dict(
     hotspot_refresh_period=25,
     beta_d_schedule={
         "points": [
-            [1, 1.0],
-            [51, 2.0],
-            [101, 4.0],
-            [151, 8.0],
-            [201, 16.0],
-            [251, 32.0],
-            [301, 64.0],
-            [351, 128.0],
+            [0, 1.0],
+            [50, 2.0],
+            [100, 4.0],
+            [150, 8.0],
+            [200, 16.0],
+            [250, 32.0],
+            [300, 64.0],
+            [350, 128.0],
         ],
         "mode": "step",
     },
     beta_t_schedule={
         "points": [
-            [1, 10.0],
-            [31, 15.0],
-            [61, 20.0],
-            [91, 25.0],
-            [121, 30.0],
-            [151, 35.0],
-            [181, 40.0],
-            [211, 45.0],
-            [241, 50.0],
+            [0, 10.0],
+            [30, 15.0],
+            [60, 20.0],
+            [90, 25.0],
+            [120, 30.0],
+            [150, 35.0],
+            [180, 40.0],
+            [210, 45.0],
+            [240, 50.0],
         ],
         "mode": "step",
     },
@@ -156,6 +156,8 @@ MESHES = [
 # design the previous iteration actually left behind -- nothing reconstructed and nothing
 # perturbed by hand. Whether the previous solution is a good initial guess is precisely
 # the question, so the pair must not be manufactured by assuming it is.
+# Indices into the trajectory, where index 0 is the initial field -- so `it0800` is the
+# design after 800 iterations, not the one iteration 800 produced.
 SNAPSHOT_LOOPS = [25, 100, 200, 400, 600, 799, 800]
 
 

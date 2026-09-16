@@ -3,6 +3,24 @@
 Decisions that are load-bearing across most of `sttopt`, fixed once here rather than
 re-derived per module. Module docstrings reference this file instead of restating it.
 
+## Iteration numbering
+
+Optimization iterations are 0-indexed: the first `step` call runs iteration 0, and
+`State.loop` holds the number of iterations already done, which is also the index of the
+one `step` runs next. Schedules (`run_config.weight_at` and both schedule classes), the
+`iteration` argument `mma.mmasub` takes, the `loop` field in a run's `iterations.jsonl`,
+and the `design_itNNNN.npz` snapshot names all use that index.
+
+Two consequences worth knowing. A periodic trigger written `loop % period == 0` fires on
+iteration 0, which is what lets the hotspot calibration be seeded by the first iteration
+rather than by a special case in `init_state`; a continuation that must *not* fire before
+the first iteration is judged needs an explicit `loop > 0`. And the trajectories in
+`RunResult` still carry the initial field at index 0, so iteration `i` is `records[i]`
+but `xPhys_traj[i + 1]`.
+
+`tests/matlab_reference_loop.py` stays 1-indexed, matching the MATLAB source it
+transliterates; tests that drive it convert at the comparison.
+
 ## Array order
 
 The MATLAB source indexes elements column-major over an `(nely, nelx)` grid:
@@ -66,9 +84,9 @@ linear solve. Compare per quantity, not per test:
   its sensitivities).
 - **Growing with iteration count**, for end-to-end trajectory comparisons only:
   `subsolv`'s inner Newton line search amplifies small per-iteration differences.
-  "Iteration 1 matches to 1e-9, iteration 5 to 1e-4" is the realistic target — not
+  "Iteration 0 matches to 1e-9, iteration 4 to 1e-4" is the realistic target — not
   exact agreement after hundreds of iterations. `tests/conftest.py`'s `assert_close`
-  takes an iteration count and scales tolerance accordingly.
+  takes an iteration index and scales tolerance accordingly.
 
 ## Mesh assumptions
 
@@ -109,7 +127,7 @@ autograd, which gets the self-pair case right on its own.
 Not a measure-zero edge case, either: a time field with exact repeated values along a
 grid axis (e.g. a linear ramp) produces structural off-diagonal ties on a nontrivial
 fraction of neighbor pairs, surviving density filtering — so under that kind of
-initialization this branch is live from iteration 0, not a rare coincidence. The old
+initialization this branch is live from the very first iteration, not a rare coincidence. The old
 bug was also worse than "wrong on a small set": `DFT`
 was ~`rouf/4` approaching a tie and exactly `0` at one, so `dt1` was discontinuous in
 `t` — a hole in the gradient field that an optimizer driving a symmetric design toward

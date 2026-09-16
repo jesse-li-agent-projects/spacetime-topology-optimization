@@ -63,7 +63,7 @@ def test_cli_logs_one_diagnostics_record_per_iteration(tmp_path, monkeypatch):
     lines = log.splitlines()
     assert len(lines) == _FIXTURE_CONFIG.nloop
     entries = [json.loads(line) for line in lines]
-    assert [e["loop"] for e in entries] == [1, 2]
+    assert [e["loop"] for e in entries] == [0, 1]
     for entry in entries:
         # The trust-region fields are why this is logged per iteration at all.
         assert entry["step_max"] <= _FIXTURE_CONFIG.tmove + 1e-12

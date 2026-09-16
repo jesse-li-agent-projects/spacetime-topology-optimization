@@ -833,9 +833,7 @@ def test_e2e_trajectory_through_mgcg():
     what this is for.
     """
     problem = stto.build_problem(e2e_mod.CONFIG)
-    direct = stto.run_from_state(
-        problem, stto.init_state(problem), e2e_mod.NLOOP
-    )
+    direct = stto.run_from_state(problem, stto.init_state(problem), e2e_mod.NLOOP)
 
     setup = calib.mesh_setup(e2e_mod.NELX, e2e_mod.NELY)
     with calib.mgcg_backend(setup, rtol=calib.RECOMMENDED_RTOL) as iters:
@@ -846,18 +844,16 @@ def test_e2e_trajectory_through_mgcg():
         )
     assert len(iters) == e2e_mod.NLOOP * (1 + e2e_mod.NSTAGE)
 
-    for k in range(1, e2e_mod.NLOOP + 1):
+    # Trajectory index 0 is the initial field, so iteration `k` lands at index `k + 1`.
+    for k in range(e2e_mod.NLOOP):
         assert_close(
-            result.xPhys_traj[k], direct.xPhys_traj[k], tier="e2e", iteration=k
+            result.xPhys_traj[k + 1], direct.xPhys_traj[k + 1], tier="e2e", iteration=k
         )
         assert_close(
-            result.tPhys_traj[k], direct.tPhys_traj[k], tier="e2e", iteration=k
+            result.tPhys_traj[k + 1], direct.tPhys_traj[k + 1], tier="e2e", iteration=k
         )
         assert_close(
-            result.records[k - 1].obj,
-            direct.records[k - 1].obj,
-            tier="e2e",
-            iteration=k,
+            result.records[k].obj, direct.records[k].obj, tier="e2e", iteration=k
         )
 
 
