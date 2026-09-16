@@ -90,9 +90,9 @@ def mmasub(
                       xmin_j <= x_j <= xmax_j,     j = 1..n
                       z >= 0, y_i >= 0
 
-    `iteration` is the current outer-loop count (1 the first time this is called);
+    `iteration` is the current outer-loop index (0 the first time this is called);
     `xold1`/`xold2`/`low`/`upp` carry state from previous calls (unused when
-    `iteration < 2.5`, which re-initializes the asymptotes from scratch). `f0val` is
+    `iteration < 2`, which re-initializes the asymptotes from scratch). `f0val` is
     unused by the algorithm itself (kept for signature fidelity with the MATLAB source,
     which also never reads it).
 
@@ -130,7 +130,7 @@ def mmasub(
     # Asymptotes: re-initialized on the first two iterations, then adapted based on
     # whether xval is oscillating (zzz < 0) or moving monotonically (zzz > 0) relative
     # to the last two iterates.
-    if iteration < 2.5:
+    if iteration < 2:
         low = xval - asyinit * xrange
         upp = xval + asyinit * xrange
     else:

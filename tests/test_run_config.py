@@ -37,12 +37,12 @@ def test_from_dict_warns_and_drops_unknown_keys(cls, config):
 
 
 def test_cosine_schedule_decays_between_its_endpoints():
-    """`decay_iterations` is the last iteration still decaying, so a 300-iteration
+    """`decay_iterations` is the number of iterations still decaying, so a 300-iteration
     decay of an 800-iteration run reads as written."""
     schedule = CosineSchedule(initial=1.0, decay_iterations=300, final=0.02)
-    assert schedule.at(1) == 1.0
-    assert schedule.at(301) == pytest.approx(0.02)
-    assert schedule.at(151) == pytest.approx(0.51)  # half a cosine's midpoint
+    assert schedule.at(0) == 1.0
+    assert schedule.at(300) == pytest.approx(0.02)
+    assert schedule.at(150) == pytest.approx(0.51)  # half a cosine's midpoint
 
 
 def test_cosine_schedule_holds_final_past_the_decay():
@@ -56,7 +56,7 @@ def test_cosine_schedule_holds_final_past_the_decay():
 def test_cosine_schedule_decreases_monotonically():
     values = [
         CosineSchedule(initial=1.0, decay_iterations=300, final=0.02).at(loop)
-        for loop in range(1, 302)
+        for loop in range(301)
     ]
     assert all(later <= earlier for earlier, later in zip(values, values[1:]))
 
@@ -85,14 +85,14 @@ def test_config_round_trips_a_cosine_weight(cls, make_config):
 
     revived = cls.from_dict(json.loads(json.dumps(scheduled.to_dict())))
     assert revived == scheduled
-    assert weight_at(revived.roughness_weight, 1) == 1.0
+    assert weight_at(revived.roughness_weight, 0) == 1.0
     assert weight_at(revived.roughness_weight, 800) == pytest.approx(0.02)
 
 
 def test_weight_at_passes_a_bare_number_through():
     """A plain number means a constant, so an unscheduled config needs no special
     casing at the call site."""
-    assert weight_at(0.2, 1) == 0.2
+    assert weight_at(0.2, 0) == 0.2
     assert weight_at(0.2, 10_000) == 0.2
 
 
@@ -107,21 +107,21 @@ def test_seq_config_round_trips_a_constant_weight_as_a_number():
 
 def test_piecewise_schedule_interpolates_and_holds_outside_its_points():
     schedule = PiecewiseSchedule(points=[[100, 2.0], [300, 0.8]])
-    assert schedule.at(1) == 2.0
+    assert schedule.at(0) == 2.0
     assert schedule.at(200) == pytest.approx(1.4)
     assert schedule.at(10_000) == 0.8
 
 
 def test_piecewise_schedule_log_interpolates_geometrically():
-    schedule = PiecewiseSchedule(points=[[1, 1.0], [101, 100.0]], mode="log")
-    assert schedule.at(51) == pytest.approx(10.0)
+    schedule = PiecewiseSchedule(points=[[0, 1.0], [100, 100.0]], mode="log")
+    assert schedule.at(50) == pytest.approx(10.0)
 
 
 def test_piecewise_step_schedule_holds_each_value_until_the_next_point():
     """`step` does not interpolate: the value jumps at a point's own iteration, which is
     what the projection sharpness ramps have always done."""
-    schedule = PiecewiseSchedule(points=[[1, 1.0], [51, 2.0], [101, 4.0]], mode="step")
-    assert [schedule.at(loop) for loop in (1, 50, 51, 100, 101, 10_000)] == [
+    schedule = PiecewiseSchedule(points=[[0, 1.0], [50, 2.0], [100, 4.0]], mode="step")
+    assert [schedule.at(loop) for loop in (0, 49, 50, 99, 100, 10_000)] == [
         1.0,
         1.0,
         2.0,
@@ -133,7 +133,7 @@ def test_piecewise_step_schedule_holds_each_value_until_the_next_point():
 
 def test_piecewise_schedule_rejects_an_unknown_mode():
     with pytest.raises(ValueError, match="not a valid Interpolation"):
-        PiecewiseSchedule(points=[[1, 1.0]], mode="quadratic")
+        PiecewiseSchedule(points=[[0, 1.0]], mode="quadratic")
 
 
 def test_piecewise_schedule_rejects_unsorted_points():
@@ -144,8 +144,8 @@ def test_piecewise_schedule_rejects_unsorted_points():
 def test_config_round_trips_a_piecewise_schedule():
     """A mapping with `points` is a `PiecewiseSchedule`, in any schedulable field."""
     config = default_run_config(
-        Tcr={"points": [[1, 5.0], [200, 0.8]]},
-        hotspot_beta={"points": [[1, 4.0], [400, 32.0]], "mode": "log"},
+        Tcr={"points": [[0, 5.0], [200, 0.8]]},
+        hotspot_beta={"points": [[0, 4.0], [400, 32.0]], "mode": "log"},
     )
     assert isinstance(config.Tcr, PiecewiseSchedule)
     revived = RunConfig.from_dict(json.loads(json.dumps(config.to_dict())))

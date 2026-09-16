@@ -12,7 +12,7 @@ A0 = 1.0
 C_VAL = 2500.0
 
 
-def test_mmasub_iteration1():
+def test_mmasub_first_iteration():
     fx = load_fixture_npz("mma")
     m, n = int(fx["m"]), int(fx["n"])
     a = np.zeros(m)
@@ -22,7 +22,7 @@ def test_mmasub_iteration1():
     xmma, ymma, zmma, lam, xsi, eta, mu, zet, s, low, upp = mma.mmasub(
         m,
         n,
-        1,
+        0,
         tt(fx["xval_1"]),
         tt(fx["xmin_1"]),
         tt(fx["xmax_1"]),
@@ -32,8 +32,9 @@ def test_mmasub_iteration1():
         tt(fx["df0dx_1"]),
         tt(fx["fval_1"]),
         tt(fx["dfdx_1"]),
-        # low_1/upp_1 are unused at iteration 1 (see mma.mmasub: `iteration < 2.5`
-        # recomputes them from scratch) -- the fixture stores them as zeros.
+        # low_1/upp_1 are unused on the first iteration (see mma.mmasub: `iteration < 2`
+        # recomputes them from scratch) -- the fixture stores them as zeros. The `_1`
+        # fixture keys are MATLAB's own 1-based iteration labels.
         tt(np.zeros(n)),
         tt(np.zeros(n)),
         A0,
@@ -55,18 +56,18 @@ def test_mmasub_iteration1():
 
 
 def test_mmasub_asymptote_update_branch():
-    """Exercises the `iteration >= 2.5` asymptote branch (factor/asyincr/asydecr and
-    the four min/max clamps in mma.mmasub), which iteration 1 never reaches.
+    """Exercises the `iteration >= 2` asymptote branch (factor/asyincr/asydecr and
+    the four min/max clamps in mma.mmasub), which the first two iterations never reach.
 
-    A fixture-chained version of this test (feeding iteration 2/3 state reconstructed
-    from xmma_all/low_all/upp_all) was tried and dropped: xval at iteration 2 depends
-    on this port's own iteration-1 xmma, which agrees with MATLAB's only to ~1e-15 (not
+    A fixture-chained version of this test (feeding later state reconstructed
+    from xmma_all/low_all/upp_all) was tried and dropped: xval at the second iteration
+    depends on this port's own first xmma, which agrees with MATLAB's only to ~1e-15 (not
     bit-exactly -- see conventions.md's tolerance policy) -- and a handful of elements
     have `zzz = (xval-xold1)*(xold1-xold2)` sitting right at 0, where that tiny
     difference flips `factor` between asyincr/1.0/asydecr (a 20-30% swing), not a
     smoothly growing error. That's a real trajectory-divergence hazard for any future
     end-to-end MMA-loop comparison (Phase 8) to be aware of, but it makes a fixture
-    comparison at iteration 2+ fail for reasons unrelated to port correctness.
+    comparison past the first iteration fail for reasons unrelated to port correctness.
 
     Instead, this constructs a small synthetic problem hand-picked to exercise every
     branch (zzz > 0, zzz < 0, zzz == 0 exactly, and each of the lowmin/lowmax/uppmin/

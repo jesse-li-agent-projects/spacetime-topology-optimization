@@ -31,7 +31,7 @@ def _run_mmasub(n, m, xmin, xmax, x0, a0, a, c, d, objective, constraint, n_iter
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        for iteration in range(1, n_iterations + 1):
+        for iteration in range(n_iterations):
             f0val, df0dx = objective(x)
             fval, dfdx = constraint(x)
             xmma, _, _, _, _, _, _, _, _, low, upp = mma.mmasub(

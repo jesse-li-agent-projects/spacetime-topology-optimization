@@ -70,8 +70,8 @@ class CosineSchedule:
     Use it to release a regularizer once the design is in a good basin, and to ask how
     far it can be released. `decay_iterations` is independent of `nloop`, so the decay
     can finish well before the run does and leave the rest of the budget at `final`.
-    It is the last iteration still decaying: iteration 1 is exactly `initial`, and
-    iteration `decay_iterations + 1` onward is exactly `final`.
+    It is the number of iterations still decaying: iteration 0 is exactly `initial`, and
+    iteration `decay_iterations` onward is exactly `final`.
 
     Cosine rather than linear because it is flat at both ends -- the weight stays near
     `initial` while the design is still finding its basin, and settles onto `final`
@@ -95,8 +95,8 @@ class CosineSchedule:
             )
 
     def at(self, loop: int) -> float:
-        """The value at 1-indexed iteration `loop`."""
-        progress = min(max((loop - 1) / self.decay_iterations, 0.0), 1.0)
+        """The value at 0-indexed iteration `loop`."""
+        progress = min(max(loop / self.decay_iterations, 0.0), 1.0)
         taper = 0.5 * (1.0 + math.cos(math.pi * progress))
         return self.final + (self.initial - self.final) * taper
 
@@ -141,7 +141,7 @@ class PiecewiseSchedule:
             )
 
     def at(self, loop: int) -> float:
-        """The value at 1-indexed iteration `loop`."""
+        """The value at 0-indexed iteration `loop`."""
         loops = [p[0] for p in self.points]
         values = [p[1] for p in self.points]
         mode = Interpolation(self.mode)
@@ -161,7 +161,7 @@ def schedule_from_dict(d: dict) -> CosineSchedule | PiecewiseSchedule:
 
 
 def weight_at(setting: Scheduled, loop: int) -> float:
-    """The value of a possibly-scheduled scalar at 1-indexed iteration `loop`."""
+    """The value of a possibly-scheduled scalar at 0-indexed iteration `loop`."""
     if isinstance(setting, (CosineSchedule, PiecewiseSchedule)):
         return setting.at(loop)
     return float(setting)
