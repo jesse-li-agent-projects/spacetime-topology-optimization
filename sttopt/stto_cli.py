@@ -1,6 +1,6 @@
 """Command-line entry point for the space-time topology optimization loop -- the
 argparse equivalent of `conductivity_estimation_stto_main.m`'s hardcoded constants at
-the top of that script (`nelx`, `nely`, `nloop`, ... through `beta_d_max`), with the same
+the top of that script (`nelx`, `nely`, `nloop`, ... through the projection ramps), with the same
 default values (the original *full-scale* script's constants, not the smaller ones the
 fixture harness/tests use for speed).
 
@@ -32,7 +32,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="path to a RunConfig JSON file (e.g. a previous run's output/<tag>/"
         "config.json). Fields (nelx, nely, nloop, volfrac, nStage, Theta, Tcr, "
-        "print_base, rmin, lrmin, rmin_cond, beta_d_max, and the rest of "
+        "print_base, rmin, lrmin, rmin_cond, beta_d_schedule, and the rest of "
         "build_problem's hyperparameters) are settable only through this file",
     )
     parser.add_argument(
@@ -45,6 +45,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="delete an existing output/<tag> directory before this run, instead of "
         "erroring out",
+    )
+    parser.add_argument(
+        "--snapshot-every",
+        type=int,
+        default=50,
+        help="save x/t/xPhys/tPhys every this many iterations (default: 50)",
     )
     parser.add_argument(
         "--device",
@@ -76,6 +82,7 @@ def resolve_config(args: argparse.Namespace) -> "RunConfig":
 def main(args: argparse.Namespace) -> None:
     import json
     import shutil
+    import time
 
     import numpy as np
 
@@ -101,22 +108,46 @@ def main(args: argparse.Namespace) -> None:
     (output_dir / "config.json").write_text(json.dumps(config.to_dict(), indent=2))
 
     problem = stto.build_problem(config, device=args.device)
-    state = stto.init_state(problem, beta_d=1.0)
+    state = stto.init_state(problem)
 
-    for _ in range(config.nloop):
-        state, record = stto.step(problem, state)
-        xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, state.beta_d)
-        print(
-            f"It.: {state.loop:4d} Obj.: {record.f:10.4f} "
-            f"Vol.: {xPhys.mean():6.3f} Tm.: {record.tru_max:7.3f} "
-            f"Unif.: {record.uniformity:8.5f}"
-        )
-        if state.loop % 50 == 0:
-            np.savez(
-                output_dir / f"design_it{state.loop:04d}.npz",
-                x=torch_util.to_numpy(state.x),
-                t=torch_util.to_numpy(state.t),
+    start = time.perf_counter()
+    with (output_dir / "iterations.jsonl").open("w") as log:
+        for _ in range(config.nloop):
+            state, record = stto.step(problem, state)
+            xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, state.beta_d)
+            diag = record.diagnostics
+            vol = float(xPhys.mean())
+            print(
+                f"It.: {state.loop:4d} Obj.: {record.f:10.4f} "
+                f"Vol.: {vol:6.3f} Tm.: {record.tru_max:7.3f} "
+                f"Unif.: {record.uniformity:8.5f} c: {record.obj:9.3f} "
+                f"TmTrue: {diag['true_max']:6.3f} neff: {diag['n_eff']:7.1f}"
             )
+            entry = dict(
+                loop=state.loop,
+                elapsed=time.perf_counter() - start,
+                f=record.f,
+                obj=record.obj,
+                vol=vol,
+                tru_max=record.tru_max,
+                uniformity=record.uniformity,
+                roughness=record.roughness,
+                roughness_weight=record.roughness_weight,
+                g=record.g.tolist(),
+                lam=record.lam.tolist(),
+                **diag,
+            )
+            # Flushed per iteration so a running optimization can be followed live.
+            log.write(json.dumps(entry) + "\n")
+            log.flush()
+            if state.loop % args.snapshot_every == 0:
+                np.savez_compressed(
+                    output_dir / f"design_it{state.loop:04d}.npz",
+                    x=torch_util.to_numpy(state.x),
+                    t=torch_util.to_numpy(state.t),
+                    xPhys=torch_util.to_numpy(xPhys),
+                    tPhys=torch_util.to_numpy(tPhys),
+                )
 
     np.savez(
         output_dir / "final_design.npz",

@@ -164,7 +164,7 @@ def main():
     # -- Main loop: run NLOOP iterations from the current (correct) init_state,
     # recomputing each module's own intermediate outputs alongside stto.step's
     # so per-module fixtures agree with the trajectory by construction. -------------
-    state = stto.init_state(problem, BETA_D_INIT)
+    state = stto.init_state(problem)
     xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, state.beta_d)
 
     xPhys_traj = [N(xPhys)]

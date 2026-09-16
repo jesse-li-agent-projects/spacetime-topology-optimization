@@ -834,14 +834,14 @@ def test_e2e_trajectory_through_mgcg():
     """
     problem = stto.build_problem(e2e_mod.CONFIG)
     direct = stto.run_from_state(
-        problem, stto.init_state(problem, e2e_mod.BETA_INIT), e2e_mod.NLOOP
+        problem, stto.init_state(problem), e2e_mod.NLOOP
     )
 
     setup = calib.mesh_setup(e2e_mod.NELX, e2e_mod.NELY)
     with calib.mgcg_backend(setup, rtol=calib.RECOMMENDED_RTOL) as iters:
         result = stto.run_from_state(
             problem,
-            stto.init_state(problem, e2e_mod.BETA_INIT),
+            stto.init_state(problem),
             e2e_mod.NLOOP,
         )
     assert len(iters) == e2e_mod.NLOOP * (1 + e2e_mod.NSTAGE)

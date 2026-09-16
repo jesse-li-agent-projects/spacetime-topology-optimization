@@ -24,7 +24,7 @@ multigrid-CG, not a NumPy round trip. `fem.py`'s NumPy `assemble_stiffness`/`sol
 stay only as `tests/reference/`'s independent oracle; nothing in `sttopt/` calls them.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import torch
@@ -130,6 +130,9 @@ class IterationRecord:
     lam: Float[np.ndarray, " m"]
     g: Float[np.ndarray, " m"]
     dg: Float[np.ndarray, "m n"]
+    # Scalars for following the optimization dynamics: this iteration's continuation
+    # values, the true hotspot maximum and where it sits, and the MMA step size.
+    diagnostics: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -244,7 +247,6 @@ def build_problem(
             config.p,
             config.r,
             config.hotspot_beta,
-            config.hotspot_density_exponent,
         ),
         n=n,
         **float_fields,
@@ -284,7 +286,7 @@ def physical_fields(
     return xPhys, tPhys
 
 
-def init_state(problem: Problem, beta_d: float) -> State:
+def init_state(problem: Problem) -> State:
     """Initial state: `x`/`t` are the raw seed (uniform `problem.config.volfrac`, time
     field per `problem.config.print_base`).
 
@@ -316,9 +318,11 @@ def init_state(problem: Problem, beta_d: float) -> State:
     # Calibrated against the seed, so iteration 1's hotspot row bounds the true maximum
     # rather than the aggregate's bias -- which at a low `hotspot_beta` is larger than
     # the maximum itself.
+    beta_d = run_config.weight_at(config.beta_d_schedule, 1)
+    beta_t = run_config.weight_at(config.beta_t_schedule, 1)
     xPhys, tPhys = physical_fields(problem, x, t, beta_d)
     problem.hotspot(
-        estimated_conductivity(problem, xPhys, tPhys), xPhys, recalibrate=True
+        estimated_conductivity(problem, xPhys, tPhys, loop=1), xPhys, recalibrate=True
     )
 
     return State(
@@ -329,7 +333,7 @@ def init_state(problem: Problem, beta_d: float) -> State:
         low=torch.zeros(problem.n, device=device, dtype=dtype),
         upp=torch.zeros(problem.n, device=device, dtype=dtype),
         loop=0,
-        beta_t=10.0,
+        beta_t=beta_t,
         beta_d=beta_d,
         U=None,
     )
@@ -386,6 +390,7 @@ def estimated_conductivity(
     problem: Problem,
     xPhys: Float[Tensor, "nely nelx"],
     tPhys: Float[Tensor, "nely nelx"],
+    loop: int | None = None,
 ) -> Float[Tensor, " nel"]:
     """The `K_est` field behind the run's hotspot term, with every conductivity setting
     taken from `problem`.
@@ -393,8 +398,16 @@ def estimated_conductivity(
     The one path to that field, so offline tooling cannot report a hotspot measure the
     run never optimized -- rebuilding this call by hand once plotted the print base as
     the worst hotspot in the domain (PR #98).
+
+    :param loop: the iteration whose scheduled settings apply, or `None` for the values
+        a finished run settles on.
     """
     config = problem.config
+    rouf = (
+        run_config.final_value(config.rouf)
+        if loop is None
+        else run_config.weight_at(config.rouf, loop)
+    )
     return conductivity.estimated_conductivity(
         xPhys,
         tPhys,
@@ -402,7 +415,7 @@ def estimated_conductivity(
         problem.e2,
         problem.w,
         config.q,
-        config.rouf,
+        rouf,
         problem.hotspot_denom,
         problem.hotspot_base,
     )
@@ -431,6 +444,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     loop = state.loop + 1
     beta_t = state.beta_t
     beta_d = state.beta_d
+    penal = run_config.weight_at(config.penal, loop)
+    uniformity_weight = run_config.weight_at(config.uniformity_weight, loop)
+    Tcr = run_config.weight_at(config.Tcr, loop)
+    rouf = run_config.weight_at(config.rouf, loop)
 
     # -- Gradient region begins: x/t become autograd leaves. --
     x = state.x.clone().requires_grad_(True)
@@ -450,7 +467,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         problem.edofMat,
         config.Emin,
         config.Emax,
-        config.penal,
+        penal,
         problem.freedofs,
         problem.F,
         problem.ndof,
@@ -466,13 +483,14 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     f_val_t = c_t
     for cg_t in stage_cs:
         f_val_t = f_val_t + config.Theta * cg_t
+    stage_obj = config.Theta * sum(float(cg_t.detach()) for cg_t in stage_cs)
 
     # Layer-uniformity penalty on the time field. Weighted by xPhys, so it measures the
     # layers of the part, and its gradient moves material as well as print time.
     uniformity_t = timefield.uniformity_penalty(
         tPhys, timefield.UniformityMetric(config.uniformity_metric), weights=xPhys
     )
-    f_val_t = f_val_t + config.uniformity_weight * uniformity_t
+    f_val_t = f_val_t + uniformity_weight * uniformity_t
     # The uniformity penalty alone rewards a sawtooth across the print direction
     # (`timefield._gradient_cv`).
     rough_t = timefield.relative_roughness(tPhys, weights=xPhys)
@@ -525,11 +543,14 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         )
 
     # Hotspot constraint. A refresh recalibrates before the row is built, so the row's
-    # value and its gradient share one calibration.
-    hotspot_t = problem.hotspot(
-        estimated_conductivity(problem, xPhys, tPhys), xPhys, recalibrate=loop % 25 == 0
-    )
-    g_hotspot_t = hotspot_t / config.Tcr - 1
+    # value and its gradient share one calibration. A scheduled change in the
+    # aggregate's sharpness or in `rouf` moves its bias, so it refreshes too.
+    recalibrate = loop % config.hotspot_refresh_period == 0
+    recalibrate |= rouf != run_config.weight_at(config.rouf, loop - 1)
+    recalibrate |= problem.hotspot.resolve(loop)
+    K_est_t = estimated_conductivity(problem, xPhys, tPhys, loop)
+    hotspot_t = problem.hotspot(K_est_t, xPhys, recalibrate=recalibrate)
+    g_hotspot_t = hotspot_t / Tcr - 1
     tru_max = float(hotspot_t.detach())
 
     g_parts.append(g_hotspot_t[None])
@@ -538,15 +559,25 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         [_sensitivity_rows(g, x, t) for g in g_parts],
         dim=0,
     )
+    diagnostics = _hotspot_diagnostics(hotspot_t, K_est_t, xPhys, config.r)
+    diagnostics.update(
+        stage_obj=stage_obj,
+        grey=float(((xPhys > 0.05) & (xPhys < 0.95)).double().mean()),
+        calibration=problem.hotspot.calibration,
+        recalibrated=bool(recalibrate),
+        penal=penal,
+        uniformity_weight=uniformity_weight,
+        Tcr=Tcr,
+        rouf=rouf,
+        hotspot_beta=run_config.weight_at(config.hotspot_beta, loop),
+        beta_d=beta_d,
+        beta_t=beta_t,
+    )
 
     # -- Periodic state updates, deferred to take effect starting *next* iteration's
     # step() call, never rescaling this iteration's own g_all/dg_dx mid-loop. --
-    if loop % 30 == 0 and beta_t < 50:
-        beta_t += 5
-    if loop % 50 == 0 and beta_d <= config.beta_d_max:
-        beta_d *= 2
-    if beta_d > config.beta_d_max:
-        beta_d = config.beta_d_max
+    beta_t = run_config.weight_at(config.beta_t_schedule, loop + 1)
+    beta_d = run_config.weight_at(config.beta_d_schedule, loop + 1)
 
     # -- Gradient region ends: mmasub is not part of the autograd graph. df_dx/g_all/
     # dg_dx are the last gradient-carrying values, detached here on their way in.
@@ -593,6 +624,13 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         # of multigrid hierarchy across iterations -- see commit 855eb76.
         U=U_new.detach(),
     )
+    step_size = (xmma - xval).abs()
+    diagnostics.update(
+        dx_max=float(step_size[:nel].max()),
+        dx_mean=float(step_size[:nel].mean()),
+        dt_max=float(step_size[nel:].max()),
+        dt_mean=float(step_size[nel:].mean()),
+    )
     record = IterationRecord(
         obj=obj_final_only,
         vol=vol_diag,
@@ -608,23 +646,45 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         lam=torch_util.to_numpy(lam),
         g=torch_util.to_numpy(g_all),
         dg=torch_util.to_numpy(dg_dx),
+        diagnostics=diagnostics,
     )
     return new_state, record
 
 
-def run(
-    config: run_config.RunConfig,
-    *,
-    beta_d: float = 1.0,
-    **problem_kwargs,
-) -> RunResult:
+def _hotspot_diagnostics(
+    hotspot_t: Float[Tensor, ""],
+    K_est_t: Float[Tensor, " nel"],
+    xPhys: Float[Tensor, "nely nelx"],
+    r: float,
+) -> dict:
+    """The true maximum severity and where it sits, and how many elements share the
+    hotspot row's sensitivity -- `n_eff`, the participation ratio of `|d row / d K_est|`.
+    A large `n_eff` means the row acts like a mean over the part rather than on its
+    maximum.
+    """
+    (grad,) = torch.autograd.grad(hotspot_t, K_est_t, retain_graph=True)
+    with torch.no_grad():
+        a = torch.nan_to_num(grad.abs(), posinf=0.0)
+        n_eff = float(a.sum() ** 2 / (a**2).sum()) if bool((a > 0).any()) else 0.0
+        severity = conductivity.severity(K_est_t, xPhys, r)
+        imax = int(severity.argmax())
+    nelx = xPhys.shape[1]
+    return dict(
+        true_max=float(severity[imax]),
+        hot_row=imax // nelx,
+        hot_col=imax % nelx,
+        n_eff=n_eff,
+    )
+
+
+def run(config: run_config.RunConfig, **problem_kwargs) -> RunResult:
     """Build the fixed setup and run `config.nloop` optimization iterations from the
     standard initialization (uniform density at `config.volfrac`,
     `timefield.init_timefield` for the print-time field). `problem_kwargs` forwards to
     `build_problem` (`device`/`dtype`) for callers that need non-default values.
     """
     problem = build_problem(config, **problem_kwargs)
-    return run_from_state(problem, init_state(problem, beta_d), config.nloop)
+    return run_from_state(problem, init_state(problem), config.nloop)
 
 
 def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
