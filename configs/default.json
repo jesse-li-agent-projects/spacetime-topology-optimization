@@ -7,17 +7,19 @@
   "enable_stage_volume": false,
   "Theta": 0.1,
   "uniformity_metric": "gradient_cv",
-  "uniformity_weight": 10.0,
+  "uniformity_weight": 100.0,
   "roughness_weight": {
     "initial": 0.2,
     "decay_iterations": 500,
     "final": 0.02
   },
-  "Tcr": 0.8,
+  "Tcr": {
+    "points": [[1, 5.0], [150, 5.0], [250, 0.8]]
+  },
   "hotspot_normalization": "half_stencil",
   "hotspot_aggregation": "logsumexp",
-  "hotspot_beta": 4.0,
-  "hotspot_density_exponent": 1.25,
+  "hotspot_beta": 100.0,
+  "hotspot_refresh_period": 1,
   "print_base": "opposite_corner",
   "rmin": 4.0,
   "time_filter_rmin": 4.0,
@@ -26,7 +28,7 @@
   "lrmin": 2.0,
   "rmin_cond": 12.0,
   "beta_d_max": 128.0,
-  "Emin": 1e-9,
+  "Emin": 1e-09,
   "Emax": 1.0,
   "nu": 0.3,
   "penal": 3.0,

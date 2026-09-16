@@ -45,8 +45,21 @@ def _problem(
     Theta=1.0,
     uniformity_weight=0.0,
     enable_stage_volume=True,
+    hotspot_refresh_period=None,
     **kwargs,
 ):
+    """A small `Problem` at production defaults bar the arguments named here.
+
+    :param hotspot_refresh_period: overrides the default when given -- pass a period
+        longer than the run to freeze the hotspot calibration, which a test comparing
+        the hotspot row across two designs needs (see
+        `test_step_assembled_sensitivities_match_finite_differences`).
+    """
+    refresh = (
+        {}
+        if hotspot_refresh_period is None
+        else {"hotspot_refresh_period": hotspot_refresh_period}
+    )
     config = default_run_config(
         nelx=nelx,
         nely=nely,
@@ -61,6 +74,7 @@ def _problem(
         time_filter_rmin=RMIN,
         lrmin=LRMIN,
         rmin_cond=RMIN_COND,
+        **refresh,
     )
     return stto.build_problem(config, **kwargs)
 
@@ -331,8 +345,18 @@ def test_step_assembled_sensitivities_match_finite_differences(monkeypatch):
     # h = 1e-4 / 1e-5 / 1e-6 / 1e-7: .f 1e-6 / 2e-6 / 3e-5 / 1e-4, .g 9e-6 / 9e-8 / 2e-8
     # / 5e-7.
     h = 1e-5
-    # Stage volume bounds on, so every kind of constraint row is present.
-    problem = _problem(nelx=nelx, nely=nely, nStage=nStage, enable_stage_volume=True)
+    # Stage volume bounds on, so every kind of constraint row is present. The hotspot
+    # calibration is a detached offset re-measured from the design it is refreshed on,
+    # so on a refresh iteration `.g`'s hotspot row moves by an amount `.dg` deliberately
+    # does not carry -- `.dg` is the smooth surrogate's gradient, which is what MMA
+    # linearizes. Freezing the calibration leaves a row the finite difference can see.
+    problem = _problem(
+        nelx=nelx,
+        nely=nely,
+        nStage=nStage,
+        enable_stage_volume=True,
+        hotspot_refresh_period=2**62,
+    )
     nel = nelx * nely
     assert problem.n == 2 * nel
 
