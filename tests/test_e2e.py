@@ -95,5 +95,5 @@ def test_constraints_stacking_matches_fixture():
     state = stto.init_state(problem)
 
     _, record = stto.step(problem, state)
-    assert_close(record.g, fx["fval_all"][:, 0], tier="e2e", iteration=1)
-    assert_close(record.dg, fx["dfdx_all"][:, :, 0], tier="e2e", iteration=1)
+    assert_close(record.g, fx["fval_all"][:, 0], tier="e2e", iteration=0)
+    assert_close(record.dg, fx["dfdx_all"][:, :, 0], tier="e2e", iteration=0)

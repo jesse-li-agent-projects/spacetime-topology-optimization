@@ -11,7 +11,7 @@ at these sizes, and it will not).
 Everything the plan warns against is deliberately covered:
 
 - **Never uniform density alone.** `x = volfrac` is the best-conditioned field the
-  optimizer ever holds and it holds it only at iteration zero. Both fields are reported
+  optimizer ever holds and it holds it only at the seed. Both fields are reported
   and the late near-binary one is what the verdict turns on.
 - **Warm start is the real operating condition.** `move = tmove = 0.01` caps the design's
   per-iteration motion, so the previous `U` is an excellent initial guess -- an advantage
@@ -273,7 +273,7 @@ def benchmark_mesh(mesh: str, table: Table, rtol: float, opts) -> None:
     nelx, nely = (int(v) for v in mesh.split("x"))
     x_prev, t_prev, x_bin, t_bin = design_pair(mesh, opts.iteration)
     # Uniform density is a conditioning control only, so it gets no warm-start row: the
-    # optimizer holds `x = volfrac` at iteration zero alone, and there is no previous
+    # optimizer holds `x = volfrac` at the seed alone, and there is no previous
     # iteration for it to have left a solution behind.
     fields = [
         ("uniform", np.full((nely, nelx), VOLFRAC), t_bin, ("cold",)),

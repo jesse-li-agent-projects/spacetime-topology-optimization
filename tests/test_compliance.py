@@ -47,7 +47,7 @@ def test_gravity_compliance_matches_fixture():
     nelx, nely, nStage = int(fx["nelx"]), int(fx["nely"]), int(fx["nStage"])
     nloop = e2e["xPhys_traj"].shape[2] - 1
     Emin, Emax, penal = 1e-9, 1.0, 3
-    beta_t = 10.0  # beta_t=10 fixed for loop=1..3: loop%30==0 never triggers (see generate_fixtures.py)
+    beta_t = 10.0  # beta_t=10 fixed for the reference loop's iterations 1..3: loop%30==0 never triggers (see generate_fixtures.py)
 
     KE = tt(fem.plane_stress_KE(nu=0.3))
     edofMat = tti(fem.element_dof_map(nelx, nely))

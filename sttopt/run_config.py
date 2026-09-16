@@ -242,8 +242,10 @@ class RunConfig(_ConfigMixin):
     # long-standing ramps are `Interpolation.STEP` schedules in the config files.
     beta_d_schedule: Scheduled
     beta_t_schedule: Scheduled
-    # Iterations between hotspot calibration refreshes. A change in a scheduled
-    # `hotspot_beta` or `rouf` also refreshes it, since both move the aggregate's bias.
+    # Iterations between hotspot calibration refreshes. Iteration 0 is always one of
+    # them, which is what calibrates the aggregate against the seed. A change in a
+    # scheduled `hotspot_beta` or `rouf` also refreshes it, since both move the
+    # aggregate's bias.
     hotspot_refresh_period: int
 
 
