@@ -84,9 +84,7 @@ class Problem:
     # the normalization needs no print base -- `conductivity.infinite_base`.
     hotspot_base: Int[Tensor, " k"] | None
     # Smooth maximum of the hotspot severity, holding its own calibration.
-    hotspot: (
-        conductivity.PMean | conductivity.LogSumExp | conductivity.SeverityLogSumExp
-    )
+    hotspot: conductivity.PMean | conductivity.LogSumExp
     Nei: Int[Tensor, " k"]
 
     n: int  # number of MMA design variables: 2*nelx*nely (density half + time half)
@@ -249,7 +247,6 @@ def build_problem(
             config.p,
             config.r,
             run_config.weight_at(config.hotspot_beta, 1),
-            config.hotspot_density_exponent,
         ),
         n=n,
         **float_fields,

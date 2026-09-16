@@ -1424,7 +1424,7 @@ def test_infinite_base_leaves_gradients_finite(aggregation):
         e1,
         e2,
         w,
-        conductivity.make_aggregation(aggregation, P, R, 200.0, 1.25),
+        conductivity.make_aggregation(aggregation, P, R, 200.0),
         denom,
         base,
     )
@@ -1465,7 +1465,7 @@ def test_logsumexp_brackets_the_true_max_from_above(beta):
     true_max = severity[solid].max()
 
     numer, _ = _hotspot_value(
-        tt(xPhys), tt(tPhys), e1, e2, w, conductivity.LogSumExp(beta, 1.25, R), denom
+        tt(xPhys), tt(tPhys), e1, e2, w, conductivity.LogSumExp(beta, R), denom
     )
     bound = np.log(solid.sum()) / beta
     assert true_max <= float(numer) <= true_max + bound
@@ -1499,7 +1499,7 @@ def test_logsumexp_admits_severity_below_zero():
     xPhys_t = tt(xPhys).requires_grad_(True)
     tPhys_t = tt(tPhys).requires_grad_(True)
     numer, _ = _hotspot_value(
-        xPhys_t, tPhys_t, e1, e2, w, conductivity.LogSumExp(200.0, 1.25, R), denom
+        xPhys_t, tPhys_t, e1, e2, w, conductivity.LogSumExp(200.0, R), denom
     )
     assert torch.isfinite(numer)
     d_x, d_t = torch.autograd.grad(numer, (xPhys_t, tPhys_t))
@@ -1529,7 +1529,7 @@ def test_logsumexp_gradient_matches_finite_differences():
     rng = np.random.default_rng(201)
     xPhys0 = rng.uniform(0.2, 0.9, size=(nely, nelx))
     tPhys0 = rng.uniform(0.0, 1.0, size=(nely, nelx))
-    lse = conductivity.LogSumExp(20.0, 1.25, R)
+    lse = conductivity.LogSumExp(20.0, R)
 
     def numer_of(xPhys, tPhys):
         n, _ = _hotspot_value(tt(xPhys), tt(tPhys), e1, e2, w, lse, denom)
@@ -1556,19 +1556,9 @@ def test_logsumexp_gradient_matches_finite_differences():
     np.testing.assert_allclose(d_t.numpy().flatten(), fd_t, rtol=1e-5, atol=1e-8)
 
 
-def test_logsumexp_density_exponent_defaults_to_the_p_mean_one():
-    """`null` means "whatever P_MEAN was implicitly using", so a config that does not
-    mention the exponent does not silently change how hard void is suppressed.
-    """
-    aggregation = conductivity.make_aggregation(
-        conductivity.Aggregation.LOGSUMEXP, P, R, 200.0, None
-    )
-    assert aggregation.s == R * P
-
-
 def test_make_aggregation_rejects_an_unknown_aggregation():
     with pytest.raises(ValueError, match="Aggregation member"):
-        conductivity.make_aggregation("nonsense", P, R, 200.0, None)
+        conductivity.make_aggregation("nonsense", P, R, 200.0)
 
 
 def test_calibration_takes_the_shape_of_each_aggregates_bias():
@@ -1595,7 +1585,7 @@ def test_calibration_takes_the_shape_of_each_aggregates_bias():
         )
         assert p_mean.calibration == pytest.approx((nel / N) ** (1 / P))
 
-        lse = conductivity.LogSumExp(beta, 1.0, R)
+        lse = conductivity.LogSumExp(beta, R)
         assert float(lse(K_lse, xPhys)) == pytest.approx(true_max + np.log(N) / beta)
         assert float(lse(K_lse, xPhys, recalibrate=True)) == pytest.approx(true_max)
         assert lse.calibration == pytest.approx(np.log(N) / beta)
@@ -1608,7 +1598,7 @@ def test_calibration_holds_until_the_next_refresh(aggregation):
     rng = np.random.default_rng(204)
     xPhys = tt(rng.uniform(0.5, 1.0, size=(4, 5)))
     K_measured, K_later = tt(rng.uniform(0.0, 0.5, size=(2, 20)))
-    aggregate = conductivity.make_aggregation(aggregation, P, R, 200.0, None)
+    aggregate = conductivity.make_aggregation(aggregation, P, R, 200.0)
 
     raw = float(aggregate(K_later, xPhys))
     aggregate(K_measured, xPhys, recalibrate=True)
@@ -1631,26 +1621,26 @@ def test_p_mean_keeps_its_calibration_where_the_ratio_is_undefined():
     p_mean(torch.ones(20, dtype=torch.float64), xPhys, recalibrate=True)
     assert p_mean.calibration == 1.3
 
-    lse = conductivity.LogSumExp(200.0, 1.0, R)
+    lse = conductivity.LogSumExp(200.0, R)
     K_est = torch.full((20,), 1.3, dtype=torch.float64)
     assert float(lse(K_est, xPhys, recalibrate=True)) == pytest.approx(-0.3)
 
 
-def test_severity_logsumexp_approaches_the_true_maximum_of_the_severity():
+def test_logsumexp_approaches_the_true_maximum_of_the_severity():
     """The smooth maximum is taken over `T * x**r` itself, so at a sharp `beta` its
     uncalibrated value already sits on the maximum the calibration targets."""
     rng = np.random.default_rng(11)
     xPhys = tt(rng.uniform(0.0, 1.0, size=(4, 5)))
     K_est = tt(rng.uniform(0.0, 0.8, size=20))
     true_max = float(((1 - K_est) * xPhys.flatten() ** R).max())
-    aggregate = conductivity.SeverityLogSumExp(1e4, R)
+    aggregate = conductivity.LogSumExp(1e4, R)
     assert float(aggregate(K_est, xPhys)) == pytest.approx(true_max, abs=5e-4)
 
 
-def test_severity_logsumexp_gradient_is_finite_at_zero_density_and_infinite_K():
+def test_logsumexp_gradient_is_finite_at_zero_density_and_infinite_K():
     x = tt(np.array([[0.0, 0.5, 1.0, 1.0]])).requires_grad_(True)
     K_est = tt(np.array([0.2, 0.3, np.inf, 0.1])).requires_grad_(True)
-    value = conductivity.SeverityLogSumExp(25.0, R)(K_est, x)
+    value = conductivity.LogSumExp(25.0, R)(K_est, x)
     d_K, d_x = torch.autograd.grad(value, (K_est, x))
     assert torch.isfinite(value)
     assert torch.isfinite(d_K).all() and torch.isfinite(d_x).all()

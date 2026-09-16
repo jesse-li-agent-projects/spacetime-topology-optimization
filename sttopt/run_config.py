@@ -197,7 +197,6 @@ class RunConfig(_ConfigMixin):
     hotspot_normalization: str
     hotspot_aggregation: str
     hotspot_beta: Scheduled
-    hotspot_density_exponent: float | None
     print_base: str
     rmin: float
     time_filter_rmin: float
@@ -277,13 +276,6 @@ class SeqRunConfig(_ConfigMixin):
         sharp statement but makes MMA chatter as the argmax moves; low spreads it and
         blunts the term. The aggregate overshoots the true maximum by at most
         `log(sum of weights)/beta`. Inert under `p_mean`, which uses `p`.
-    :param hotspot_density_exponent: `logsumexp`'s void-suppression exponent. Needed
-        at all because void is the hottest thing in the domain -- nothing shields it,
-        so an unweighted aggregate reports empty space rather than the part. Must
-        exceed 1 or the weight's own gradient diverges at zero density. `null` takes
-        `p_mean`'s implicit `r * p`, which is where the "must exceed 1" requirement is
-        met only by coincidence of two unrelated knobs. Inert under `p_mean`, and inert
-        on any binary geometry, where `x**s == x` for every `s`.
     :param uniformity_metric: a `timefield.UniformityMetric` member name.
     :param roughness_weight: weight on `timefield.relative_roughness`, the objective's
         smoothness regularizer -- a number, or a `CosineSchedule` decaying one weight
@@ -330,7 +322,6 @@ class SeqRunConfig(_ConfigMixin):
     hotspot_normalization: str
     hotspot_aggregation: str
     hotspot_beta: float
-    hotspot_density_exponent: float | None
     uniformity_metric: str
     uniformity_weight: float
     roughness_weight: float | CosineSchedule

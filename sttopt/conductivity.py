@@ -81,7 +81,6 @@ class Aggregation(StrEnum):
 
     P_MEAN = "p_mean"
     LOGSUMEXP = "logsumexp"
-    LOGSUMEXP_SEVERITY = "logsumexp_severity"
 
 
 def _stencil_offsets(rmin_cond: float) -> list[tuple[int, int, float]]:
@@ -356,64 +355,29 @@ class PMean:
 
 
 class LogSumExp:
-    """`log(sum(x**s * exp(beta*T))) / beta`, a translation-equivariant smooth maximum,
-    carried onto the true maximum by a calibration offset.
+    """`log(sum(exp(beta * T * x**r))) / beta`, a smooth maximum of the severity
+    `T * x**r`, carried onto the true maximum by a calibration offset.
 
     Translation rather than scale equivariance is the property that fits once
     `Normalization.HALF_STENCIL` has pinned the scale against a physical reference:
     `exp` is defined on all of R, so `K_est > 1` needs no clamp. Its bias is additive
-    and bounded by `log(nel_weighted)/beta` rather than multiplicative -- +0.001 at
-    `beta=200` where `PMean` at `p=25` is -26%. The bound grows as `beta` falls: a
-    `beta` low enough to spread the sensitivity past a handful of hot elements pays a
-    bias larger than the maximum itself (+1.9 at `beta=4` on a 120x100 c-shape), which
-    the calibration carries back onto the true maximum. Sharpness (`beta`) and density
-    suppression (`s`) are independent knobs.
+    and bounded by `log(nel)/beta` rather than multiplicative -- +0.001 at `beta=200`
+    where `PMean` at `p=25` is -26%. The bound grows as `beta` falls: a `beta` low
+    enough to spread the sensitivity past a handful of hot elements pays a bias larger
+    than the maximum itself, which the calibration carries back onto the true maximum.
 
-    The calibration is run state, refreshed in place by a call with `recalibrate`.
-    """
-
-    def __init__(self, beta: float, s: float, r: float):
-        """
-        :param r: the density exponent of the severity the calibration targets
-        """
-        self.beta = beta
-        self.s = s
-        self.r = r
-        self.calibration = 0.0
-
-    def __call__(
-        self,
-        K_est: Float[Tensor, " nel"],
-        xPhys: Float[Tensor, "nely nelx"],
-        recalibrate: bool = False,
-    ) -> Float[Tensor, ""]:
-        """The calibrated aggregate, differentiable in `K_est` and `xPhys`.
-
-        :param recalibrate: first refresh the calibration against this field's true
-            maximum.
-        """
-        # Infinitely shielded elements need no weight of their own: `exp(-inf) == 0`.
-        numer = _weighted_logsumexp(1 - K_est, xPhys.flatten() ** self.s, self.beta)
-        if recalibrate:
-            self.calibration = float(numer.detach()) - _max_severity(
-                K_est, xPhys, self.r
-            )
-        return numer - self.calibration
-
-
-class SeverityLogSumExp:
-    """`log(sum(exp(beta * T * x**r))) / beta`: a smooth maximum of the severity
-    `T * x**r` itself, the quantity `PMean` and the calibration both target, carried
-    onto the true maximum by a calibration offset.
-
-    Unlike `LogSumExp`, density enters through the severity rather than as a separate
-    weight, so void is not suppressed beyond scoring zero severity; its share of the
-    sum is `exp(-beta * max)` per element, which a sharp `beta` makes negligible.
+    It aggregates exactly the quantity `PMean` and the calibration both target, so
+    density enters through the severity rather than as a separate weight and void is
+    not suppressed beyond scoring zero severity; a void element's share of the sum is
+    `exp(-beta * max)`, which a sharp `beta` makes negligible.
 
     The calibration is run state, refreshed in place by a call with `recalibrate`.
     """
 
     def __init__(self, beta: float, r: float):
+        """
+        :param r: the density exponent of the severity the calibration targets
+        """
         self.beta = beta
         self.r = r
         self.calibration = 0.0
@@ -449,25 +413,16 @@ class SeverityLogSumExp:
 
 
 def make_aggregation(
-    aggregation: Aggregation,
-    p: float,
-    r: float,
-    beta: float,
-    density_exponent: float | None,
-) -> PMean | LogSumExp | SeverityLogSumExp:
+    aggregation: Aggregation, p: float, r: float, beta: float
+) -> PMean | LogSumExp:
     """A fresh, uncalibrated aggregation for a run's settings.
 
     :param beta: `LogSumExp` sharpness; unused by `PMean`, which takes `p` instead.
-    :param density_exponent: `LogSumExp`'s void-suppression exponent, defaulting to
-        `PMean`'s implicit `r * p`. Unused by `PMean`, whose exponent is not separable.
     """
     if aggregation == Aggregation.P_MEAN:
         return PMean(p, r)
     elif aggregation == Aggregation.LOGSUMEXP:
-        s = r * p if density_exponent is None else density_exponent
-        return LogSumExp(beta, s, r)
-    elif aggregation == Aggregation.LOGSUMEXP_SEVERITY:
-        return SeverityLogSumExp(beta, r)
+        return LogSumExp(beta, r)
     else:
         raise ValueError(
             f"aggregation must be an Aggregation member, got {aggregation!r}"

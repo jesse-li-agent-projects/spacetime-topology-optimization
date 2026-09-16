@@ -111,7 +111,7 @@ def test_cli_logs_scheduled_continuation(tmp_path, monkeypatch):
     config = dataclasses.replace(
         _FIXTURE_CONFIG,
         nloop=3,
-        hotspot_aggregation="logsumexp_severity",
+        hotspot_aggregation="logsumexp",
         hotspot_beta={"points": [[1, 4.0], [3, 16.0]], "log": True},
         penal={"points": [[1, 1.0], [3, 3.0]]},
         Tcr={"points": [[1, 5.0], [3, 0.8]]},

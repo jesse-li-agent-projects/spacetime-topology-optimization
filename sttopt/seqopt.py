@@ -211,7 +211,6 @@ def build_problem(
             config.p,
             config.r,
             config.hotspot_beta,
-            config.hotspot_density_exponent,
         ),
         n=n,
         **int_fields,

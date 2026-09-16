@@ -97,7 +97,6 @@ _EXTRA_CONFIG_FIELDS = dict(
     hotspot_normalization="neighborhood",
     hotspot_aggregation="p_mean",
     hotspot_beta=200.0,
-    hotspot_density_exponent=None,
     beta_d_max=128.0,
     Emin=1e-9,
     Emax=1.0,
