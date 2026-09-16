@@ -1,5 +1,5 @@
 """First-principles tests for `sttopt.seqopt`: the wiring layer, mirroring
-`tests/test_optimize.py`'s approach for `stto`."""
+`tests/test_stto.py`'s approach for `stto`."""
 
 import dataclasses
 
