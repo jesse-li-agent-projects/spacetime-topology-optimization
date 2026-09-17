@@ -50,6 +50,31 @@ def test_stage_boundary_plot_nonzero_segments_for_two_region_split():
     assert len(coll.get_segments()) > 0
 
 
+def test_hotspot_severity_plot_titles_with_the_measured_maximum():
+    """The maximum is what the hotspot constraint is about, so it belongs in the title --
+    and the unmeasured elements the measure leaves as `nan` must not swallow it.
+    """
+    xPhys = np.ones((NELY, NELX))
+    severity = np.full((NELY, NELX), 0.25)
+    severity[0, 0] = 0.75
+    severity[-1, -1] = np.nan
+
+    ax = viz.hotspot_severity_plot(xPhys, severity, np.zeros((NELY, NELX)), nStage=1)
+
+    assert "0.75" in ax.get_title()
+
+
+def test_hotspot_severity_plot_titles_without_a_maximum_when_nothing_is_measured():
+    """An all-`nan` severity has no maximum to report, and `nan` is not a number to put
+    in front of a reader."""
+    xPhys = np.ones((NELY, NELX))
+    severity = np.full((NELY, NELX), np.nan)
+
+    ax = viz.hotspot_severity_plot(xPhys, severity, np.zeros((NELY, NELX)), nStage=1)
+
+    assert ax.get_title() == "Hotspot severity"
+
+
 def test_gradient_magnitude_plot_draws_every_solid_element():
     """The Gauss-point magnitudes scatter back onto every element, border included, so
     the plot covers the whole part rather than leaving a blank frame."""
