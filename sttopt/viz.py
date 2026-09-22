@@ -245,7 +245,7 @@ def hotspot_severity_plot(
             Y,
             tPhys,
             levels=boundaries,
-            colors="red",  # apart from the print-direction arrows
+            colors="cyan",  # apart from the arrows, and absent from `plasma`
             linewidths=0.5,
         )
         _cover_void(ax, xPhys)
