@@ -43,6 +43,29 @@ _BOUNDARY_LINEWIDTH = 1.5
 _VOID_GRAY = "0.5"
 _VOID_ALPHA = 0.65
 _NO_MEASURE_GRAY = "0.75"  # solid element, quantity undefined -- not void
+_VOID_COVER_ZORDER = 10  # above contours, so `_cover_void` hides them outside the part
+
+
+def _cover_void(
+    ax: Axes, xPhys: Float[np.ndarray, "nely nelx"], *, show_void: bool = False
+) -> None:
+    """Paints over the elements without material, in `combination_plot`'s frame, so a
+    field contoured over the full mesh reads only inside the part: its contours keep
+    the field's smooth shape instead of being clipped to a jagged element boundary.
+
+    :param show_void: translucent gray instead of opaque white, so what lies beneath
+        stays readable while still reading as "not printed".
+    """
+    rows, cols = np.nonzero(xPhys <= 0.5)
+    ax.add_collection(
+        PolyCollection(
+            _cell_verts(rows, cols),
+            facecolors=_VOID_GRAY if show_void else "white",
+            alpha=_VOID_ALPHA if show_void else 1.0,
+            edgecolors="none",
+            zorder=_VOID_COVER_ZORDER,
+        )
+    )
 
 
 def _new_axes() -> Axes:
@@ -314,11 +337,29 @@ def print_direction_plot(
     :return: the `Axes` drawn into.
     """
     ax = timefield_plot(xPhys, tPhys, ax=ax)
-    nely, nelx = tPhys.shape
+    _quiver_print_direction(ax, xPhys, direction, stride=stride, width=0.003)
+    ax.set_title("Print direction")
+    return ax
+
+
+def _quiver_print_direction(
+    ax: Axes,
+    xPhys: Float[np.ndarray, "nely nelx"],
+    direction: tuple[Float[np.ndarray, "nely nelx"], Float[np.ndarray, "nely nelx"]],
+    *,
+    stride: int | None,
+    width: float,
+) -> None:
+    """Quivers unit print-direction arrows over the solid elements of `ax`, in
+    `combination_plot`'s frame; see `print_direction_plot` for `direction`/`stride`.
+
+    :param width: arrow shaft width, as a fraction of the plot width.
+    """
+    ux, uy = direction
+    nely, nelx = ux.shape
     if stride is None:
         stride = max(1, round(max(nelx, nely) / 30))
 
-    ux, uy = direction
     rows = slice(stride // 2, None, stride)
     cols = slice(stride // 2, None, stride)
     # Cell centers in `combination_plot`'s frame: x in [col, col+1], y in [-(row+1), -row].
@@ -335,10 +376,9 @@ def print_direction_plot(
         color="black",
         pivot="middle",
         scale=1.3 * max(nelx, nely) / stride,
-        width=0.003,
+        width=width,
+        zorder=_VOID_COVER_ZORDER + 1,  # an arrow at the part's edge overhangs the void
     )
-    ax.set_title("Print direction")
-    return ax
 
 
 def timefield_contour_plot(
@@ -426,15 +466,7 @@ def timefield_filled_contour_plot(
             ticks=TIMEFIELD_TICKS,
         )
 
-    rows, cols = np.nonzero(xPhys <= 0.5)
-    empty = PolyCollection(
-        _cell_verts(rows, cols),
-        facecolors=_VOID_GRAY if show_void else "white",
-        alpha=_VOID_ALPHA if show_void else 1.0,
-        edgecolors="none",
-        zorder=10,
-    )
-    ax.add_collection(empty)
+    _cover_void(ax, xPhys, show_void=show_void)
 
     ax.set_aspect("equal")
     ax.autoscale_view()
