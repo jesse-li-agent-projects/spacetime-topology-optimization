@@ -1,12 +1,13 @@
 """Smoke tests for sttopt.viz -- per the plan's Phase 9 guidance, this is the lowest
 correctness-risk phase (visual output, not numerical), so testing here is limited to
 "runs without error on a small case" plus a couple of cheap structural sanity checks,
-not pixel-level MATLAB fixture comparison (no fixture exists for these two functions).
+not pixel-level MATLAB fixture comparison (no fixture exists for these plots).
 """
 
 import json
 
 import numpy as np
+from matplotlib.quiver import Quiver
 
 import sttopt.viz as viz
 
@@ -25,29 +26,6 @@ def test_combination_plot_draws_only_solid_elements():
     coll = ax.collections[0]
     assert len(coll.get_paths()) == n_expected
     assert coll.get_array().size == n_expected
-
-
-def test_stage_boundary_plot_zero_segments_for_uniform_tfield():
-    """No stage transitions exist when every element shares one print time."""
-    tPhys = np.full((NELY, NELX), 0.5)
-
-    ax = viz.stage_boundary_plot(tPhys, nStage=4)
-
-    coll = ax.collections[0]
-    assert len(coll.get_segments()) == 0
-
-
-def test_stage_boundary_plot_nonzero_segments_for_two_region_split():
-    """A hand-constructed two-region split (left half early, right half late) must
-    produce boundary edges along the region seam.
-    """
-    tPhys = np.zeros((NELY, NELX))
-    tPhys[:, NELX // 2 :] = 1.0
-
-    ax = viz.stage_boundary_plot(tPhys, nStage=2)
-
-    coll = ax.collections[0]
-    assert len(coll.get_segments()) > 0
 
 
 def test_hotspot_severity_plot_titles_with_the_measured_maximum():
@@ -73,6 +51,18 @@ def test_hotspot_severity_plot_titles_without_a_maximum_when_nothing_is_measured
     ax = viz.hotspot_severity_plot(xPhys, severity, np.zeros((NELY, NELX)), nStage=1)
 
     assert ax.get_title() == "Hotspot severity"
+
+
+def test_hotspot_severity_plot_quivers_the_print_direction_when_given():
+    xPhys = np.ones((NELY, NELX))
+    tPhys = np.tile(np.linspace(0.0, 1.0, NELX)[None, :], (NELY, 1))
+    direction = (np.ones_like(tPhys), np.zeros_like(tPhys))
+
+    ax = viz.hotspot_severity_plot(
+        xPhys, np.zeros_like(tPhys), tPhys, nStage=2, direction=direction
+    )
+
+    assert isinstance(ax.collections[-1], Quiver)
 
 
 def test_gradient_magnitude_plot_draws_every_solid_element():
@@ -114,42 +104,6 @@ def test_timefield_contour_lines_sit_on_the_filled_contour_boundaries():
     lines = viz.timefield_contour_plot(xPhys, tPhys, nContours=4).collections[-1]
     filled = viz.timefield_filled_contour_plot(xPhys, tPhys, nContours=4).collections[0]
     np.testing.assert_allclose(lines.levels, filled.levels)
-
-
-def test_combination_and_boundary_compose_on_one_axes():
-    """The CLI overlays both plots on one Axes; check that composition actually works
-    (the `ax` passed to `stage_boundary_plot` is reused, not replaced).
-    """
-    xPhys = np.full((NELY, NELX), 1.0)
-    tPhys = np.zeros((NELY, NELX))
-    tPhys[:, NELX // 2 :] = 1.0
-
-    ax = viz.combination_plot(xPhys, tPhys, eps=0.1)
-    ax2 = viz.stage_boundary_plot(tPhys, nStage=2, ax=ax, combination_coords=True)
-
-    assert ax2 is ax
-    assert len(ax.collections) == 2
-
-
-def test_combination_coords_align_boundary_segments_with_combination_frame():
-    """The two functions' native coordinate frames don't coincide (see viz.py's module
-    docstring) -- this pins the `combination_coords=True` remap actually lands boundary
-    segments inside the combination plot's own data extent, not in a disjoint region.
-    """
-    xPhys = np.full((NELY, NELX), 1.0)
-    tPhys = np.zeros((NELY, NELX))
-    tPhys[:, NELX // 2 :] = 1.0
-
-    combo_ax = viz.combination_plot(xPhys, tPhys, eps=0.1)
-    x0, x1 = combo_ax.dataLim.intervalx
-    y0, y1 = combo_ax.dataLim.intervaly
-
-    boundary_ax = viz.stage_boundary_plot(tPhys, nStage=2, combination_coords=True)
-    bx0, bx1 = boundary_ax.dataLim.intervalx
-    by0, by1 = boundary_ax.dataLim.intervaly
-
-    assert x0 <= bx0 and bx1 <= x1
-    assert y0 <= by0 and by1 <= y1
 
 
 def test_main_regenerates_plots_from_a_seqopt_run_directory(tmp_path, monkeypatch):

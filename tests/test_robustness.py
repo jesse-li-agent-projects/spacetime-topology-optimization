@@ -27,7 +27,7 @@ import sttopt.torch_util as torch_util
 import sttopt.viz as viz
 import tests.reference.conductivity as conductivity_ref
 
-NELX, NELY, NSTAGE, NLOOP = 7, 5, 3, 3
+NELX, NELY, NLOOP = 7, 5, 3
 
 
 def test_subsolv_m_ge_n_solves_the_subproblem():
@@ -122,7 +122,7 @@ def test_subsolv_m_ge_n_solves_the_subproblem():
 
 
 def test_viz_does_not_accumulate_figures():
-    """Regression: `combination_plot`/`stage_boundary_plot` used to allocate through the
+    """Regression: `combination_plot` used to allocate through the
     pyplot *state machine* (`plt.subplots()`) when no `ax` was passed, so every call
     registered a figure that was never released. One call per process (the CLI's usage)
     was harmless, but any loop over frames -- porting `fabrication.m`'s per-timestep
@@ -142,10 +142,9 @@ def test_viz_does_not_accumulate_figures():
     try:
         for _ in range(25):
             ax = viz.combination_plot(xPhys, tPhys, eps=0.1)
-            viz.stage_boundary_plot(tPhys, NSTAGE)
         assert (
             len(plt.get_fignums()) == 0
-        ), f"{len(plt.get_fignums())} pyplot figures left open after 50 calls"
+        ), f"{len(plt.get_fignums())} pyplot figures left open after 25 calls"
         # A pyplot-free Figure must still render, or the fix would have broken the CLI.
         buf = io.BytesIO()
         ax.figure.savefig(buf, format="png")
@@ -156,7 +155,7 @@ def test_viz_does_not_accumulate_figures():
 
 def test_viz_still_honours_a_caller_supplied_axes():
     """The escape hatch the fix relies on: callers who *want* a pyplot-managed figure
-    pass their own `ax`, and both functions must draw into exactly that one.
+    pass their own `ax`, and the plot must draw into exactly that one.
     """
     import matplotlib.pyplot as plt
 
@@ -166,10 +165,9 @@ def test_viz_still_honours_a_caller_supplied_axes():
     try:
         fig, ax = plt.subplots()
         out = viz.combination_plot(np.ones((NELY, NELX)), tPhys, eps=0.1, ax=ax)
-        out2 = viz.stage_boundary_plot(tPhys, 2, ax=ax, combination_coords=True)
-        assert out is ax and out2 is ax
+        assert out is ax
         assert plt.get_fignums() == [fig.number]
-        assert len(ax.collections) == 2
+        assert len(ax.collections) == 1
     finally:
         plt.close("all")
 
