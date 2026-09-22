@@ -775,16 +775,14 @@ def test_step_would_have_produced_nan_without_the_nan_safe_rewrite():
     assert torch.any(torch.isnan(d_x))
 
 
-def _curvature_records(tool_radius, *, loop=None):
+def _curvature_records(tool_radius):
     """One `step` record at the default `tool_radius` and one at `tool_radius`, from the
-    same design."""
+    same design, at iteration `QUIET_LOOP`."""
     base = _problem(nelx=10, nely=8)
     with_tool = stto.build_problem(
         dataclasses.replace(base.config, tool_radius=tool_radius)
     )
     _, _, state = _draw_well_conditioned_state(base, np.random.default_rng(3))
-    if loop is not None:
-        state = dataclasses.replace(state, loop=loop)
     _, record = stto.step(base, state)
     _, with_record = stto.step(with_tool, state)
     return record, with_record
@@ -807,8 +805,10 @@ def test_tool_radius_appends_one_row_bounding_the_concave_curvature():
 def test_tool_radius_at_zero_mid_schedule_is_an_inactive_row():
     """A ramp that has not yet left 0 already has its row, which a zero-radius tool
     satisfies with no gradient."""
-    ramp = run_config.PiecewiseSchedule(points=[[0, 0.0], [10, 0.0], [20, 3.0]])
-    record, with_record = _curvature_records(ramp, loop=5)
+    ramp = run_config.PiecewiseSchedule(
+        points=[[0, 0.0], [QUIET_LOOP + 10, 0.0], [QUIET_LOOP + 20, 3.0]]
+    )
+    record, with_record = _curvature_records(ramp)
 
     assert with_record.g.shape == (record.g.shape[0] + 1,)
     assert with_record.g[-1] == pytest.approx(-1.0, abs=1e-12)
