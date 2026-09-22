@@ -293,7 +293,9 @@ def _lobe(
     :param g_dot_dir: `g . dhat`, the gradient projected on each direction
     :param gmag: `|g|`, broadcasting against `g_dot_dir`
     :param dirs: the unit directions, whose zero rows mark "no direction" -- the stencil
-        origin, which takes weight `1` since there is no angle to penalize
+        origin, which takes weight `1` since there is no angle to penalize. That is the
+        one offset no lobe suppresses, so it does not cancel out of a ratio the way it
+        does on uniform material (`plans/angular_weight.md`).
     :param kappa: lobe concentration; `0` gives a uniform weight of `1`
     :param g0: the gradient scale at which the lobe reaches half its concentration
     """

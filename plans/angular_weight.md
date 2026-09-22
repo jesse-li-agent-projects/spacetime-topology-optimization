@@ -54,9 +54,16 @@ about 9% weight instead of Das's exact zero. That is deliberate: a wide lobe is 
 not a delta, and the residual tail is what buys the smoothness. `plot/angular_lobes.png`
 (from `angular_lobes.tmp.py`) is the shape comparison.
 
-The self-pair (`e1 == e2`, `d = 0`) has no direction; it takes `w_angular = 1`. The
-choice is free -- it cancels between numerator and denominator -- but "no direction, no
-penalty" is the statement that does not need a caveat.
+The self-pair (`e1 == e2`, `d = 0`) has no direction; it takes `w_angular = 1`, the
+"no direction, no penalty" rule.
+
+It cancels between numerator and denominator on *uniform* material, but not in general:
+the origin contributes its full weight to the numerator against `sigmoid(0) = 0.5` in the
+denominator, a local ratio of 2, and it is the one offset the lobe never suppresses. So
+it sets a floor on how far a narrow lobe can pull the saturated `K_est` down -- dropping
+it takes the maximum from 1.040 to 1.016 at `kappa = 10`, `|grad t| = 0.7`. Giving the
+origin the in-layer weight `exp(-kappa_eff)` instead would remove that floor and is
+arguably the better statement of where the origin sits, but nothing yet depends on it.
 
 ## Normalization: `half_stencil` becomes directional
 

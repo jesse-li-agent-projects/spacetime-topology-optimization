@@ -1858,3 +1858,107 @@ def test_angular_stencil_is_not_built_for_a_purely_radial_run():
     assert conductivity.angular_stencil(*args, 2.0) is not None
     schedule = run_config.schedule_from_dict({"points": [[0, 0.0], [10, 2.0]]})
     assert conductivity.angular_stencil(*args, schedule) is not None
+
+
+# --- physical behaviour on a filled square under a uniform print direction ----------
+#
+# Row 0 is the top of the domain (`timefield.init_timefield`'s BOTTOM_EDGE puts t=1
+# there), so "up" is decreasing row.
+
+_SQ_N = 21
+_SQ_RMIN = 4.0
+_SQ_ROWS, _SQ_COLS = np.meshgrid(np.arange(_SQ_N), np.arange(_SQ_N), indexing="ij")
+
+
+def _square_severity(tPhys, base, kappa):
+    """The severity field on a fully solid `_SQ_N` square, as `(nely, nelx)`."""
+    e1, e2, w = conductivity.neighbor_weights(_SQ_N, _SQ_N, _SQ_RMIN)
+    e1_t, e2_t = tti(e1), tti(e2)
+    xPhys = torch.ones(_SQ_N, _SQ_N, dtype=torch.float64)
+    # The `kappa` argument only decides whether the stencil is built at all; the value
+    # that shapes the lobe is the one passed to `estimated_conductivity` below.
+    stencil = conductivity.angular_stencil(
+        e1_t, e2_t, _SQ_N, _SQ_RMIN, torch.float64, 1.0
+    )
+    K_est = conductivity.estimated_conductivity(
+        xPhys,
+        tt(tPhys),
+        e1_t,
+        e2_t,
+        tt(w),
+        Q,
+        ROUF,
+        conductivity.half_stencil_weight(_SQ_RMIN),
+        tti(base),
+        stencil,
+        kappa,
+        0.07,
+    )
+    return conductivity.severity(K_est, xPhys, R).reshape(_SQ_N, _SQ_N).numpy()
+
+
+@pytest.mark.parametrize("kappa", [0.0, 2.3666])
+def test_printing_upward_leaves_the_top_surface_safe_and_the_sides_exposed(kappa):
+    """Print straight up off a full build plate, on solid material.
+
+    The top surface is missing only material the print has not reached yet, which
+    shields nothing, so it should score ~0. The side walls are missing material beside
+    and *below* them -- already deposited, and therefore shielding they do not have --
+    so they should score substantially worse. Getting this backwards would mean the
+    measure is reading the unprinted region as shielding.
+    """
+    tPhys = (_SQ_N - 1 - _SQ_ROWS) / (_SQ_N - 1)
+    base = (_SQ_N - 1) * _SQ_N + np.arange(_SQ_N)  # whole bottom row
+    severity = _square_severity(tPhys, base, kappa)
+
+    margin = int(_SQ_RMIN) + 1
+    mid = slice(margin, _SQ_N - margin)
+    top = severity[0, mid]
+    left, right = severity[mid, 0], severity[mid, -1]
+    interior = severity[margin + 1 : -margin - 1, margin + 1 : -margin - 1]
+
+    assert np.all(np.isfinite(top)) and np.all(np.isfinite(left))
+    assert top.max() < 0.01, "the top surface is missing only unprinted material"
+    assert left.min() > 0.2 and right.min() > 0.2, "side walls lose real shielding"
+    assert left.min() > 10 * top.max()
+    # Nothing is missing around an interior element, so it matches the reference fill.
+    assert_close(interior, np.zeros_like(interior), atol=1e-9)
+    # The two walls are mirror images under a print direction with no x-component.
+    assert_close(left, right)
+
+
+@pytest.mark.parametrize("kappa", [0.0, 2.3666])
+def test_diagonal_printing_exposes_the_trailing_edges_not_the_leading_ones(kappa):
+    """Print along [1, 1] from the lower-left corner, on solid material.
+
+    The bottom and left edges trail the print front: what is missing beside them has
+    already been deposited, so they lose shielding they would otherwise have. The top
+    and right edges lead it, and lose only material that is not there yet. So the
+    trailing pair must score strictly worse than the leading pair -- an asymmetry that
+    exists only because the measure is direction-aware at all.
+    """
+    tPhys = (_SQ_COLS + (_SQ_N - 1 - _SQ_ROWS)) / (2 * (_SQ_N - 1))
+    base = np.array([(_SQ_N - 1) * _SQ_N])  # lower-left corner alone
+    severity = _square_severity(tPhys, base, kappa)
+
+    # Far enough from the corner that the infinitely dense base is out of stencil reach.
+    far = np.hypot(_SQ_ROWS - (_SQ_N - 1), _SQ_COLS) > 2 * _SQ_RMIN
+    bottom = severity[-1][far[-1]]
+    left = severity[:, 0][far[:, 0]]
+    top = severity[0, 1:]
+    right = severity[:-1, -1]
+
+    for name, edge in (
+        ("bottom", bottom),
+        ("left", left),
+        ("top", top),
+        ("right", right),
+    ):
+        assert np.all(np.isfinite(edge)), name
+
+    assert min(bottom.min(), left.min()) > max(top.max(), right.max())
+    # The geometry and the print direction are both symmetric about the diagonal, which
+    # maps (row, col) -> (N-1-col, N-1-row) -- so the paired edges are traversed in
+    # opposite directions and one has to be reversed to line them up.
+    assert_close(bottom, left[::-1])
+    assert_close(top, right[::-1])
