@@ -10,6 +10,8 @@ import torch
 
 import sttopt.conductivity as conductivity
 import sttopt.filters as filters
+import sttopt.run_config as run_config
+import sttopt.timefield as timefield
 import sttopt.torch_util as torch_util
 import tests.reference.conductivity as conductivity_ref
 from conftest import assert_close, load_fixture_npz, tt, tti
@@ -1644,3 +1646,215 @@ def test_logsumexp_gradient_is_finite_at_zero_density_and_infinite_K():
     d_K, d_x = torch.autograd.grad(value, (K_est, x))
     assert torch.isfinite(value)
     assert torch.isfinite(d_K).all() and torch.isfinite(d_x).all()
+
+
+# --- angular stencil weight (plans/angular_weight.md) --------------------------------
+
+
+def _linear_timefield(nelx, nely, angle, gmag):
+    """A time field with exactly the gradient `gmag * (cos angle, sin angle)`, in
+    `timefield.unit_length` units."""
+    ys, xs = np.meshgrid(np.arange(nely), np.arange(nelx), indexing="ij")
+    unit = (nelx * nely) ** 0.5
+    return tt((np.cos(angle) * xs + np.sin(angle) * ys) * gmag / unit)
+
+
+def _stencil(nelx, nely, rmin_cond):
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
+    e1_t, e2_t = tti(e1), tti(e2)
+    return (
+        e1_t,
+        e2_t,
+        tt(w),
+        conductivity.angular_stencil(e1_t, e2_t, nelx, rmin_cond, torch.float64, 1.0),
+    )
+
+
+def test_angular_stencil_directions_match_the_pairs_they_weight():
+    """The directions are derived from the pair list, so they must describe exactly the
+    offsets in it, with the self-pair left directionless."""
+    nelx, nely, rmin_cond = 9, 7, 3.0
+    e1, e2, _, stencil = _stencil(nelx, nely, rmin_cond)
+
+    dx = (e2 % nelx - e1 % nelx).to(torch.float64)
+    dy = (e2 // nelx - e1 // nelx).to(torch.float64)
+    length = torch.sqrt(dx**2 + dy**2)
+    moved = length > 0
+    assert_close(stencil.pair_dir[moved, 0], dx[moved] / length[moved])
+    assert_close(stencil.pair_dir[moved, 1], dy[moved] / length[moved])
+    assert torch.all(stencil.pair_dir[~moved] == 0)
+    assert bool((~moved).any()), "the stencil should contain self-pairs"
+
+
+@pytest.mark.parametrize("kappa", [0.0, 1.0, 2.3666, 8.0])
+def test_lobe_peaks_opposite_the_print_direction_and_decays_monotonically(kappa):
+    """`w_angular` is 1 straight behind the print front and falls off monotonically as
+    the neighbor rotates toward the print direction."""
+    g0, gmag = 0.35, 1.0
+    phi = torch.linspace(0.0, np.pi, 181, dtype=torch.float64)
+    # Print direction +x, so the build-opposite direction is -x and phi is measured
+    # from it.
+    dirs = torch.stack((-torch.cos(phi), torch.sin(phi)), dim=-1)
+    g = torch.tensor([gmag, 0.0], dtype=torch.float64)
+    w = conductivity._lobe(dirs @ g, torch.full_like(phi, gmag), dirs, kappa, g0)
+
+    assert float(w[0]) == pytest.approx(1.0)
+    if kappa == 0:
+        assert_close(w, torch.ones_like(w))
+    else:
+        assert torch.all(torch.diff(w) < 0)
+        assert float(w[-1]) < float(w[0])
+
+
+def test_lobe_flattens_to_isotropic_as_the_gradient_vanishes():
+    """Where there is no layering there is no print direction, so the weight must be
+    exactly uniform -- not merely nearly so."""
+    dirs = torch.tensor([[1.0, 0.0], [0.0, 1.0], [-0.6, 0.8]], dtype=torch.float64)
+    g = torch.zeros(2, dtype=torch.float64)
+    w = conductivity._lobe(
+        dirs @ g, torch.zeros(3, dtype=torch.float64), dirs, 5.0, 0.35
+    )
+    assert_close(w, torch.ones(3, dtype=torch.float64))
+
+
+@pytest.mark.parametrize("rmin_cond", [3.0, 5.0])
+@pytest.mark.parametrize("angle", [0.0, 0.3, np.pi / 4, 2.0, -1.1])
+@pytest.mark.parametrize("gmag", [0.05, 1.0, 20.0])
+def test_directed_denominator_is_the_half_stencil_constant_at_kappa_zero(
+    rmin_cond, angle, gmag
+):
+    """The directional reference generalizes `half_stencil_weight`, so with no angular
+    weight it must reproduce it -- at every print direction and every layer thickness,
+    by the `sigmoid(z) + sigmoid(-z) == 1` pairing argument.
+    """
+    nelx, nely = 11, 9
+    _, _, _, stencil = _stencil(nelx, nely, rmin_cond)
+    tPhys = _linear_timefield(nelx, nely, angle, gmag)
+    grad = timefield.central_difference_gradient_vector(tPhys)
+
+    denom = conductivity.directed_denominator(
+        grad, stencil, 0.0, 0.35, ROUF, timefield.unit_length(tPhys)
+    )
+    expected = conductivity.half_stencil_weight(rmin_cond)
+    assert_close(denom, torch.full_like(denom, expected))
+
+
+def test_directed_denominator_tracks_the_lobe_at_nonzero_kappa():
+    """A narrower lobe keeps less of the stencil, so the reference it sets must shrink
+    -- otherwise `K_est` would not be measured against the fill it names."""
+    nelx, nely, rmin_cond = 11, 9, 3.0
+    _, _, _, stencil = _stencil(nelx, nely, rmin_cond)
+    tPhys = _linear_timefield(nelx, nely, 0.4, 1.0)
+    grad = timefield.central_difference_gradient_vector(tPhys)
+
+    previous = conductivity.half_stencil_weight(rmin_cond) + 1.0
+    for kappa in (0.0, 1.0, 2.3666, 8.0):
+        denom = conductivity.directed_denominator(
+            grad, stencil, kappa, 0.35, ROUF, timefield.unit_length(tPhys)
+        )
+        value = float(denom.mean())
+        assert value < previous
+        previous = value
+
+
+def test_kappa_zero_leaves_K_est_bit_for_bit_unchanged():
+    """The continuation starts from the present behavior, so `kappa = 0` must not
+    perturb it at all -- the angular path is skipped, not evaluated to 1."""
+    nelx, nely = 11, 9
+    rng = np.random.default_rng(3)
+    xPhys = tt(rng.uniform(0.2, 1.0, size=(nely, nelx)))
+    tPhys = tt(rng.uniform(0.0, 1.0, size=(nely, nelx)))
+    e1, e2, w, stencil = _stencil(nelx, nely, RMIN_COND)
+    denom = conductivity.half_stencil_weight(RMIN_COND)
+
+    baseline = conductivity.estimated_conductivity(
+        xPhys, tPhys, e1, e2, w, Q, ROUF, denom
+    )
+    with_stencil = conductivity.estimated_conductivity(
+        xPhys, tPhys, e1, e2, w, Q, ROUF, denom, None, stencil, 0.0, 0.35
+    )
+    assert torch.equal(baseline, with_stencil)
+
+
+def test_uniform_material_scores_zero_severity_at_every_print_direction():
+    """The reference is an ideal uniform layered fill, so fully solid material printed
+    in any direction is exactly as shielded as its own reference -- the property that
+    disqualifies a constant divisor once the stencil carries an angular weight
+    (plans/angular_weight.md).
+    """
+    nelx, nely, rmin_cond = 23, 23, 3.0
+    e1, e2, w, stencil = _stencil(nelx, nely, rmin_cond)
+    xPhys = torch.ones(nely, nelx, dtype=torch.float64)
+    denom = conductivity.half_stencil_weight(rmin_cond)
+    interior = (nely // 2) * nelx + nelx // 2
+
+    for angle in np.linspace(-np.pi, np.pi, 17):
+        tPhys = _linear_timefield(nelx, nely, angle, 1.0)
+        K_est = conductivity.estimated_conductivity(
+            xPhys, tPhys, e1, e2, w, Q, ROUF, denom, None, stencil, 2.3666, 0.35
+        )
+        assert float(K_est[interior]) == pytest.approx(1.0, abs=1e-12)
+
+
+def test_angular_weight_needs_the_half_stencil_normalization():
+    """`NEIGHBORHOOD` derives its own divisor and has no directional reference to
+    generalize, so the combination is refused rather than silently computed."""
+    nelx, nely = 9, 7
+    e1, e2, w, stencil = _stencil(nelx, nely, RMIN_COND)
+    xPhys = torch.ones(nely, nelx, dtype=torch.float64)
+    tPhys = _linear_timefield(nelx, nely, 0.3, 1.0)
+    with pytest.raises(ValueError, match="HALF_STENCIL"):
+        conductivity.estimated_conductivity(
+            xPhys, tPhys, e1, e2, w, Q, ROUF, None, None, stencil, 2.0, 0.35
+        )
+
+
+def test_infinite_base_reach_is_unchanged_by_the_angular_weight():
+    """The lobe is strictly positive, and reach is radial, so the set of elements the
+    print base renders infinitely shielded must not move with `kappa`."""
+    nelx, nely, rmin_cond = 13, 9, 3.0
+    e1, e2, w, stencil = _stencil(nelx, nely, rmin_cond)
+    xPhys = torch.ones(nely, nelx, dtype=torch.float64)
+    tPhys = _linear_timefield(nelx, nely, np.pi / 2, 1.0)
+    base = tti(np.arange(nelx))
+    denom = conductivity.half_stencil_weight(rmin_cond)
+
+    captured = [
+        torch.isinf(
+            conductivity.estimated_conductivity(
+                xPhys, tPhys, e1, e2, w, Q, ROUF, denom, base, stencil, kappa, 0.35
+            )
+        )
+        for kappa in (0.0, 2.3666, 8.0)
+    ]
+    assert torch.equal(captured[0], captured[1])
+    assert torch.equal(captured[0], captured[2])
+
+
+def test_angular_weight_sensitivity_flows_through_the_reference():
+    """The divisor is attached, not detached: that is what cancels the discretization
+    artefact in the gradient and not merely in the value."""
+    nelx, nely, rmin_cond = 13, 11, 3.0
+    e1, e2, w, stencil = _stencil(nelx, nely, rmin_cond)
+    rng = np.random.default_rng(5)
+    xPhys = tt(rng.uniform(0.3, 1.0, size=(nely, nelx)))
+    tPhys = _linear_timefield(nelx, nely, 0.4, 1.0).requires_grad_(True)
+    denom = conductivity.half_stencil_weight(rmin_cond)
+
+    K_est = conductivity.estimated_conductivity(
+        xPhys, tPhys, e1, e2, w, Q, ROUF, denom, None, stencil, 2.3666, 0.35
+    )
+    (grad,) = torch.autograd.grad(K_est.sum(), tPhys)
+    assert torch.isfinite(grad).all()
+    assert float(grad.abs().max()) > 0
+
+
+def test_angular_stencil_is_not_built_for_a_purely_radial_run():
+    """A constant `kappa = 0` never opens the lobe, so the run should not carry the
+    `npairs`-sized direction arrays it would never read."""
+    e1, e2, _ = conductivity.neighbor_weights(9, 7, 3.0)
+    args = (tti(e1), tti(e2), 9, 3.0, torch.float64)
+    assert conductivity.angular_stencil(*args, 0.0) is None
+    assert conductivity.angular_stencil(*args, 2.0) is not None
+    schedule = run_config.schedule_from_dict({"points": [[0, 0.0], [10, 2.0]]})
+    assert conductivity.angular_stencil(*args, schedule) is not None

@@ -193,6 +193,19 @@ class RunConfig(_ConfigMixin):
         `nStage` still sets the `Theta`-weighted stage compliances either way.
     :param hotspot_normalization: as in `SeqRunConfig`, as are the other `hotspot_*`
         fields.
+    :param hotspot_kappa: angular-weight lobe concentration, possibly scheduled. `0`
+        leaves the conductivity stencil purely radial; larger values narrow the lobe
+        onto the direction opposite the local print direction, `2.37` matching Das2023
+        Eq. (3.5)'s linear ramp at half maximum. Requires `half_stencil` normalization
+        -- see `conductivity._lobe` and `plans/angular_weight.md`.
+    :param hotspot_g0: the angular lobe's gradient scale, per unit length: how much
+        layering must exist before the print direction is believed. The lobe flattens to
+        isotropic as `|grad t|` falls below it, which is what keeps the weight
+        well-defined where no direction is defined. Belongs an order of magnitude below
+        the run's own median `|grad t|` and is not a tuning knob: a converged field's
+        gradient distribution is tight, so a `g0` near the median attenuates `kappa` by
+        a near-constant factor across the whole part, which is a second `hotspot_kappa`
+        rather than a floor (measured in `plans/angular_weight.md`, Phase 3 results).
     :param time_filter_rmin: density-filter radius applied to `t`, in elements, as in
         `SeqRunConfig`; separate from `rmin` so the two fields can be smoothed
         differently. 0 leaves `t` unfiltered.
@@ -217,6 +230,8 @@ class RunConfig(_ConfigMixin):
     hotspot_normalization: str
     hotspot_aggregation: str
     hotspot_beta: Scheduled
+    hotspot_kappa: Scheduled
+    hotspot_g0: float
     print_base: str
     rmin: float
     time_filter_rmin: float
@@ -296,6 +311,19 @@ class SeqRunConfig(_ConfigMixin):
         sharp statement but makes MMA chatter as the argmax moves; low spreads it and
         blunts the term. The aggregate overshoots the true maximum by at most
         `log(sum of weights)/beta`. Inert under `p_mean`, which uses `p`.
+    :param hotspot_kappa: angular-weight lobe concentration, possibly scheduled. `0`
+        leaves the conductivity stencil purely radial; larger values narrow the lobe
+        onto the direction opposite the local print direction, `2.37` matching Das2023
+        Eq. (3.5)'s linear ramp at half maximum. Requires `half_stencil` normalization
+        -- see `conductivity._lobe` and `plans/angular_weight.md`.
+    :param hotspot_g0: the angular lobe's gradient scale, per unit length: how much
+        layering must exist before the print direction is believed. The lobe flattens to
+        isotropic as `|grad t|` falls below it, which is what keeps the weight
+        well-defined where no direction is defined. Belongs an order of magnitude below
+        the run's own median `|grad t|` and is not a tuning knob: a converged field's
+        gradient distribution is tight, so a `g0` near the median attenuates `kappa` by
+        a near-constant factor across the whole part, which is a second `hotspot_kappa`
+        rather than a floor (measured in `plans/angular_weight.md`, Phase 3 results).
     :param uniformity_metric: a `timefield.UniformityMetric` member name.
     :param roughness_weight: weight on `timefield.relative_roughness`, the objective's
         smoothness regularizer -- a number, or a `CosineSchedule` decaying one weight
@@ -342,6 +370,8 @@ class SeqRunConfig(_ConfigMixin):
     hotspot_normalization: str
     hotspot_aggregation: str
     hotspot_beta: float
+    hotspot_kappa: Scheduled
+    hotspot_g0: float
     uniformity_metric: str
     uniformity_weight: float
     roughness_weight: float | CosineSchedule

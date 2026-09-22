@@ -392,10 +392,10 @@ def init_geometry_timefield(
 # Keeps d|grad t|/d(grad t) finite where the gradient vanishes; small enough (relative
 # to the squared gradients themselves, order 1 per unit length) to leave the magnitude
 # unchanged to many digits wherever it is nonzero.
-_GRAD_EPS = 1e-12
+GRAD_EPS = 1e-12
 
 
-def _unit_length(tPhys: Float[Tensor, "nely nelx"]) -> float:
+def unit_length(tPhys: Float[Tensor, "nely nelx"]) -> float:
     """The nondimensional unit length, in elements: the square root of the design
     domain's area.
 
@@ -443,7 +443,7 @@ def _q4_gauss_gradient(
     tPhys: Float[Tensor, "nely nelx"],
 ) -> tuple[Float[Tensor, "4 nely-1 nelx-1"], Float[Tensor, "4 nely-1 nelx-1"]]:
     """`(dt/dx, dt/dy)` at the 2x2 Gauss points of every cell, per unit length
-    (`_unit_length`).
+    (`unit_length`).
 
     Cells are the dual grid: cell `(i, j)` has the four elements `tPhys[i:i+2, j:j+2]`
     as its corner nodes, so `tPhys` is read as a bilinear (Q4) nodal field and the
@@ -462,7 +462,7 @@ def _q4_gauss_gradient(
         (row_lo, row_hi), (col_lo, col_hi) = _q4_blends(eta_sign, xi_sign)
         dt_dx.append(row_lo * (lo_hi - lo_lo) + row_hi * (hi_hi - hi_lo))
         dt_dy.append(col_lo * (hi_lo - lo_lo) + col_hi * (hi_hi - lo_hi))
-    unit = _unit_length(tPhys)
+    unit = unit_length(tPhys)
     return torch.stack(dt_dx) * unit, torch.stack(dt_dy) * unit
 
 
@@ -488,7 +488,7 @@ def gradient_magnitude(
     :return: `|grad tPhys|` at each cell's four Gauss points
     """
     dt_dx, dt_dy = _q4_gauss_gradient(tPhys)
-    return torch.sqrt(dt_dx**2 + dt_dy**2 + _GRAD_EPS)
+    return torch.sqrt(dt_dx**2 + dt_dy**2 + GRAD_EPS)
 
 
 def interpolate_to_gauss(
@@ -616,7 +616,7 @@ def relative_roughness(
     mean, _, _ = _weighted_gradient_mean(tPhys, weights)
     if mean == 0:
         return tPhys.new_zeros(())
-    return roughness(tPhys, weights) / (mean / _unit_length(tPhys))
+    return roughness(tPhys, weights) / (mean / unit_length(tPhys))
 
 
 def sawtooth_amplitude(
@@ -648,6 +648,33 @@ def sawtooth_amplitude(
     return torch.sum(w * torch.abs(interior - smooth)) / total_w
 
 
+def central_difference_gradient_vector(
+    tPhys: Float[Tensor, "nely nelx"],
+) -> tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]]:
+    """`(dt/dx, dt/dy)` at every element, per unit length (`unit_length`), by central
+    differences in the interior and one-sided differences on the mesh border.
+
+    The local print direction, for anything that needs to know which way the build front
+    is moving. A *vector* per element, unlike `_central_difference_gradient`'s masked
+    magnitudes and `_q4_gauss_gradient`'s per-Gauss-point samples.
+
+    Central differences rather than `_q4_gauss_gradient` for the reason that makes them
+    unusable as an objective: they are blind to the one-element sawtooth, so a direction
+    taken from them does not chatter with a padding mode.
+
+    Every element gets a value, including over void, where `t` is pinned by nothing
+    physical -- a consumer that cannot tolerate that must mask on its own. Whatever uses
+    this must also degrade gracefully as the gradient vanishes, since the direction is
+    then undefined.
+
+    :param tPhys: filtered time field
+    :return: `(dt/dx, dt/dy)`, each shaped like `tPhys`
+    """
+    dt_dy, dt_dx = torch.gradient(tPhys, dim=(0, 1))
+    unit = unit_length(tPhys)
+    return dt_dx * unit, dt_dy * unit
+
+
 def _central_difference_gradient(
     tPhys: Float[Tensor, "nely nelx"], xPhys: Float[Tensor, "nely nelx"]
 ) -> Float[Tensor, " k"]:
@@ -669,10 +696,10 @@ def _central_difference_gradient(
     :param xPhys: density field, to locate the fully-solid stencils
     :return: the qualifying samples, flattened; empty if no stencil qualifies
     """
-    half_step = _unit_length(tPhys) / 2
+    half_step = unit_length(tPhys) / 2
     dx = (tPhys[1:-1, 2:] - tPhys[1:-1, :-2]) * half_step
     dy = (tPhys[2:, 1:-1] - tPhys[:-2, 1:-1]) * half_step
-    g = torch.sqrt(dx**2 + dy**2 + _GRAD_EPS)
+    g = torch.sqrt(dx**2 + dy**2 + GRAD_EPS)
 
     solid = xPhys > geometry.SOLID_THRESHOLD
     keep = (
@@ -705,7 +732,7 @@ def relative_sawtooth_amplitude(
     g = _central_difference_gradient(tPhys, xPhys)
     if g.numel() == 0 or g.mean() == 0:
         return tPhys.new_zeros(())
-    return sawtooth_amplitude(tPhys, xPhys) / (g.mean() / _unit_length(tPhys))
+    return sawtooth_amplitude(tPhys, xPhys) / (g.mean() / unit_length(tPhys))
 
 
 def central_difference_cv(
@@ -732,6 +759,32 @@ def central_difference_cv(
     # Population std, not torch's default sample std, so this matches the plain
     # `g.std()/g.mean()` of the numpy analyses this number is compared against.
     return torch.std(sample, unbiased=False) / mean
+
+
+def gradient_percentiles(
+    tPhys: Float[Tensor, "nely nelx"],
+    xPhys: Float[Tensor, "nely nelx"],
+    percentiles: tuple[float, ...] = (10.0, 50.0, 90.0),
+) -> tuple[float, ...]:
+    """Percentiles of `|grad tPhys|` over `_central_difference_gradient`'s fully-solid
+    stencils, per unit length.
+
+    How thick the deposited layers are and how much that varies across the part, in the
+    units any per-unit-length gradient setting is expressed in -- so a setting keyed to
+    the layer thickness can be checked against the run that used it rather than guessed
+    at. Sawtooth-blind, like everything built on that operator, which is what makes it a
+    statement about the layers rather than about the padding mode.
+
+    :param tPhys: physical time field
+    :param xPhys: density field, to locate the fully-solid stencils
+    :param percentiles: which percentiles to take, in [0, 100]
+    :return: one value per requested percentile; zeros when no stencil qualifies
+    """
+    sample = _central_difference_gradient(tPhys, xPhys)
+    if sample.numel() == 0:
+        return tuple(0.0 for _ in percentiles)
+    qs = torch.tensor(percentiles, dtype=sample.dtype, device=sample.device) / 100
+    return tuple(float(v) for v in torch.quantile(sample, qs))
 
 
 class UniformityMetric(StrEnum):
@@ -777,7 +830,7 @@ def _gradient_cv(
     variance = torch.sum(w * (g - mean) ** 2) / torch.sum(w)
     # Keeps sqrt's derivative finite at zero spread. Relative to mean**2, so this stays
     # sqrt(CV**2 + eps) and scale-invariant; an absolute eps scores a flat field CV=1.
-    return torch.sqrt(variance + _GRAD_EPS * mean**2) / mean
+    return torch.sqrt(variance + GRAD_EPS * mean**2) / mean
 
 
 _UNIFORMITY_METRICS = {UniformityMetric.GRADIENT_CV: _gradient_cv}

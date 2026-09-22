@@ -88,9 +88,9 @@ def test_uniform_ramp_has_zero_gradient_spread():
         indexing="ij",
     )
     weights = torch.rand((ny, nx), dtype=torch.float64)
-    # Zero spread still scores the sqrt regularizer's floor, sqrt(_GRAD_EPS), plus
+    # Zero spread still scores the sqrt regularizer's floor, sqrt(GRAD_EPS), plus
     # roundoff -- so the bound has to sit clear of the floor, not on it.
-    floor = timefield._GRAD_EPS**0.5
+    floor = timefield.GRAD_EPS**0.5
     for ramp in (0.3 * xs, 0.7 * ys, 0.2 * xs - 0.5 * ys):
         cv = timefield.uniformity_penalty(
             ramp, timefield.UniformityMetric.GRADIENT_CV, weights=weights
@@ -461,7 +461,7 @@ def test_gradient_cv_zero_weight_returns_zero():
 def test_gradient_cv_zero_mean_gradient_returns_zero():
     field = torch.full((6, 6), 0.3, dtype=torch.float64)  # constant -> zero gradient
     cv = timefield.uniformity_penalty(field, timefield.UniformityMetric.GRADIENT_CV)
-    # Not exactly zero: the sqrt regularizer leaves a floor of sqrt(_GRAD_EPS).
+    # Not exactly zero: the sqrt regularizer leaves a floor of sqrt(GRAD_EPS).
     assert float(cv) == pytest.approx(0.0, abs=1e-6)
 
 
@@ -703,3 +703,26 @@ def test_init_geometry_timefield_dispatches_and_rejects_unknown_extensions():
         )
     with pytest.raises(ValueError, match="VoidExtension"):
         timefield.init_geometry_timefield(xPhys, base, "biharmonic")
+
+
+def test_gradient_percentiles_recover_a_known_layer_thickness():
+    """A field linear in y has one layer thickness everywhere, so every percentile must
+    land on it -- in `unit_length` units, like every other gradient here."""
+    nely, nelx = 9, 7
+    gmag = 0.6
+    unit = (nelx * nely) ** 0.5
+    rows = torch.arange(nely, dtype=torch.float64)[:, None]
+    tPhys = (rows * gmag / unit).expand(nely, nelx).contiguous()
+    xPhys = torch.ones(nely, nelx, dtype=torch.float64)
+
+    p10, p50, p90 = timefield.gradient_percentiles(tPhys, xPhys)
+    assert p10 == pytest.approx(gmag, rel=1e-9)
+    assert p50 == pytest.approx(gmag, rel=1e-9)
+    assert p90 == pytest.approx(gmag, rel=1e-9)
+
+
+def test_gradient_percentiles_are_zero_when_no_stencil_qualifies():
+    """All void, so there is nothing to report a layer thickness over."""
+    tPhys = torch.rand(6, 6, dtype=torch.float64)
+    xPhys = torch.zeros(6, 6, dtype=torch.float64)
+    assert timefield.gradient_percentiles(tPhys, xPhys) == (0.0, 0.0, 0.0)

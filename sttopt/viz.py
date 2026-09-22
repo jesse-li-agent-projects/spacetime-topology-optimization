@@ -26,6 +26,7 @@ from collections.abc import Callable
 from collections.abc import Sequence
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 import matplotlib
 import numpy as np
@@ -285,6 +286,61 @@ def timefield_gradient_magnitude_plot(
     return ax
 
 
+def print_direction_plot(
+    xPhys: Float[np.ndarray, "nely nelx"],
+    tPhys: Float[np.ndarray, "nely nelx"],
+    direction: tuple[Float[np.ndarray, "nely nelx"], Float[np.ndarray, "nely nelx"]],
+    *,
+    stride: int | None = None,
+    ax: Axes | None = None,
+) -> Axes:
+    """`timefield_plot` with the local print direction quivered over it: which way the
+    build front moves at each element.
+
+    The direction the angular stencil weight is taken against
+    (`conductivity.angular_stencil`), so this is where a run that locks its print
+    direction onto the grid, or swirls it where the field is flat, becomes visible --
+    neither of which a time-field plot alone shows.
+
+    Arrows are unit length, so only orientation is shown; the layer thickness is
+    `timefield_gradient_magnitude_plot`'s job. Where the gradient vanishes there is no
+    direction and no arrow is drawn, which is itself the thing worth seeing.
+
+    :param xPhys: physical density field (not yet binarized).
+    :param tPhys: physical print-time field, drawn as the background.
+    :param direction: per-element unit print direction `(ux, uy)`, zero where undefined.
+    :param stride: draw one arrow per `stride` elements in each direction; `None` picks
+        a stride that keeps the arrow count legible on any mesh.
+    :return: the `Axes` drawn into.
+    """
+    ax = timefield_plot(xPhys, tPhys, ax=ax)
+    nely, nelx = tPhys.shape
+    if stride is None:
+        stride = max(1, round(max(nelx, nely) / 30))
+
+    ux, uy = direction
+    rows = slice(stride // 2, None, stride)
+    cols = slice(stride // 2, None, stride)
+    # Cell centers in `combination_plot`'s frame: x in [col, col+1], y in [-(row+1), -row].
+    X, Y = np.meshgrid(np.arange(nelx) + 0.5, -(np.arange(nely) + 0.5))
+    drawn = (xPhys > 0.5) & ((ux**2 + uy**2) > 0)
+
+    keep = drawn[rows, cols]
+    ax.quiver(
+        X[rows, cols][keep],
+        Y[rows, cols][keep],
+        ux[rows, cols][keep],
+        # The plot frame flips y, so a component toward increasing row draws downward.
+        -uy[rows, cols][keep],
+        color="black",
+        pivot="middle",
+        scale=1.3 * max(nelx, nely) / stride,
+        width=0.003,
+    )
+    ax.set_title("Print direction")
+    return ax
+
+
 def timefield_contour_plot(
     xPhys: Float[np.ndarray, "nely nelx"],
     tPhys: Float[np.ndarray, "nely nelx"],
@@ -452,6 +508,48 @@ def _hotspot_severity(
     return severity
 
 
+class RunPlotInputs(NamedTuple):
+    """Everything the plots need from one saved design, loaded by `_load_stto_run` or
+    `_load_seqopt_run`.
+
+    Named rather than positional: the two loaders and every call site have to agree on
+    it, and the list grows as the run gains fields worth plotting.
+    """
+
+    xPhys: Float[np.ndarray, "nely nelx"]
+    tPhys: Float[np.ndarray, "nely nelx"]
+    compliance: float | None  # None for seqopt, which runs no FEM
+    hotspot_severity: Float[np.ndarray, "nely nelx"]
+    grad_magnitude: Float[np.ndarray, "nely nelx"]
+    # Unit-length local print direction per element, `(dt/dx, dt/dy)` normalized -- the
+    # direction the angular stencil weight reads (`conductivity._lobe`).
+    direction: tuple[Float[np.ndarray, "nely nelx"], Float[np.ndarray, "nely nelx"]]
+    nStage: int
+
+
+def _print_direction(tPhys_t) -> tuple[np.ndarray, np.ndarray]:
+    """The unit-length local print direction per element, from the same central
+    differences the angular stencil weight reads (`conductivity._lobe`).
+
+    Normalized here rather than in the plot so that "no direction" is representable:
+    where the gradient vanishes there is no print direction, and the zero vector says
+    so where a normalized-but-arbitrary one would not.
+
+    :param tPhys_t: the time field, as a torch tensor
+    :return: `(ux, uy)`, each shaped like `tPhys`, zero where `|grad t|` is zero
+    """
+    import sttopt.timefield as timefield
+    import sttopt.torch_util as torch_util
+
+    gx, gy = timefield.central_difference_gradient_vector(tPhys_t)
+    magnitude = (gx**2 + gy**2).sqrt()
+    safe = magnitude.clamp(min=timefield.GRAD_EPS**0.5)
+    return (
+        torch_util.to_numpy(gx / safe),
+        torch_util.to_numpy(gy / safe),
+    )
+
+
 @lru_cache(maxsize=1)
 def _stto_problem(run_dir: Path) -> tuple:
     """The `(config, Problem)` a run directory's `config.json` builds.
@@ -468,7 +566,9 @@ def _stto_problem(run_dir: Path) -> tuple:
     return config, stto.build_problem(config)
 
 
-def _load_stto_run(run_dir: Path, design_file: str = "final_design.npz") -> tuple:
+def _load_stto_run(
+    run_dir: Path, design_file: str = "final_design.npz"
+) -> RunPlotInputs:
     """Loads an `stto` run directory's plotting inputs: `xPhys`, `tPhys`, whole-
     structure compliance, hotspot severity, `|grad tPhys|`, and `nStage`.
 
@@ -476,6 +576,7 @@ def _load_stto_run(run_dir: Path, design_file: str = "final_design.npz") -> tupl
         `final_design.npz` or a periodic `design_it*.npz` checkpoint. Checkpoints
         written before those carried the filtered fields hold only raw `x`/`t` and are
         rejected.
+    :return: the plots' inputs, as a `RunPlotInputs`
     """
     import sttopt.compliance as compliance
     import sttopt.stto as stto
@@ -511,10 +612,20 @@ def _load_stto_run(run_dir: Path, design_file: str = "final_design.npz") -> tupl
     K_est = torch_util.to_numpy(K_est_t).reshape(config.nely, config.nelx)
     hotspot_severity = _hotspot_severity(xPhys, K_est)
     grad_magnitude = torch_util.to_numpy(timefield.gradient_magnitude_elements(tPhys_t))
-    return xPhys, tPhys, obj, hotspot_severity, grad_magnitude, config.nStage
+    return RunPlotInputs(
+        xPhys,
+        tPhys,
+        obj,
+        hotspot_severity,
+        grad_magnitude,
+        _print_direction(tPhys_t),
+        config.nStage,
+    )
 
 
-def _load_seqopt_run(run_dir: Path, design_file: str = "final_design.npz") -> tuple:
+def _load_seqopt_run(
+    run_dir: Path, design_file: str = "final_design.npz"
+) -> RunPlotInputs:
     """`_load_stto_run`'s counterpart for a `seqopt` run directory: no FEM, so
     compliance is `None`, and the geometry comes from the run's own artefacts rather
     than from a config.
@@ -523,6 +634,7 @@ def _load_seqopt_run(run_dir: Path, design_file: str = "final_design.npz") -> tu
         `final_design.npz` (`xPhys`/`tPhys`) or a periodic `design_it*.npz` checkpoint
         (`tPhys`, or `t` alone in older checkpoints; the fixed geometry comes from
         `run_dir/geometry.npz` instead).
+    :return: the plots' inputs, as a `RunPlotInputs`
     """
     import json
 
@@ -551,7 +663,15 @@ def _load_seqopt_run(run_dir: Path, design_file: str = "final_design.npz") -> tu
     K_est = torch_util.to_numpy(K_est_t).reshape(xPhys.shape)
     hotspot_severity = _hotspot_severity(xPhys, K_est)
     grad_magnitude = torch_util.to_numpy(timefield.gradient_magnitude_elements(tPhys_t))
-    return xPhys, tPhys, None, hotspot_severity, grad_magnitude, config.nStage
+    return RunPlotInputs(
+        xPhys,
+        tPhys,
+        None,
+        hotspot_severity,
+        grad_magnitude,
+        _print_direction(tPhys_t),
+        config.nStage,
+    )
 
 
 def _design_checkpoints(run_dir: Path) -> list[str]:
@@ -572,7 +692,7 @@ def _animate_timefield_filled_contour(
     plot_dir: Path,
     n_contours: int,
     fps: float,
-    load_run: Callable[[Path, str], tuple],
+    load_run: Callable[[Path, str], RunPlotInputs],
 ) -> None:
     """Renders `timefield_filled_contour_plot` for every design checkpoint in `run_dir`
     and stitches the frames into a GIF. The void is drawn translucent (`show_void`), so
@@ -594,9 +714,8 @@ def _animate_timefield_filled_contour(
     out_path = plot_dir / "timefield_filled_contour_animation.gif"
     writer = PillowWriter(fps=fps)
     with writer.saving(fig, out_path, dpi=150):
-        for i, (design_file, (xPhys, tPhys, obj, *_rest)) in enumerate(
-            zip(design_files, frames)
-        ):
+        for i, (design_file, frame) in enumerate(zip(design_files, frames)):
+            xPhys, tPhys, obj = frame.xPhys, frame.tPhys, frame.compliance
             ax.clear()
             # Only the first frame draws a colorbar: the color mapping is the same
             # fixed one in every frame, so it never needs redrawing -- and redrawing it
@@ -631,14 +750,9 @@ def _main(args: argparse.Namespace) -> None:
         )
         return
 
-    if is_seqopt:
-        xPhys, tPhys, obj, hotspot_severity, grad_magnitude, nStage = _load_seqopt_run(
-            run_dir, args.design_file
-        )
-    else:
-        xPhys, tPhys, obj, hotspot_severity, grad_magnitude, nStage = _load_stto_run(
-            run_dir, args.design_file
-        )
+    load = _load_seqopt_run if is_seqopt else _load_stto_run
+    run = load(run_dir, args.design_file)
+    xPhys, tPhys, obj = run.xPhys, run.tPhys, run.compliance
 
     # Nest non-default design files under their own subdirectory so an intermediate
     # checkpoint's plots don't overwrite the final design's.
@@ -647,7 +761,7 @@ def _main(args: argparse.Namespace) -> None:
     if design_stem != "final_design":
         plot_dir /= design_stem
     plot_dir.mkdir(parents=True, exist_ok=True)
-    ax = hotspot_severity_plot(xPhys, hotspot_severity, tPhys, nStage)
+    ax = hotspot_severity_plot(xPhys, run.hotspot_severity, tPhys, run.nStage)
     out_path = plot_dir / "hotspot_severity.png"
     ax.figure.savefig(out_path)
     print(f"Saved hotspot severity plot to {out_path}")
@@ -657,10 +771,15 @@ def _main(args: argparse.Namespace) -> None:
     ax.figure.savefig(out_path)
     print(f"Saved time field plot to {out_path}")
 
-    ax = timefield_gradient_magnitude_plot(xPhys, grad_magnitude)
+    ax = timefield_gradient_magnitude_plot(xPhys, run.grad_magnitude)
     out_path = plot_dir / "timefield_gradient_magnitude.png"
     ax.figure.savefig(out_path)
     print(f"Saved time field gradient magnitude plot to {out_path}")
+
+    ax = print_direction_plot(xPhys, tPhys, run.direction)
+    out_path = plot_dir / "print_direction.png"
+    ax.figure.savefig(out_path)
+    print(f"Saved print direction plot to {out_path}")
 
     ax = timefield_contour_plot(xPhys, tPhys, args.n_contours, compliance=obj)
     out_path = plot_dir / "timefield_contour.png"

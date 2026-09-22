@@ -190,7 +190,40 @@ def test_main_regenerates_plots_from_a_seqopt_run_directory(tmp_path, monkeypatc
         "hotspot_severity.png",
         "timefield.png",
         "timefield_gradient_magnitude.png",
+        "print_direction.png",
         "timefield_contour.png",
         "timefield_filled_contour.png",
     ]:
         assert (plot_dir / name).exists()
+
+
+def test_print_direction_plot_draws_one_arrow_per_sampled_solid_element():
+    """No arrow where there is no direction: void, and anywhere the time field is flat
+    enough to leave `grad t` at zero."""
+    xPhys = np.ones((NELY, NELX))
+    xPhys[0, :] = 0.0
+    tPhys = np.tile(np.linspace(0.0, 1.0, NELY)[:, None], (1, NELX))
+    ux = np.zeros_like(tPhys)
+    uy = np.ones_like(tPhys)
+    uy[:, -1] = 0.0  # a column with no direction at all
+
+    ax = viz.print_direction_plot(xPhys, tPhys, (ux, uy), stride=1)
+
+    drawn = (xPhys > 0.5) & ((ux**2 + uy**2) > 0)
+    quiver = ax.collections[-1]
+    assert len(quiver.get_offsets()) == int(drawn.sum())
+
+
+def test_print_direction_plot_flips_y_into_the_plot_frame():
+    """`combination_plot`'s frame negates y, so a direction toward increasing row must
+    draw downward -- otherwise every arrow points the wrong way and the plot silently
+    says the opposite of the truth."""
+    xPhys = np.ones((2, 2))
+    tPhys = np.array([[0.0, 0.0], [1.0, 1.0]])
+    ux = np.zeros_like(tPhys)
+    uy = np.ones_like(tPhys)  # toward increasing row
+
+    ax = viz.print_direction_plot(xPhys, tPhys, (ux, uy), stride=1)
+
+    quiver = ax.collections[-1]
+    assert np.all(quiver.V < 0)
