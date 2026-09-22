@@ -11,7 +11,7 @@ places element `(row, col)` at `x in [col, col+1]`, `y in [-(row+1), -row]` (y f
 `stage_boundary_plot` places it at `x in [col+0.5, col+1.5]`, `y in [row+0.5, row+1.5]`
 (no flip, half-cell offset). The two frames are related by `x' = x - 0.5, y' = 0.5 - y`;
 `stage_boundary_plot(..., combination_coords=True)` applies it to compose both plots on
-one `Axes` (as `stto_cli.py` does). See `conventions.md`.
+one `Axes`. See `conventions.md`.
 
 Run as a script (`python -m sttopt.viz <tag>`) to regenerate plots for a saved run from
 its `output/<tag>/` artefacts, without rerunning the optimization. This reads
@@ -208,17 +208,21 @@ def hotspot_severity_plot(
     tPhys: Float[np.ndarray, "nely nelx"],
     nStage: int,
     *,
+    direction: (
+        tuple[Float[np.ndarray, "nely nelx"], Float[np.ndarray, "nely nelx"]] | None
+    ) = None,
     ax: Axes | None = None,
 ) -> Axes:
     """`combination_plot` (binarized density, colored by `hotspot_severity`, `plasma`
-    colormap, labelled horizontal colorbar) with `stage_boundary_plot` overlaid in its
-    `combination_coords` frame -- the plot recipe `stto_cli.py` saves as
-    `hotspot_severity.png`.
+    colormap, labelled horizontal colorbar) with the stage boundaries overlaid as
+    `tPhys` contour lines, drawn the way `timefield_filled_contour_plot` draws them.
 
     :param xPhys: physical density field (not yet binarized).
     :param hotspot_severity: per-element overheating severity, e.g. `(1 - K_est) * (xPhys > 0.5)`.
     :param tPhys: physical print-time field.
-    :param nStage: number of print stages, for `stage_boundary_plot`'s binning.
+    :param nStage: number of print stages; a line is drawn at each boundary between two.
+    :param direction: per-element unit print direction `(ux, uy)`, quivered over the
+        plot (thinner than `print_direction_plot`'s) if given.
     :return: the `Axes` drawn into.
     """
     XPhys = (xPhys > 0.5).astype(xPhys.dtype)
@@ -232,7 +236,21 @@ def hotspot_severity_plot(
         colorbar_label="Hotspot severity",
         ax=ax,
     )
-    stage_boundary_plot(tPhys, nStage, ax=ax, combination_coords=True)
+    boundaries = np.linspace(*TIMEFIELD_RANGE, nStage + 1)[1:-1]
+    if boundaries.size:
+        nely, nelx = tPhys.shape
+        X, Y = np.meshgrid(np.arange(nelx) + 0.5, -(np.arange(nely) + 0.5))
+        ax.contour(
+            X,
+            Y,
+            tPhys,
+            levels=boundaries,
+            colors="black",
+            linewidths=_BOUNDARY_LINEWIDTH,
+        )
+        _cover_void(ax, xPhys)
+    if direction is not None:
+        _quiver_print_direction(ax, xPhys, direction, stride=None, width=0.0015)
     # The maximum is the quantity the hotspot constraint is actually about, and the
     # colorbar alone does not give it: its range is set by the extremes of the field,
     # which the eye cannot read a number off. `nan` marks elements the measure does not
@@ -793,7 +811,9 @@ def _main(args: argparse.Namespace) -> None:
     if design_stem != "final_design":
         plot_dir /= design_stem
     plot_dir.mkdir(parents=True, exist_ok=True)
-    ax = hotspot_severity_plot(xPhys, run.hotspot_severity, tPhys, run.nStage)
+    ax = hotspot_severity_plot(
+        xPhys, run.hotspot_severity, tPhys, run.nStage, direction=run.direction
+    )
     out_path = plot_dir / "hotspot_severity.png"
     ax.figure.savefig(out_path)
     print(f"Saved hotspot severity plot to {out_path}")

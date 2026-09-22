@@ -7,6 +7,7 @@ not pixel-level MATLAB fixture comparison (no fixture exists for these two funct
 import json
 
 import numpy as np
+from matplotlib.quiver import Quiver
 
 import sttopt.viz as viz
 
@@ -73,6 +74,18 @@ def test_hotspot_severity_plot_titles_without_a_maximum_when_nothing_is_measured
     ax = viz.hotspot_severity_plot(xPhys, severity, np.zeros((NELY, NELX)), nStage=1)
 
     assert ax.get_title() == "Hotspot severity"
+
+
+def test_hotspot_severity_plot_quivers_the_print_direction_when_given():
+    xPhys = np.ones((NELY, NELX))
+    tPhys = np.tile(np.linspace(0.0, 1.0, NELX)[None, :], (NELY, 1))
+    direction = (np.ones_like(tPhys), np.zeros_like(tPhys))
+
+    ax = viz.hotspot_severity_plot(
+        xPhys, np.zeros_like(tPhys), tPhys, nStage=2, direction=direction
+    )
+
+    assert isinstance(ax.collections[-1], Quiver)
 
 
 def test_gradient_magnitude_plot_draws_every_solid_element():
