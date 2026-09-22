@@ -321,12 +321,20 @@ The extra corrugation is nonetheless real and distributed, not a boundary artefa
 trimming 10 columns off each edge leaves the control at 0.0151 and `kappa = 5` at 0.0198
 on the c-shape, and the ratio survives on all three geometries.
 
-**Recommendation: adopt the lobe at the narrow end.** The angular weight is a
-physical-accuracy correction, not a tuning knob -- heat does leave through already-printed
-material rather than sideways -- so the question is how to carry it, not whether. Use a
-constant `kappa` at the narrow end (5, not Das's 2.37, which is within noise of no lobe
-at all on every geometry here), no continuation, and `g0` an order of magnitude below the
-run's median `|grad t|`.
+**Decision: the lobe is on by default, at `kappa = 2.3666`.** The angular weight is a
+physical-accuracy correction, not a tuning knob -- heat does leave through
+already-printed material rather than sideways -- so the question was how to carry it, not
+whether. Constant, no continuation, and `g0` an order of magnitude below the run's median
+`|grad t|`.
+
+`2.3666` is Das2023's own half-width, which is the only value here with a claim to
+physical meaning; everything else on the axis is a number that happened to score well.
+The `seqopt` sweep above preferred 5, where 2.37 was within noise of no lobe at all --
+but that finding did not survive the move to `stto`, where 2.37 bought 14.3% of `true_cv`
+(Phase 3b). `stto` is the code that matters long-term, and a physically grounded setting
+beats a fitted one when the two disagree by this little. If a design turns out not to
+change under the lobe at this width, that is a coincidence to note rather than evidence
+of a problem.
 
 **The one open concern is budget, not level.** `sawtooth_raw` had not converged at
 iteration 500 in *any* arm -- every trace is still climbing, control included -- so the

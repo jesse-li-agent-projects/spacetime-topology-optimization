@@ -19,7 +19,7 @@
   "hotspot_normalization": "half_stencil",
   "hotspot_aggregation": "logsumexp",
   "hotspot_beta": 100.0,
-  "hotspot_kappa": 0.0,
+  "hotspot_kappa": 2.3666,
   "hotspot_g0": 0.07,
   "hotspot_refresh_period": 1,
   "beta_d_schedule": {

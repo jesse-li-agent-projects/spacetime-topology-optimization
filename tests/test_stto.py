@@ -341,8 +341,14 @@ def test_step_assembled_sensitivities_match_finite_differences(monkeypatch):
     # .f (a compliance) is noise-dominated at small h; the constraint rows reach
     # truncation error at large h. Worst relative error over the directions below at
     # h = 1e-4 / 1e-5 / 1e-6 / 1e-7: .f 1e-6 / 2e-6 / 3e-5 / 1e-4, .g 9e-6 / 9e-8 / 2e-8
-    # / 5e-7.
-    h = 1e-5
+    # / 5e-7 -- measured before the angular stencil weight was on by default.
+    #
+    # The lobe and its directional divisor both read `grad t`, which makes the hotspot
+    # row markedly more curved in `t`: its worst direction goes from 4.6e-8 at
+    # `hotspot_kappa = 0` to 1.4e-6 at 2.3666, both at h = 1e-5, decaying as h**2 in
+    # each case. So h sits at 1e-6, where that direction reaches 7.5e-9 and `.f` is
+    # still an order of magnitude inside its own tolerance.
+    h = 1e-6
     # Stage volume bounds on, so every kind of constraint row is present. The hotspot
     # calibration is a detached offset re-measured from the design it is refreshed on,
     # so on a refresh iteration `.g`'s hotspot row moves by an amount `.dg` deliberately
