@@ -272,6 +272,41 @@ def timefield_gradient_magnitude_plot(
     return ax
 
 
+def iso_curvature_plot(
+    xPhys: Float[np.ndarray, "nely nelx"],
+    curvature: Float[np.ndarray, "nely nelx"],
+    *,
+    ax: Axes | None = None,
+) -> Axes:
+    """`combination_plot` (binarized density) of the time field's iso-line curvature,
+    concave fronts in red: where a print tool wider than `1 / |curvature|` would collide
+    with printed material.
+
+    The color scale is symmetric and stops at the 99th percentile of `|curvature|` in
+    the part, so the unbounded convex curvature at a point-like print start does not
+    wash out the rest.
+
+    :param xPhys: physical density field (not yet binarized).
+    :param curvature: per-element curvature in 1/elements, `nan` where unmeasured, e.g.
+        `RunPlotInputs.curvature`.
+    :return: the `Axes` drawn into.
+    """
+    solid = xPhys > 0.5
+    limit = np.nanpercentile(np.abs(curvature[solid]), 99)
+    cmap = matplotlib.colormaps["RdBu"].with_extremes(bad=_NO_MEASURE_GRAY)
+    ax = combination_plot(
+        solid.astype(xPhys.dtype),
+        curvature,
+        eps=0.5,
+        cmap=cmap,
+        colorbar_label="Iso-line curvature (1/element), concave < 0",
+        clim=(-limit, limit),
+        ax=ax,
+    )
+    ax.set_title("Iso-line curvature")
+    return ax
+
+
 def print_direction_plot(
     xPhys: Float[np.ndarray, "nely nelx"],
     tPhys: Float[np.ndarray, "nely nelx"],
@@ -520,6 +555,18 @@ class RunPlotInputs(NamedTuple):
     # direction the angular stencil weight reads (`conductivity._lobe`).
     direction: tuple[Float[np.ndarray, "nely nelx"], Float[np.ndarray, "nely nelx"]]
     nStage: int
+    # Iso-line curvature per element, in 1/elements, `nan` on the mesh border
+    curvature: Float[np.ndarray, "nely nelx"]
+
+
+def _iso_curvature_elements(tPhys_t, xPhys_t) -> np.ndarray:
+    """`timefield.iso_curvature` per element rather than per unit length, padded with
+    `nan` onto the border elements it does not measure."""
+    import sttopt.timefield as timefield
+    import sttopt.torch_util as torch_util
+
+    kappa = timefield.iso_curvature(tPhys_t, xPhys_t) / timefield.unit_length(tPhys_t)
+    return np.pad(torch_util.to_numpy(kappa), 1, constant_values=np.nan)
 
 
 def _print_direction(tPhys_t) -> tuple[np.ndarray, np.ndarray]:
@@ -615,6 +662,7 @@ def _load_stto_run(
         grad_magnitude,
         _print_direction(tPhys_t),
         config.nStage,
+        _iso_curvature_elements(tPhys_t, xPhys_t),
     )
 
 
@@ -666,6 +714,7 @@ def _load_seqopt_run(
         grad_magnitude,
         _print_direction(tPhys_t),
         config.nStage,
+        _iso_curvature_elements(tPhys_t, problem.xPhys),
     )
 
 
@@ -777,6 +826,11 @@ def _main(args: argparse.Namespace) -> None:
     out_path = plot_dir / "print_direction.png"
     ax.figure.savefig(out_path)
     print(f"Saved print direction plot to {out_path}")
+
+    ax = iso_curvature_plot(xPhys, run.curvature)
+    out_path = plot_dir / "iso_curvature.png"
+    ax.figure.savefig(out_path)
+    print(f"Saved iso-line curvature plot to {out_path}")
 
     ax = timefield_contour_plot(xPhys, tPhys, args.n_contours, compliance=obj)
     out_path = plot_dir / "timefield_contour.png"
