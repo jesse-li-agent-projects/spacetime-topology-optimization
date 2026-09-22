@@ -302,12 +302,36 @@ within noise of it. Meanwhile `sawtooth_raw` roughly doubles at every `kappa > 0
 the filtered `sawtooth` barely moves -- the filter is absorbing a corrugation that grew,
 which `seqopt.py`'s own docstring calls a failure rather than a fix.
 
-**Recommendation: do not enable the lobe by default.** A ~20% uniformity gain that costs
-a 2x raw corrugation is not a trade worth shipping blind. `hotspot_kappa = 0` stays the
-default. Before revisiting: find out why the lobe feeds the sawtooth. It is plausibly the
-same quadrature blindness as PR #94 -- the lobe is evaluated per element from a
-central-difference gradient, which is exactly the operator that cannot see the mode --
-in which case the fix is in how the direction is sampled, not in `kappa`.
+**4. That sawtooth doubling is small in absolute terms.** The ratio is what the table
+shows, but the level is 2.9% -> 5.2% of a layer thickness on the c-shape. The corrugation
+that motivated PR #94 and the multi-pronged plan was **21% of a layer domain-wide**
+(`plans/archive/seqopt_sawtooth_multipronged.md`), so every arm here sits at a quarter of
+the known-bad level or below, and the *filtered* `sawtooth` does not move at all
+(0.0062 -> 0.0061). A doubling of something four times below the threshold is not a
+reason to refuse the term.
+
+The extra corrugation is nonetheless real and distributed, not a boundary artefact:
+trimming 10 columns off each edge leaves the control at 0.0151 and `kappa = 5` at 0.0198
+on the c-shape, and the ratio survives on all three geometries.
+
+**Recommendation: adopt the lobe at the narrow end.** The angular weight is a
+physical-accuracy correction, not a tuning knob -- heat does leave through already-printed
+material rather than sideways -- so the question is how to carry it, not whether. Use a
+constant `kappa` at the narrow end (5, not Das's 2.37, which is within noise of no lobe
+at all on every geometry here), no continuation, and `g0` an order of magnitude below the
+run's median `|grad t|`.
+
+**The one open concern is budget, not level.** `sawtooth_raw` had not converged at
+iteration 500 in *any* arm -- every trace is still climbing, control included -- so the
+2x is a ratio between two growing curves and says nothing about where either settles. The
+test that matters is a long run (~1500 iterations) checking whether the gap keeps widening
+or the arms converge. Until that is done, treat `sawtooth_raw` as a watched diagnostic on
+any run with `kappa > 0`.
+
+If it does keep widening, the mechanism to look at first is the same quadrature blindness
+as PR #94: the lobe reads a per-element central-difference gradient, exactly the operator
+that cannot see the one-element mode, so the fix would be in how the direction is sampled
+rather than in `kappa`.
 
 Untested and worth knowing: `kappa > 5`, since `true_cv` had not turned around; and the
 whole question on `stto`, where density is also a design variable.
