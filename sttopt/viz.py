@@ -209,7 +209,15 @@ def hotspot_severity_plot(
         ax=ax,
     )
     stage_boundary_plot(tPhys, nStage, ax=ax, combination_coords=True)
-    ax.set_title("Hotspot severity")
+    # The maximum is the quantity the hotspot constraint is actually about, and the
+    # colorbar alone does not give it: its range is set by the extremes of the field,
+    # which the eye cannot read a number off. `nan` marks elements the measure does not
+    # report, including the case where it reports nothing at all.
+    measured = ~np.isnan(hotspot_severity)
+    title = "Hotspot severity"
+    if measured.any():
+        title += f" (max: {hotspot_severity[measured].max():.4g})"
+    ax.set_title(title)
     return ax
 
 
