@@ -761,6 +761,32 @@ def central_difference_cv(
     return torch.std(sample, unbiased=False) / mean
 
 
+def gradient_percentiles(
+    tPhys: Float[Tensor, "nely nelx"],
+    xPhys: Float[Tensor, "nely nelx"],
+    percentiles: tuple[float, ...] = (10.0, 50.0, 90.0),
+) -> tuple[float, ...]:
+    """Percentiles of `|grad tPhys|` over `_central_difference_gradient`'s fully-solid
+    stencils, per unit length.
+
+    How thick the deposited layers are and how much that varies across the part, in the
+    units any per-unit-length gradient setting is expressed in -- so a setting keyed to
+    the layer thickness can be checked against the run that used it rather than guessed
+    at. Sawtooth-blind, like everything built on that operator, which is what makes it a
+    statement about the layers rather than about the padding mode.
+
+    :param tPhys: physical time field
+    :param xPhys: density field, to locate the fully-solid stencils
+    :param percentiles: which percentiles to take, in [0, 100]
+    :return: one value per requested percentile; zeros when no stencil qualifies
+    """
+    sample = _central_difference_gradient(tPhys, xPhys)
+    if sample.numel() == 0:
+        return tuple(0.0 for _ in percentiles)
+    qs = torch.tensor(percentiles, dtype=sample.dtype, device=sample.device) / 100
+    return tuple(float(v) for v in torch.quantile(sample, qs))
+
+
 class UniformityMetric(StrEnum):
     """Names for `uniformity_penalty`'s selectable layer-uniformity measure. Adding a
     measure is a matter of writing a function and a member here -- see

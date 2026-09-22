@@ -583,8 +583,16 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         dim=0,
     )
     diagnostics = _hotspot_diagnostics(hotspot_t, K_est_t, xPhys, config.r)
+    with torch.no_grad():
+        grad_p10, grad_p50, grad_p90 = timefield.gradient_percentiles(
+            tPhys.detach(), xPhys.detach()
+        )
     diagnostics.update(
         stage_obj=stage_obj,
+        grad_p10=grad_p10,
+        grad_p50=grad_p50,
+        grad_p90=grad_p90,
+        hotspot_kappa=run_config.weight_at(config.hotspot_kappa, loop),
         grey=float(((xPhys > 0.05) & (xPhys < 0.95)).double().mean()),
         calibration=problem.hotspot.calibration,
         recalibrated=bool(recalibrate),

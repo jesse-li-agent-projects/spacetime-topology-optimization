@@ -703,3 +703,26 @@ def test_init_geometry_timefield_dispatches_and_rejects_unknown_extensions():
         )
     with pytest.raises(ValueError, match="VoidExtension"):
         timefield.init_geometry_timefield(xPhys, base, "biharmonic")
+
+
+def test_gradient_percentiles_recover_a_known_layer_thickness():
+    """A field linear in y has one layer thickness everywhere, so every percentile must
+    land on it -- in `unit_length` units, like every other gradient here."""
+    nely, nelx = 9, 7
+    gmag = 0.6
+    unit = (nelx * nely) ** 0.5
+    rows = torch.arange(nely, dtype=torch.float64)[:, None]
+    tPhys = (rows * gmag / unit).expand(nely, nelx).contiguous()
+    xPhys = torch.ones(nely, nelx, dtype=torch.float64)
+
+    p10, p50, p90 = timefield.gradient_percentiles(tPhys, xPhys)
+    assert p10 == pytest.approx(gmag, rel=1e-9)
+    assert p50 == pytest.approx(gmag, rel=1e-9)
+    assert p90 == pytest.approx(gmag, rel=1e-9)
+
+
+def test_gradient_percentiles_are_zero_when_no_stencil_qualifies():
+    """All void, so there is nothing to report a layer thickness over."""
+    tPhys = torch.rand(6, 6, dtype=torch.float64)
+    xPhys = torch.zeros(6, 6, dtype=torch.float64)
+    assert timefield.gradient_percentiles(tPhys, xPhys) == (0.0, 0.0, 0.0)
