@@ -19,7 +19,7 @@ With `grad t` per unit length (`timefield.unit_length`), as every other `timefie
 ```
 n     = grad t / sqrt(|grad t|^2 + eps_n * gbar^2)
 kappa = div n
-g     = R * smax_e( -kappa_e * rho_e**r ) - 1  <=  0
+g     = smax_e( R * -kappa_e * rho_e**r ) - 1  <=  0
 ```
 
 - `n` points from printed toward unprinted material, so `kappa > 0` is a convex printed
@@ -35,8 +35,9 @@ g     = R * smax_e( -kappa_e * rho_e**r ) - 1  <=  0
   (every `hotspot_refresh_period`, and whenever `curvature_beta` moves).
 - `rho**r` uses the **hotspot severity's density exponent `r`**, with the same NaN-safe
   handling of exact-zero density. Void scores zero severity and can never violate.
-- **`R` sits outside the aggregate**, so scheduling it never stales the calibration, and
-  `g` is O(1) for MMA.
+- **`R` sits inside the aggregate** (as implemented; the first draft had it outside), so
+  the severity is dimensionless, 1 on the bound, and `curvature_beta` reads like
+  `hotspot_beta`. A change in `R` refreshes the calibration, as a change in `rouf` does.
 - `R` is set in **elements** (`tool_radius`) and converted to unit lengths in one place;
   moving to physical units later is a change to that conversion only.
 
@@ -104,6 +105,38 @@ On `output/stto_k2p37` and its `kappa = 0` control: `kappa` maps and the largest
 each final design already satisfies. Picks `R_target` and a starting `curvature_beta`.
 No optimization in this phase.
 
+#### Phase 4 results -- do not re-run
+
+Final designs, severity `-kappa * xPhys**0.05` per element. Void is exactly 0 after
+projection, so `r = 0.05` lets no void through. `R` is `1 / curvature`, in elements.
+
+| run | max concave (1/el) | admissible `R` | `R` without worst 0.5% / 1% / 5% of solid |
+|---|---|---|---|
+| `stto_k2p37` | 1.742 | **0.57** | 0.99 / 1.46 / 3.52 |
+| `stto_ctrl`  | 2.179 | **0.46** | 0.99 / 1.52 / 3.66 |
+
+Share of solid elements that violate: `R = 1`: 0.5%, `R = 2`: ~1.9%, `R = 3`: 4.0%,
+`R = 5`: ~6.7%, `R = 8`: ~12%. The angular weight changes almost none of this.
+
+**The worst values are creases, not bends.** They lie on one-element-wide lines, many of
+them exactly along grid rows (`plot/<tag>/iso_curvature.png`). Across one (`stto_k2p37`,
+column 75, rows 42-58) `tPhys` is a zig-zag: the slope flips from -0.0055 to +0.0055 per
+element in one step at row 48, and back at row 52. The raw `t` has a one-row trough
+there (0.28 against about 0.40 on each side). The time filter's cone kernel makes a
+one-row spike into a tent with a sharp apex, so `tPhys` keeps a crease. Raw `t` in the
+solid has a median `|laplacian|` of 0.04 and a maximum of 0.54, against 0.0005 and 0.012
+for `tPhys`: `relative_roughness` scores `tPhys` and never sees the spikes behind it.
+
+Consequences for Phase 5:
+
+- Any `R_target >= 1` element is active from the start. To remove these creases, the
+  optimizer must smooth the raw `t`, not only bend fronts.
+- Ramp up from `0` to a first target of 2-3 elements, where 2-4% of the solid violates.
+  Start `curvature_beta` at 100, the same as `hotspot_beta`, because the severity is 1 on
+  the bound in both rows.
+- This probably relates to the current `seqopt` smooth-layers question: layer
+  smoothness measured on `tPhys` can look good while the raw `t` is a sawtooth.
+
 ### Phase 5 -- tune the continuation (GPU)
 
 From the `stto_k2p37` config: `tool_radius` ramps `0 -> R_target` at a few onsets, each
@@ -122,11 +155,14 @@ Open questions this phase answers:
 
 - **Plateau noise.** `GRAD_EPS = 1e-12` suits `|grad t|`, but in `n` it amplifies
   element-scale noise on a `t` plateau by up to ~1e6 in `kappa`, and a max-type
-  constraint finds exactly those spikes. `eps_n` will likely be much larger, e.g.
-  `(0.1)^2`; Phase 1's plateau test settles it.
+  constraint finds exactly those spikes. Settled in Phase 1: `timefield.NORMAL_EPS =
+  1e-2` reduces the noise response from 49 to 0.03 per unit length, and changes circle
+  curvature by 0.5%.
 - **Resolution invariance of the design, not of the metric.** `kappa` is per unit length,
-  but `time_filter_rmin` and `rmin` are in elements, and the filter bounds the reachable
-  curvature at roughly `1 / r_filter`. The optimized design is resolution invariant only
-  if the filter radii scale with the mesh -- the same limit the existing terms have.
+  but `time_filter_rmin` and `rmin` are in elements. The cone filter does **not** limit
+  curvature to about `1 / r_filter`: a spike in the raw `t` keeps a crease at the apex,
+  about 1 per element at any resolution (Phase 4). The optimized design is resolution
+  invariant only if the filter radii scale with the mesh, the same limit the existing
+  terms have.
 - **Void gaps are ignored by design.** A notch spanning a void gap (two arms of a U
   leading the layer) is not seen. Accepted as out of scope.
