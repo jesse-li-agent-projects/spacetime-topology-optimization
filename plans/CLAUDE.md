@@ -12,6 +12,10 @@ This directory contains plans for agents.
       with a `kappa` continuation from the present isotropic behavior, and
       `Normalization.HALF_STENCIL`'s divisor generalized from a constant to a
       per-element directional reference.
+- curvature_constraint.md
+    - A hard MMA constraint keeping the concave curvature of `t`'s iso-lines below
+      `1 / tool_radius`, so the print tool cannot collide with the part. Calibrated
+      LogSumExp smooth max, with `tool_radius` scheduled from 0 as the continuation.
 Completed plans live in `plans/archive/` and are not summarized here to keep this
 index short. Only open one if you specifically need the history behind a past
 decision.
