@@ -773,3 +773,49 @@ def test_step_would_have_produced_nan_without_the_nan_safe_rewrite():
     numer = (torch.sum(cond_p) / x_t.numel()) ** (1 / 25.0)
     (d_x,) = torch.autograd.grad(numer, (x_t,))
     assert torch.any(torch.isnan(d_x))
+
+
+def _curvature_records(tool_radius, *, loop=None):
+    """One `step` record at the default `tool_radius` and one at `tool_radius`, from the
+    same design."""
+    base = _problem(nelx=10, nely=8)
+    with_tool = stto.build_problem(
+        dataclasses.replace(base.config, tool_radius=tool_radius)
+    )
+    _, _, state = _draw_well_conditioned_state(base, np.random.default_rng(3))
+    if loop is not None:
+        state = dataclasses.replace(state, loop=loop)
+    _, record = stto.step(base, state)
+    _, with_record = stto.step(with_tool, state)
+    return record, with_record
+
+
+def test_tool_radius_appends_one_row_bounding_the_concave_curvature():
+    """The row is the tool radius over the largest one the design admits, minus 1,
+    since every iteration refreshes the calibration onto the true maximum."""
+    assert _problem().config.tool_radius == 0  # premise: the default adds no row
+    record, with_record = _curvature_records(2.0)
+
+    assert with_record.g.shape == (record.g.shape[0] + 1,)
+    np.testing.assert_allclose(with_record.g[:-1], record.g, rtol=1e-12)
+    admissible = with_record.diagnostics["admissible_tool_radius"]
+    assert np.isfinite(admissible)  # non-vacuous: a random design has concave fronts
+    assert with_record.g[-1] == pytest.approx(2.0 / admissible - 1, rel=1e-10)
+    assert np.abs(with_record.dg[-1]).max() > 0
+
+
+def test_tool_radius_at_zero_mid_schedule_is_an_inactive_row():
+    """A ramp that has not yet left 0 already has its row, which a zero-radius tool
+    satisfies with no gradient."""
+    ramp = run_config.PiecewiseSchedule(points=[[0, 0.0], [10, 0.0], [20, 3.0]])
+    record, with_record = _curvature_records(ramp, loop=5)
+
+    assert with_record.g.shape == (record.g.shape[0] + 1,)
+    assert with_record.g[-1] == pytest.approx(-1.0, abs=1e-12)
+    assert np.abs(with_record.dg[-1]).max() == 0
+
+
+def test_tool_radius_needs_an_interior_element():
+    config = dataclasses.replace(_problem().config, nelx=2, nely=6, tool_radius=1.0)
+    with pytest.raises(ValueError, match="interior element"):
+        stto.build_problem(config)

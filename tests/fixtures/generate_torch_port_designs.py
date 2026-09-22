@@ -100,6 +100,8 @@ _EXTRA_CONFIG_FIELDS = dict(
     hotspot_kappa=0.0,
     hotspot_g0=0.35,
     hotspot_refresh_period=25,
+    tool_radius=0.0,
+    curvature_beta=100.0,
     beta_d_schedule={
         "points": [
             [0, 1.0],

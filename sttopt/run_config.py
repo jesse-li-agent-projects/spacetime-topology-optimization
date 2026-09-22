@@ -167,6 +167,15 @@ def weight_at(setting: Scheduled, loop: int) -> float:
     return float(setting)
 
 
+def identically_zero(setting: Scheduled) -> bool:
+    """Whether a possibly-scheduled scalar is zero at every iteration."""
+    if isinstance(setting, CosineSchedule):
+        return setting.initial == setting.final == 0
+    if isinstance(setting, PiecewiseSchedule):
+        return all(p[1] == 0 for p in setting.points)
+    return float(setting) == 0
+
+
 def final_value(setting: Scheduled) -> float:
     """The value a possibly-scheduled scalar settles on, for tooling that reads a
     finished run rather than one iteration of it."""
@@ -211,6 +220,13 @@ class RunConfig(_ConfigMixin):
         differently. 0 leaves `t` unfiltered.
     :param enable_continuity: whether the time-field continuity constraint is in the
         MMA constraint stack at all, as in `SeqRunConfig`, as is `continuity_tol`.
+    :param tool_radius: print tool radius in elements, possibly scheduled. Bounds the
+        concave curvature of the time field's iso-lines (`timefield.iso_curvature`) to
+        `1 / tool_radius`, so the tool cannot collide with printed material. `0` is a
+        tool that cannot collide; the constraint row exists only if the schedule is
+        nonzero somewhere, so a ramp up from `0` is the continuation.
+    :param curvature_beta: `LogSumExp` sharpness of that constraint's smooth maximum,
+        on the severity `tool_radius * concave curvature`, which is 1 on the bound.
     """
 
     # Frequently varied -- also exposed as a CLI flag in stto_cli.py.
@@ -237,6 +253,8 @@ class RunConfig(_ConfigMixin):
     time_filter_rmin: float
     enable_continuity: bool
     continuity_tol: float
+    tool_radius: Scheduled
+    curvature_beta: Scheduled
     lrmin: float
     rmin_cond: float
     Emin: float
@@ -246,7 +264,7 @@ class RunConfig(_ConfigMixin):
     eta: float
     p: float  # p-mean exponent for hotspot severity aggregation (p_mean only)
     q: float  # hotspot conductivity SIMP exponent
-    r: float  # density exponent for hotspot severity
+    r: float  # density exponent for hotspot and curvature severity
     rouf: Scheduled
     a0: float
     mma_c: float
@@ -257,10 +275,10 @@ class RunConfig(_ConfigMixin):
     # long-standing ramps are `Interpolation.STEP` schedules in the config files.
     beta_d_schedule: Scheduled
     beta_t_schedule: Scheduled
-    # Iterations between hotspot calibration refreshes. Iteration 0 is always one of
-    # them, which is what calibrates the aggregate against the seed. A change in a
-    # scheduled `hotspot_beta` or `rouf` also refreshes it, since both move the
-    # aggregate's bias.
+    # Iterations between hotspot and curvature calibration refreshes. Iteration 0 is
+    # always one of them, which is what calibrates each aggregate against the seed. A
+    # change in a scheduled setting that moves an aggregate's bias (`hotspot_beta`,
+    # `rouf`, `curvature_beta`, `tool_radius`, ...) also refreshes that aggregate.
     hotspot_refresh_period: int
 
 
