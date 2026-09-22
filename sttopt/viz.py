@@ -1,17 +1,13 @@
 """Plots for the printed structure: elements colored by print time, and the boundaries
 between print stages.
 
-When no `ax` is passed, both functions build their own `Figure` directly rather than
+When no `ax` is passed, the plot functions build their own `Figure` directly rather than
 going through `pyplot`, so nothing is registered globally and there's nothing for the
 caller to close; `savefig` still works. Pass your own `ax` (e.g. from `plt.subplots()`)
 to draw into a pyplot-managed, interactive figure instead.
 
-Coordinate conventions differ between the two functions, on purpose: `combination_plot`
-places element `(row, col)` at `x in [col, col+1]`, `y in [-(row+1), -row]` (y flipped);
-`stage_boundary_plot` places it at `x in [col+0.5, col+1.5]`, `y in [row+0.5, row+1.5]`
-(no flip, half-cell offset). The two frames are related by `x' = x - 0.5, y' = 0.5 - y`;
-`stage_boundary_plot(..., combination_coords=True)` applies it to compose both plots on
-one `Axes`. See `conventions.md`.
+Every plot draws in `combination_plot`'s frame, which places element `(row, col)` at
+`x in [col, col+1]`, `y in [-(row+1), -row]` (y flipped), so plots compose on one `Axes`.
 
 Run as a script (`python -m sttopt.viz <tag>`) to regenerate plots for a saved run from
 its `output/<tag>/` artefacts, without rerunning the optimization. This reads
@@ -32,14 +28,13 @@ import matplotlib
 import numpy as np
 from jaxtyping import Float
 from matplotlib.axes import Axes
-from matplotlib.collections import LineCollection, PolyCollection
+from matplotlib.collections import PolyCollection
 from matplotlib.colors import Colormap
 from matplotlib.figure import Figure
 
 matplotlib.rcParams["savefig.bbox"] = "tight"
 matplotlib.rcParams["savefig.dpi"] = "300"
 
-_BOUNDARY_LINEWIDTH = 1.5
 _VOID_GRAY = "0.5"
 _VOID_ALPHA = 0.65
 _NO_MEASURE_GRAY = "0.75"  # solid element, quantity undefined -- not void
@@ -149,56 +144,6 @@ def combination_plot(
             label=colorbar_label,
             ticks=colorbar_ticks,
         )
-    return ax
-
-
-def stage_boundary_plot(
-    tPhys: Float[np.ndarray, "nely nelx"],
-    nStage: int,
-    *,
-    ax: Axes | None = None,
-    combination_coords: bool = False,
-) -> Axes:
-    """Assigns each element to one of `nStage` print stages by its `tPhys` value
-    (half-open `(tt[j], tt[j+1]]` bins except the first, which is closed on both ends),
-    then draws a black line along every internal mesh edge whose two adjacent elements
-    fall in different stages.
-
-    :param combination_coords: remap edges into `combination_plot`'s coordinate frame
-        (`x' = x - 0.5, y' = 0.5 - y`) before drawing, e.g. to overlay onto an `Axes` a
-        prior `combination_plot` call already populated; leave `False` for a standalone
-        plot. See the module docstring.
-    """
-    if ax is None:
-        ax = _new_axes()
-
-    tt = np.linspace(0.0, 1.0, nStage + 1)
-    stage = np.zeros(tPhys.shape, dtype=int)
-    for j in range(nStage):
-        lo, hi = tt[j], tt[j + 1]
-        mask = (tPhys >= lo) & (tPhys <= hi) if j == 0 else (tPhys > lo) & (tPhys <= hi)
-        stage[mask] = j + 1
-
-    def _pt(x: float, y: float) -> tuple[float, float]:
-        return (x - 0.5, 0.5 - y) if combination_coords else (x, y)
-
-    segments = []
-    # Vertical edges: element (row, col) | (row, col+1), shared edge at x = col+1.5.
-    rows, cols = np.nonzero(stage[:, :-1] != stage[:, 1:])
-    for row, col in zip(rows, cols):
-        x = col + 1.5
-        segments.append([_pt(x, row + 0.5), _pt(x, row + 1.5)])
-    # Horizontal edges: element (row, col) | (row+1, col), shared edge at y = row+1.5.
-    rows, cols = np.nonzero(stage[:-1, :] != stage[1:, :])
-    for row, col in zip(rows, cols):
-        y = row + 1.5
-        segments.append([_pt(col + 0.5, y), _pt(col + 1.5, y)])
-
-    ax.add_collection(
-        LineCollection(segments, colors="black", linewidths=_BOUNDARY_LINEWIDTH)
-    )
-    ax.set_aspect("equal")
-    ax.autoscale_view()
     return ax
 
 
