@@ -246,7 +246,7 @@ def hotspot_severity_plot(
             tPhys,
             levels=boundaries,
             colors="black",
-            linewidths=_BOUNDARY_LINEWIDTH,
+            linewidths=0.5,
         )
         _cover_void(ax, xPhys)
     if direction is not None:
