@@ -11,6 +11,8 @@
   "hotspot_normalization": "half_stencil",
   "hotspot_aggregation": "logsumexp",
   "hotspot_beta": 4.0,
+  "hotspot_kappa": 0.0,
+  "hotspot_g0": 0.35,
   "uniformity_metric": "gradient_cv",
   "uniformity_weight": 1.0,
   "roughness_weight": {

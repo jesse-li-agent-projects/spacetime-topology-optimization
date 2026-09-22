@@ -20,14 +20,16 @@ rule (`H`/`Hs`/`dx` from `filters.py`) directly into its sensitivities, as a cro
 (`benchmarks/bench_sensitivities.py`). See `conventions.md` for array-order/tolerance
 conventions.
 
-Two deliberate deviations from Das2025 Eq. (6), both load-bearing for this port and
-neither a bug: the paper's neighbor weight is radial *times angular*, the angular part
-favoring the build direction, but `neighbor_weights` below keeps only the radial
-factor -- the build direction is not fixed once deposition order is itself a design
-variable (`plans/archive/fixed_geometry_sequence_optimization.md`), so this is a known
-future direction rather than an oversight. And the paper's Eq. (6) numerator weights a
-neighbor by its raw density `rho_j`, where `_conductivity_core` uses `x_j**q` with
-`q = 3` -- a SIMP-style penalization of intermediate density the paper does not have.
+The paper's neighbor weight is radial *times angular*, the angular part favoring the
+build direction. `neighbor_weights` below supplies only the radial factor; `_lobe` adds
+the angular one, read off the local `grad t` rather than off a fixed build direction,
+since deposition order is itself a design variable here. It is off at `kappa = 0`, which
+is exactly the radial-only stencil -- see `plans/angular_weight.md`.
+
+One deliberate deviation from Das2025 Eq. (6) remains, load-bearing for this port and
+not a bug: the paper's Eq. (6) numerator weights a neighbor by its raw density `rho_j`,
+where `_conductivity_core` uses `x_j**q` with `q = 3` -- a SIMP-style penalization of
+intermediate density the paper does not have.
 """
 
 from enum import StrEnum
@@ -40,7 +42,7 @@ import torch
 from jaxtyping import Float, Int
 from torch import Tensor
 
-from sttopt import run_config
+from sttopt import run_config, timefield
 
 
 class Normalization(StrEnum):
@@ -62,6 +64,10 @@ class Normalization(StrEnum):
     entirely (it only ever multiplies a zero density). `K_est` is no longer an average
     and may exceed 1, meaning "better shielded than an infinite uniform layer" -- see
     `PMean`/`LogSumExp` for what tolerates that.
+
+    HALF_STENCIL is also the only normalization an angular weight can be paired with:
+    the constant divisor stops being constant once the stencil stops being symmetric
+    under `d -> -d`, and `directed_denominator` is what it generalizes to.
     """
 
     NEIGHBORHOOD = "neighborhood"
@@ -179,6 +185,200 @@ def neighbor_weights(
     return np.concatenate(e1s), np.concatenate(e2s), np.concatenate(ws)
 
 
+@cache
+def _offset_table(
+    rmin_cond: float,
+) -> tuple[Float[np.ndarray, "noffsets 2"], Float[np.ndarray, " noffsets"]]:
+    """`_stencil_offsets` as arrays: the `(dx, dy)` of every offset, in elements, and its
+    radial weight.
+
+    The untruncated stencil, i.e. before any of it is cut away by a mesh edge, which is
+    what `directed_denominator` has to sum over.
+    """
+    offsets = _stencil_offsets(rmin_cond)
+    return (
+        np.array([(di, dj) for di, dj, _ in offsets], dtype=float),
+        np.array([w for _, _, w in offsets], dtype=float),
+    )
+
+
+class AngularStencil(NamedTuple):
+    """The fixed stencil geometry the angular weight reads, built once per run by
+    `angular_stencil`.
+
+    `pair_dir` lines up with `neighbor_weights`' COO pair arrays. The `offset_*` fields
+    are the untruncated stencil instead, which is deliberately a different list -- see
+    `directed_denominator`.
+    """
+
+    pair_dir: Float[Tensor, "npairs 2"]
+    offset: Float[Tensor, "noffsets 2"]
+    offset_dir: Float[Tensor, "noffsets 2"]
+    offset_w: Float[Tensor, " noffsets"]
+
+
+def _unit_rows(v: Float[Tensor, "n 2"]) -> Float[Tensor, "n 2"]:
+    """`v` with every row scaled to unit length, leaving a zero row at zero.
+
+    A zero row means "no direction", which `_lobe` reads off the row itself rather than
+    from a parallel mask that could drift away from it.
+    """
+    norm = torch.linalg.vector_norm(v, dim=-1, keepdim=True)
+    return v / torch.where(norm == 0, torch.ones_like(norm), norm)
+
+
+def angular_stencil(
+    e1: Int[Tensor, " npairs"],
+    e2: Int[Tensor, " npairs"],
+    nelx: int,
+    rmin_cond: float,
+    dtype: torch.dtype,
+    kappa: "run_config.Scheduled",
+) -> AngularStencil | None:
+    """Build the angular weight's fixed geometry for one mesh, or `None` for a run whose
+    lobe never opens.
+
+    The pair directions are derived from the pair list itself rather than rebuilt from
+    `_stencil_offsets`, so they cannot fall out of step with the pairs they weight. They
+    are also one more `npairs`-sized pair of arrays, which a purely radial run has no
+    use for -- hence the `None`.
+
+    :param e1: first index of each COO pair, as `neighbor_weights` returns it
+    :param e2: second index of each COO pair
+    :param nelx: element count in x, to read an element number back as a grid position
+    :param rmin_cond: conductivity-neighborhood radius, in elements
+    :param dtype: floating dtype of the run's real-valued fields
+    :param kappa: the run's lobe concentration setting; a constant `0` builds nothing,
+        while a schedule is taken at its word that it will open the lobe at some point
+    """
+    if isinstance(kappa, float | int) and kappa == 0:
+        return None
+
+    def row(e: Int[Tensor, " npairs"]) -> Int[Tensor, " npairs"]:
+        return torch.div(e, nelx, rounding_mode="floor")
+
+    pair_d = torch.stack(
+        ((e2 % nelx - e1 % nelx).to(dtype), (row(e2) - row(e1)).to(dtype)), dim=-1
+    )
+    offset_np, offset_w_np = _offset_table(rmin_cond)
+    offset = torch.as_tensor(offset_np, dtype=dtype, device=e1.device)
+    return AngularStencil(
+        pair_dir=_unit_rows(pair_d),
+        offset=offset,
+        offset_dir=_unit_rows(offset),
+        offset_w=torch.as_tensor(offset_w_np, dtype=dtype, device=e1.device),
+    )
+
+
+def _lobe(
+    g_dot_dir: Float[Tensor, "..."],
+    gmag: Float[Tensor, "..."],
+    dirs: Float[Tensor, "n 2"],
+    kappa: float,
+    g0: float,
+) -> Float[Tensor, "..."]:
+    """The von Mises angular weight `exp(-kappa * (g . dhat + |g|) / (|g| + g0))`.
+
+    `1` for a neighbor lying straight behind the print front, decaying as it rotates
+    toward and then past the print direction. `kappa` sets the lobe width; 2.37 matches
+    the linear ramp of Das2023 Eq. (3.5) at half maximum. `g0` sets how much layering
+    must exist before the direction is believed, and is in the same per-unit-length
+    units as `g`.
+
+    Written so that normalizing the direction leaves no division by `|g|`: as the
+    gradient vanishes the exponent goes to zero and the weight to exactly `1`, i.e. the
+    isotropic radial-only stencil, which is the right answer where no layering defines a
+    direction. `kappa = 0` is that same isotropic case at any gradient.
+
+    :param g_dot_dir: `g . dhat`, the gradient projected on each direction
+    :param gmag: `|g|`, broadcasting against `g_dot_dir`
+    :param dirs: the unit directions, whose zero rows mark "no direction" -- the stencil
+        origin, which takes weight `1` since there is no angle to penalize
+    :param kappa: lobe concentration; `0` gives a uniform weight of `1`
+    :param g0: the gradient scale at which the lobe reaches half its concentration
+    """
+    w = torch.exp(-kappa * (g_dot_dir + gmag) / (gmag + g0))
+    return torch.where((dirs == 0).all(dim=-1), torch.ones_like(w), w)
+
+
+def _gradient_magnitude(
+    grad: tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]],
+) -> Float[Tensor, " nel"]:
+    """`|grad t|` per element, flattened, kept differentiable where the gradient
+    vanishes (`timefield.GRAD_EPS`)."""
+    gx, gy = grad
+    return torch.sqrt(gx.flatten() ** 2 + gy.flatten() ** 2 + timefield.GRAD_EPS)
+
+
+def angular_pair_weights(
+    grad: tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]],
+    e1: Int[Tensor, " npairs"],
+    stencil: AngularStencil,
+    kappa: float,
+    g0: float,
+) -> Float[Tensor, " npairs"]:
+    """`_lobe` for every COO pair, against the print direction of the pair's own first
+    element.
+
+    :param grad: `(dt/dx, dt/dy)` per element, per unit length
+    :param e1: first index of each COO pair, whose gradient each pair is weighted by
+    :param stencil: the run's `AngularStencil`
+    :param kappa: lobe concentration for this iteration
+    :param g0: the lobe's gradient scale
+    """
+    gx, gy = grad[0].flatten(), grad[1].flatten()
+    g_dot_dir = gx[e1] * stencil.pair_dir[:, 0] + gy[e1] * stencil.pair_dir[:, 1]
+    return _lobe(g_dot_dir, _gradient_magnitude(grad)[e1], stencil.pair_dir, kappa, g0)
+
+
+def directed_denominator(
+    grad: tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]],
+    stencil: AngularStencil,
+    kappa: float,
+    g0: float,
+    rouf: float,
+    unit: float,
+) -> Float[Tensor, " nel"]:
+    """`Normalization.HALF_STENCIL`'s divisor once the stencil carries an angular
+    weight: the stencil sum an ideal uniform layered fill would supply at each element's
+    own print direction and layer thickness.
+
+    The same sum the numerator computes, evaluated on a reference of full density whose
+    time field is exactly linear with the element's own gradient. `K_est = 1` therefore
+    still means "as well shielded as an ideal uniform layered fill", which is what the
+    constant `half_stencil_weight` meant before the angular factor broke the `d -> -d`
+    symmetry that made it a constant.
+
+    Summed over the untruncated offset table, never over the in-mesh pair list: that is
+    what keeps the normalization's defining property that leaving the mesh costs exactly
+    what an equal-sized internal void costs.
+
+    At `kappa = 0` this is `half_stencil_weight(rmin_cond)` for every direction and every
+    gradient magnitude, by the pairing argument in that function's docstring.
+
+    :param grad: `(dt/dx, dt/dy)` per element, per unit length
+    :param stencil: the run's `AngularStencil`
+    :param kappa: lobe concentration for this iteration
+    :param g0: the lobe's gradient scale
+    :param rouf: print-order sigmoid sharpness, as in `_pairwise_sigmoid`
+    :param unit: `timefield.unit_length`, to read the per-unit-length gradient as a print
+        time difference across an offset measured in elements
+    """
+    gx, gy = grad[0].flatten(), grad[1].flatten()
+    g = torch.stack((gx, gy), dim=-1)
+    # t_neighbor - t_self under the reference field, hence the sign: the sigmoid masks
+    # in what was deposited *before* this element.
+    mask = torch.sigmoid(-rouf * (g @ stencil.offset.T) / unit)
+    w_ang = _lobe(
+        g @ stencil.offset_dir.T,
+        _gradient_magnitude(grad)[:, None],
+        stencil.offset_dir,
+        kappa,
+        g0,
+    )
+    return (stencil.offset_w * w_ang * mask).sum(dim=-1)
+
+
 def _pairwise_sigmoid(
     t: Float[Tensor, " nel"],
     a: Int[Tensor, " npairs"],
@@ -217,7 +417,7 @@ def _conductivity_core(
     w: Float[Tensor, " npairs"],
     q: float,
     rouf: float,
-    denom: float | None = None,
+    denom: float | Float[Tensor, " nel"] | None = None,
     base: Int[Tensor, " k"] | None = None,
 ) -> _ConductivityCore:
     """`K_est` and the divisor it was formed with, plus the `a->b` pair terms
@@ -225,9 +425,9 @@ def _conductivity_core(
     `tests/reference/conductivity.py`'s `_conductivity_terms` -- computed once here
     rather than redone by each.
 
-    :param denom: a constant divisor for every element (`constant_denominator`), or
-        `None` for the per-element already-printed neighbor weight. Only the `None`
-        case makes `denom` indexable per element.
+    :param denom: a constant divisor for every element (`constant_denominator`), a
+        per-element one (`directed_denominator`), or `None` for the per-element
+        already-printed neighbor weight.
     :param base: print base elements, taken to be infinitely dense (`infinite_base`),
         or `None` to leave them ordinary design material.
     """
@@ -441,17 +641,40 @@ def estimated_conductivity(
     rouf: float,
     denom: float | None = None,
     base: Int[Tensor, " k"] | None = None,
+    stencil: AngularStencil | None = None,
+    kappa: float = 0.0,
+    g0: float = 1.0,
 ) -> Float[Tensor, " nely*nelx"]:
     """Local estimated conductivity: how strongly each element's neighborhood has
     already solidified (cooler, earlier `tPhys`) around it, used as an overheating
     proxy by `PMean`/`LogSumExp`. `Normalization` sets what it is measured relative to,
     via `denom`, and `infinite_base`'s `base` is infinite wherever it is in reach.
 
+    With `kappa > 0` the stencil additionally carries `_lobe`'s angular weight, favoring
+    neighbors that lie behind the local print direction, and `denom` is replaced by
+    `directed_denominator`'s per-element reference -- the two go together, since the
+    angular factor is what stops a constant divisor from being the right one.
+
+    :param stencil: the run's `AngularStencil`; required for `kappa > 0`
+    :param kappa: angular lobe concentration for this iteration; `0` leaves the stencil
+        purely radial, which is this function's behavior with no angular weight at all
+    :param g0: the lobe's gradient scale
     :raises ValueError: if no element carrying density is left with a finite `K_est`,
-        the whole part being within stencil reach of the print base
+        the whole part being within stencil reach of the print base; or if `kappa > 0`
+        without the constant divisor the directional reference generalizes
     """
     x = xPhys.flatten()
     t = tPhys.flatten()
+    if kappa != 0:
+        if stencil is None or denom is None:
+            raise ValueError(
+                "an angular weight (kappa > 0) needs an AngularStencil and the HALF_STENCIL normalization, whose constant divisor it generalizes to a per-element directional reference; Normalization.NEIGHBORHOOD derives its own divisor and has no angular variant"
+            )
+        grad = timefield.central_difference_gradient_vector(tPhys)
+        w = w * angular_pair_weights(grad, e1, stencil, kappa, g0)
+        denom = directed_denominator(
+            grad, stencil, kappa, g0, rouf, timefield.unit_length(tPhys)
+        )
     K_est = _conductivity_core(x, t, e1, e2, w, q, rouf, denom, base).K_est
     if base is not None and not bool((torch.isfinite(K_est) & (x > 0)).any()):
         raise ValueError(

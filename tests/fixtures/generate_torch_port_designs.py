@@ -97,6 +97,8 @@ _EXTRA_CONFIG_FIELDS = dict(
     hotspot_normalization="neighborhood",
     hotspot_aggregation="p_mean",
     hotspot_beta=200.0,
+    hotspot_kappa=0.0,
+    hotspot_g0=0.35,
     hotspot_refresh_period=25,
     beta_d_schedule={
         "points": [

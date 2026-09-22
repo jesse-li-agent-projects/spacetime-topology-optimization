@@ -80,6 +80,10 @@ class Problem:
     # Constant `K_est` divisor for `config.hotspot_normalization`, or None where the
     # divisor is per-element -- `conductivity.constant_denominator`.
     hotspot_denom: float | None
+    # Fixed geometry the angular stencil weight reads, or None where
+    # `config.hotspot_kappa` leaves the stencil purely radial -- see
+    # `conductivity.angular_stencil`.
+    hotspot_stencil: conductivity.AngularStencil | None
     # Print base elements the hotspot measure treats as infinitely dense, or None where
     # the normalization needs no print base -- `conductivity.infinite_base`.
     hotspot_base: Int[Tensor, " k"] | None
@@ -241,6 +245,14 @@ def build_problem(
         L=torch_util.csr_to_tensor(L, device, dtype),
         C=torch_util.csr_to_tensor(C, device, dtype),
         hotspot_denom=hotspot_denom,
+        hotspot_stencil=conductivity.angular_stencil(
+            int_fields["e1"],
+            int_fields["e2"],
+            nelx,
+            config.rmin_cond,
+            dtype,
+            config.hotspot_kappa,
+        ),
         hotspot_base=None if hotspot_base is None else int_fields["Nei"],
         hotspot=conductivity.make_aggregation(
             conductivity.Aggregation(config.hotspot_aggregation),
@@ -405,6 +417,11 @@ def estimated_conductivity(
         if loop is None
         else run_config.weight_at(config.rouf, loop)
     )
+    kappa = (
+        run_config.final_value(config.hotspot_kappa)
+        if loop is None
+        else run_config.weight_at(config.hotspot_kappa, loop)
+    )
     return conductivity.estimated_conductivity(
         xPhys,
         tPhys,
@@ -415,6 +432,9 @@ def estimated_conductivity(
         rouf,
         problem.hotspot_denom,
         problem.hotspot_base,
+        problem.hotspot_stencil,
+        kappa,
+        config.hotspot_g0,
     )
 
 
@@ -543,9 +563,13 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     # Hotspot constraint. A refresh recalibrates before the row is built, so the row's
     # value and its gradient share one calibration. A scheduled change in the
-    # aggregate's sharpness or in `rouf` moves its bias, so it refreshes too.
+    # aggregate's sharpness, in `rouf`, or in the angular lobe's width moves its bias,
+    # so each refreshes too.
     recalibrate = loop % config.hotspot_refresh_period == 0
     recalibrate |= rouf != run_config.weight_at(config.rouf, loop - 1)
+    recalibrate |= run_config.weight_at(
+        config.hotspot_kappa, loop
+    ) != run_config.weight_at(config.hotspot_kappa, loop - 1)
     recalibrate |= problem.hotspot.resolve(loop)
     K_est_t = estimated_conductivity(problem, xPhys, tPhys, loop)
     hotspot_t = problem.hotspot(K_est_t, xPhys, recalibrate=recalibrate)

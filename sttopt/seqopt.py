@@ -77,6 +77,10 @@ class Problem:
     # Constant `K_est` divisor for `config.hotspot_normalization`, or None where the
     # divisor is per-element -- `conductivity.constant_denominator`.
     hotspot_denom: float | None
+    # Fixed geometry the angular stencil weight reads, or None where
+    # `config.hotspot_kappa` leaves the stencil purely radial -- see
+    # `conductivity.angular_stencil`.
+    hotspot_stencil: conductivity.AngularStencil | None
     # Print base elements the hotspot measure treats as infinitely dense, or None where
     # the normalization needs no print base -- `conductivity.infinite_base`.
     hotspot_base: Int[Tensor, " k"] | None
@@ -205,6 +209,14 @@ def build_problem(
         Hs=Hs,
         w=torch_util.to_tensor(w, device, dtype),
         hotspot_denom=hotspot_denom,
+        hotspot_stencil=conductivity.angular_stencil(
+            int_fields["e1"],
+            int_fields["e2"],
+            nelx,
+            config.rmin_cond,
+            dtype,
+            config.hotspot_kappa,
+        ),
         hotspot_base=None if hotspot_base is None else int_fields["Nei"],
         hotspot=conductivity.make_aggregation(
             conductivity.Aggregation(config.hotspot_aggregation),
@@ -268,7 +280,9 @@ def init_state(problem: Problem) -> State:
 
 
 def estimated_conductivity(
-    problem: Problem, tPhys: Float[Tensor, "nely nelx"]
+    problem: Problem,
+    tPhys: Float[Tensor, "nely nelx"],
+    loop: int | None = None,
 ) -> Float[Tensor, " nel"]:
     """The `K_est` field behind the run's hotspot term, with every conductivity setting
     taken from `problem`.
@@ -276,8 +290,16 @@ def estimated_conductivity(
     The one path to that field, so offline tooling cannot report a hotspot measure the
     run never optimized -- rebuilding this call by hand once plotted the print base as
     the worst hotspot in the domain (PR #98).
+
+    :param loop: the iteration whose scheduled settings apply, or `None` for the values
+        a finished run settles on.
     """
     config = problem.config
+    kappa = (
+        run_config.final_value(config.hotspot_kappa)
+        if loop is None
+        else run_config.weight_at(config.hotspot_kappa, loop)
+    )
     return conductivity.estimated_conductivity(
         problem.xPhys,
         tPhys,
@@ -288,6 +310,9 @@ def estimated_conductivity(
         config.rouf,
         problem.hotspot_denom,
         problem.hotspot_base,
+        problem.hotspot_stencil,
+        kappa,
+        config.hotspot_g0,
     )
 
 
@@ -323,8 +348,15 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     t = state.t.clone().requires_grad_(True)
     tPhys = physical_timefield(problem, t)
 
+    # A scheduled change in the angular lobe's width moves the aggregate's bias, so it
+    # recalibrates off-cycle too, as `stto.step` does for `rouf` and `hotspot_beta`.
+    kappa_moved = run_config.weight_at(
+        config.hotspot_kappa, loop
+    ) != run_config.weight_at(config.hotspot_kappa, loop - 1)
     hotspot_t = problem.hotspot(
-        estimated_conductivity(problem, tPhys), xPhys, recalibrate=loop % 25 == 0
+        estimated_conductivity(problem, tPhys, loop),
+        xPhys,
+        recalibrate=loop % 25 == 0 or kappa_moved,
     )
     # The roughness regularizer is not optional garnish: uniformity alone rewards a
     # sawtooth across the print direction (`timefield._gradient_cv`).
