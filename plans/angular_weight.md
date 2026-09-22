@@ -252,6 +252,66 @@ Open questions this phase answers, not Phase 1:
 - Does the lobe help or hurt the layer-smoothness objective that motivated `seqopt`'s
   current line of work?
 
+#### Phase 3 results -- do not re-run
+
+16 `seqopt` runs, 500 iterations, shipped `seq_default` weights, `Tcr` untouched. Ten
+`kappa` arms on the c-shape plus a matched `kappa = 0` control, then control /
+`kappa = 2.37` / `kappa = 5` repeated on the l-shape and the overhang bracket, neither of
+which anything was tuned on. Run-to-run reproducibility was measured first, by running
+one config twice: the objective agrees to 1.3e-11 relative (CUDA atomics), so anything
+above ~1e-6 is real.
+
+**A run's own `hotspot` number, and therefore its `f`, is not comparable across arms.**
+`kappa` changes what `K_est` is measured against, so each arm reports a different
+quantity and each is best at its own. Every design was re-scored under one fixed measure
+instead (true maximum severity at `kappa = 0` and at `kappa = 2.37`), and the decision
+rests on the diagnostics rather than on either severity.
+
+**1. `g0` wants to be small, and is not a tuning axis.** Converged `|grad t|` is tight --
+p5..p95 within +/-10% of the median on every geometry -- so a `g0` near the median
+multiplies `kappa` by a near-constant factor everywhere, which is a disguised second
+`kappa` rather than a floor. At `g0 = p50/10` the factor is 0.91 and near-uniform.
+Measured at `kappa = 2.37`: `g0` of p50/40, p50/10, p50/2.5 gives `true_cv` 0.0535,
+0.0545, 0.0577. Anything at or below p50/10 is within 2%; the near-median value is
+measurably worse. **Set it low and stop looking at it.**
+
+**2. The continuation is unnecessary here, and later is monotonically worse.** At
+`kappa = 2.37` on the c-shape: constant from iteration 0 gives `true_cv` 0.0545, ramps
+over [0,250] 0.0549, [100,350] 0.0558, [250,450] 0.0580. The plan's motivating worry --
+that an early lobe locks in a print direction -- is **not observed**. Caveat that limits
+how far this generalizes: `seqopt` holds the geometry fixed, so `t` is the only fluid
+thing; the worry was about a fluid *design*, which only `stto` has. Do not carry this
+conclusion to `stto` without re-testing it there.
+
+**3. The lobe buys layer uniformity and pays for it in raw sawtooth.** Consistent on all
+three geometries, control-relative:
+
+| geometry | `kappa` | `true_cv` | `sawtooth_raw` |
+|---|---|---|---|
+| c-shape | 1 | +8.5% | +64% |
+| c-shape | 2.37 | -1.1% | +80% |
+| c-shape | 5 | **-20.8%** | +77% |
+| l-shape | 2.37 | -1.8% | +143% |
+| l-shape | 5 | **-15.8%** | +127% |
+| overhang bracket | 2.37 | -0.5% | +94% |
+| overhang bracket | 5 | **-18.1%** | +90% |
+
+`true_cv` improves monotonically with `kappa` and only becomes worthwhile at the narrow
+end; `kappa = 1` is *worse* than no lobe at all, and Das's own half-width (2.37) is
+within noise of it. Meanwhile `sawtooth_raw` roughly doubles at every `kappa > 0` while
+the filtered `sawtooth` barely moves -- the filter is absorbing a corrugation that grew,
+which `seqopt.py`'s own docstring calls a failure rather than a fix.
+
+**Recommendation: do not enable the lobe by default.** A ~20% uniformity gain that costs
+a 2x raw corrugation is not a trade worth shipping blind. `hotspot_kappa = 0` stays the
+default. Before revisiting: find out why the lobe feeds the sawtooth. It is plausibly the
+same quadrature blindness as PR #94 -- the lobe is evaluated per element from a
+central-difference gradient, which is exactly the operator that cannot see the mode --
+in which case the fix is in how the direction is sampled, not in `kappa`.
+
+Untested and worth knowing: `kappa > 5`, since `true_cv` had not turned around; and the
+whole question on `stto`, where density is also a design variable.
+
 ## Risks
 
 - **Self-reinforcing direction.** The lobe rewards shielding from the direction the field
