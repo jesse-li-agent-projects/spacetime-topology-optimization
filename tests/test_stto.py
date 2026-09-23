@@ -819,3 +819,14 @@ def test_tool_radius_needs_an_interior_element():
     config = dataclasses.replace(_problem().config, nelx=2, nely=6, tool_radius=1.0)
     with pytest.raises(ValueError, match="interior element"):
         stto.build_problem(config)
+
+
+def test_scheduled_tmove_bounds_each_iterations_time_step():
+    """A `tmove` schedule sets the trust region of the iteration it resolves at."""
+    schedule = run_config.PiecewiseSchedule(points=[[0, 0.02], [1, 0.005]], mode="step")
+    problem = _problem(config_overrides=dict(tmove=schedule))
+    state, first = stto.step(problem, stto.init_state(problem))
+    _, second = stto.step(problem, state)
+
+    assert first.diagnostics["dt_max"] > 0.005  # non-vacuous: the wide limit is used
+    assert second.diagnostics["dt_max"] <= 0.005 + 1e-12

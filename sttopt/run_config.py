@@ -269,7 +269,7 @@ class RunConfig(_ConfigMixin):
     a0: float
     mma_c: float
     move: float
-    tmove: float
+    tmove: Scheduled
 
     # The density/time projection sharpnesses, scheduled like any other setting; the
     # long-standing ramps are `Interpolation.STEP` schedules in the config files.

@@ -544,7 +544,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     xmax = torch.ones_like(xval)
     mma_trust = mma.trust_region_params(
         _flatten_pair(
-            torch.full_like(xflat, config.move), torch.full_like(tflat, config.tmove)
+            torch.full_like(xflat, config.move),
+            torch.full_like(tflat, run_config.weight_at(config.tmove, loop)),
         ),
         xmax - xmin,
     )
