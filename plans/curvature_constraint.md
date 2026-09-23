@@ -153,7 +153,8 @@ Open questions this phase answers:
 
 #### Phase 5 results
 
-Recipe, in `configs/stto_tool_radius.json` (the `stto_k2p37` config plus these three):
+Recipe, now the default in `configs/default.json` (the `stto_k2p37` config plus these
+three):
 
 ```json
 "tool_radius":    {"points": [[0, 0.0], [300, 0.0], [400, 2.5]], "mode": "linear"},

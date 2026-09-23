@@ -150,12 +150,14 @@ def test_build_problem_rejects_the_1x1_mesh(tfield):
     """A 1x1 mesh degenerates two of `build_problem`'s pieces -- the distance time fields
     normalize by a zero max distance, and the continuity filter divides by a zero
     neighbour count -- so it must be rejected up front, before either produces a `nan` or
-    a divide-by-zero warning. Lone-1 meshes stay legal (see `test_timefield.py`)."""
+    a divide-by-zero warning. Lone-1 meshes stay legal without a tool-radius row, which
+    needs an interior element (see `test_timefield.py`)."""
     with pytest.raises(ValueError):
         _problem(nelx=1, nely=1, tfield=tfield)
 
-    _problem(nelx=1, nely=4, tfield=tfield)
-    _problem(nelx=4, nely=1, tfield=tfield)
+    no_tool = {"tool_radius": 0.0}
+    _problem(nelx=1, nely=4, tfield=tfield, config_overrides=no_tool)
+    _problem(nelx=4, nely=1, tfield=tfield, config_overrides=no_tool)
 
 
 def test_density_filter_fixes_constant_fields():
@@ -349,17 +351,18 @@ def test_step_assembled_sensitivities_match_finite_differences(monkeypatch):
     # each case. So h sits at 1e-6, where that direction reaches 7.5e-9 and `.f` is
     # still an order of magnitude inside its own tolerance.
     h = 1e-6
-    # Stage volume bounds on, so every kind of constraint row is present. The hotspot
-    # calibration is a detached offset re-measured from the design it is refreshed on,
-    # so on a refresh iteration `.g`'s hotspot row moves by an amount `.dg` deliberately
-    # does not carry -- `.dg` is the smooth surrogate's gradient, which is what MMA
-    # linearizes. Freezing the calibration leaves a row the finite difference can see.
+    # Stage volume bounds on and a constant tool radius, so every kind of constraint row
+    # is present and live. The smooth-max calibrations are detached offsets re-measured
+    # from the design they are refreshed on, so on a refresh iteration `.g`'s hotspot and
+    # tool-radius rows move by an amount `.dg` deliberately does not carry -- `.dg` is the
+    # smooth surrogate's gradient, which is what MMA linearizes. Freezing the
+    # calibrations leaves rows the finite difference can see.
     problem = _problem(
         nelx=nelx,
         nely=nely,
         nStage=nStage,
         enable_stage_volume=True,
-        config_overrides={"hotspot_refresh_period": 2**62},
+        config_overrides={"hotspot_refresh_period": 2**62, "tool_radius": 2.0},
     )
     nel = nelx * nely
     assert problem.n == 2 * nel
@@ -369,10 +372,13 @@ def test_step_assembled_sensitivities_match_finite_differences(monkeypatch):
     _, record = stto.step(problem, state)
 
     # Row count follows from the stack `step` builds: volume, continuity (when enabled),
-    # one row per print-start element, an upper and a lower bound per stage, and the
-    # hotspot row.
+    # one row per print-start element, an upper and a lower bound per stage, the hotspot
+    # row, and the tool-radius row (when enabled).
     n_continuity_rows = 1 if problem.config.enable_continuity else 0
-    m = 1 + n_continuity_rows + len(problem.Nei) + 2 * nStage + 1
+    n_curvature_rows = (
+        0 if run_config.identically_zero(problem.config.tool_radius) else 1
+    )
+    m = 1 + n_continuity_rows + len(problem.Nei) + 2 * nStage + 1 + n_curvature_rows
     assert record.df.shape == (problem.n,)
     assert record.g.shape == (m,)
     assert record.dg.shape == (m, problem.n)
@@ -776,9 +782,9 @@ def test_step_would_have_produced_nan_without_the_nan_safe_rewrite():
 
 
 def _curvature_records(tool_radius):
-    """One `step` record at the default `tool_radius` and one at `tool_radius`, from the
-    same design, at iteration `QUIET_LOOP`."""
-    base = _problem(nelx=10, nely=8)
+    """One `step` record with no tool-radius row and one at `tool_radius`, from the same
+    design, at iteration `QUIET_LOOP`."""
+    base = _problem(nelx=10, nely=8, config_overrides={"tool_radius": 0.0})
     with_tool = stto.build_problem(
         dataclasses.replace(base.config, tool_radius=tool_radius)
     )
@@ -791,7 +797,6 @@ def _curvature_records(tool_radius):
 def test_tool_radius_appends_one_row_bounding_the_concave_curvature():
     """The row is the tool radius over the largest one the design admits, minus 1,
     since every iteration refreshes the calibration onto the true maximum."""
-    assert _problem().config.tool_radius == 0  # premise: the default adds no row
     record, with_record = _curvature_records(2.0)
 
     assert with_record.g.shape == (record.g.shape[0] + 1,)
