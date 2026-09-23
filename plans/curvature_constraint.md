@@ -151,6 +151,72 @@ Open questions this phase answers:
 - `curvature_beta`: sharp enough to track the true maximum, soft enough to spread the
   sensitivity past one element.
 
+#### Phase 5 results
+
+Recipe, in `configs/stto_tool_radius.json` (the `stto_k2p37` config plus these three):
+
+```json
+"tool_radius":    {"points": [[0, 0.0], [300, 0.0], [400, 2.5]], "mode": "linear"},
+"curvature_beta": {"points": [[0, 10.0], [500, 10.0], [650, 100.0]], "mode": "linear"},
+"tmove":          {"points": [[0, 0.01], [450, 0.01], [550, 0.001]], "mode": "log"}
+```
+
+**`curvature_beta` is the knob that matters, not the `tool_radius` onset.** At beta 100
+the row's linearization is wrong by an order of magnitude: on a real iterate, a step at
+the move limit is predicted to lower the row by 0.63 and lowers the true maximum by
+0.05. MMA then either leaves the row violated with a near-zero multiplier, or pins the
+multiplier at `mma_c`, where the row outweighs the uniformity term and the optimizer
+turns the concave ridges of `t` into convex troughs (layers become a patchwork). At beta
+10 the prediction is 0.21 against 0.16. Because the calibration is refreshed every
+iteration, a soft beta does not loosen the bound; it only spreads the gradient.
+
+**A shrinking `tmove` is what makes the final beta 100 hold.** At beta 100 the gradient
+sits on ~2 elements, so a full `tmove` step lets other near-bound elements drift over.
+Without it, `R = 10` held while beta was soft and then collapsed to 6 or less; later or
+gradual sharpening alone does not fix this. `tmove` is `Scheduled` for this.
+
+**The late onset (300-400, after `Tcr`) keeps the topology.** On 180x60 the onset makes
+no measurable difference; on 120x90 an onset during topology formation lands in a
+different topology at +10% compliance, and the late one costs +1.8%.
+
+Final designs, each against its matched `tool_radius: 0` control. `tail g` is the
+largest curvature row over the last 50 iterations; `adm. R` the final admissible radius.
+
+| run | problem | c | `true_max` | unif | adm. R | tail g |
+|---|---|---|---|---|---|---|
+| control | 180x60 | 180.64 | 0.800 | 0.035 | 0.58 | -- |
+| recipe, R 2.5 | 180x60 | 180.91 | 0.800 | 0.036 | 2.50 | +0.013 |
+| recipe, R 5 | 180x60 | 180.51 | 0.800 | 0.036 | 5.00 | +0.013 |
+| recipe, R 10 | 180x60 | 181.52 | 0.800 | 0.040 | 9.58 | +0.066 |
+| control | 120x90 | 34.16 | 0.805 | 0.060 | 0.36 | -- |
+| recipe, R 2.5 | 120x90 | 34.78 | 0.800 | 0.080 | 2.50 | +0.002 |
+
+What does not work, at R 2.5 on 180x60 unless stated:
+
+| change from the recipe | c | adm. R | why |
+|---|---|---|---|
+| beta 100 throughout, onset 150-250 | 183.12 | 2.28 | row at `mma_c` for ~300 iterations; uniformity 0.31 |
+| beta 100, constant R 2.5 | 190.81 | 1.00 | creases still form by iteration 25 |
+| beta 30 during the ramp | 181.79 | 2.50 | works, but costs ~1 in `c` |
+| constant `tmove`, R 10 | 182.98 | 6.11 | collapses after sharpening |
+| constant `tmove`, R 10, sharpen 700-780 | 182.89 | 9.29 | still flickers to +0.45 |
+| `hotspot_kappa` ramp 0 -> 2.37 over 250-450 | 180.87 | 2.35 | no gain: the two rows do not compete once beta is soft |
+
+Other findings:
+
+- **Creases form at iteration ~25** in the control, long before the `Tcr` onset.
+- **Soft beta removes the creases rather than moving them.** The designs keep the
+  control's topology on 180x60, and the raw `t` is no rougher (median `|laplacian|` in
+  the solid 0.035-0.039 against 0.039).
+- **The remaining cost is `subsolv` iteration-cap hits** in the small-`tmove` phase:
+  0-1 at R 2.5 and 5, ~140 at R 10 and ~280 on 120x90, which also slow those runs to
+  15-25 minutes (about 9 without the shrink). The designs are unaffected. The `t`
+  asymptote clamps shrink with `tmove` while the `x` ones stay at `move`, which is the
+  likely cause. A `tmove` floor of 0.002 halves the hits on 120x90 with the same
+  design, but leaves R 10 at 9.57 instead of 9.72.
+- R 10 reaches ~96% of the target with the same schedule. The residual is the same
+  end-of-run flicker the hotspot row has at `hotspot_refresh_period = 1`, only larger.
+
 ## Risks
 
 - **Plateau noise.** `GRAD_EPS = 1e-12` suits `|grad t|`, but in `n` it amplifies
