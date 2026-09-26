@@ -594,20 +594,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     g_parts.append(g_hotspot_t[None])
 
-    # Tool-radius constraint on the concave curvature of the iso-lines. The severity is
-    # `R * concave curvature`, so the row is its smooth maximum minus the bound of 1.
-    kappa_t = timefield.iso_curvature(tPhys, xPhys)
-    unit = timefield.unit_length(tPhys)
-    density_r = smooth_max.density_power(xPhys[1:-1, 1:-1].flatten(), config.r)
-    concave_t = -kappa_t.flatten() / unit * density_r  # per element
-    tool_radius = run_config.weight_at(config.tool_radius, loop)
-    if problem.curvature is not None:
-        recalibrate = problem.curvature.resolve(loop)
-        recalibrate |= loop % config.hotspot_refresh_period == 0
-        recalibrate |= tool_radius != run_config.weight_at(config.tool_radius, loop - 1)
-        g_curvature_t = (
-            problem.curvature.aggregate(tool_radius * concave_t, recalibrate) - 1
-        )
+    g_curvature_t, concave_t, tool_radius = _tool_radius_row(
+        problem, xPhys, tPhys, loop
+    )
+    if g_curvature_t is not None:
         g_parts.append(g_curvature_t[None])
     g_all = torch.cat(g_parts)
     dg_dx = torch.cat(
@@ -714,6 +704,36 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         diagnostics=diagnostics,
     )
     return new_state, record
+
+
+def _tool_radius_row(
+    problem: Problem,
+    xPhys: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+    loop: int,
+) -> tuple[Float[Tensor, ""] | None, Float[Tensor, " n"], float]:
+    """The tool-radius constraint on the concave curvature of the iso-lines, `None`
+    where the run has no such row, with the concave curvature per measured element
+    (density-weighted, per element) and iteration `loop`'s tool radius `R`.
+
+    The severity is `R * concave curvature`, so the row is its smooth maximum minus the
+    bound of 1.
+    """
+    config = problem.config
+    kappa_t = timefield.iso_curvature(tPhys, xPhys)
+    unit = timefield.unit_length(tPhys)
+    density_r = smooth_max.density_power(xPhys[1:-1, 1:-1].flatten(), config.r)
+    concave_t = -kappa_t.flatten() / unit * density_r
+    tool_radius = run_config.weight_at(config.tool_radius, loop)
+    if problem.curvature is None:
+        return None, concave_t, tool_radius
+    recalibrate = problem.curvature.resolve(loop)
+    recalibrate |= loop % config.hotspot_refresh_period == 0
+    recalibrate |= tool_radius != run_config.weight_at(config.tool_radius, loop - 1)
+    g_curvature_t = (
+        problem.curvature.aggregate(tool_radius * concave_t, recalibrate) - 1
+    )
+    return g_curvature_t, concave_t, tool_radius
 
 
 def _admissible_tool_radius(concave: Float[Tensor, " n"]) -> float:
