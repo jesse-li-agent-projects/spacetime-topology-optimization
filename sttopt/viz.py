@@ -688,6 +688,7 @@ def _load_seqopt_run(
 
     import torch
 
+    import sttopt.geometry as geometry
     import sttopt.seqopt as seqopt
     import sttopt.timefield as timefield
     import sttopt.torch_util as torch_util
@@ -697,14 +698,15 @@ def _load_seqopt_run(
         json.loads((run_dir / "seq_config.json").read_text())
     )
     design = np.load(run_dir / design_file)
-    xPhys = (
-        design["xPhys"]
-        if "xPhys" in design
-        else np.load(run_dir / "geometry.npz")["xPhys"]
+    xPhys, element_size_m = geometry.load_geometry(
+        run_dir / "geometry.npz", binary=False
     )
+    xPhys = design["xPhys"] if "xPhys" in design else xPhys
     tPhys = design["tPhys"] if "tPhys" in design else design["t"]
 
-    problem = seqopt.build_problem(config, xPhys, device="cpu", dtype=torch.float64)
+    problem = seqopt.build_problem(
+        config, xPhys, element_size_m, device="cpu", dtype=torch.float64
+    )
     tPhys_t = torch_util.to_tensor(tPhys, device="cpu", dtype=torch.float64)
     K_est_t = seqopt.estimated_conductivity(problem, tPhys_t)
     xPhys = torch_util.to_numpy(problem.xPhys)  # what the run optimized, post-cleanup

@@ -6,11 +6,19 @@ import pytest
 import sttopt.geometry as geometry
 import sttopt.geometry_builders as geometry_builders
 
+H = 2e-3
+
 
 def _write_npz(tmp_path, **arrays):
     path = tmp_path / "geometry.npz"
     np.savez(path, **arrays)
     return path
+
+
+def _sized(xPhys, h=H):
+    """`xPhys` with the size keys of a domain of square elements of side `h`."""
+    nely, nelx = np.shape(xPhys)[-2:]
+    return dict(xPhys=xPhys, width_m=nelx * h, height_m=nely * h)
 
 
 # --- load_geometry ---------------------------------------------------------------
@@ -19,8 +27,10 @@ def _write_npz(tmp_path, **arrays):
 def test_load_geometry_round_trips(tmp_path):
     xPhys = np.zeros((5, 7))
     xPhys[:, :3] = 1.0
-    path = _write_npz(tmp_path, xPhys=xPhys)
-    np.testing.assert_array_equal(geometry.load_geometry(path), xPhys)
+    path = _write_npz(tmp_path, **_sized(xPhys))
+    loaded, element_size_m = geometry.load_geometry(path)
+    np.testing.assert_array_equal(loaded, xPhys)
+    assert element_size_m == pytest.approx(H, rel=1e-15)
 
 
 def test_load_geometry_missing_key(tmp_path):
@@ -30,7 +40,7 @@ def test_load_geometry_missing_key(tmp_path):
 
 
 def test_load_geometry_rejects_3d(tmp_path):
-    path = _write_npz(tmp_path, xPhys=np.zeros((2, 3, 4)))
+    path = _write_npz(tmp_path, **_sized(np.zeros((2, 3, 4))))
     with pytest.raises(ValueError, match="2-D"):
         geometry.load_geometry(path)
 
@@ -38,7 +48,7 @@ def test_load_geometry_rejects_3d(tmp_path):
 def test_load_geometry_rejects_out_of_range(tmp_path):
     xPhys = np.zeros((3, 4))
     xPhys[0, 0] = 1.5
-    path = _write_npz(tmp_path, xPhys=xPhys)
+    path = _write_npz(tmp_path, **_sized(xPhys))
     with pytest.raises(ValueError, match=r"\[0, 1\]"):
         geometry.load_geometry(path)
 
@@ -46,15 +56,28 @@ def test_load_geometry_rejects_out_of_range(tmp_path):
 def test_load_geometry_rejects_non_binary(tmp_path):
     xPhys = np.zeros((3, 4))
     xPhys[0, 0] = 0.5
-    path = _write_npz(tmp_path, xPhys=xPhys)
+    path = _write_npz(tmp_path, **_sized(xPhys))
     with pytest.raises(ValueError, match="not binary"):
         geometry.load_geometry(path)
 
 
 def test_load_geometry_non_binary_waived(tmp_path):
     xPhys = np.full((3, 4), 0.5)
-    path = _write_npz(tmp_path, xPhys=xPhys)
-    np.testing.assert_array_equal(geometry.load_geometry(path, binary=False), xPhys)
+    path = _write_npz(tmp_path, **_sized(xPhys))
+    np.testing.assert_array_equal(geometry.load_geometry(path, binary=False)[0], xPhys)
+
+
+def test_load_geometry_requires_a_size(tmp_path):
+    path = _write_npz(tmp_path, xPhys=np.zeros((3, 4)))
+    with pytest.raises(ValueError, match="width_m"):
+        geometry.load_geometry(path)
+
+
+def test_load_geometry_rejects_non_square_elements(tmp_path):
+    arrays = _sized(np.zeros((3, 4))) | dict(height_m=3.5 * H)
+    path = _write_npz(tmp_path, **arrays)
+    with pytest.raises(ValueError, match="square"):
+        geometry.load_geometry(path)
 
 
 # --- base_elements -----------------------------------------------------------------
@@ -175,13 +198,34 @@ def test_binarize_reports_solid_fraction(tmp_path, capsys):
     src = _write_npz(tmp_path, xPhys=xPhys)
     out = tmp_path / "binarized.npz"
     args = geometry_builders._parse_args(
-        ["binarize", str(src), "--threshold", "0.5", "--out", str(out)]
+        ["binarize", str(src), "--threshold", "0.5", "--out", str(out), "--width-m", "0.1"]
     )
     geometry_builders.main(args)
 
     with np.load(out) as data:
         np.testing.assert_array_equal(data["xPhys"], [[0.0, 0.0], [1.0, 1.0]])
         assert float(data["threshold"]) == 0.5
+    # The source states no size, so the output carries the one passed.
+    assert geometry.load_geometry(out)[1] == pytest.approx(0.05)
+
+
+def test_binarize_keeps_the_sources_size(tmp_path):
+    xPhys = np.array([[0.1, 0.4, 0.9], [0.6, 0.9, 0.9]])
+    src = _write_npz(tmp_path, **_sized(xPhys))
+    out = tmp_path / "binarized.npz"
+    geometry_builders.main(
+        geometry_builders._parse_args(["binarize", str(src), "--out", str(out)])
+    )
+    assert geometry.load_geometry(out)[1] == pytest.approx(H, rel=1e-15)
+
+
+def test_generate_rejects_a_resolution_with_non_square_elements(tmp_path):
+    """The c-shape is 200 x 240 mm, so 100 elements up its height leave 83.3 across."""
+    args = geometry_builders._parse_args(
+        ["generate", "--shape", "c_shape", "--resolution", "100", "--out", str(tmp_path / "c.npz")]
+    )
+    with pytest.raises(ValueError, match="width"):
+        geometry_builders.main(args)
 
 
 # --- neighbor_pairs / drop_disconnected ---------------------------------------------

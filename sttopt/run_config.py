@@ -313,7 +313,8 @@ class SeqRunConfig(_ConfigMixin):
     Full hyperparameter set for a single fixed-geometry fabrication-sequence
     (`seqopt`) run, mirroring `seqopt.build_problem`'s parameters.
 
-    No `nelx`/`nely`: the geometry file (`--geometry`) defines the mesh, so a mismatch
+    No `nelx`/`nely` or domain size: the geometry file (`--geometry`) defines the mesh
+    and its element size, so a mismatch
     between config and geometry is unrepresentable rather than merely caught. No
     solid/void cutoff either: it would be inert on a binary geometry,
     which `geometry.load_geometry` requires by default, so `geometry.SOLID_THRESHOLD`
@@ -329,20 +330,17 @@ class SeqRunConfig(_ConfigMixin):
         iterations undoing it.
     :param enable_continuity: whether the print-time continuity constraint
         (`constraints.time_field_continuity`) is included at all; ``False`` drops it
-        from the MMA constraint stack entirely, rather than relaxing it via `lrmin`.
+        from the MMA constraint stack entirely, rather than relaxing it via `lrmin_m`.
     :param continuity_tol: `constraints.time_field_continuity`'s bound on the time
         field's mean squared deviation from its local neighborhood average -- the only
         term deciding how smooth the answer is. Inert when `enable_continuity` is False.
-    :param lrmin: continuity-filter radius, in **elements**, as in `RunConfig`. Since
-        the geometry file sets the mesh, rasterizing the same component at a different
-        resolution changes what this radius means physically; rescale it by hand to
-        match.
-    :param rmin_cond: conductivity-neighborhood radius, in elements -- same caveat as
-        `lrmin`.
-    :param time_filter_rmin: density-filter radius applied to `t`, in elements; 0 leaves
-        the time field unfiltered, which is `seqopt`'s starting design (see its module
-        docstring for what a nonzero radius costs, and read `sawtooth_raw` alongside
-        `sawtooth` when using one).
+    :param lrmin_m: continuity-filter radius. Like every `_m` length, in metres,
+        converting at the element size the geometry file gives.
+    :param rmin_cond_m: conductivity-neighborhood radius.
+    :param time_filter_rmin_m: density-filter radius applied to `t`; 0 leaves the time
+        field unfiltered, which is `seqopt`'s starting design (see its module docstring
+        for what a nonzero radius costs, and read `sawtooth_raw` alongside `sawtooth`
+        when using one).
     :param hotspot_normalization: a `conductivity.Normalization` member name, choosing
         what `K_est` measures shielding against. Not a tuning knob: `neighborhood`
         cannot see a free surface that lies on the mesh boundary, and lets void print
@@ -379,7 +377,7 @@ class SeqRunConfig(_ConfigMixin):
         layer deep, and 0.18 is what flattens it, putting this term at 30-50% of the
         uniformity one. A schedule is what buys a lower end weight -- holding near 1.0
         over the first few hundred iterations and then releasing reaches the same
-        smoothness ending at 0.06, and at 0.02 alongside a `time_filter_rmin` (PR #95).
+        smoothness ending at 0.06, and at 0.02 alongside a `time_filter_rmin_m` (PR #95).
         Only a strictly positive *constant* weight makes the sawtooth amplitude
         stationary. A smooth field is not a local minimum of the uniformity penalty
         alone, so under any released floor the mode creeps back with no plateau -- slowly
@@ -405,9 +403,9 @@ class SeqRunConfig(_ConfigMixin):
 
     enable_continuity: bool
     continuity_tol: float
-    lrmin: float
-    rmin_cond: float
-    time_filter_rmin: float
+    lrmin_m: float
+    rmin_cond_m: float
+    time_filter_rmin_m: float
 
     hotspot_weight: float
     hotspot_normalization: str

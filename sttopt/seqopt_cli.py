@@ -148,7 +148,9 @@ def main(args: argparse.Namespace) -> None:
 
     config = resolve_config(args)
     assert config.nloop > 0, "Number of iterations must be positive"
-    xPhys = geometry.load_geometry(args.geometry, binary=not args.non_binarized)
+    xPhys, element_size_m = geometry.load_geometry(
+        args.geometry, binary=not args.non_binarized
+    )
 
     output_dir = Path("output") / args.tag
     if output_dir.exists():
@@ -162,11 +164,17 @@ def main(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "seq_config.json").write_text(json.dumps(config.to_dict(), indent=2))
 
-    problem = seqopt.build_problem(config, xPhys, device=args.device)
+    problem = seqopt.build_problem(config, xPhys, element_size_m, device=args.device)
     # build_problem may have dropped solid that can't reach the build plate, so save
     # its geometry rather than the loaded one: the artefact should be what ran.
     xPhys = torch_util.to_numpy(problem.xPhys)
-    np.savez(output_dir / "geometry.npz", xPhys=xPhys)
+    nely, nelx = xPhys.shape
+    np.savez(
+        output_dir / "geometry.npz",
+        xPhys=xPhys,
+        width_m=nelx * element_size_m,
+        height_m=nely * element_size_m,
+    )
     state = seqopt.init_state(problem)
 
     log_path = output_dir / "iterations.jsonl"

@@ -5,10 +5,14 @@ import json
 import numpy as np
 
 import sttopt.seqopt_cli as seqopt_cli
-from conftest import default_seq_run_config
+from conftest import SEQ_ELEMENT_M, default_seq_run_config
 
 _FIXTURE_CONFIG = default_seq_run_config(
-    lrmin=1.5, rmin_cond=2.5, nStage=2, nloop=2, tmove=0.05
+    lrmin_m=1.5 * SEQ_ELEMENT_M,
+    rmin_cond_m=2.5 * SEQ_ELEMENT_M,
+    nStage=2,
+    nloop=2,
+    tmove=0.05,
 )
 
 
@@ -23,7 +27,12 @@ def _argv(tmp_path, tag):
     config_path = tmp_path / "fixture_seq_config.json"
     config_path.write_text(json.dumps(_FIXTURE_CONFIG.to_dict()))
     geometry_path = tmp_path / "geometry_in.npz"
-    np.savez(geometry_path, xPhys=_geometry())
+    np.savez(
+        geometry_path,
+        xPhys=_geometry(),
+        width_m=7 * SEQ_ELEMENT_M,
+        height_m=5 * SEQ_ELEMENT_M,
+    )
     return [
         "--geometry",
         str(geometry_path),

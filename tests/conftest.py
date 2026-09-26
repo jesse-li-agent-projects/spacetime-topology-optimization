@@ -78,6 +78,11 @@ def default_seq_run_config(**overrides) -> SeqRunConfig:
     return dataclasses.replace(base, **overrides)
 
 
+# The element size `configs/seq_default.json`'s lengths are stated at (the c-shape's),
+# for tests that pass `seqopt` a geometry and state lengths in elements.
+SEQ_ELEMENT_M = 2e-3
+
+
 def matlab_reference_node_perm(nelx: int, nely: int) -> np.ndarray:
     """Maps `matlab_reference.py`'s 0-indexed node numbering (F-order/column-major, the
     original MATLAB convention) to `sttopt`'s 0-indexed node numbering (C-order/

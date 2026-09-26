@@ -147,6 +147,8 @@ def main(args: argparse.Namespace) -> None:
                     t=torch_util.to_numpy(state.t),
                     xPhys=torch_util.to_numpy(xPhys),
                     tPhys=torch_util.to_numpy(tPhys),
+                    width_m=config.width_m,
+                    height_m=config.height_m,
                 )
 
     np.savez(
@@ -156,6 +158,9 @@ def main(args: argparse.Namespace) -> None:
         xPhys=torch_util.to_numpy(xPhys),
         t=torch_util.to_numpy(state.t),
         tPhys=torch_util.to_numpy(tPhys),
+        # The domain size, so `geometry_builders binarize` can make a geometry of it.
+        width_m=config.width_m,
+        height_m=config.height_m,
         f=record.f,
         vol=record.vol,
         tru_max=record.tru_max,

@@ -110,17 +110,26 @@ def test_main_regenerates_plots_from_a_seqopt_run_directory(tmp_path, monkeypatc
     """`_main` must detect a seqopt run directory (by seq_config.json) and regenerate
     its plots without a Problem/FEM, per the plan's Phase 2 viz.py section."""
     import sttopt.seqopt_cli as seqopt_cli
-    from conftest import default_seq_run_config
+    from conftest import SEQ_ELEMENT_M, default_seq_run_config
 
     monkeypatch.chdir(tmp_path)
     config = default_seq_run_config(
-        lrmin=1.5, rmin_cond=2.5, nStage=2, nloop=2, tmove=0.05
+        lrmin_m=1.5 * SEQ_ELEMENT_M,
+        rmin_cond_m=2.5 * SEQ_ELEMENT_M,
+        nStage=2,
+        nloop=2,
+        tmove=0.05,
     )
     xPhys = np.zeros((NELY, NELX))
     xPhys[-2:, :] = 1.0
     xPhys[:, 0] = 1.0
     geometry_path = tmp_path / "geometry.npz"
-    np.savez(geometry_path, xPhys=xPhys)
+    np.savez(
+        geometry_path,
+        xPhys=xPhys,
+        width_m=NELX * SEQ_ELEMENT_M,
+        height_m=NELY * SEQ_ELEMENT_M,
+    )
     config_path = tmp_path / "seq_config.json"
     config_path.write_text(json.dumps(config.to_dict()))
 
