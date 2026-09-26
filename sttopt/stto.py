@@ -187,11 +187,13 @@ def build_problem(
         raise ValueError(
             f"nelx and nely cannot both be 1, got nelx={nelx}, nely={nely}"
         )
-    # `iso_curvature` is measured at interior elements only
-    if not run_config.identically_zero(config.tool_radius) and min(nelx, nely) < 3:
-        raise ValueError(
-            f"tool_radius needs an interior element to measure curvature at, got nelx={nelx}, nely={nely}"
-        )
+    # The tool-radius row smooth-maxes over the elements `iso_curvature` measures
+    if not run_config.identically_zero(config.tool_radius):
+        measured = timefield.iso_curvature(torch.zeros(nely, nelx, dtype=torch.float64))
+        if measured.numel() == 0:
+            raise ValueError(
+                f"tool_radius needs an interior element to measure curvature at, but iso_curvature measures none on a nelx={nelx}, nely={nely} mesh"
+            )
 
     tfield = timefield.TimeField[config.print_base.upper()]
     KE = fem.plane_stress_KE(config.nu)
