@@ -50,8 +50,13 @@ def _problem(nelx: int, **overrides) -> stto.Problem:
 def _fields(
     problem: stto.Problem,
 ) -> tuple[Float[torch.Tensor, "nely nelx"], Float[torch.Tensor, "nely nelx"]]:
-    """A smooth density, and a time field whose iso-lines are circles about a point
-    outside the bottom-left corner, printed from the outside in, so they are concave."""
+    """
+    A smooth density, and a time field whose iso-lines are circles about a point
+    outside the bottom-left corner, printed from the outside in, so they are concave.
+
+    :param problem: the problem whose mesh the fields are sampled on
+    :return: `(x, t)`
+    """
     config = problem.config
     h = config.element_size_m
     X, Y = np.meshgrid(
@@ -66,8 +71,14 @@ def _fields(
 
 
 def _order(values: list[float]) -> float:
-    """The order of convergence the last three of `values` show, each at half the
-    previous element size; `inf` where they already agree exactly."""
+    """
+    The order of convergence the last three of `values` show; `inf` where they already
+    agree exactly.
+
+    :param values: a quantity at successive resolutions, each at half the previous
+        element size
+    :return: the observed order
+    """
     d1, d2 = abs(values[-2] - values[-3]), abs(values[-1] - values[-2])
     return math.inf if d2 == 0 else math.log2(d1 / d2)
 
@@ -80,7 +91,11 @@ def _at_each_resolution(quantity, nelx=NELX, **overrides) -> list[float]:
     return values
 
 
-def _gravity_compliance(problem, x, t):
+def _gravity_compliance(
+    problem: stto.Problem,
+    x: Float[torch.Tensor, "nely nelx"],
+    t: Float[torch.Tensor, "nely nelx"],
+) -> Float[torch.Tensor, ""]:
     c = problem.config
     cg, _ = compliance.gravity_compliance(
         x, t, problem.KE, problem.edofMat, c.Emin, c.Emax, 3.0, 1.0, problem.C,
@@ -89,7 +104,11 @@ def _gravity_compliance(problem, x, t):
     return cg
 
 
-def _whole_compliance(problem, x, t):
+def _whole_compliance(
+    problem: stto.Problem,
+    x: Float[torch.Tensor, "nely nelx"],
+    t: Float[torch.Tensor, "nely nelx"],
+) -> Float[torch.Tensor, ""]:
     c = problem.config
     cw, _ = compliance.whole_compliance(
         x, problem.KE, problem.edofMat, c.Emin, c.Emax, 3.0, problem.freedofs,
@@ -168,7 +187,7 @@ def test_void_padding_leaves_the_parts_conductivity_unchanged(kappa):
     cannot reach from the part must not change what the part measures."""
     ny, nx, pad = 20, 30, 20
 
-    def K_est(padding: int) -> np.ndarray:
+    def K_est(padding: int) -> Float[np.ndarray, "ny nx"]:
         xPhys = np.hstack([np.ones((ny, nx)), np.zeros((ny, padding))])
         # Linear across the padding too, so the part's edge column reads the same
         # gradient from a one-sided difference as from a central one.

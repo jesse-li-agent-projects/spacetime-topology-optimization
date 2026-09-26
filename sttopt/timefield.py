@@ -409,7 +409,14 @@ def unit_length(tPhys: Float[Tensor, "nely nelx"]) -> float:
 
 
 def unit_length_m(tPhys: Float[Tensor, "nely nelx"], element_size_m: float) -> float:
-    """`unit_length` in metres, e.g. to state a per-unit-length gradient per metre."""
+    """
+    `unit_length` in metres, e.g. to convert a gradient between per-unit-length and
+    per-metre.
+
+    :param tPhys: the time field, which gives the mesh shape
+    :param element_size_m: side of a square element
+    :return: the internal gradient unit's length in metres
+    """
     return unit_length(tPhys) * element_size_m
 
 

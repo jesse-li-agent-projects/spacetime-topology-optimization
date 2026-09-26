@@ -15,9 +15,15 @@ LENGTH_RTOL = 4 * sys.float_info.epsilon
 
 
 def in_elements(length_m: float, element_size_m: float) -> float:
-    """`length_m` in elements, exact where it is meant as a whole number of them -- the
-    continuity filter's window steps at whole numbers, so a few ulps either side of one
-    would change the stencil."""
+    """
+    Convert `length_m` to elements, exact where it is meant as a whole number of them:
+    the continuity filter's window steps at whole numbers, so a few ulps either side of
+    one would change the stencil.
+
+    :param length_m: the length in metres
+    :param element_size_m: side of a square element
+    :return: the length in elements
+    """
     n = length_m / element_size_m
     whole = round(n)
     return float(whole) if math.isclose(n, whole, rel_tol=LENGTH_RTOL) else n

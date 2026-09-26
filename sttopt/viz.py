@@ -567,17 +567,23 @@ def _time_field_geometry(
     xPhys_t: "Float[Tensor, 'nely nelx']",
     element_size_m: float,
 ) -> tuple[Float[np.ndarray, "nely nelx"], Float[np.ndarray, "nely nelx"]]:
-    """`|grad t|` per element and the iso-line curvature, both in 1/m, the curvature
-    padded with `nan` onto the border elements it does not measure."""
+    """
+    `|grad t|` per element and the iso-line curvature, both in 1/m.
+
+    :param tPhys_t: the time field
+    :param xPhys_t: the density field, which weights the curvature
+    :param element_size_m: side of a square element
+    :return: `(|grad t|, curvature)`, the curvature padded with `nan` onto the border
+        elements it does not measure
+    """
     import sttopt.timefield as timefield
     import sttopt.torch_util as torch_util
 
     unit_m = timefield.unit_length_m(tPhys_t, element_size_m)
     grad = timefield.gradient_magnitude_elements(tPhys_t) / unit_m
     kappa = timefield.iso_curvature(tPhys_t, xPhys_t) / unit_m
-    return torch_util.to_numpy(grad), np.pad(
-        torch_util.to_numpy(kappa), 1, constant_values=np.nan
-    )
+    kappa = np.pad(torch_util.to_numpy(kappa), 1, constant_values=np.nan)
+    return torch_util.to_numpy(grad), kappa
 
 
 def _print_direction(tPhys_t) -> tuple[np.ndarray, np.ndarray]:

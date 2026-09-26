@@ -220,10 +220,10 @@ class RunConfig(_ConfigMixin):
         much layering must exist before the print direction is believed. The lobe
         flattens to isotropic as `|grad t|` falls below it, which is what keeps the
         weight well-defined where no direction is defined. Belongs an order of magnitude
-        below the run's own median `|grad t|` (`grad_p50_per_m`) and is not a tuning knob: a converged field's
-        gradient distribution is tight, so a `g0` near the median attenuates `kappa` by
-        a near-constant factor across the whole part, which is a second `hotspot_kappa`
-        rather than a floor (measured in `plans/angular_weight.md`, Phase 3 results).
+        below the run's own median `|grad t|` (`grad_p50_per_m`) and is not a tuning
+        knob: a converged field's gradient distribution is tight, so a `g0` near the
+        median attenuates `kappa` by a near-constant factor across the whole part, which
+        is a second `hotspot_kappa` rather than a floor (measured in `plans/angular_weight.md`, Phase 3 results).
     :param rmin_m: density-filter radius.
     :param time_filter_rmin_m: density-filter radius applied to `t`, as in
         `SeqRunConfig`; separate from `rmin_m` so the two fields can be smoothed
@@ -314,10 +314,9 @@ class SeqRunConfig(_ConfigMixin):
     (`seqopt`) run, mirroring `seqopt.build_problem`'s parameters.
 
     No `nelx`/`nely` or domain size: the geometry file (`--geometry`) defines the mesh
-    and its element size, so a mismatch
-    between config and geometry is unrepresentable rather than merely caught. No
-    solid/void cutoff either: it would be inert on a binary geometry,
-    which `geometry.load_geometry` requires by default, so `geometry.SOLID_THRESHOLD`
+    and its element size, so a mismatch between config and geometry is unrepresentable
+    rather than merely caught. No solid/void cutoff either: it would be inert on a
+    binary geometry, which `geometry.load_geometry` requires by default, so `geometry.SOLID_THRESHOLD`
     is one constant rather than a setting that can disagree with itself between the
     print-start set and the time-field initialization.
 
@@ -361,10 +360,10 @@ class SeqRunConfig(_ConfigMixin):
         much layering must exist before the print direction is believed. The lobe
         flattens to isotropic as `|grad t|` falls below it, which is what keeps the
         weight well-defined where no direction is defined. Belongs an order of magnitude
-        below the run's own median `|grad t|` (`grad_p50_per_m`) and is not a tuning knob: a converged field's
-        gradient distribution is tight, so a `g0` near the median attenuates `kappa` by
-        a near-constant factor across the whole part, which is a second `hotspot_kappa`
-        rather than a floor (measured in `plans/angular_weight.md`, Phase 3 results).
+        below the run's own median `|grad t|` (`grad_p50_per_m`) and is not a tuning
+        knob: a converged field's gradient distribution is tight, so a `g0` near the
+        median attenuates `kappa` by a near-constant factor across the whole part, which
+        is a second `hotspot_kappa` rather than a floor (measured in `plans/angular_weight.md`, Phase 3 results).
     :param uniformity_metric: a `timefield.UniformityMetric` member name.
     :param roughness_weight: weight on `timefield.relative_roughness`, the objective's
         smoothness regularizer -- a number, or a `CosineSchedule` decaying one weight
