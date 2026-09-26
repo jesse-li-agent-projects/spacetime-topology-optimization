@@ -1,8 +1,8 @@
 # Physical units
 
 Goal: refining the mesh of one physical part leaves the optimization's behaviour the
-same, with no hand-rescaling of settings. `tests/test_resolution_scaling.py` checks it:
-each step below turns its `xfail`s into passes.
+same, with no hand-rescaling of settings. `tests/test_resolution_scaling.py` checks it;
+each step below turned its `xfail`s into passes, and all six are done.
 
 The rule each step follows: state a term as an area mean (or a ratio of means) over the
 domain, and a length in metres. Relative roughness is the one deliberate exception; it
@@ -38,7 +38,10 @@ handles an element-scale filtering issue, so its per-element "layer" is correct.
    `raa0_total / n`, with the defaults keeping `raa0 = 1e-5`.
 6. **`lrmin` redesign.** The continuity window is `ceil(lrmin) - 1` elements, square
    and unweighted, so it jumps at whole numbers and its physical size depends on the
-   resolution. Needed, with step 3, for the continuity row to converge.
+   resolution. Needed, with step 3, for the continuity row to converge. Now weighted
+   `max(0, lrmin - dist)` like the density filter, without the element itself: its
+   reach changes continuously with the radius, and a radius reaching no neighbor
+   (`lrmin <= 1` element) is an error rather than a division by zero.
 
 ## Left as they are
 

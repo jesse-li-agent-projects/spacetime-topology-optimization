@@ -9,6 +9,7 @@ import torch
 import sttopt.constraints as constraints
 import sttopt.filters as filters
 import sttopt.torch_util as torch_util
+import matlab_reference
 import tests.reference.constraints as constraints_ref
 from conftest import assert_close, load_fixture_npz, tt, tti
 
@@ -36,9 +37,10 @@ def test_constraints_match_fixture():
     assert tfield == 3
 
     H, Hs = _tensor_filter(nelx, nely, RMIN)
-    L = torch_util.csr_to_tensor(
-        filters.continuity_filter(nelx, nely, LRMIN), "cpu", torch.float64
-    )
+    # The fixture predates the distance-weighted continuity filter; its rows were built
+    # with the MATLAB source's, which the oracle keeps. matlab_reference is 1-indexed
+    # F-order only in its loops -- this matrix is already in sttopt's element order.
+    L = torch.from_numpy(matlab_reference.ref_continuity_filter(nelx, nely, LRMIN))
     # column 0 (all rows), per conventions.md's C-order element enumeration
     Nei = tti(np.arange(nely) * nelx)
 

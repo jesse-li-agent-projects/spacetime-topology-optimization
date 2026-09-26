@@ -6,8 +6,7 @@ physical coordinates, and checks the order of convergence the successive differe
 show. Pointwise maxima at a boundary are left out: a finer mesh samples closer to the
 boundary, so those converge only as fast as the sampling does.
 
-The `xfail` tests are the quantities not yet invariant; each names the step of
-`plans/physical_units.md` that should make it pass.
+`plans/archive/physical_units.md` records the steps that made each one converge.
 """
 
 import math
@@ -162,13 +161,9 @@ def test_a_point_load_does_not_converge():
     assert _order(values) < MIN_ORDER, values
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="step 6: the lrmin window is ceil(lrmin) - 1 elements, so its physical size moves with the mesh",
-)
 def test_continuity_row_converges():
-    """Over all four resolutions: the window happens to be 6 mm at both of the coarsest
-    two, which alone would pass."""
+    """Over all four resolutions: a window of `ceil(lrmin) - 1` elements happened to be
+    6 mm at both of the coarsest two, which alone passed."""
     values = _at_each_resolution(
         lambda p, x, t: constraints.time_field_continuity(t, p.L, 1e-6)
     )

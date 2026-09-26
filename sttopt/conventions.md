@@ -134,6 +134,12 @@ was ~`rouf/4` approaching a tie and exactly `0` at one, so `dt1` was discontinuo
 `t` — a hole in the gradient field that an optimizer driving a symmetric design toward
 equal print times would walk straight into.
 
+The continuity filter (`filters.continuity_filter`) averages the neighbors weighted
+`max(0, lrmin - dist)`, not the source's unweighted square of `ceil(lrmin) - 1`
+elements: that window's physical size jumped with the mesh, so the continuity row could
+not converge under refinement (`plans/archive/physical_units.md`, step 6). The MATLAB
+oracle keeps the source's form, for the fixtures built with it.
+
 ## Time-field treatment: `stto` vs. `seqopt`
 
 `stto` filters the time field exactly like density, reusing the density filter, then

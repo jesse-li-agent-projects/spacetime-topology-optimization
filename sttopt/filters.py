@@ -77,29 +77,32 @@ def apply_density_filter(
 
 
 def continuity_filter(nelx: int, nely: int, lrmin: float) -> sp.csr_matrix:
-    """Identity-minus-row-normalized-neighbor-average matrix, for the print-time smoothness penalty.
-
-    `L @ t` measures each element's time-field value minus the (unweighted) average of
-    its neighbors within `lrmin`; built entirely from sparse ops (row-scale a sparse
-    adjacency matrix, subtract from a sparse identity) so it never materializes a dense
-    `n x n` array, unlike the MATLAB source's `eye(n) - L./M` (see `conventions.md`).
     """
-    i1, j1 = _element_grid(nelx, nely)
-    e1_all = np.arange(nelx * nely)
-    rows, cols = [], []
-    for di, dj in _neighbor_offsets(lrmin):
-        if di == 0 and dj == 0:
-            continue
-        i2, j2 = i1 + di, j1 + dj
-        valid = (i2 >= 0) & (i2 < nelx) & (j2 >= 0) & (j2 < nely)
-        rows.append(e1_all[valid])
-        cols.append((j2 * nelx + i2)[valid])
+    Identity-minus-row-normalized-neighbor-average matrix, for the print-time smoothness penalty.
+
+    `L @ t` measures each element's time-field value minus the average of its neighbors,
+    weighted `max(0, lrmin - dist)` as in `density_filter` but without the element
+    itself. The weight falls to 0 at `lrmin`, so the average changes continuously with
+    the radius and converges under mesh refinement; the MATLAB source's unweighted
+    square of `ceil(lrmin) - 1` elements did neither (`conventions.md`, "Known
+    deviations"). Sparse throughout, never the source's dense `eye(n) - L./M`.
+
+    :param nelx: element count along x
+    :param nely: element count along y
+    :param lrmin: averaging radius, in elements
+    :return: the `(nelx * nely)`-square sparse operator `L`
+    :raises ValueError: if some element has no neighbor within `lrmin`
+    """
+    H, _ = density_filter(nelx, nely, lrmin)
+    H.setdiag(0.0)
+    H.eliminate_zeros()
+    row_sum = np.asarray(H.sum(axis=1)).flatten()
+    if not np.all(row_sum > 0):
+        raise ValueError(
+            f"the continuity average of lrmin={lrmin:g} elements reaches no neighbor of some element"
+        )
     n = nelx * nely
-    rows, cols = np.concatenate(rows), np.concatenate(cols)
-    adjacency = sp.coo_matrix((np.ones(rows.shape), (rows, cols)), shape=(n, n)).tocsr()
-    row_sum = np.asarray(adjacency.sum(axis=1)).flatten()
-    normalized = sp.diags(1.0 / row_sum) @ adjacency
-    return (sp.eye(n, format="csr") - normalized).tocsr()
+    return (sp.eye(n, format="csr") - sp.diags(1.0 / row_sum) @ H).tocsr()
 
 
 def heaviside_projection(
