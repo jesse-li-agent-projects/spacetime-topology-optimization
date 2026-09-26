@@ -657,6 +657,6 @@ def estimated_conductivity(
     K_est = _conductivity_core(x, t, e1, e2, w, q, rouf, denom, base).K_est
     if base is not None and not bool((torch.isfinite(K_est) & (x > 0)).any()):
         raise ValueError(
-            "every element carrying density has infinite K_est, being within the conductivity stencil's reach of the print base, so the hotspot measure has nothing left to aggregate over; shrink rmin_cond or use a normalization that needs no print base (infinite_base)"
+            "every element carrying density has infinite K_est, being within the conductivity stencil's reach of the print base, so the hotspot measure has nothing left to aggregate over; shrink rmin_cond_m or use a normalization that needs no print base (infinite_base)"
         )
     return K_est

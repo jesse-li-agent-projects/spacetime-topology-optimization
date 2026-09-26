@@ -90,8 +90,9 @@ linear solve. Compare per quantity, not per test:
 
 ## Mesh assumptions
 
-Every element is a unit cell on a regular `(nely, nelx)` grid — no per-element volume
-`v_e`. This isn't an oversight: Wang et al. (2019) Eq. (3)'s density-filter weighting
+Every element is a square on a regular `(nely, nelx)` grid — no per-element volume
+`v_e`. The mesh-level code works in element units; configs state lengths in metres
+(the `_m` fields), and `units.in_elements` converts them where a problem is built. This isn't an oversight: Wang et al. (2019) Eq. (3)'s density-filter weighting
 includes a `v_e` term, but states element volume is constant (`v_e = v0`) for their
 uniform mesh, at which point `v_e` cancels out of the (normalized) filter ratio —
 that's why `filters.density_filter`'s `H`/`Hs` carry no such term. A non-uniform mesh

@@ -202,7 +202,11 @@ def main():
         torch_fem.COMPACTION_RATIO = args.compaction_ratio
         print(f"COMPACTION_RATIO = {args.compaction_ratio}")
     nelx, nely = (int(v) for v in args.mesh.split("x"))
-    config = dataclasses.replace(CONFIG, nelx=nelx, nely=nely)
+    # The default element size at every mesh, so the radii keep their element counts.
+    h = CONFIG.element_size_m
+    config = dataclasses.replace(
+        CONFIG, width_m=nelx * h, height_m=nely * h, nelx=nelx
+    )
     problem = stto.build_problem(config, device=device, dtype=torch.float64)
 
     x0, t0 = load_design_raw(args.mesh, LOOP)

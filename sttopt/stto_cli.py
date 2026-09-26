@@ -31,8 +31,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--config",
         type=Path,
         help="path to a RunConfig JSON file (e.g. a previous run's output/<tag>/"
-        "config.json). Fields (nelx, nely, nloop, volfrac, nStage, Theta, Tcr, "
-        "print_base, rmin, lrmin, rmin_cond, beta_d_schedule, and the rest of "
+        "config.json). Fields (width_m, height_m, nelx, nloop, volfrac, nStage, "
+        "Theta, Tcr, print_base, rmin_m, lrmin_m, rmin_cond_m, beta_d_schedule, and the rest of "
         "build_problem's hyperparameters) are settable only through this file",
     )
     parser.add_argument(

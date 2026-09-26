@@ -31,6 +31,8 @@ from typing import TypeVar
 
 import numpy as np
 
+import sttopt.units as units
+
 _T = TypeVar("_T", bound="_ConfigMixin")
 
 
@@ -188,6 +190,13 @@ class RunConfig(_ConfigMixin):
     Full hyperparameter set for a single space-time topology optimization run,
     mirroring `stto.build_problem`'s parameters.
 
+    Lengths are in metres (the `_m` fields), so refining the mesh is a change to `nelx`
+    alone. `nely` follows from the design domain's aspect ratio, since elements are
+    square.
+
+    :param width_m: design domain width.
+    :param height_m: design domain height; must be a whole number of elements.
+    :param nelx: element count across `width_m`, the mesh resolution.
     :param print_base: 3D-printing base/start location, naming a
         `timefield.TimeField` member (case-insensitively) for JSON.
     :param uniformity_metric: a `timefield.UniformityMetric` member name, as in
@@ -215,26 +224,30 @@ class RunConfig(_ConfigMixin):
         gradient distribution is tight, so a `g0` near the median attenuates `kappa` by
         a near-constant factor across the whole part, which is a second `hotspot_kappa`
         rather than a floor (measured in `plans/angular_weight.md`, Phase 3 results).
-    :param time_filter_rmin: density-filter radius applied to `t`, in elements, as in
-        `SeqRunConfig`; separate from `rmin` so the two fields can be smoothed
+    :param rmin_m: density-filter radius.
+    :param time_filter_rmin_m: density-filter radius applied to `t`, as in
+        `SeqRunConfig`; separate from `rmin_m` so the two fields can be smoothed
         differently. 0 leaves `t` unfiltered.
     :param enable_continuity: whether the time-field continuity constraint is in the
         MMA constraint stack at all, as in `SeqRunConfig`, as is `continuity_tol`.
-    :param tool_radius: print tool radius in elements, possibly scheduled. Bounds the
-        concave curvature of the time field's iso-lines (`timefield.iso_curvature`) to
-        `1 / tool_radius`, so the tool cannot collide with printed material. `0` is a
+    :param tool_radius_m: print tool radius, possibly scheduled. Bounds the concave
+        curvature of the time field's iso-lines (`timefield.iso_curvature`) to
+        `1 / tool_radius_m`, so the tool cannot collide with printed material. `0` is a
         tool that cannot collide; the constraint row exists only if the schedule is
         nonzero somewhere, so a ramp up from `0` is the continuation.
     :param curvature_beta: `LogSumExp` sharpness of that constraint's smooth maximum,
-        on the severity `tool_radius * concave curvature`, which is 1 on the bound.
+        on the severity `tool_radius_m * concave curvature`, which is 1 on the bound.
+    :param lrmin_m: continuity-filter radius, as in `SeqRunConfig`, as is
+        `rmin_cond_m`.
     """
 
     # Frequently varied -- also exposed as a CLI flag in stto_cli.py.
     nloop: int
 
     # Config-file-only.
+    width_m: float
+    height_m: float
     nelx: int
-    nely: int
     volfrac: float
     nStage: int
     enable_stage_volume: bool
@@ -249,14 +262,14 @@ class RunConfig(_ConfigMixin):
     hotspot_kappa: Scheduled
     hotspot_g0: float
     print_base: str
-    rmin: float
-    time_filter_rmin: float
+    rmin_m: float
+    time_filter_rmin_m: float
     enable_continuity: bool
     continuity_tol: float
-    tool_radius: Scheduled
+    tool_radius_m: Scheduled
     curvature_beta: Scheduled
-    lrmin: float
-    rmin_cond: float
+    lrmin_m: float
+    rmin_cond_m: float
     Emin: float
     Emax: float
     nu: float
@@ -278,8 +291,20 @@ class RunConfig(_ConfigMixin):
     # Iterations between hotspot and curvature calibration refreshes. Iteration 0 is
     # always one of them, which is what calibrates each aggregate against the seed. A
     # change in a scheduled setting that moves an aggregate's bias (`hotspot_beta`,
-    # `rouf`, `curvature_beta`, `tool_radius`, ...) also refreshes that aggregate.
+    # `rouf`, `curvature_beta`, `tool_radius_m`, ...) also refreshes that aggregate.
     hotspot_refresh_period: int
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.nely  # raises now, at load, on a height that is not whole elements
+
+    @property
+    def element_size_m(self) -> float:
+        return self.width_m / self.nelx
+
+    @property
+    def nely(self) -> int:
+        return units.element_count(self.height_m, self.element_size_m, "height_m")
 
 
 @dataclass(kw_only=True)

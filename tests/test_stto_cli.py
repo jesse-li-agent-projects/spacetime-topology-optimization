@@ -7,27 +7,22 @@ lightest testing budget of the whole port.
 import dataclasses
 import json
 import re
-from pathlib import Path
 
 import numpy as np
 
 import sttopt.stto_cli as stto_cli
 import sttopt.stto as stto
-from sttopt.run_config import RunConfig
+from conftest import ELEMENT_M, default_run_config
 
-# nelx/nely/nStage/rmin/lrmin/rmin_cond are config-file-only (not CLI flags), so this
+# The mesh, nStage and the radii are config-file-only (not CLI flags), so this
 # fixture's overrides for them go through --config rather than argv.
-_DEFAULT_CONFIG = RunConfig.from_dict(
-    json.loads((Path(__file__).parent.parent / "configs" / "default.json").read_text())
-)
-_FIXTURE_CONFIG = dataclasses.replace(
-    _DEFAULT_CONFIG,
+_FIXTURE_CONFIG = default_run_config(
     nelx=7,
     nely=5,
     nStage=2,
-    rmin=2,
-    lrmin=2,
-    rmin_cond=3,
+    rmin_m=2 * ELEMENT_M,
+    lrmin_m=2 * ELEMENT_M,
+    rmin_cond_m=3 * ELEMENT_M,
     nloop=2,
     # Per-step volume change scales with `move`; the obj/vol test needs it clear of
     # what the printed "Vol." can resolve.
