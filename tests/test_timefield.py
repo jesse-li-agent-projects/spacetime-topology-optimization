@@ -811,7 +811,7 @@ def test_neighbour_rise_on_a_linear_field_is_its_gradient_along_each_neighbour()
     i, j = np.indices((nely, nelx))
     a, b = 0.3, -0.1  # per element, along j and i
     t = torch.from_numpy(a * j + b * i)
-    rise = timefield.neighbour_rise(t, torch.ones_like(t))
+    rise = timefield.neighbour_rise(t)
     unit = timefield.unit_length(t)
     ring = np.array([(di, dj) for di, dj in timefield._RING])
     want = (ring[:, 1] * a + ring[:, 0] * b) / np.hypot(ring[:, 0], ring[:, 1]) * unit

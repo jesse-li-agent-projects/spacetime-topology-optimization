@@ -730,10 +730,11 @@ _RING = ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1))
 
 
 def neighbour_rise(
-    tPhys: Float[Tensor, "nely nelx"], xPhys: Float[Tensor, "nely nelx"]
+    tPhys: Float[Tensor, "nely nelx"], xPhys: Float[Tensor, "nely nelx"] | None = None
 ) -> Float[Tensor, "k 8"]:
     """Slope of `t` from each element to each of its 8 neighbours, `(t_nb - t) /
-    distance`, per unit length, over the elements whose whole 3x3 block is solid.
+    distance`, per unit length, over the interior elements -- or, given `xPhys`, only
+    those whose whole 3x3 block is solid.
 
     An element is a local extremum of `t` exactly where its row has one sign, whatever
     the slopes' sizes. A central difference cannot tell: it never reads the element
@@ -741,23 +742,25 @@ def neighbour_rise(
     row's largest entry is the steepest ascent and minus its smallest the steepest
     descent; on a smooth field both approach `|grad t|`.
 
-    Blocks touching void are dropped, as in `_central_difference_gradient`: an extremum
-    on the part's boundary is reachable.
-
     :param tPhys: physical time field
-    :param xPhys: density field, to locate the fully-solid blocks
-    :return: one row of 8 slopes per qualifying element; empty if none qualifies
+    :param xPhys: density field, to keep only the fully-solid blocks, as
+        `_central_difference_gradient` does; `None` keeps every interior element
+    :return: one row of 8 slopes per kept element, row-major; empty if none is kept
     """
     nely, nelx = tPhys.shape
     centre = tPhys[1:-1, 1:-1]
-    solid = xPhys > geometry.SOLID_THRESHOLD
-    keep = solid[1:-1, 1:-1].clone()
     rises = []
     for di, dj in _RING:
         rows, cols = slice(1 + di, nely - 1 + di), slice(1 + dj, nelx - 1 + dj)
         rises.append((tPhys[rows, cols] - centre) / (di * di + dj * dj) ** 0.5)
-        keep &= solid[rows, cols]
-    return (torch.stack(rises, dim=-1) * unit_length(tPhys))[keep]
+    rise = torch.stack(rises, dim=-1) * unit_length(tPhys)
+    if xPhys is None:
+        return rise.reshape(-1, len(_RING))
+    solid = xPhys > geometry.SOLID_THRESHOLD
+    keep = solid[1:-1, 1:-1].clone()
+    for di, dj in _RING:
+        keep &= solid[1 + di : nely - 1 + di, 1 + dj : nelx - 1 + dj]
+    return rise[keep]
 
 
 def relative_sawtooth_amplitude(

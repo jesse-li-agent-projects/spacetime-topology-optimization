@@ -602,9 +602,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     )
     if g_curvature_t is not None:
         g_parts.append(g_curvature_t[None])
-    g_min_gradient_t, min_gradient_ratio = _min_gradient_row(
-        problem, xPhys, tPhys, loop
-    )
+    g_min_gradient_t, min_gradient_ratio = _min_gradient_row(problem, tPhys, loop)
     if g_min_gradient_t is not None:
         g_parts.append(g_min_gradient_t[None])
     g_all = torch.cat(g_parts)
@@ -748,26 +746,29 @@ def _tool_radius_row(
 
 def _min_gradient_row(
     problem: Problem,
-    xPhys: Float[Tensor, "nely nelx"],
     tPhys: Float[Tensor, "nely nelx"],
     loop: int,
 ) -> tuple[Float[Tensor, ""] | None, float]:
     """The floor on the time field's steepest ascent and steepest descent at each
-    element of the part's interior, `None` where the run has no such row, with the
+    interior element of the mesh, `None` where the run has no such row, with the
     smallest of either over the median ascent.
 
     Both one-sided slopes, not `|grad t|`: a local extremum of any shape has no ascent
     or no descent, while a central difference reads an uneven pit as a healthy gradient
     (PR #166). On a smooth field both approach `|grad t|`, so a saddle or a flat valley,
-    whose slopes to its neighbours are second order, fails the floor too. Blocks
-    touching void are left out (`timefield.neighbour_rise`), since an extremum there is
-    reachable. The median is held out of the gradient, as a calibration is, so the row
+    whose slopes to its neighbours are second order, fails the floor too.
+
+    Over void as well as the part. A field without interior critical points keeps them
+    to the part's boundary, where they are reachable, so this is still only what the
+    part needs; masking to the solid instead let `t` go bad under grey elements that
+    then crossed the threshold already failing, a jump the row's gradient never saw
+    (PR #166). The median is held out of the gradient, as a calibration is, so the row
     cannot be met by lowering it.
 
     Each element's ascent and descent is a calibrated smooth maximum over its
     neighbours, and the row the smooth maximum of `fraction - slope / median` over all.
     """
-    rise = timefield.neighbour_rise(tPhys, xPhys)
+    rise = timefield.neighbour_rise(tPhys)
     if rise.numel() == 0:
         # Nothing to bound; `rise.sum()` is a zero that keeps the row in the graph.
         row = None if problem.min_gradient is None else rise.sum() - 1

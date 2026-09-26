@@ -242,10 +242,10 @@ class RunConfig(_ConfigMixin):
     :param curvature_beta: `LogSumExp` sharpness of that constraint's smooth maximum,
         on the severity `tool_radius_m * concave curvature`, which is 1 on the bound.
     :param min_gradient_fraction: floor on the time field's steepest ascent and descent
-        at each element of the part's interior, as a fraction of the median ascent,
-        possibly scheduled. An element without both is an interior saddle or extremum
-        of `t`, which a tool of any finite radius cannot print, or which is printed
-        without support. `0` is no floor; the row exists only if the schedule is
+        at each interior element of the mesh, void included, as a fraction of the
+        median ascent, possibly scheduled. An element without both is an interior saddle
+        or extremum of `t`, which a tool of any finite radius cannot print, or which is
+        printed without support. `0` is no floor; the row exists only if the schedule is
         nonzero somewhere, like `tool_radius_m`'s.
     :param min_gradient_beta: `LogSumExp` sharpness of that floor's smooth maxima, over
         each element's neighbours and over the severity `min_gradient_fraction - slope

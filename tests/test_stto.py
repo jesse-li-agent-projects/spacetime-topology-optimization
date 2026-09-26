@@ -347,7 +347,7 @@ def test_step_constraint_rows_read_the_leaves_they_are_built_from():
 
     # Row order is `step`'s stack: volume, continuity, the start-point row, an upper and
     # a lower bound per stage, the hotspot row, the tool-radius row, the gradient floor
-    # (whose density mask is a hard threshold, so it reads `t` alone).
+    # (which reads `t` alone).
     density, time, both = (True, False), (False, True), (True, True)
     expected = [density, time, time] + [both] * (2 * nStage) + [both, both, time]
     assert record.dg.shape[0] == len(expected)
@@ -772,9 +772,8 @@ def _min_gradient_records(fraction):
 def test_min_gradient_floor_appends_one_row_at_the_smallest_gradient():
     """The row is the floor minus the smallest ascent or descent over the median ascent,
     since every smooth maximum in it is calibrated onto the true one."""
-    record, with_record, (xPhys, tPhys) = _min_gradient_records(0.5)
-    rise = timefield.neighbour_rise(tPhys, xPhys)
-    assert rise.shape[0] > 10  # non-vacuous: the draw has fully-solid blocks
+    record, with_record, (_, tPhys) = _min_gradient_records(0.5)
+    rise = timefield.neighbour_rise(tPhys)
     ascent, descent = rise.amax(-1), (-rise).amax(-1)
     ratio = float(torch.minimum(ascent, descent).min() / ascent.median())
 
@@ -802,15 +801,14 @@ def test_min_gradient_floor_holds_its_median_out_of_the_gradient():
     problem = _problem(nelx=10, nely=8, config_overrides={"min_gradient_fraction": 0.5})
     rng = np.random.default_rng(7)
     shape = (problem.config.nely, problem.config.nelx)
-    xPhys = torch.ones(shape, dtype=problem.dtype, device=problem.device)
     tPhys = torch_util.to_tensor(
         rng.uniform(0.0, 1.0, size=shape), problem.device, problem.dtype
     ).requires_grad_(True)
 
-    row, _ = stto._min_gradient_row(problem, xPhys, tPhys, STATE_LOOP)
+    row, _ = stto._min_gradient_row(problem, tPhys, STATE_LOOP)
     (got,) = torch.autograd.grad(row, tPhys)
 
-    rise = timefield.neighbour_rise(tPhys, xPhys)
+    rise = timefield.neighbour_rise(tPhys)
     ratio = rise / rise.detach().amax(-1).median()
     beta = problem.config.min_gradient_beta
     slopes = torch.cat(
