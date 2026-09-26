@@ -12,7 +12,7 @@
   "hotspot_aggregation": "logsumexp",
   "hotspot_beta": 4.0,
   "hotspot_kappa": 2.3666,
-  "hotspot_g0": 0.07,
+  "hotspot_g0_per_m": 0.3195,
   "uniformity_metric": "gradient_cv",
   "uniformity_weight": 1.0,
   "roughness_weight": {

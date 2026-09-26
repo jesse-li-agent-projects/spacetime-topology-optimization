@@ -12,9 +12,12 @@ handles an element-scale filtering issue, so its per-element "layer" is correct.
 
 1. **Config lengths in metres** (PR #152, done). `RunConfig` has `width_m`/`height_m`
    and `nelx`; a geometry file states its size. The mesh-level code stays in elements.
-2. **`hotspot_g0` and iso-line curvature in SI** (1/m), removing
-   `timefield.unit_length`, which measures per square root of domain area: padding a
-   geometry with void changes what `g0` means.
+2. **`hotspot_g0` and iso-line curvature in SI** (1/m). `g0` was per
+   `timefield.unit_length`, the square root of the domain area, so padding a geometry
+   with void changed what it meant. `unit_length` stays as the internal gradient unit:
+   it keeps gradients of order 1, which `GRAD_EPS`/`NORMAL_EPS` are set against, at
+   any resolution or part size. Settings and diagnostics convert through
+   `unit_length_m`.
 3. **Mean-form constraint rows.** The continuity row becomes `mean(dev**2) / tol - 1`
    (its `2 * nel` weight grows with refinement), and the start-point rows become one
    row on the base's mean print time (one row per base element now).

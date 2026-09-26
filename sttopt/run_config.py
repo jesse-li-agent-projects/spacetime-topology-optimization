@@ -216,11 +216,11 @@ class RunConfig(_ConfigMixin):
         onto the direction opposite the local print direction, `2.37` matching Das2023
         Eq. (3.5)'s linear ramp at half maximum. Requires `half_stencil` normalization
         -- see `conductivity._lobe` and `plans/angular_weight.md`.
-    :param hotspot_g0: the angular lobe's gradient scale, per unit length: how much
-        layering must exist before the print direction is believed. The lobe flattens to
-        isotropic as `|grad t|` falls below it, which is what keeps the weight
-        well-defined where no direction is defined. Belongs an order of magnitude below
-        the run's own median `|grad t|` and is not a tuning knob: a converged field's
+    :param hotspot_g0_per_m: the angular lobe's gradient scale, in `t` per metre: how
+        much layering must exist before the print direction is believed. The lobe
+        flattens to isotropic as `|grad t|` falls below it, which is what keeps the
+        weight well-defined where no direction is defined. Belongs an order of magnitude
+        below the run's own median `|grad t|` (`grad_p50_per_m`) and is not a tuning knob: a converged field's
         gradient distribution is tight, so a `g0` near the median attenuates `kappa` by
         a near-constant factor across the whole part, which is a second `hotspot_kappa`
         rather than a floor (measured in `plans/angular_weight.md`, Phase 3 results).
@@ -260,7 +260,7 @@ class RunConfig(_ConfigMixin):
     hotspot_aggregation: str
     hotspot_beta: Scheduled
     hotspot_kappa: Scheduled
-    hotspot_g0: float
+    hotspot_g0_per_m: float
     print_base: str
     rmin_m: float
     time_filter_rmin_m: float
@@ -357,11 +357,11 @@ class SeqRunConfig(_ConfigMixin):
         onto the direction opposite the local print direction, `2.37` matching Das2023
         Eq. (3.5)'s linear ramp at half maximum. Requires `half_stencil` normalization
         -- see `conductivity._lobe` and `plans/angular_weight.md`.
-    :param hotspot_g0: the angular lobe's gradient scale, per unit length: how much
-        layering must exist before the print direction is believed. The lobe flattens to
-        isotropic as `|grad t|` falls below it, which is what keeps the weight
-        well-defined where no direction is defined. Belongs an order of magnitude below
-        the run's own median `|grad t|` and is not a tuning knob: a converged field's
+    :param hotspot_g0_per_m: the angular lobe's gradient scale, in `t` per metre: how
+        much layering must exist before the print direction is believed. The lobe
+        flattens to isotropic as `|grad t|` falls below it, which is what keeps the
+        weight well-defined where no direction is defined. Belongs an order of magnitude
+        below the run's own median `|grad t|` (`grad_p50_per_m`) and is not a tuning knob: a converged field's
         gradient distribution is tight, so a `g0` near the median attenuates `kappa` by
         a near-constant factor across the whole part, which is a second `hotspot_kappa`
         rather than a floor (measured in `plans/angular_weight.md`, Phase 3 results).
@@ -412,7 +412,7 @@ class SeqRunConfig(_ConfigMixin):
     hotspot_aggregation: str
     hotspot_beta: float
     hotspot_kappa: Scheduled
-    hotspot_g0: float
+    hotspot_g0_per_m: float
     uniformity_metric: str
     uniformity_weight: float
     roughness_weight: float | CosineSchedule

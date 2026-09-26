@@ -162,19 +162,7 @@ def test_constraint_row_count_is_independent_of_resolution():
     assert rows[0] == rows[1]
 
 
-@pytest.mark.parametrize(
-    "kappa",
-    [
-        0.0,
-        pytest.param(
-            2.3666,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="step 2: hotspot_g0 is per sqrt(domain area), not per metre",
-            ),
-        ),
-    ],
-)
+@pytest.mark.parametrize("kappa", [0.0, 2.3666])
 def test_void_padding_leaves_the_parts_conductivity_unchanged(kappa):
     """The domain box is not physics: widening it with void the conductivity stencil
     cannot reach from the part must not change what the part measures."""

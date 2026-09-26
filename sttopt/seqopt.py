@@ -133,13 +133,13 @@ class IterationRecord:
     hotspot_kappa: (
         float  # this iteration's angular lobe width, which a schedule may vary
     )
-    # Layer thickness and its spread, as `|grad tPhys|` percentiles per unit length
+    # Layer thickness and its spread, as `|grad tPhys|` percentiles per metre
     # (`timefield.gradient_percentiles`). Diagnostics: they say what layer scale the
-    # run actually reached, which is what a per-unit-length setting like
-    # `config.hotspot_g0` has to be read against.
-    grad_p10: float
-    grad_p50: float
-    grad_p90: float
+    # run actually reached, which is what a gradient setting like
+    # `config.hotspot_g0_per_m` has to be read against.
+    grad_p10_per_m: float
+    grad_p50_per_m: float
+    grad_p90_per_m: float
     df: Float[np.ndarray, " n"]
     xmma: Float[np.ndarray, " n"]
     low: Float[np.ndarray, " n"]
@@ -333,7 +333,8 @@ def estimated_conductivity(
         problem.hotspot_base,
         problem.hotspot_stencil,
         kappa,
-        config.hotspot_g0,
+        config.hotspot_g0_per_m
+        * timefield.unit_length_m(tPhys, problem.element_size_m),
     )
 
 
@@ -440,7 +441,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         true_cv = float(timefield.central_difference_cv(physical, xPhys))
         sawtooth = float(timefield.relative_sawtooth_amplitude(physical, xPhys))
         sawtooth_raw = float(timefield.relative_sawtooth_amplitude(raw, xPhys))
-        grad_p10, grad_p50, grad_p90 = timefield.gradient_percentiles(physical, xPhys)
+        unit_m = timefield.unit_length_m(physical, problem.element_size_m)
+        grad_p10, grad_p50, grad_p90 = (
+            g / unit_m for g in timefield.gradient_percentiles(physical, xPhys)
+        )
 
     # -- Gradient region ends: mmasub is not part of the autograd graph. --
     m = len(g_all)
@@ -492,9 +496,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         sawtooth_raw=sawtooth_raw,
         roughness_weight=roughness_weight,
         hotspot_kappa=run_config.weight_at(config.hotspot_kappa, loop),
-        grad_p10=grad_p10,
-        grad_p50=grad_p50,
-        grad_p90=grad_p90,
+        grad_p10_per_m=grad_p10,
+        grad_p50_per_m=grad_p50,
+        grad_p90_per_m=grad_p90,
         df=torch_util.to_numpy(df_dt[0]),
         xmma=torch_util.to_numpy(xmma),
         low=torch_util.to_numpy(low),
