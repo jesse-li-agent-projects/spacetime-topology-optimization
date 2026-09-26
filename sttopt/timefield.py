@@ -787,6 +787,48 @@ def gradient_percentiles(
     return tuple(float(v) for v in torch.quantile(sample, qs))
 
 
+# Floor on `|grad t|` when normalizing it to the iso-line normal, relative to the
+# weighted mean gradient. `GRAD_EPS` would let element-scale noise on a plateau of `t`
+# read as a curvature ~1e6 times too large.
+NORMAL_EPS = 1e-2
+
+
+def iso_curvature(
+    tPhys: Float[Tensor, "nely nelx"],
+    weights: Float[Tensor, "nely nelx"] | None = None,
+) -> Float[Tensor, "nely-2 nelx-2"]:
+    """Signed curvature `div(grad t / |grad t|)` of the time field's iso-lines at the
+    interior elements, per unit length (`unit_length`).
+
+    The normal points from printed toward unprinted material, so a positive value is a
+    convex printed region and a negative one is concave as the print tool sees it:
+    printing circles from the outside in reads `-1/r`, from the inside out `+1/r`.
+
+    The normal is taken at the dual-grid cell centres and its divergence back at the
+    elements, since a Q4 field has no `t_xx`/`t_yy` inside a cell. That stencil is blind
+    to the `(-1)^(i+j)` checkerboard, which `relative_roughness` penalizes instead.
+
+    :param tPhys: physical time field
+    :param weights: per-element weight for the mean gradient that sets the normal's
+        floor (`NORMAL_EPS`), e.g. the density field; `None` weights every sample equally
+    :return: the curvature at every element not on the mesh border
+    """
+    lo_lo, lo_hi = tPhys[:-1, :-1], tPhys[:-1, 1:]
+    hi_lo, hi_hi = tPhys[1:, :-1], tPhys[1:, 1:]
+    dt_dx = (lo_hi - lo_lo + hi_hi - hi_lo) / 2
+    dt_dy = (hi_lo - lo_lo + hi_hi - lo_hi) / 2
+
+    # the floor is set per element, so scale the unit-length mean back to that
+    mean, _, _ = _weighted_gradient_mean(tPhys, weights)
+    floor = NORMAL_EPS * (mean / unit_length(tPhys)) ** 2
+    norm = torch.sqrt(dt_dx**2 + dt_dy**2 + floor + GRAD_EPS)
+    nx, ny = dt_dx / norm, dt_dy / norm
+
+    dnx_dx = (nx[:-1, 1:] - nx[:-1, :-1] + nx[1:, 1:] - nx[1:, :-1]) / 2
+    dny_dy = (ny[1:, :-1] - ny[:-1, :-1] + ny[1:, 1:] - ny[:-1, 1:]) / 2
+    return (dnx_dx + dny_dy) * unit_length(tPhys)
+
+
 class UniformityMetric(StrEnum):
     """Names for `uniformity_penalty`'s selectable layer-uniformity measure. Adding a
     measure is a matter of writing a function and a member here -- see

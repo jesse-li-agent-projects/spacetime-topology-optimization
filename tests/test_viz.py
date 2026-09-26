@@ -145,6 +145,7 @@ def test_main_regenerates_plots_from_a_seqopt_run_directory(tmp_path, monkeypatc
         "timefield.png",
         "timefield_gradient_magnitude.png",
         "print_direction.png",
+        "iso_curvature.png",
         "timefield_contour.png",
         "timefield_filled_contour.png",
     ]:
@@ -181,3 +182,21 @@ def test_print_direction_plot_flips_y_into_the_plot_frame():
 
     quiver = ax.collections[-1]
     assert np.all(quiver.V < 0)
+
+
+def test_iso_curvature_plot_greys_the_unmeasured_border_and_centres_on_zero():
+    """Border elements have no curvature but are still part of the design, and the
+    scale is symmetric so concave and convex read at the same strength."""
+    xPhys = np.ones((NELY, NELX))
+    curvature = np.pad(
+        np.linspace(-0.2, 0.1, (NELY - 2) * (NELX - 2)).reshape(NELY - 2, NELX - 2),
+        1,
+        constant_values=np.nan,
+    )
+
+    ax = viz.iso_curvature_plot(xPhys, curvature)
+
+    coll = ax.collections[0]
+    assert len(coll.get_paths()) == NELY * NELX
+    low, high = coll.get_clim()
+    assert high == -low > 0

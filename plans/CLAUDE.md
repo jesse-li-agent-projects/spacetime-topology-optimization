@@ -16,6 +16,9 @@ This directory contains plans for agents.
     - A hard MMA constraint keeping the concave curvature of `t`'s iso-lines below
       `1 / tool_radius`, so the print tool cannot collide with the part. Calibrated
       LogSumExp smooth max, with `tool_radius` scheduled from 0 as the continuation.
+- curvature_constraint_handoff.md
+    - The brief for that plan's Phase 5 (tune the continuation to `R = 2.5` elements):
+      corrections to the plan, the sweep setup, what to report, and known traps.
 Completed plans live in `plans/archive/` and are not summarized here to keep this
 index short. Only open one if you specifically need the history behind a past
 decision.

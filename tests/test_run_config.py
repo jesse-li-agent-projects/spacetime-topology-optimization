@@ -11,6 +11,7 @@ from sttopt.run_config import (
     PiecewiseSchedule,
     RunConfig,
     SeqRunConfig,
+    identically_zero,
     weight_at,
 )
 
@@ -151,3 +152,18 @@ def test_config_round_trips_a_piecewise_schedule():
     revived = RunConfig.from_dict(json.loads(json.dumps(config.to_dict())))
     assert revived == config
     assert weight_at(revived.hotspot_beta, 400) == pytest.approx(32.0)
+
+
+@pytest.mark.parametrize(
+    "setting, expected",
+    [
+        (0.0, True),
+        (0.5, False),
+        (CosineSchedule(initial=0.0, decay_iterations=10, final=0.0), True),
+        (CosineSchedule(initial=1.0, decay_iterations=10, final=0.0), False),
+        (PiecewiseSchedule(points=[[0, 0.0], [50, 0.0]]), True),
+        (PiecewiseSchedule(points=[[0, 0.0], [50, 2.0]]), False),
+    ],
+)
+def test_identically_zero(setting, expected):
+    assert identically_zero(setting) is expected

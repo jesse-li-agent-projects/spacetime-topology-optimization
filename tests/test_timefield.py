@@ -2,10 +2,13 @@
 conventions.md)."""
 
 import itertools
+from collections.abc import Callable
 
 import numpy as np
 import pytest
 import torch
+from jaxtyping import Float
+from torch import Tensor
 
 import sttopt.geometry as geometry
 import sttopt.timefield as timefield
@@ -726,3 +729,59 @@ def test_gradient_percentiles_are_zero_when_no_stencil_qualifies():
     tPhys = torch.rand(6, 6, dtype=torch.float64)
     xPhys = torch.zeros(6, 6, dtype=torch.float64)
     assert timefield.gradient_percentiles(tPhys, xPhys) == (0.0, 0.0, 0.0)
+
+
+def _circles(
+    n: int, profile: Callable[[np.ndarray], np.ndarray]
+) -> tuple[Float[Tensor, "n n"], Float[np.ndarray, "n-2 n-2"]]:
+    """Iso-lines that are circles about a centre half a domain outside the corner, so the
+    same physical field at every `n`; `profile` maps radius (in domain widths) to `t`.
+    Returns the field and each interior element's radius in unit lengths."""
+    i, j = np.indices((n, n)).astype(float)
+    r = np.hypot(i + n / 2, j + n / 2) / n
+    return torch.from_numpy(profile(r)), r[1:-1, 1:-1]
+
+
+@pytest.mark.parametrize("n", [40, 80])
+def test_iso_curvature_of_circles_signs_the_print_direction(n):
+    """Printing circles from the inside out is convex (`+1/r`), from the outside in
+    concave (`-1/r`), at any resolution of the same field."""
+    outward, r = _circles(n, lambda r: r)
+    inward, _ = _circles(n, lambda r: -r)
+    # 0.5% is the normal's floor, not discretization error: it does not shrink with n
+    np.testing.assert_allclose(
+        timefield.iso_curvature(outward).numpy(), 1 / r, rtol=6e-3
+    )
+    np.testing.assert_allclose(
+        timefield.iso_curvature(inward).numpy(), -1 / r, rtol=6e-3
+    )
+
+
+def test_iso_curvature_ignores_layer_thickness_along_the_normal():
+    """Curvature is a property of the iso-lines, not of how fast `t` crosses them."""
+    square, r = _circles(40, lambda r: r**2)
+    np.testing.assert_allclose(
+        timefield.iso_curvature(square).numpy(), 1 / r, rtol=0.02
+    )
+
+
+@pytest.mark.parametrize("a, b", [(0.0, 1.0), (1.0, 0.0), (0.3, 0.7), (-0.6, 0.2)])
+def test_iso_curvature_of_a_ramp_is_zero(a, b):
+    i, j = np.indices((12, 15)).astype(float)
+    field = torch.from_numpy(a * i + b * j)
+    assert timefield.iso_curvature(field).abs().max() < 1e-10
+
+
+def test_iso_curvature_is_insensitive_to_noise_on_a_plateau():
+    """Where `|grad t|` is ~0 the normal is noise; the floor keeps that noise from
+    reading as curvature."""
+    i, j = np.indices((60, 60)).astype(float)
+    clean = j / 59
+    clean[20:40, 20:40] = 0.5
+    noisy = clean.copy()
+    noisy[20:40, 20:40] += 1e-7 * np.random.default_rng(0).standard_normal((20, 20))
+    noisy_kappa = timefield.iso_curvature(torch.from_numpy(noisy))
+    clean_kappa = timefield.iso_curvature(torch.from_numpy(clean))
+    diff = noisy_kappa - clean_kappa
+    # a circle one element across reads ~60 per unit length here
+    assert diff.abs().max() < 0.1

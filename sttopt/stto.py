@@ -40,6 +40,7 @@ import sttopt.gravity as gravity
 import sttopt.mma as mma
 import sttopt.run_config as run_config
 import sttopt.sensitivity as sensitivity
+import sttopt.smooth_max as smooth_max
 import sttopt.timefield as timefield
 import sttopt.torch_fem as torch_fem
 import sttopt.torch_util as torch_util
@@ -89,6 +90,9 @@ class Problem:
     hotspot_base: Int[Tensor, " k"] | None
     # Smooth maximum of the hotspot severity, holding its own calibration.
     hotspot: conductivity.PMean | conductivity.LogSumExp
+    # Smooth maximum of the tool-radius curvature severity, holding its own
+    # calibration, or None where `config.tool_radius` never leaves 0 and so has no row.
+    curvature: smooth_max.CalibratedLogSumExp | None
     Nei: Int[Tensor, " k"]
 
     n: int  # number of MMA design variables: 2*nelx*nely (density half + time half)
@@ -183,6 +187,13 @@ def build_problem(
         raise ValueError(
             f"nelx and nely cannot both be 1, got nelx={nelx}, nely={nely}"
         )
+    # The tool-radius row smooth-maxes over the elements `iso_curvature` measures
+    if not run_config.identically_zero(config.tool_radius):
+        measured = timefield.iso_curvature(torch.zeros(nely, nelx, dtype=torch.float64))
+        if measured.numel() == 0:
+            raise ValueError(
+                f"tool_radius needs an interior element to measure curvature at, but iso_curvature measures none on a nelx={nelx}, nely={nely} mesh"
+            )
 
     tfield = timefield.TimeField[config.print_base.upper()]
     KE = fem.plane_stress_KE(config.nu)
@@ -259,6 +270,11 @@ def build_problem(
             config.p,
             config.r,
             config.hotspot_beta,
+        ),
+        curvature=(
+            None
+            if run_config.identically_zero(config.tool_radius)
+            else smooth_max.CalibratedLogSumExp(config.curvature_beta)
         ),
         n=n,
         **float_fields,
@@ -528,7 +544,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     xmax = torch.ones_like(xval)
     mma_trust = mma.trust_region_params(
         _flatten_pair(
-            torch.full_like(xflat, config.move), torch.full_like(tflat, config.tmove)
+            torch.full_like(xflat, config.move),
+            torch.full_like(tflat, run_config.weight_at(config.tmove, loop)),
         ),
         xmax - xmin,
     )
@@ -577,6 +594,12 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     tru_max = float(hotspot_t.detach())
 
     g_parts.append(g_hotspot_t[None])
+
+    g_curvature_t, concave_t, tool_radius = _tool_radius_row(
+        problem, xPhys, tPhys, loop
+    )
+    if g_curvature_t is not None:
+        g_parts.append(g_curvature_t[None])
     g_all = torch.cat(g_parts)
     dg_dx = torch.cat(
         [_sensitivity_rows(g, x, t) for g in g_parts],
@@ -603,6 +626,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         hotspot_beta=run_config.weight_at(config.hotspot_beta, loop),
         beta_d=beta_d,
         beta_t=beta_t,
+        tool_radius=tool_radius,
+        admissible_tool_radius=_admissible_tool_radius(concave_t.detach()),
     )
 
     # -- Periodic state updates, deferred to take effect starting *next* iteration's
@@ -680,6 +705,43 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         diagnostics=diagnostics,
     )
     return new_state, record
+
+
+def _tool_radius_row(
+    problem: Problem,
+    xPhys: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+    loop: int,
+) -> tuple[Float[Tensor, ""] | None, Float[Tensor, " n"], float]:
+    """The tool-radius constraint on the concave curvature of the iso-lines, `None`
+    where the run has no such row, with the concave curvature per measured element
+    (density-weighted, per element) and iteration `loop`'s tool radius `R`.
+
+    The severity is `R * concave curvature`, so the row is its smooth maximum minus the
+    bound of 1.
+    """
+    config = problem.config
+    kappa_t = timefield.iso_curvature(tPhys, xPhys)
+    unit = timefield.unit_length(tPhys)
+    density_r = smooth_max.density_power(xPhys[1:-1, 1:-1].flatten(), config.r)
+    concave_t = -kappa_t.flatten() / unit * density_r
+    tool_radius = run_config.weight_at(config.tool_radius, loop)
+    if problem.curvature is None:
+        return None, concave_t, tool_radius
+    recalibrate = problem.curvature.resolve(loop)
+    recalibrate |= loop % config.hotspot_refresh_period == 0
+    recalibrate |= tool_radius != run_config.weight_at(config.tool_radius, loop - 1)
+    g_curvature_t = (
+        problem.curvature.aggregate(tool_radius * concave_t, recalibrate) - 1
+    )
+    return g_curvature_t, concave_t, tool_radius
+
+
+def _admissible_tool_radius(concave: Float[Tensor, " n"]) -> float:
+    """The largest tool radius, in elements, that no iso-line's concave curvature
+    (density-weighted, per element) forbids; `inf` where nothing is concave."""
+    worst = float(concave.max()) if concave.numel() else 0.0
+    return 1 / worst if worst > 0 else float("inf")
 
 
 def _hotspot_diagnostics(

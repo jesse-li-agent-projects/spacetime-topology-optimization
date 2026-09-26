@@ -150,12 +150,15 @@ def test_build_problem_rejects_the_1x1_mesh(tfield):
     """A 1x1 mesh degenerates two of `build_problem`'s pieces -- the distance time fields
     normalize by a zero max distance, and the continuity filter divides by a zero
     neighbour count -- so it must be rejected up front, before either produces a `nan` or
-    a divide-by-zero warning. Lone-1 meshes stay legal (see `test_timefield.py`)."""
+    a divide-by-zero warning. Lone-1 meshes stay legal (see `test_timefield.py`) without
+    a tool-radius row, which needs an interior element (see
+    `test_tool_radius_needs_an_interior_element`)."""
     with pytest.raises(ValueError):
         _problem(nelx=1, nely=1, tfield=tfield)
 
-    _problem(nelx=1, nely=4, tfield=tfield)
-    _problem(nelx=4, nely=1, tfield=tfield)
+    no_tool = {"tool_radius": 0.0}
+    _problem(nelx=1, nely=4, tfield=tfield, config_overrides=no_tool)
+    _problem(nelx=4, nely=1, tfield=tfield, config_overrides=no_tool)
 
 
 def test_density_filter_fixes_constant_fields():
@@ -349,17 +352,18 @@ def test_step_assembled_sensitivities_match_finite_differences(monkeypatch):
     # each case. So h sits at 1e-6, where that direction reaches 7.5e-9 and `.f` is
     # still an order of magnitude inside its own tolerance.
     h = 1e-6
-    # Stage volume bounds on, so every kind of constraint row is present. The hotspot
-    # calibration is a detached offset re-measured from the design it is refreshed on,
-    # so on a refresh iteration `.g`'s hotspot row moves by an amount `.dg` deliberately
-    # does not carry -- `.dg` is the smooth surrogate's gradient, which is what MMA
-    # linearizes. Freezing the calibration leaves a row the finite difference can see.
+    # Stage volume bounds on and a constant tool radius, so every kind of constraint row
+    # is present and live. The smooth-max calibrations are detached offsets re-measured
+    # from the design they are refreshed on, so on a refresh iteration `.g`'s hotspot and
+    # tool-radius rows move by an amount `.dg` deliberately does not carry -- `.dg` is the
+    # smooth surrogate's gradient, which is what MMA linearizes. Freezing the
+    # calibrations leaves rows the finite difference can see.
     problem = _problem(
         nelx=nelx,
         nely=nely,
         nStage=nStage,
         enable_stage_volume=True,
-        config_overrides={"hotspot_refresh_period": 2**62},
+        config_overrides={"hotspot_refresh_period": 2**62, "tool_radius": 2.0},
     )
     nel = nelx * nely
     assert problem.n == 2 * nel
@@ -369,10 +373,13 @@ def test_step_assembled_sensitivities_match_finite_differences(monkeypatch):
     _, record = stto.step(problem, state)
 
     # Row count follows from the stack `step` builds: volume, continuity (when enabled),
-    # one row per print-start element, an upper and a lower bound per stage, and the
-    # hotspot row.
+    # one row per print-start element, an upper and a lower bound per stage, the hotspot
+    # row, and the tool-radius row (when enabled).
     n_continuity_rows = 1 if problem.config.enable_continuity else 0
-    m = 1 + n_continuity_rows + len(problem.Nei) + 2 * nStage + 1
+    n_curvature_rows = (
+        0 if run_config.identically_zero(problem.config.tool_radius) else 1
+    )
+    m = 1 + n_continuity_rows + len(problem.Nei) + 2 * nStage + 1 + n_curvature_rows
     assert record.df.shape == (problem.n,)
     assert record.g.shape == (m,)
     assert record.dg.shape == (m, problem.n)
@@ -773,3 +780,59 @@ def test_step_would_have_produced_nan_without_the_nan_safe_rewrite():
     numer = (torch.sum(cond_p) / x_t.numel()) ** (1 / 25.0)
     (d_x,) = torch.autograd.grad(numer, (x_t,))
     assert torch.any(torch.isnan(d_x))
+
+
+def _curvature_records(tool_radius):
+    """One `step` record with no tool-radius row and one at `tool_radius`, from the same
+    design, at iteration `QUIET_LOOP`."""
+    base = _problem(nelx=10, nely=8, config_overrides={"tool_radius": 0.0})
+    with_tool = stto.build_problem(
+        dataclasses.replace(base.config, tool_radius=tool_radius)
+    )
+    _, _, state = _draw_well_conditioned_state(base, np.random.default_rng(3))
+    _, record = stto.step(base, state)
+    _, with_record = stto.step(with_tool, state)
+    return record, with_record
+
+
+def test_tool_radius_appends_one_row_bounding_the_concave_curvature():
+    """The row is the tool radius over the largest one the design admits, minus 1,
+    since every iteration refreshes the calibration onto the true maximum."""
+    record, with_record = _curvature_records(2.0)
+
+    assert with_record.g.shape == (record.g.shape[0] + 1,)
+    np.testing.assert_allclose(with_record.g[:-1], record.g, rtol=1e-12)
+    admissible = with_record.diagnostics["admissible_tool_radius"]
+    assert np.isfinite(admissible)  # non-vacuous: a random design has concave fronts
+    assert with_record.g[-1] == pytest.approx(2.0 / admissible - 1, rel=1e-10)
+    assert np.abs(with_record.dg[-1]).max() > 0
+
+
+def test_tool_radius_at_zero_mid_schedule_is_an_inactive_row():
+    """A ramp that has not yet left 0 already has its row, which a zero-radius tool
+    satisfies with no gradient."""
+    ramp = run_config.PiecewiseSchedule(
+        points=[[0, 0.0], [QUIET_LOOP + 10, 0.0], [QUIET_LOOP + 20, 3.0]]
+    )
+    record, with_record = _curvature_records(ramp)
+
+    assert with_record.g.shape == (record.g.shape[0] + 1,)
+    assert with_record.g[-1] == pytest.approx(-1.0, abs=1e-12)
+    assert np.abs(with_record.dg[-1]).max() == 0
+
+
+def test_tool_radius_needs_an_interior_element():
+    config = dataclasses.replace(_problem().config, nelx=2, nely=6, tool_radius=1.0)
+    with pytest.raises(ValueError, match="interior element"):
+        stto.build_problem(config)
+
+
+def test_scheduled_tmove_bounds_each_iterations_time_step():
+    """A `tmove` schedule sets the trust region of the iteration it resolves at."""
+    schedule = run_config.PiecewiseSchedule(points=[[0, 0.02], [1, 0.005]], mode="step")
+    problem = _problem(config_overrides=dict(tmove=schedule))
+    state, first = stto.step(problem, stto.init_state(problem))
+    _, second = stto.step(problem, state)
+
+    assert first.diagnostics["dt_max"] > 0.005  # non-vacuous: the wide limit is used
+    assert second.diagnostics["dt_max"] <= 0.005 + 1e-12

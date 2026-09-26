@@ -42,7 +42,7 @@ import torch
 from jaxtyping import Float, Int
 from torch import Tensor
 
-from sttopt import run_config, timefield
+from sttopt import run_config, smooth_max, timefield
 
 
 class Normalization(StrEnum):
@@ -553,24 +553,17 @@ class PMean:
         return self.calibration * numer
 
 
-class LogSumExp:
-    """`log(sum(exp(beta * T * x**r))) / beta`, a smooth maximum of the severity
-    `T * x**r`, carried onto the true maximum by a calibration offset.
+class LogSumExp(smooth_max.CalibratedLogSumExp):
+    """The calibrated LogSumExp smooth maximum of the severity `T * x**r`.
 
-    Translation rather than scale equivariance is the property that fits once
-    `Normalization.HALF_STENCIL` has pinned the scale against a physical reference:
-    `exp` is defined on all of R, so `K_est > 1` needs no clamp. Its bias is additive
-    and bounded by `log(nel)/beta` rather than multiplicative -- +0.001 at `beta=200`
-    where `PMean` at `p=25` is -26%. The bound grows as `beta` falls: a `beta` low
-    enough to spread the sensitivity past a handful of hot elements pays a bias larger
-    than the maximum itself, which the calibration carries back onto the true maximum.
+    Suits `Normalization.HALF_STENCIL`, which pins the scale against a physical
+    reference, so `PMean`'s scale equivariance buys nothing there. Its additive bias is
+    +0.001 at `beta=200` where `PMean` at `p=25` is -26%.
 
     It aggregates exactly the quantity `PMean` and the calibration both target: density
     enters through the severity, so void is not suppressed beyond scoring zero severity
     -- a void element's share of the sum is `exp(-beta * max)`, which a sharp `beta`
     makes negligible.
-
-    The calibration is run state, refreshed in place by a call with `recalibrate`.
     """
 
     def __init__(self, beta: "run_config.Scheduled", r: float):
@@ -578,17 +571,8 @@ class LogSumExp:
         :param beta: sharpness, possibly scheduled; `resolve` adopts one iteration's.
         :param r: the density exponent of the severity the calibration targets
         """
-        self.beta_schedule = beta
-        self.beta = run_config.weight_at(beta, 0)
+        super().__init__(beta)
         self.r = r
-        self.calibration = 0.0
-
-    def resolve(self, loop: int) -> bool:
-        """Adopt iteration `loop`'s scheduled sharpness, reporting whether it moved --
-        which stales the calibration, since `beta` sets the aggregate's bias.
-        """
-        beta, self.beta = self.beta, run_config.weight_at(self.beta_schedule, loop)
-        return beta != self.beta
 
     def __call__(
         self,
@@ -598,21 +582,14 @@ class LogSumExp:
     ) -> Float[Tensor, ""]:
         """The calibrated aggregate, differentiable in `K_est` and `xPhys`.
 
-        :param recalibrate: first refresh the calibration against this field's true
-            maximum.
+        :param recalibrate: see `aggregate`.
         """
-        x = xPhys.flatten()
         shielded = torch.isinf(K_est)
-        solid = x > 0
-        # not torch.where(solid, x**self.r, 0): the dead branch backprops 0 * inf = nan
-        x_r = solid * torch.where(solid, x, torch.ones_like(x)) ** self.r
+        x_r = smooth_max.density_power(xPhys.flatten(), self.r)
         # `1 - inf` would poison the `-inf` reselect below through `inf * 0`.
         T = torch.where(shielded, torch.zeros_like(K_est), 1 - K_est)
         sev = torch.where(shielded, -torch.inf, T * x_r)
-        numer = torch.logsumexp(self.beta * sev, dim=0) / self.beta
-        if recalibrate:
-            self.calibration = float(numer.detach()) - float(sev.detach().max())
-        return numer - self.calibration
+        return self.aggregate(sev, recalibrate)
 
 
 def make_aggregation(
