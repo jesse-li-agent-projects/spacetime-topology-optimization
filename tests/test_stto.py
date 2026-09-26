@@ -373,13 +373,13 @@ def test_step_assembled_sensitivities_match_finite_differences(monkeypatch):
     _, record = stto.step(problem, state)
 
     # Row count follows from the stack `step` builds: volume, continuity (when enabled),
-    # one row per print-start element, an upper and a lower bound per stage, the hotspot
-    # row, and the tool-radius row (when enabled).
+    # the start-point row, an upper and a lower bound per stage, the hotspot row, and
+    # the tool-radius row (when enabled).
     n_continuity_rows = 1 if problem.config.enable_continuity else 0
     n_curvature_rows = (
         0 if run_config.identically_zero(problem.config.tool_radius_m) else 1
     )
-    m = 1 + n_continuity_rows + len(problem.Nei) + 2 * nStage + 1 + n_curvature_rows
+    m = 1 + n_continuity_rows + 1 + 2 * nStage + 1 + n_curvature_rows
     assert record.df.shape == (problem.n,)
     assert record.g.shape == (m,)
     assert record.dg.shape == (m, problem.n)

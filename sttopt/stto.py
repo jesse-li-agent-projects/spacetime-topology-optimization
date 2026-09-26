@@ -387,9 +387,9 @@ def _sensitivity_rows(
     x: Float[Tensor, "nely nelx"],
     t: Float[Tensor, "nely nelx"],
 ) -> Float[Tensor, "k n"]:
-    """Sensitivities of `k` independent scalar outputs (e.g. one per print-start
-    element, or one per stage, or a single row passed as `value[None]`) w.r.t. both raw
-    leaves, as `(k, n)` in MMA's `[density; time]` layout.
+    """Sensitivities of `k` independent scalar outputs (e.g. one per element, or one per
+    stage, or a single row passed as `value[None]`) w.r.t. both raw leaves, as `(k, n)`
+    in MMA's `[density; time]` layout.
 
     Every step of the chain is autograd's, the density filter included. That is only
     affordable because `filters.apply_density_filter` multiplies through
@@ -563,7 +563,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         )
         g_parts.append(g_cont_t[None])
 
-    g_parts.append(constraints.start_point(tPhys, problem.Nei))
+    g_parts.append(constraints.start_point(tPhys, problem.Nei)[None])
 
     if config.enable_stage_volume:
         stage_upper_t = [  # per-stage volume bounds

@@ -44,6 +44,9 @@ def time_field_continuity(
     legitimate curvature, and below that curvature's own deviation it is infeasible from
     the first iteration rather than binding (PR #91).
 
+    A mean over the domain relative to `tolerance`, so the row stays of order 1 under
+    mesh refinement; the MATLAB source's `2 * nel` weight grew with it.
+
     :param tPhys: physical time field
     :param L: continuity filter, from `filters.continuity_filter`
     :param tolerance: bound on the mean squared deviation from the neighborhood average,
@@ -51,24 +54,28 @@ def time_field_continuity(
         geometry's own curvature floor to be a constraint at all.
     :return: the constraint value, non-positive when satisfied
     """
-    nely, nelx = tPhys.shape
-    nel = nely * nelx
-    smoothness_weight = 2 * nel
     deviation = L @ tPhys.flatten()
-    return smoothness_weight * (torch.sum(deviation**2 / nel) - tolerance)
+    return torch.mean(deviation**2) / tolerance - 1
 
 
 def start_point(
     tPhys: Float[Tensor, "nely nelx"], Nei: Int[Tensor, " k"]
-) -> Float[Tensor, " k"]:
-    """Print-start constraint(s): the deposition-origin element(s) `Nei` (0-indexed
-    element numbers, per `conventions.md`) must start printing at t=0 (up to machine
-    precision).
+) -> Float[Tensor, ""]:
+    """
+    Print-start constraint: the deposition-origin element(s) must start printing at t=0
+    (up to machine precision).
+
+    One row on their mean print time rather than one per element, so the row count does
+    not grow with the mesh. `tPhys` is non-negative, so a mean at 0 pins every one.
 
     Example: `Nei` is `[0]` for the single-origin time field (`tfield==1`) -- the
     elements nearest the print-start origin.
+
+    :param tPhys: physical time field
+    :param Nei: deposition-origin element numbers, 0-indexed per `conventions.md`
+    :return: the constraint value, non-positive when satisfied
     """
-    return tPhys.flatten()[Nei] - 1.0e-9
+    return tPhys.flatten()[Nei].mean() - 1.0e-9
 
 
 def stage_volume_bounds(

@@ -20,7 +20,8 @@ handles an element-scale filtering issue, so its per-element "layer" is correct.
    `unit_length_m`.
 3. **Mean-form constraint rows.** The continuity row becomes `mean(dev**2) / tol - 1`
    (its `2 * nel` weight grows with refinement), and the start-point rows become one
-   row on the base's mean print time (one row per base element now).
+   row on the base's mean print time (one row per base element now). The continuity
+   row still does not converge until step 6.
 4. **Tip traction** over a physical length on the right edge, from the bottom-right
    corner up, 1 mm by default, with exact integration of the nodal shape functions. A
    point load's compliance grows as `log(1/h)`.

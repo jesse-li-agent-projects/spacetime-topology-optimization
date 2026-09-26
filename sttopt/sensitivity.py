@@ -15,9 +15,8 @@ from torch import Tensor
 def jacobian_rows(
     outputs: Float[Tensor, " k"], leaves: Sequence[Tensor]
 ) -> tuple[Tensor, ...]:
-    """Sensitivities of `k` independent scalar outputs (e.g. one per print-start
-    element, or one per stage) w.r.t. each of `leaves`, as one `(k, numel)` block per
-    leaf, in leaf order.
+    """Sensitivities of `k` independent scalar outputs (e.g. one per element, or one per
+    stage) w.r.t. each of `leaves`, as one `(k, numel)` block per leaf, in leaf order.
 
     One `torch.autograd.grad` per row. The alternative -- a single
     `is_grads_batched=True` call with one-hot seeds -- is faster per call but only by a

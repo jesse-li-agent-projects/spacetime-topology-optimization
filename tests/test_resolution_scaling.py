@@ -159,19 +159,17 @@ def test_tip_load_compliance_converges():
 
 @pytest.mark.xfail(
     strict=True,
-    reason="step 3 (a mean-form row) and the lrmin redesign (a physical window)",
+    reason="step 6: the lrmin window is ceil(lrmin) - 1 elements, so its physical size moves with the mesh",
 )
 def test_continuity_row_converges():
+    """Over all four resolutions: the window happens to be 6 mm at both of the coarsest
+    two, which alone would pass."""
     values = _at_each_resolution(
-        lambda p, x, t: constraints.time_field_continuity(t, p.L, 1e-6),
-        nelx=NELX[:3],
+        lambda p, x, t: constraints.time_field_continuity(t, p.L, 1e-6)
     )
     assert _order(values) >= MIN_ORDER, values
 
 
-@pytest.mark.xfail(
-    strict=True, reason="step 3: one start-point row, not one per base element"
-)
 def test_constraint_row_count_is_independent_of_resolution():
     rows = []
     for n in NELX[:2]:

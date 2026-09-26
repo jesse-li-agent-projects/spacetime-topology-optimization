@@ -409,7 +409,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     # -- Constraints, in the fixed documented order above. --
     g_start_t = constraints.start_point(tPhys, problem.Nei)
-    g_parts = [g_start_t]
+    g_parts = [g_start_t[None]]
     if config.enable_continuity:
         g_cont_t = constraints.time_field_continuity(
             tPhys, problem.L, config.continuity_tol
