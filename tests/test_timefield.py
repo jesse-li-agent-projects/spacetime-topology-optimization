@@ -798,7 +798,7 @@ def test_neighbour_rise_sees_an_uneven_pit_a_central_difference_reads_as_healthy
     x = torch.ones_like(t)
 
     # Both are over the 3x3 interior, row-major, so (2, 2) is sample 4.
-    central = timefield.central_difference_gradient(t, x)
+    central = timefield._central_difference_gradient(t, x)
     assert float(central[4]) > 0.5 * float(central.median())
 
     rise = timefield.neighbour_rise(t, x)
