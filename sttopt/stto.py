@@ -94,6 +94,9 @@ class Problem:
     # Smooth maximum of the tool-radius curvature severity, holding its own
     # calibration, or None where `config.tool_radius_m` never leaves 0 and so has no row.
     curvature: smooth_max.CalibratedLogSumExp | None
+    # Smooth maximum of the gradient-floor severity, holding its own calibration, or
+    # None where `config.min_gradient_fraction` never leaves 0 and so has no row.
+    min_gradient: smooth_max.CalibratedLogSumExp | None
     Nei: Int[Tensor, " k"]
 
     n: int  # number of MMA design variables: 2*nelx*nely (density half + time half)
@@ -280,6 +283,11 @@ def build_problem(
             None
             if run_config.identically_zero(config.tool_radius_m)
             else smooth_max.CalibratedLogSumExp(config.curvature_beta)
+        ),
+        min_gradient=(
+            None
+            if run_config.identically_zero(config.min_gradient_fraction)
+            else smooth_max.CalibratedLogSumExp(config.min_gradient_beta)
         ),
         n=n,
         **float_fields,
@@ -594,6 +602,11 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     )
     if g_curvature_t is not None:
         g_parts.append(g_curvature_t[None])
+    g_min_gradient_t, min_gradient_ratio = _min_gradient_row(
+        problem, xPhys, tPhys, loop
+    )
+    if g_min_gradient_t is not None:
+        g_parts.append(g_min_gradient_t[None])
     g_all = torch.cat(g_parts)
     dg_dx = torch.cat(
         [_sensitivity_rows(g, x, t) for g in g_parts],
@@ -625,6 +638,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         admissible_tool_radius_m=_admissible_tool_radius_m(
             concave_t.detach(), config.element_size_m
         ),
+        min_gradient_fraction=run_config.weight_at(config.min_gradient_fraction, loop),
+        min_gradient_ratio=min_gradient_ratio,
     )
 
     # -- Periodic state updates, deferred to take effect starting *next* iteration's
@@ -729,6 +744,35 @@ def _tool_radius_row(
     tool_radius = units.in_elements(tool_radius_m, config.element_size_m)
     g_curvature_t = problem.curvature.aggregate(tool_radius * concave_t, loop) - 1
     return g_curvature_t, concave_t, tool_radius_m
+
+
+def _min_gradient_row(
+    problem: Problem,
+    xPhys: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+    loop: int,
+) -> tuple[Float[Tensor, ""] | None, float]:
+    """The floor on the time field's gradient over the part's interior, `None` where the
+    run has no such row, with the smallest gradient over the median.
+
+    The samples are `timefield.central_difference_gradient`'s, which a sawtooth cannot
+    pad up to the floor, and which leave out stencils touching void, where a saddle or
+    extremum of `t` is reachable. The median is held out of the gradient, as a
+    calibration is, so the row cannot be met by lowering it.
+
+    The severity is `fraction - gradient / median`, so the row is its smooth maximum.
+    """
+    g = timefield.central_difference_gradient(tPhys, xPhys)
+    if g.numel() == 0:
+        # Nothing to bound; `g.sum()` is a zero that keeps the row in the graph.
+        row = None if problem.min_gradient is None else g.sum() - 1
+        return row, float("nan")
+    ratio = g / g.detach().median()
+    min_ratio = float(ratio.detach().min())
+    if problem.min_gradient is None:
+        return None, min_ratio
+    fraction = run_config.weight_at(problem.config.min_gradient_fraction, loop)
+    return problem.min_gradient.aggregate(fraction - ratio, loop), min_ratio
 
 
 def _admissible_tool_radius_m(
