@@ -19,6 +19,7 @@ import torch
 import sttopt.compliance as compliance
 import sttopt.filters as filters
 import sttopt.run_config as run_config
+import sttopt.smooth_max as smooth_max
 import sttopt.stto as stto
 import sttopt.timefield as timefield
 import sttopt.torch_solve as torch_solve
@@ -769,12 +770,13 @@ def _min_gradient_records(fraction):
 
 
 def test_min_gradient_floor_appends_one_row_at_the_smallest_gradient():
-    """The row is the floor minus the smallest gradient over the median, since every
-    iteration refreshes the calibration onto the true maximum."""
+    """The row is the floor minus the smallest ascent or descent over the median ascent,
+    since every smooth maximum in it is calibrated onto the true one."""
     record, with_record, (xPhys, tPhys) = _min_gradient_records(0.5)
-    g = timefield.central_difference_gradient(tPhys, xPhys)
-    assert g.numel() > 10  # non-vacuous: the draw has fully-solid stencils
-    ratio = float(g.min() / g.median())
+    rise = timefield.neighbour_rise(tPhys, xPhys)
+    assert rise.shape[0] > 10  # non-vacuous: the draw has fully-solid blocks
+    ascent, descent = rise.amax(-1), (-rise).amax(-1)
+    ratio = float(torch.minimum(ascent, descent).min() / ascent.median())
 
     assert with_record.g.shape == (record.g.shape[0] + 1,)
     np.testing.assert_allclose(with_record.g[:-1], record.g, rtol=1e-12)
@@ -808,9 +810,16 @@ def test_min_gradient_floor_holds_its_median_out_of_the_gradient():
     row, _ = stto._min_gradient_row(problem, xPhys, tPhys, STATE_LOOP)
     (got,) = torch.autograd.grad(row, tPhys)
 
-    g = timefield.central_difference_gradient(tPhys, xPhys)
+    rise = timefield.neighbour_rise(tPhys, xPhys)
+    ratio = rise / rise.detach().amax(-1).median()
     beta = problem.config.min_gradient_beta
-    surrogate = torch.logsumexp(beta * (0.5 - g / g.detach().median()), 0) / beta
+    slopes = torch.cat(
+        [
+            smooth_max.calibrated_logsumexp(ratio, beta),
+            smooth_max.calibrated_logsumexp(-ratio, beta),
+        ]
+    )
+    surrogate = torch.logsumexp(beta * (0.5 - slopes), 0) / beta
     (want,) = torch.autograd.grad(surrogate, tPhys)
     torch.testing.assert_close(got, want, rtol=1e-10, atol=0.0)
 

@@ -241,14 +241,15 @@ class RunConfig(_ConfigMixin):
         nonzero somewhere, so a ramp up from `0` is the continuation.
     :param curvature_beta: `LogSumExp` sharpness of that constraint's smooth maximum,
         on the severity `tool_radius_m * concave curvature`, which is 1 on the bound.
-    :param min_gradient_fraction: floor on the time field's gradient over the part's
-        interior, as a fraction of its median, possibly scheduled. A vanishing gradient
-        is an interior saddle or extremum of `t`, which a tool of any finite radius
-        cannot print, or which is printed without support. `0` is no floor; the row
-        exists only if the schedule is nonzero somewhere, like `tool_radius_m`'s.
-    :param min_gradient_beta: `LogSumExp` sharpness of that floor's smooth maximum, on
-        the severity `min_gradient_fraction - gradient / median`, which is 0 on the
-        floor.
+    :param min_gradient_fraction: floor on the time field's steepest ascent and descent
+        at each element of the part's interior, as a fraction of the median ascent,
+        possibly scheduled. An element without both is an interior saddle or extremum
+        of `t`, which a tool of any finite radius cannot print, or which is printed
+        without support. `0` is no floor; the row exists only if the schedule is
+        nonzero somewhere, like `tool_radius_m`'s.
+    :param min_gradient_beta: `LogSumExp` sharpness of that floor's smooth maxima, over
+        each element's neighbours and over the severity `min_gradient_fraction - slope
+        / median`, which is 0 on the floor.
     :param lrmin_m: continuity-filter radius, as in `SeqRunConfig`, as is
         `rmin_cond_m`.
     :param raa0_total: MMA's curvature floor (`mma.mmasub`'s `raa0`), summed over the

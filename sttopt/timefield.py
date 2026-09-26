@@ -726,6 +726,41 @@ def central_difference_gradient(
     return g[keep]
 
 
+# The 8-neighbour ring, as (row, column) offsets.
+_RING = ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1))
+
+
+def neighbour_rise(
+    tPhys: Float[Tensor, "nely nelx"], xPhys: Float[Tensor, "nely nelx"]
+) -> Float[Tensor, "k 8"]:
+    """Slope of `t` from each element to each of its 8 neighbours, `(t_nb - t) /
+    distance`, per unit length, over the elements whose whole 3x3 block is solid.
+
+    An element is a local extremum of `t` exactly where its row has one sign, whatever
+    the slopes' sizes. A central difference cannot tell: it never reads the element
+    itself, so a pit below unevenly-rising neighbours reads as a healthy gradient. The
+    row's largest entry is the steepest ascent and minus its smallest the steepest
+    descent; on a smooth field both approach `|grad t|`.
+
+    Blocks touching void are dropped, as in `central_difference_gradient`: an extremum
+    on the part's boundary is reachable.
+
+    :param tPhys: physical time field
+    :param xPhys: density field, to locate the fully-solid blocks
+    :return: one row of 8 slopes per qualifying element; empty if none qualifies
+    """
+    nely, nelx = tPhys.shape
+    centre = tPhys[1:-1, 1:-1]
+    solid = xPhys > geometry.SOLID_THRESHOLD
+    keep = solid[1:-1, 1:-1].clone()
+    rises = []
+    for di, dj in _RING:
+        rows, cols = slice(1 + di, nely - 1 + di), slice(1 + dj, nelx - 1 + dj)
+        rises.append((tPhys[rows, cols] - centre) / (di * di + dj * dj) ** 0.5)
+        keep &= solid[rows, cols]
+    return (torch.stack(rises, dim=-1) * unit_length(tPhys))[keep]
+
+
 def relative_sawtooth_amplitude(
     tPhys: Float[Tensor, "nely nelx"], xPhys: Float[Tensor, "nely nelx"]
 ) -> Float[Tensor, ""]:

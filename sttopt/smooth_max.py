@@ -15,6 +15,20 @@ def density_power(x: Float[Tensor, " n"], r: float) -> Float[Tensor, " n"]:
     return solid * torch.where(solid, x, torch.ones_like(x)) ** r
 
 
+def calibrated_logsumexp(
+    values: Float[Tensor, "*batch n"], beta: float
+) -> Float[Tensor, "*batch"]:
+    """The smooth maximum of each row of `values`, carried onto its true maximum: the
+    value is the row's max, the gradient `logsumexp(beta * values) / beta`'s.
+
+    For a smooth maximum nested inside another, where one calibration scalar cannot
+    carry every row: an uncalibrated inner maximum would overshoot by up to
+    `log(n) / beta`, loosening whatever bound the outer one feeds.
+    """
+    smooth = torch.logsumexp(beta * values, dim=-1) / beta
+    return smooth - (smooth - values.amax(dim=-1)).detach()
+
+
 class CalibratedLogSumExp:
     """`log(sum(exp(beta * sev))) / beta`, carried onto the true maximum of `sev` by a
     calibration offset.

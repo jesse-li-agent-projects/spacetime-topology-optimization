@@ -752,27 +752,40 @@ def _min_gradient_row(
     tPhys: Float[Tensor, "nely nelx"],
     loop: int,
 ) -> tuple[Float[Tensor, ""] | None, float]:
-    """The floor on the time field's gradient over the part's interior, `None` where the
-    run has no such row, with the smallest gradient over the median.
+    """The floor on the time field's steepest ascent and steepest descent at each
+    element of the part's interior, `None` where the run has no such row, with the
+    smallest of either over the median ascent.
 
-    The samples are `timefield.central_difference_gradient`'s, which a sawtooth cannot
-    pad up to the floor, and which leave out stencils touching void, where a saddle or
-    extremum of `t` is reachable. The median is held out of the gradient, as a
-    calibration is, so the row cannot be met by lowering it.
+    Both one-sided slopes, not `|grad t|`: a local extremum of any shape has no ascent
+    or no descent, while a central difference reads an uneven pit as a healthy gradient
+    (PR #166). On a smooth field both approach `|grad t|`, so a saddle or a flat valley,
+    whose slopes to its neighbours are second order, fails the floor too. Blocks
+    touching void are left out (`timefield.neighbour_rise`), since an extremum there is
+    reachable. The median is held out of the gradient, as a calibration is, so the row
+    cannot be met by lowering it.
 
-    The severity is `fraction - gradient / median`, so the row is its smooth maximum.
+    Each element's ascent and descent is a calibrated smooth maximum over its
+    neighbours, and the row the smooth maximum of `fraction - slope / median` over all.
     """
-    g = timefield.central_difference_gradient(tPhys, xPhys)
-    if g.numel() == 0:
-        # Nothing to bound; `g.sum()` is a zero that keeps the row in the graph.
-        row = None if problem.min_gradient is None else g.sum() - 1
+    rise = timefield.neighbour_rise(tPhys, xPhys)
+    if rise.numel() == 0:
+        # Nothing to bound; `rise.sum()` is a zero that keeps the row in the graph.
+        row = None if problem.min_gradient is None else rise.sum() - 1
         return row, float("nan")
-    ratio = g / g.detach().median()
-    min_ratio = float(ratio.detach().min())
+    ratio = rise / rise.detach().amax(dim=-1).median()
+    hard = ratio.detach()
+    min_ratio = float(torch.minimum(hard.amax(-1), (-hard).amax(-1)).min())
     if problem.min_gradient is None:
         return None, min_ratio
+    beta = run_config.weight_at(problem.config.min_gradient_beta, loop)
+    slopes = torch.cat(
+        [
+            smooth_max.calibrated_logsumexp(ratio, beta),
+            smooth_max.calibrated_logsumexp(-ratio, beta),
+        ]
+    )
     fraction = run_config.weight_at(problem.config.min_gradient_fraction, loop)
-    return problem.min_gradient.aggregate(fraction - ratio, loop), min_ratio
+    return problem.min_gradient.aggregate(fraction - slopes, loop), min_ratio
 
 
 def _admissible_tool_radius_m(

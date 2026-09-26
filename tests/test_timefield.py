@@ -785,3 +785,41 @@ def test_iso_curvature_is_insensitive_to_noise_on_a_plateau():
     diff = noisy_kappa - clean_kappa
     # a circle one element across reads ~60 per unit length here
     assert diff.abs().max() < 0.1
+
+
+def test_neighbour_rise_sees_an_uneven_pit_a_central_difference_reads_as_healthy():
+    """An element dropped just below neighbours that rise unevenly -- steeply on one
+    side, barely on the other -- keeps a central difference near the field's own, yet
+    has no descent: every slope in its row is positive."""
+    nely, nelx = 5, 5
+    _, j = np.indices((nely, nelx))
+    t = torch.from_numpy(np.where(j >= 3, 3.0 * j, 1.0 * j) / 20.0)
+    t[2, 2] = 0.04  # below its left neighbours' 0.05; its right ones are at 0.45
+    x = torch.ones_like(t)
+
+    # Both are over the 3x3 interior, row-major, so (2, 2) is sample 4.
+    central = timefield.central_difference_gradient(t, x)
+    assert float(central[4]) > 0.5 * float(central.median())
+
+    rise = timefield.neighbour_rise(t, x)
+    assert rise.shape == (9, 8)
+    assert torch.all(rise[4] > 0)
+
+
+def test_neighbour_rise_on_a_linear_field_is_its_gradient_along_each_neighbour():
+    nely, nelx = 6, 7
+    i, j = np.indices((nely, nelx))
+    a, b = 0.3, -0.1  # per element, along j and i
+    t = torch.from_numpy(a * j + b * i)
+    rise = timefield.neighbour_rise(t, torch.ones_like(t))
+    unit = timefield.unit_length(t)
+    ring = np.array([(di, dj) for di, dj in timefield._RING])
+    want = (ring[:, 1] * a + ring[:, 0] * b) / np.hypot(ring[:, 0], ring[:, 1]) * unit
+    np.testing.assert_allclose(rise.numpy(), np.broadcast_to(want, rise.shape))
+
+
+def test_neighbour_rise_drops_blocks_touching_void():
+    t = torch.from_numpy(np.arange(25.0).reshape(5, 5))
+    x = torch.ones_like(t)
+    x[0, 0] = 0.0  # touches only the block centred on (1, 1)
+    assert timefield.neighbour_rise(t, x).shape == (8, 8)
