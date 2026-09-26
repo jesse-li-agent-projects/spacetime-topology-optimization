@@ -514,7 +514,9 @@ class PMean:
     is `x**(r*p)`, so `p` cannot be changed without also changing how hard void is
     suppressed, and `r*p <= 1` silently makes the gradient diverge at `x == 0`.
 
-    The calibration is run state, refreshed in place by a call with `recalibrate`.
+    Every call measures the calibration afresh and holds it out of the gradient, as
+    `smooth_max.CalibratedLogSumExp` does, except where every element contributes zero:
+    the aggregate then says nothing about the maximum, so the last one is kept.
     """
 
     def __init__(self, p: float, r: float):
@@ -522,15 +524,11 @@ class PMean:
         self.r = r
         self.calibration = 1.0
 
-    def resolve(self, loop: int) -> bool:
-        """No scheduled parameters to adopt, so nothing that stales the calibration."""
-        return False
+    def resolve(self, loop: int) -> None:
+        """No scheduled parameters to adopt."""
 
     def __call__(
-        self,
-        K_est: Float[Tensor, " nel"],
-        xPhys: Float[Tensor, "nely nelx"],
-        recalibrate: bool = False,
+        self, K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"]
     ) -> Float[Tensor, ""]:
         """The calibrated aggregate, differentiable in `K_est` and `xPhys`.
 
@@ -538,18 +536,15 @@ class PMean:
         `x == 0` (density does reach exact zero once the Heaviside projection
         saturates), so this computes the algebraically identical `T**p * x**(r*p)`,
         whose gradient is finite while `r*p > 1`.
-
-        :param recalibrate: first refresh the calibration against this field's true
-            maximum. Kept as it is where every element contributes zero, since the
-            aggregate then says nothing about the maximum.
         """
         x = xPhys.flatten()
         # An infinitely shielded element contributes nothing, which `(-inf)**p` is not
         # a way to say.
         T = torch.where(torch.isinf(K_est), torch.zeros_like(K_est), 1 - K_est)
         numer = _safe_pmean(torch.mean(T**self.p * x ** (self.r * self.p)), self.p)
-        if recalibrate and float(numer) != 0:
-            self.calibration = _max_severity(K_est, xPhys, self.r) / float(numer)
+        numer_value = float(numer.detach())
+        if numer_value != 0:
+            self.calibration = _max_severity(K_est, xPhys, self.r) / numer_value
         return self.calibration * numer
 
 
@@ -575,21 +570,15 @@ class LogSumExp(smooth_max.CalibratedLogSumExp):
         self.r = r
 
     def __call__(
-        self,
-        K_est: Float[Tensor, " nel"],
-        xPhys: Float[Tensor, "nely nelx"],
-        recalibrate: bool = False,
+        self, K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"]
     ) -> Float[Tensor, ""]:
-        """The calibrated aggregate, differentiable in `K_est` and `xPhys`.
-
-        :param recalibrate: see `aggregate`.
-        """
+        """The calibrated aggregate, differentiable in `K_est` and `xPhys`."""
         shielded = torch.isinf(K_est)
         x_r = smooth_max.density_power(xPhys.flatten(), self.r)
         # `1 - inf` would poison the `-inf` reselect below through `inf * 0`.
         T = torch.where(shielded, torch.zeros_like(K_est), 1 - K_est)
         sev = torch.where(shielded, -torch.inf, T * x_r)
-        return self.aggregate(sev, recalibrate)
+        return self.aggregate(sev)
 
 
 def make_aggregation(

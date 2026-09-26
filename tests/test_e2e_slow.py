@@ -89,7 +89,6 @@ CONFIG = RunConfig(
     hotspot_beta=200.0,
     hotspot_kappa=0.0,
     hotspot_g0_per_m=3.368,
-    hotspot_refresh_period=25,
     beta_d_schedule=STEP_BETA_D,
     beta_t_schedule=STEP_BETA_T,
     print_base=PRINT_BASE,

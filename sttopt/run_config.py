@@ -298,11 +298,6 @@ class RunConfig(_ConfigMixin):
     # long-standing ramps are `Interpolation.STEP` schedules in the config files.
     beta_d_schedule: Scheduled
     beta_t_schedule: Scheduled
-    # Iterations between hotspot and curvature calibration refreshes. Iteration 0 is
-    # always one of them, which is what calibrates each aggregate against the seed. A
-    # change in a scheduled setting that moves an aggregate's bias (`hotspot_beta`,
-    # `rouf`, `curvature_beta`, `tool_radius_m`, ...) also refreshes that aggregate.
-    hotspot_refresh_period: int
 
     def __post_init__(self) -> None:
         super().__post_init__()
