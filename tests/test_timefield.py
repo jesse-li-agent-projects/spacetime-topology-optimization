@@ -2,10 +2,13 @@
 conventions.md)."""
 
 import itertools
+from collections.abc import Callable
 
 import numpy as np
 import pytest
 import torch
+from jaxtyping import Float
+from torch import Tensor
 
 import sttopt.geometry as geometry
 import sttopt.timefield as timefield
@@ -728,7 +731,9 @@ def test_gradient_percentiles_are_zero_when_no_stencil_qualifies():
     assert timefield.gradient_percentiles(tPhys, xPhys) == (0.0, 0.0, 0.0)
 
 
-def _circles(n: int, profile) -> tuple[torch.Tensor, np.ndarray]:
+def _circles(
+    n: int, profile: Callable[[np.ndarray], np.ndarray]
+) -> tuple[Float[Tensor, "n n"], Float[np.ndarray, "n-2 n-2"]]:
     """Iso-lines that are circles about a centre half a domain outside the corner, so the
     same physical field at every `n`; `profile` maps radius (in domain widths) to `t`.
     Returns the field and each interior element's radius in unit lengths."""
@@ -775,8 +780,8 @@ def test_iso_curvature_is_insensitive_to_noise_on_a_plateau():
     clean[20:40, 20:40] = 0.5
     noisy = clean.copy()
     noisy[20:40, 20:40] += 1e-7 * np.random.default_rng(0).standard_normal((20, 20))
-    diff = timefield.iso_curvature(torch.from_numpy(noisy)) - timefield.iso_curvature(
-        torch.from_numpy(clean)
-    )
+    noisy_kappa = timefield.iso_curvature(torch.from_numpy(noisy))
+    clean_kappa = timefield.iso_curvature(torch.from_numpy(clean))
+    diff = noisy_kappa - clean_kappa
     # a circle one element across reads ~60 per unit length here
     assert diff.abs().max() < 0.1
