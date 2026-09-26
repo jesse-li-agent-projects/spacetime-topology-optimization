@@ -556,10 +556,9 @@ class PMean:
 class LogSumExp(smooth_max.CalibratedLogSumExp):
     """The calibrated LogSumExp smooth maximum of the severity `T * x**r`.
 
-    Translation rather than scale equivariance is the property that fits once
-    `Normalization.HALF_STENCIL` has pinned the scale against a physical reference:
-    `K_est > 1` needs no clamp. Its additive bias is +0.001 at `beta=200` where `PMean`
-    at `p=25` is -26%.
+    Suits `Normalization.HALF_STENCIL`, which pins the scale against a physical
+    reference, so `PMean`'s scale equivariance buys nothing there. Its additive bias is
+    +0.001 at `beta=200` where `PMean` at `p=25` is -26%.
 
     It aggregates exactly the quantity `PMean` and the calibration both target: density
     enters through the severity, so void is not suppressed beyond scoring zero severity
@@ -583,8 +582,7 @@ class LogSumExp(smooth_max.CalibratedLogSumExp):
     ) -> Float[Tensor, ""]:
         """The calibrated aggregate, differentiable in `K_est` and `xPhys`.
 
-        :param recalibrate: first refresh the calibration against this field's true
-            maximum.
+        :param recalibrate: see `aggregate`.
         """
         shielded = torch.isinf(K_est)
         x_r = smooth_max.density_power(xPhys.flatten(), self.r)
