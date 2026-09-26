@@ -49,14 +49,26 @@ DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "configs" / "default.json"
 DEFAULT_SEQ_CONFIG_PATH = Path(__file__).parent.parent / "configs" / "seq_default.json"
 
 
-def default_run_config(**overrides) -> RunConfig:
+def default_run_config(*, nely: int | None = None, **overrides) -> RunConfig:
     """`RunConfig` loaded from `configs/default.json` (the single source of default
     hyperparameters) with `overrides` applied -- for tests/benchmarks that only care
     about a handful of fields (typically mesh size) and want everything else at the
     production default.
+
+    A `nelx`/`nely` override keeps the default element size, so a small test mesh is a
+    small part rather than a coarse one, and every default length keeps its size in
+    elements.
     """
     base = RunConfig.from_dict(json.loads(DEFAULT_CONFIG_PATH.read_text()))
+    h = base.element_size_m
+    nelx = overrides.get("nelx", base.nelx)
+    overrides.setdefault("width_m", nelx * h)
+    overrides.setdefault("height_m", (base.nely if nely is None else nely) * h)
     return dataclasses.replace(base, **overrides)
+
+
+# The default config's element size, for tests that state a length in elements.
+ELEMENT_M = default_run_config().element_size_m
 
 
 def default_seq_run_config(**overrides) -> SeqRunConfig:
@@ -64,6 +76,11 @@ def default_seq_run_config(**overrides) -> SeqRunConfig:
     counterpart for `seqopt`."""
     base = SeqRunConfig.from_dict(json.loads(DEFAULT_SEQ_CONFIG_PATH.read_text()))
     return dataclasses.replace(base, **overrides)
+
+
+# The element size `configs/seq_default.json`'s lengths are stated at (the c-shape's),
+# for tests that pass `seqopt` a geometry and state lengths in elements.
+SEQ_ELEMENT_M = 2e-3
 
 
 def matlab_reference_node_perm(nelx: int, nely: int) -> np.ndarray:

@@ -259,8 +259,8 @@ def timefield_gradient_magnitude_plot(
     even color means even layers.
 
     :param xPhys: physical density field (not yet binarized), over the full mesh.
-    :param gradient_magnitude: per-element `|grad tPhys|`, e.g. from
-        `timefield.gradient_magnitude_elements`.
+    :param gradient_magnitude: per-element `|grad tPhys|` in 1/m, e.g.
+        `RunPlotInputs.grad_magnitude`.
     :return: the `Axes` drawn into.
     """
     ax = combination_plot(
@@ -268,7 +268,7 @@ def timefield_gradient_magnitude_plot(
         gradient_magnitude,
         eps=1.0e-1,
         cmap="magma",
-        colorbar_label="Time field gradient magnitude",
+        colorbar_label="Time field gradient magnitude (1/m)",
         ax=ax,
     )
     ax.set_title("Time field gradient magnitude")
@@ -290,7 +290,7 @@ def iso_curvature_plot(
     wash out the rest.
 
     :param xPhys: physical density field (not yet binarized).
-    :param curvature: per-element curvature in 1/elements, `nan` where unmeasured, e.g.
+    :param curvature: per-element curvature in 1/m, `nan` where unmeasured, e.g.
         `RunPlotInputs.curvature`.
     :return: the `Axes` drawn into.
     """
@@ -302,7 +302,7 @@ def iso_curvature_plot(
         curvature,
         eps=0.5,
         cmap=cmap,
-        colorbar_label="Iso-line curvature (1/element), concave < 0",
+        colorbar_label="Iso-line curvature (1/m), concave < 0",
         clim=(-limit, limit),
         ax=ax,
     )
@@ -553,25 +553,37 @@ class RunPlotInputs(NamedTuple):
     tPhys: Float[np.ndarray, "nely nelx"]
     compliance: float | None  # None for seqopt, which runs no FEM
     hotspot_severity: Float[np.ndarray, "nely nelx"]
-    grad_magnitude: Float[np.ndarray, "nely nelx"]
+    grad_magnitude: Float[np.ndarray, "nely nelx"]  # in 1/m
     # Unit-length local print direction per element, `(dt/dx, dt/dy)` normalized -- the
     # direction the angular stencil weight reads (`conductivity._lobe`).
     direction: tuple[Float[np.ndarray, "nely nelx"], Float[np.ndarray, "nely nelx"]]
     nStage: int
-    # Iso-line curvature per element, in 1/elements, `nan` on the mesh border
+    # Iso-line curvature per element, in 1/m, `nan` on the mesh border
     curvature: Float[np.ndarray, "nely nelx"]
 
 
-def _iso_curvature_elements(
-    tPhys_t: "Float[Tensor, 'nely nelx']", xPhys_t: "Float[Tensor, 'nely nelx']"
-) -> Float[np.ndarray, "nely nelx"]:
-    """`timefield.iso_curvature` per element rather than per unit length, padded with
-    `nan` onto the border elements it does not measure."""
+def _time_field_geometry(
+    tPhys_t: "Float[Tensor, 'nely nelx']",
+    xPhys_t: "Float[Tensor, 'nely nelx']",
+    element_size_m: float,
+) -> tuple[Float[np.ndarray, "nely nelx"], Float[np.ndarray, "nely nelx"]]:
+    """
+    `|grad t|` per element and the iso-line curvature, both in 1/m.
+
+    :param tPhys_t: the time field
+    :param xPhys_t: the density field, which weights the curvature
+    :param element_size_m: side of a square element
+    :return: `(|grad t|, curvature)`, the curvature padded with `nan` onto the border
+        elements it does not measure
+    """
     import sttopt.timefield as timefield
     import sttopt.torch_util as torch_util
 
-    kappa = timefield.iso_curvature(tPhys_t, xPhys_t) / timefield.unit_length(tPhys_t)
-    return np.pad(torch_util.to_numpy(kappa), 1, constant_values=np.nan)
+    unit_m = timefield.unit_length_m(tPhys_t, element_size_m)
+    grad = timefield.gradient_magnitude_elements(tPhys_t) / unit_m
+    kappa = timefield.iso_curvature(tPhys_t, xPhys_t) / unit_m
+    kappa = np.pad(torch_util.to_numpy(kappa), 1, constant_values=np.nan)
+    return torch_util.to_numpy(grad), kappa
 
 
 def _print_direction(tPhys_t) -> tuple[np.ndarray, np.ndarray]:
@@ -627,7 +639,6 @@ def _load_stto_run(
     """
     import sttopt.compliance as compliance
     import sttopt.stto as stto
-    import sttopt.timefield as timefield
     import sttopt.torch_util as torch_util
     from sttopt.run_config import final_value
 
@@ -658,7 +669,9 @@ def _load_stto_run(
     K_est_t = stto.estimated_conductivity(problem, xPhys_t, tPhys_t)
     K_est = torch_util.to_numpy(K_est_t).reshape(config.nely, config.nelx)
     hotspot_severity = _hotspot_severity(xPhys, K_est)
-    grad_magnitude = torch_util.to_numpy(timefield.gradient_magnitude_elements(tPhys_t))
+    grad_magnitude, curvature = _time_field_geometry(
+        tPhys_t, xPhys_t, config.element_size_m
+    )
     return RunPlotInputs(
         xPhys,
         tPhys,
@@ -667,7 +680,7 @@ def _load_stto_run(
         grad_magnitude,
         _print_direction(tPhys_t),
         config.nStage,
-        _iso_curvature_elements(tPhys_t, xPhys_t),
+        curvature,
     )
 
 
@@ -688,8 +701,8 @@ def _load_seqopt_run(
 
     import torch
 
+    import sttopt.geometry as geometry
     import sttopt.seqopt as seqopt
-    import sttopt.timefield as timefield
     import sttopt.torch_util as torch_util
     from sttopt.run_config import SeqRunConfig
 
@@ -697,20 +710,23 @@ def _load_seqopt_run(
         json.loads((run_dir / "seq_config.json").read_text())
     )
     design = np.load(run_dir / design_file)
-    xPhys = (
-        design["xPhys"]
-        if "xPhys" in design
-        else np.load(run_dir / "geometry.npz")["xPhys"]
+    xPhys, element_size_m = geometry.load_geometry(
+        run_dir / "geometry.npz", binary=False
     )
+    xPhys = design["xPhys"] if "xPhys" in design else xPhys
     tPhys = design["tPhys"] if "tPhys" in design else design["t"]
 
-    problem = seqopt.build_problem(config, xPhys, device="cpu", dtype=torch.float64)
+    problem = seqopt.build_problem(
+        config, xPhys, element_size_m, device="cpu", dtype=torch.float64
+    )
     tPhys_t = torch_util.to_tensor(tPhys, device="cpu", dtype=torch.float64)
     K_est_t = seqopt.estimated_conductivity(problem, tPhys_t)
     xPhys = torch_util.to_numpy(problem.xPhys)  # what the run optimized, post-cleanup
     K_est = torch_util.to_numpy(K_est_t).reshape(xPhys.shape)
     hotspot_severity = _hotspot_severity(xPhys, K_est)
-    grad_magnitude = torch_util.to_numpy(timefield.gradient_magnitude_elements(tPhys_t))
+    grad_magnitude, curvature = _time_field_geometry(
+        tPhys_t, problem.xPhys, element_size_m
+    )
     return RunPlotInputs(
         xPhys,
         tPhys,
@@ -719,7 +735,7 @@ def _load_seqopt_run(
         grad_magnitude,
         _print_direction(tPhys_t),
         config.nStage,
-        _iso_curvature_elements(tPhys_t, problem.xPhys),
+        curvature,
     )
 
 

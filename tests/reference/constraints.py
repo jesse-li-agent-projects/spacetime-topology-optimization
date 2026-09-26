@@ -46,19 +46,18 @@ def time_field_continuity(
     neighborhood average (`filters.continuity_filter`'s `L`), so the deposition sequence
     sweeps coherently across the mesh instead of jumping between distant elements.
 
+    In `sttopt`'s mean form, `mean(deviation**2) / tol - 1`, rather than the MATLAB
+    source's `2 * nel * (mean(deviation**2) - tol)`, which grew with the mesh.
+
     `dfx` is identically zero -- this constraint has no density dependence.
     """
     nely, nelx = tPhys.shape
     nel = nely * nelx
-    # smoothness_weight = 2*nel is an overall tuning multiplier on the whole constraint
-    # (MATLAB source's `kk`, commented "controlling the smoothness of the time field" --
-    # not a paper symbol); it shows up in fval itself, so it isn't a derivative artifact.
-    # The separate explicit `* 2` in dft below IS a derivative factor, from
-    # d(deviation**2)/dt = 2*deviation * d(deviation)/dt.
-    smoothness_weight = 2 * nel
+    tol = 1.0e-6
     deviation = L @ tPhys.flatten()
-    fval = float(smoothness_weight * (torch.sum(deviation**2 / nel) - 1.0e-6))
-    dft = H @ ((smoothness_weight * 2 * (L.t() @ deviation)) / Hs) / nel
+    fval = float(torch.sum(deviation**2) / (nel * tol) - 1)
+    # the `2` is d(deviation**2)/dt = 2*deviation * d(deviation)/dt
+    dft = H @ ((2 * (L.t() @ deviation)) / Hs) / (nel * tol)
     dfx = torch.zeros(nel, dtype=tPhys.dtype, device=tPhys.device)
     return fval, dfx, dft
 
@@ -68,25 +67,20 @@ def start_point(
     Nei: Int[Tensor, " k"],
     H: Tensor,
     Hs: Float[Tensor, " nely*nelx"],
-) -> tuple[
-    Float[Tensor, " k"],
-    Float[Tensor, "k nely*nelx"],
-    Float[Tensor, "k nely*nelx"],
-]:
-    """Print-start constraint(s): the deposition-origin element(s) `Nei` (0-indexed element
+) -> tuple[float, Float[Tensor, " nely*nelx"], Float[Tensor, " nely*nelx"]]:
+    """Print-start constraint: the deposition-origin element(s) `Nei` (0-indexed element
     numbers, per `conventions.md`) must start printing at t=0 (up to machine precision).
 
-    Example: `Nei` is `[0]` for the single-origin time field (`tfield==1`) -- the elements nearest
-    the print-start origin. `dfx` is identically zero (no density dependence).
+    In `sttopt`'s form, one row on their mean print time, rather than the MATLAB
+    source's one row per element. `dfx` is identically zero (no density dependence).
     """
     nely, nelx = tPhys.shape
     nel = nely * nelx
-    k = len(Nei)
-    fval = tPhys.flatten()[Nei] - 1.0e-9
-    ss = torch.zeros((nel, k), dtype=tPhys.dtype, device=tPhys.device)
-    ss[Nei, torch.arange(k, device=tPhys.device)] = 1.0  # one-hot selector
-    dft = (H @ (ss / Hs[:, None])).t()
-    dfx = torch.zeros((k, nel), dtype=tPhys.dtype, device=tPhys.device)
+    fval = float(tPhys.flatten()[Nei].mean() - 1.0e-9)
+    selector = torch.zeros(nel, dtype=tPhys.dtype, device=tPhys.device)
+    selector[Nei] = 1.0 / len(Nei)
+    dft = H @ (selector / Hs)
+    dfx = torch.zeros(nel, dtype=tPhys.dtype, device=tPhys.device)
     return fval, dfx, dft
 
 

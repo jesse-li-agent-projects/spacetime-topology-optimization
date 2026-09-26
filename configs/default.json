@@ -1,6 +1,8 @@
 {
+  "width_m": 0.18,
+  "height_m": 0.06,
   "nelx": 180,
-  "nely": 60,
+  "load_length_m": 0.001,
   "nloop": 800,
   "volfrac": 0.5,
   "nStage": 8,
@@ -20,7 +22,7 @@
   "hotspot_aggregation": "logsumexp",
   "hotspot_beta": 100.0,
   "hotspot_kappa": 2.3666,
-  "hotspot_g0": 0.07,
+  "hotspot_g0_per_m": 0.6736,
   "hotspot_refresh_period": 1,
   "beta_d_schedule": {
     "points": [[0, 1.0], [50, 2.0], [100, 4.0], [150, 8.0], [200, 16.0], [250, 32.0], [300, 64.0], [350, 128.0]],
@@ -31,18 +33,18 @@
     "mode": "step"
   },
   "print_base": "opposite_corner",
-  "rmin": 4.0,
-  "time_filter_rmin": 4.0,
+  "rmin_m": 0.004,
+  "time_filter_rmin_m": 0.004,
   "enable_continuity": false,
   "continuity_tol": 1e-06,
-  "tool_radius": {
-    "points": [[0, 0.0], [300, 0.0], [400, 2.5]]
+  "tool_radius_m": {
+    "points": [[0, 0.0], [300, 0.0], [400, 0.0025]]
   },
   "curvature_beta": {
     "points": [[0, 10.0], [500, 10.0], [650, 100.0]]
   },
-  "lrmin": 2.0,
-  "rmin_cond": 12.0,
+  "lrmin_m": 0.002,
+  "rmin_cond_m": 0.012,
   "Emin": 1e-09,
   "Emax": 1.0,
   "nu": 0.3,
@@ -54,6 +56,7 @@
   "rouf": 100.0,
   "a0": 1.0,
   "mma_c": 2500.0,
+  "raa0_total": 0.216,
   "move": 0.01,
   "tmove": {
     "points": [[0, 0.01], [450, 0.01], [550, 0.001]],

@@ -31,6 +31,8 @@ from typing import TypeVar
 
 import numpy as np
 
+import sttopt.units as units
+
 _T = TypeVar("_T", bound="_ConfigMixin")
 
 
@@ -188,6 +190,17 @@ class RunConfig(_ConfigMixin):
     Full hyperparameter set for a single space-time topology optimization run,
     mirroring `stto.build_problem`'s parameters.
 
+    Lengths are in metres (the `_m` fields), so refining the mesh is a change to `nelx`
+    alone. `nely` follows from the design domain's aspect ratio, since elements are
+    square.
+
+    :param width_m: design domain width.
+    :param height_m: design domain height; must be a whole number of elements.
+    :param nelx: element count across `width_m`, the mesh resolution.
+    :param load_length_m: span of the tip load, a uniform downward traction of unit
+        total force on the right edge, from the bottom-right corner up. `0` is a point
+        load on the corner node, whose compliance grows as `log(1 / h)` under
+        refinement.
     :param print_base: 3D-printing base/start location, naming a
         `timefield.TimeField` member (case-insensitively) for JSON.
     :param uniformity_metric: a `timefield.UniformityMetric` member name, as in
@@ -207,34 +220,43 @@ class RunConfig(_ConfigMixin):
         onto the direction opposite the local print direction, `2.37` matching Das2023
         Eq. (3.5)'s linear ramp at half maximum. Requires `half_stencil` normalization
         -- see `conductivity._lobe` and `plans/angular_weight.md`.
-    :param hotspot_g0: the angular lobe's gradient scale, per unit length: how much
-        layering must exist before the print direction is believed. The lobe flattens to
-        isotropic as `|grad t|` falls below it, which is what keeps the weight
-        well-defined where no direction is defined. Belongs an order of magnitude below
-        the run's own median `|grad t|` and is not a tuning knob: a converged field's
-        gradient distribution is tight, so a `g0` near the median attenuates `kappa` by
-        a near-constant factor across the whole part, which is a second `hotspot_kappa`
-        rather than a floor (measured in `plans/angular_weight.md`, Phase 3 results).
-    :param time_filter_rmin: density-filter radius applied to `t`, in elements, as in
-        `SeqRunConfig`; separate from `rmin` so the two fields can be smoothed
+    :param hotspot_g0_per_m: the angular lobe's gradient scale, in `t` per metre: how
+        much layering must exist before the print direction is believed. The lobe
+        flattens to isotropic as `|grad t|` falls below it, which is what keeps the
+        weight well-defined where no direction is defined. Belongs an order of magnitude
+        below the run's own median `|grad t|` (`grad_p50_per_m`) and is not a tuning
+        knob: a converged field's gradient distribution is tight, so a `g0` near the
+        median attenuates `kappa` by a near-constant factor across the whole part, which
+        is a second `hotspot_kappa` rather than a floor (measured in `plans/angular_weight.md`, Phase 3 results).
+    :param rmin_m: density-filter radius.
+    :param time_filter_rmin_m: density-filter radius applied to `t`, as in
+        `SeqRunConfig`; separate from `rmin_m` so the two fields can be smoothed
         differently. 0 leaves `t` unfiltered.
     :param enable_continuity: whether the time-field continuity constraint is in the
         MMA constraint stack at all, as in `SeqRunConfig`, as is `continuity_tol`.
-    :param tool_radius: print tool radius in elements, possibly scheduled. Bounds the
-        concave curvature of the time field's iso-lines (`timefield.iso_curvature`) to
-        `1 / tool_radius`, so the tool cannot collide with printed material. `0` is a
+    :param tool_radius_m: print tool radius, possibly scheduled. Bounds the concave
+        curvature of the time field's iso-lines (`timefield.iso_curvature`) to
+        `1 / tool_radius_m`, so the tool cannot collide with printed material. `0` is a
         tool that cannot collide; the constraint row exists only if the schedule is
         nonzero somewhere, so a ramp up from `0` is the continuation.
     :param curvature_beta: `LogSumExp` sharpness of that constraint's smooth maximum,
-        on the severity `tool_radius * concave curvature`, which is 1 on the bound.
+        on the severity `tool_radius_m * concave curvature`, which is 1 on the bound.
+    :param lrmin_m: continuity-filter radius, as in `SeqRunConfig`, as is
+        `rmin_cond_m`.
+    :param raa0_total: MMA's curvature floor (`mma.mmasub`'s `raa0`), summed over the
+        design variables: each gets `raa0_total / n`. A term stated as a domain mean has
+        a gradient of order `1 / n` per variable, so a fixed `raa0` would outweigh it
+        more with every refinement.
     """
 
     # Frequently varied -- also exposed as a CLI flag in stto_cli.py.
     nloop: int
 
     # Config-file-only.
+    width_m: float
+    height_m: float
     nelx: int
-    nely: int
+    load_length_m: float
     volfrac: float
     nStage: int
     enable_stage_volume: bool
@@ -247,16 +269,16 @@ class RunConfig(_ConfigMixin):
     hotspot_aggregation: str
     hotspot_beta: Scheduled
     hotspot_kappa: Scheduled
-    hotspot_g0: float
+    hotspot_g0_per_m: float
     print_base: str
-    rmin: float
-    time_filter_rmin: float
+    rmin_m: float
+    time_filter_rmin_m: float
     enable_continuity: bool
     continuity_tol: float
-    tool_radius: Scheduled
+    tool_radius_m: Scheduled
     curvature_beta: Scheduled
-    lrmin: float
-    rmin_cond: float
+    lrmin_m: float
+    rmin_cond_m: float
     Emin: float
     Emax: float
     nu: float
@@ -268,6 +290,7 @@ class RunConfig(_ConfigMixin):
     rouf: Scheduled
     a0: float
     mma_c: float
+    raa0_total: float
     move: float
     tmove: Scheduled
 
@@ -278,8 +301,20 @@ class RunConfig(_ConfigMixin):
     # Iterations between hotspot and curvature calibration refreshes. Iteration 0 is
     # always one of them, which is what calibrates each aggregate against the seed. A
     # change in a scheduled setting that moves an aggregate's bias (`hotspot_beta`,
-    # `rouf`, `curvature_beta`, `tool_radius`, ...) also refreshes that aggregate.
+    # `rouf`, `curvature_beta`, `tool_radius_m`, ...) also refreshes that aggregate.
     hotspot_refresh_period: int
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.nely  # raises now, at load, on a height that is not whole elements
+
+    @property
+    def element_size_m(self) -> float:
+        return self.width_m / self.nelx
+
+    @property
+    def nely(self) -> int:
+        return units.element_count(self.height_m, self.element_size_m, "height_m")
 
 
 @dataclass(kw_only=True)
@@ -288,10 +323,10 @@ class SeqRunConfig(_ConfigMixin):
     Full hyperparameter set for a single fixed-geometry fabrication-sequence
     (`seqopt`) run, mirroring `seqopt.build_problem`'s parameters.
 
-    No `nelx`/`nely`: the geometry file (`--geometry`) defines the mesh, so a mismatch
-    between config and geometry is unrepresentable rather than merely caught. No
-    solid/void cutoff either: it would be inert on a binary geometry,
-    which `geometry.load_geometry` requires by default, so `geometry.SOLID_THRESHOLD`
+    No `nelx`/`nely` or domain size: the geometry file (`--geometry`) defines the mesh
+    and its element size, so a mismatch between config and geometry is unrepresentable
+    rather than merely caught. No solid/void cutoff either: it would be inert on a
+    binary geometry, which `geometry.load_geometry` requires by default, so `geometry.SOLID_THRESHOLD`
     is one constant rather than a setting that can disagree with itself between the
     print-start set and the time-field initialization.
 
@@ -304,20 +339,17 @@ class SeqRunConfig(_ConfigMixin):
         iterations undoing it.
     :param enable_continuity: whether the print-time continuity constraint
         (`constraints.time_field_continuity`) is included at all; ``False`` drops it
-        from the MMA constraint stack entirely, rather than relaxing it via `lrmin`.
+        from the MMA constraint stack entirely, rather than relaxing it via `lrmin_m`.
     :param continuity_tol: `constraints.time_field_continuity`'s bound on the time
         field's mean squared deviation from its local neighborhood average -- the only
         term deciding how smooth the answer is. Inert when `enable_continuity` is False.
-    :param lrmin: continuity-filter radius, in **elements**, as in `RunConfig`. Since
-        the geometry file sets the mesh, rasterizing the same component at a different
-        resolution changes what this radius means physically; rescale it by hand to
-        match.
-    :param rmin_cond: conductivity-neighborhood radius, in elements -- same caveat as
-        `lrmin`.
-    :param time_filter_rmin: density-filter radius applied to `t`, in elements; 0 leaves
-        the time field unfiltered, which is `seqopt`'s starting design (see its module
-        docstring for what a nonzero radius costs, and read `sawtooth_raw` alongside
-        `sawtooth` when using one).
+    :param lrmin_m: continuity-filter radius. Like every `_m` length, in metres,
+        converting at the element size the geometry file gives.
+    :param rmin_cond_m: conductivity-neighborhood radius.
+    :param time_filter_rmin_m: density-filter radius applied to `t`; 0 leaves the time
+        field unfiltered, which is `seqopt`'s starting design (see its module docstring
+        for what a nonzero radius costs, and read `sawtooth_raw` alongside `sawtooth`
+        when using one).
     :param hotspot_normalization: a `conductivity.Normalization` member name, choosing
         what `K_est` measures shielding against. Not a tuning knob: `neighborhood`
         cannot see a free surface that lies on the mesh boundary, and lets void print
@@ -334,14 +366,14 @@ class SeqRunConfig(_ConfigMixin):
         onto the direction opposite the local print direction, `2.37` matching Das2023
         Eq. (3.5)'s linear ramp at half maximum. Requires `half_stencil` normalization
         -- see `conductivity._lobe` and `plans/angular_weight.md`.
-    :param hotspot_g0: the angular lobe's gradient scale, per unit length: how much
-        layering must exist before the print direction is believed. The lobe flattens to
-        isotropic as `|grad t|` falls below it, which is what keeps the weight
-        well-defined where no direction is defined. Belongs an order of magnitude below
-        the run's own median `|grad t|` and is not a tuning knob: a converged field's
-        gradient distribution is tight, so a `g0` near the median attenuates `kappa` by
-        a near-constant factor across the whole part, which is a second `hotspot_kappa`
-        rather than a floor (measured in `plans/angular_weight.md`, Phase 3 results).
+    :param hotspot_g0_per_m: the angular lobe's gradient scale, in `t` per metre: how
+        much layering must exist before the print direction is believed. The lobe
+        flattens to isotropic as `|grad t|` falls below it, which is what keeps the
+        weight well-defined where no direction is defined. Belongs an order of magnitude
+        below the run's own median `|grad t|` (`grad_p50_per_m`) and is not a tuning
+        knob: a converged field's gradient distribution is tight, so a `g0` near the
+        median attenuates `kappa` by a near-constant factor across the whole part, which
+        is a second `hotspot_kappa` rather than a floor (measured in `plans/angular_weight.md`, Phase 3 results).
     :param uniformity_metric: a `timefield.UniformityMetric` member name.
     :param roughness_weight: weight on `timefield.relative_roughness`, the objective's
         smoothness regularizer -- a number, or a `CosineSchedule` decaying one weight
@@ -354,7 +386,7 @@ class SeqRunConfig(_ConfigMixin):
         layer deep, and 0.18 is what flattens it, putting this term at 30-50% of the
         uniformity one. A schedule is what buys a lower end weight -- holding near 1.0
         over the first few hundred iterations and then releasing reaches the same
-        smoothness ending at 0.06, and at 0.02 alongside a `time_filter_rmin` (PR #95).
+        smoothness ending at 0.06, and at 0.02 alongside a `time_filter_rmin_m` (PR #95).
         Only a strictly positive *constant* weight makes the sawtooth amplitude
         stationary. A smooth field is not a local minimum of the uniformity penalty
         alone, so under any released floor the mode creeps back with no plateau -- slowly
@@ -371,6 +403,7 @@ class SeqRunConfig(_ConfigMixin):
     :param asyincr: factor the asymptotes relax by per iteration when a variable moves
         monotonically.
     :param asydecr: factor they tighten by when a variable oscillates.
+    :param raa0_total: as in `RunConfig`.
     """
 
     nloop: int
@@ -380,16 +413,16 @@ class SeqRunConfig(_ConfigMixin):
 
     enable_continuity: bool
     continuity_tol: float
-    lrmin: float
-    rmin_cond: float
-    time_filter_rmin: float
+    lrmin_m: float
+    rmin_cond_m: float
+    time_filter_rmin_m: float
 
     hotspot_weight: float
     hotspot_normalization: str
     hotspot_aggregation: str
     hotspot_beta: float
     hotspot_kappa: Scheduled
-    hotspot_g0: float
+    hotspot_g0_per_m: float
     uniformity_metric: str
     uniformity_weight: float
     roughness_weight: float | CosineSchedule
@@ -402,6 +435,7 @@ class SeqRunConfig(_ConfigMixin):
 
     a0: float
     mma_c: float
+    raa0_total: float
     tmove: float
     asyclamp_min_ratio: float
     asyclamp_max_ratio: float

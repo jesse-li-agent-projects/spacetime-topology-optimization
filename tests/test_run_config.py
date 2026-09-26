@@ -1,10 +1,12 @@
 """Round-trip and unknown-key tests for `RunConfig`/`SeqRunConfig`'s shared
 `_ConfigMixin` JSON plumbing."""
 
+import dataclasses
 import json
 
 import pytest
 
+import sttopt.units as units
 from conftest import default_run_config, default_seq_run_config
 from sttopt.run_config import (
     CosineSchedule,
@@ -167,3 +169,24 @@ def test_config_round_trips_a_piecewise_schedule():
 )
 def test_identically_zero(setting, expected):
     assert identically_zero(setting) is expected
+
+
+def test_nely_follows_from_the_domain_at_any_resolution():
+    """Refining is a change to `nelx` alone: `nely` follows, across decimal lengths
+    that are only whole numbers of elements up to float rounding."""
+    base = default_run_config()
+    for nelx in (90, 180, 360, 540):
+        config = dataclasses.replace(base, width_m=0.18, height_m=0.06, nelx=nelx)
+        assert config.nely == nelx // 3
+
+
+def test_a_height_that_is_not_whole_elements_is_rejected_at_load():
+    with pytest.raises(ValueError, match="height_m"):
+        dataclasses.replace(default_run_config(), width_m=0.18, height_m=0.0605)
+
+
+@pytest.mark.parametrize("nelx", [7, 90, 180, 360, 1440])
+@pytest.mark.parametrize("elements", [1.0, 2.0, 3.0, 4.0, 12.0])
+def test_a_whole_number_of_elements_converts_exactly(nelx, elements):
+    h = 0.18 / nelx
+    assert units.in_elements(elements * h, h) == elements

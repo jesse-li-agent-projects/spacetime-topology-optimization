@@ -9,7 +9,7 @@ no `Emin`/`Emax`/`nu`/`penal`/`eta`/`beta_d`), and `xPhys` is a fixed input rath
 a design variable, so `n = nel` (not `2*nel`) and `t` is the sole autograd leaf.
 
 **The filter on `t` is off by default: `tPhys` is `t` scaled to a maximum of 1 unless
-`config.time_filter_rmin` is set.** STTO reuses the density filter to smooth `tPhys`,
+`config.time_filter_rmin_m` is set.** STTO reuses the density filter to smooth `tPhys`,
 which also smooths *across void* -- two branches separated by a gap get their print
 times mixed with no material between them to carry heat, and void `t`, which is pinned
 by nothing physical, bleeds into the `tPhys` of solid within `rmin` of the boundary.
@@ -47,6 +47,7 @@ import sttopt.run_config as run_config
 import sttopt.sensitivity as sensitivity
 import sttopt.timefield as timefield
 import sttopt.torch_util as torch_util
+import sttopt.units as units
 
 
 @dataclass(frozen=True)
@@ -65,9 +66,10 @@ class Problem:
     xPhys: Float[Tensor, "nely nelx"]  # the fixed geometry -- never requires grad
     nelx: int
     nely: int
+    element_size_m: float
 
     L: Tensor  # sparse CSR continuity filter, shape (nel, nel)
-    # The density filter on `t`, or None when `config.time_filter_rmin` is 0 and
+    # The density filter on `t`, or None when `config.time_filter_rmin_m` is 0 and
     # `tPhys` is `t` itself -- see the module docstring.
     H: torch_util.SymmetricCsr | None
     Hs: Float[Tensor, " nel"] | None
@@ -131,13 +133,13 @@ class IterationRecord:
     hotspot_kappa: (
         float  # this iteration's angular lobe width, which a schedule may vary
     )
-    # Layer thickness and its spread, as `|grad tPhys|` percentiles per unit length
+    # Layer thickness and its spread, as `|grad tPhys|` percentiles per metre
     # (`timefield.gradient_percentiles`). Diagnostics: they say what layer scale the
-    # run actually reached, which is what a per-unit-length setting like
-    # `config.hotspot_g0` has to be read against.
-    grad_p10: float
-    grad_p50: float
-    grad_p90: float
+    # run actually reached, which is what a gradient setting like
+    # `config.hotspot_g0_per_m` has to be read against.
+    grad_p10_per_m: float
+    grad_p50_per_m: float
+    grad_p90_per_m: float
     df: Float[np.ndarray, " n"]
     xmma: Float[np.ndarray, " n"]
     low: Float[np.ndarray, " n"]
@@ -159,6 +161,7 @@ class RunResult:
 def build_problem(
     config: run_config.SeqRunConfig,
     xPhys: Float[np.ndarray, "nely nelx"],
+    element_size_m: float,
     *,
     device: torch.device | str | None = None,
     dtype: torch.dtype = torch.float64,
@@ -173,6 +176,8 @@ def build_problem(
     :param xPhys: fixed density field, shape `(nely, nelx)`; solid that does not
         connect to the build plate is dropped (`geometry.drop_disconnected`), so
         `Problem.xPhys` is what the run actually optimizes and is not always this
+    :param element_size_m: side of `xPhys`'s square elements, which the config's lengths
+        convert at
     :param device: device every tensor field lives on; defaults to CUDA if available
     :param dtype: floating dtype every real-valued tensor field is cast to
     """
@@ -186,18 +191,23 @@ def build_problem(
     Nei = geometry.base_elements(xPhys, candidates)
     xPhys = geometry.drop_disconnected(xPhys, Nei)
 
-    L = filters.continuity_filter(nelx, nely, config.lrmin)
-    e1, e2, w = conductivity.neighbor_weights(nelx, nely, config.rmin_cond)
+    rmin_cond = units.in_elements(config.rmin_cond_m, element_size_m)
+    L = filters.continuity_filter(
+        nelx, nely, units.in_elements(config.lrmin_m, element_size_m)
+    )
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
     hotspot_denom = conductivity.constant_denominator(
-        conductivity.Normalization(config.hotspot_normalization), config.rmin_cond
+        conductivity.Normalization(config.hotspot_normalization), rmin_cond
     )
     hotspot_base = conductivity.infinite_base(
         conductivity.Normalization(config.hotspot_normalization), Nei
     )
 
     H = Hs = None
-    if config.time_filter_rmin > 0:
-        H_np, Hs_np = filters.density_filter(nelx, nely, config.time_filter_rmin)
+    if config.time_filter_rmin_m > 0:
+        H_np, Hs_np = filters.density_filter(
+            nelx, nely, units.in_elements(config.time_filter_rmin_m, element_size_m)
+        )
         H = torch_util.symmetric_csr_to_tensor(H_np, device, dtype)
         Hs = torch_util.to_tensor(Hs_np, device, dtype)
 
@@ -214,6 +224,7 @@ def build_problem(
         xPhys=xPhys_t,
         nelx=nelx,
         nely=nely,
+        element_size_m=element_size_m,
         L=torch_util.csr_to_tensor(L, device, dtype),
         H=H,
         Hs=Hs,
@@ -223,7 +234,7 @@ def build_problem(
             int_fields["e1"],
             int_fields["e2"],
             nelx,
-            config.rmin_cond,
+            rmin_cond,
             dtype,
             config.hotspot_kappa,
         ),
@@ -322,7 +333,8 @@ def estimated_conductivity(
         problem.hotspot_base,
         problem.hotspot_stencil,
         kappa,
-        config.hotspot_g0,
+        config.hotspot_g0_per_m
+        * timefield.unit_length_m(tPhys, problem.element_size_m),
     )
 
 
@@ -397,7 +409,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     # -- Constraints, in the fixed documented order above. --
     g_start_t = constraints.start_point(tPhys, problem.Nei)
-    g_parts = [g_start_t]
+    g_parts = [g_start_t[None]]
     if config.enable_continuity:
         g_cont_t = constraints.time_field_continuity(
             tPhys, problem.L, config.continuity_tol
@@ -429,7 +441,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         true_cv = float(timefield.central_difference_cv(physical, xPhys))
         sawtooth = float(timefield.relative_sawtooth_amplitude(physical, xPhys))
         sawtooth_raw = float(timefield.relative_sawtooth_amplitude(raw, xPhys))
-        grad_p10, grad_p50, grad_p90 = timefield.gradient_percentiles(physical, xPhys)
+        unit_m = timefield.unit_length_m(physical, problem.element_size_m)
+        grad_p10, grad_p50, grad_p90 = (
+            g / unit_m for g in timefield.gradient_percentiles(physical, xPhys)
+        )
 
     # -- Gradient region ends: mmasub is not part of the autograd graph. --
     m = len(g_all)
@@ -457,6 +472,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         mma_d,
         asyincr=config.asyincr,
         asydecr=config.asydecr,
+        raa0=config.raa0_total / problem.n,
         **mma_trust,
     )
 
@@ -481,9 +497,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         sawtooth_raw=sawtooth_raw,
         roughness_weight=roughness_weight,
         hotspot_kappa=run_config.weight_at(config.hotspot_kappa, loop),
-        grad_p10=grad_p10,
-        grad_p50=grad_p50,
-        grad_p90=grad_p90,
+        grad_p10_per_m=grad_p10,
+        grad_p50_per_m=grad_p50,
+        grad_p90_per_m=grad_p90,
         df=torch_util.to_numpy(df_dt[0]),
         xmma=torch_util.to_numpy(xmma),
         low=torch_util.to_numpy(low),

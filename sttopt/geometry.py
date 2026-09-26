@@ -15,6 +15,8 @@ import scipy.sparse as sp
 from jaxtyping import Bool, Float, Int
 from scipy.sparse.csgraph import connected_components
 
+import sttopt.units as units
+
 # Elements within this of 0 or 1 count as solid/void; anything strictly between is
 # "intermediate" and trips load_geometry's binary check.
 _BINARY_TOL = 1e-3
@@ -31,9 +33,12 @@ _NEIGHBOR_OFFSETS_8 = [
 ]
 
 
-def load_geometry(path: Path, *, binary: bool = True) -> Float[np.ndarray, "nely nelx"]:
+def load_geometry(
+    path: Path, *, binary: bool = True
+) -> tuple[Float[np.ndarray, "nely nelx"], float]:
     """
-    Load a fixed density field from an `.npz` file's `xPhys` key.
+    Load a fixed density field from an `.npz` file's `xPhys` key, with the element size
+    its `width_m`/`height_m` keys give it.
 
     :param path: path to the `.npz` file
     :param binary: if True (default), require every element to lie within
@@ -42,19 +47,28 @@ def load_geometry(path: Path, *, binary: bool = True) -> Float[np.ndarray, "nely
         turning one into a printable geometry is its own step
         (`python -m sttopt.geometry_builders binarize`), not a hidden transform here.
         Pass `False` (the CLI's `--non-binarized`) to study a grey field deliberately.
-    :return: the density field, shape `(nely, nelx)`
-    :raises ValueError: if `xPhys` is missing, not 2-D, has non-finite or
-        out-of-`[0, 1]` values, or (when `binary`) is not binary
+    :return: `(xPhys, element_size_m)`, `xPhys` of shape `(nely, nelx)`
+    :raises ValueError: if `xPhys`, `width_m` or `height_m` is missing, `xPhys` is not
+        2-D, has non-finite or out-of-`[0, 1]` values, or (when `binary`) is not binary,
+        or the elements are not square
     """
     with np.load(path) as data:
-        if "xPhys" not in data:
+        missing = {"xPhys", "width_m", "height_m"} - set(data.keys())
+        if missing:
             raise ValueError(
-                f"{path}: no 'xPhys' key found; keys present: {sorted(data.keys())}"
+                f"{path}: no {sorted(missing)} key(s) found; keys present: {sorted(data.keys())}"
             )
         xPhys = np.asarray(data["xPhys"])
+        width_m, height_m = float(data["width_m"]), float(data["height_m"])
 
     if xPhys.ndim != 2:
         raise ValueError(f"{path}: xPhys must be 2-D, got shape {xPhys.shape}")
+    nely, nelx = xPhys.shape
+    element_size_m = width_m / nelx
+    if units.in_elements(height_m, element_size_m) != nely:
+        raise ValueError(
+            f"{path}: height_m={height_m:g} m spans {height_m / element_size_m!r} square elements of side width_m/nelx = {element_size_m:g} m, but xPhys has nely={nely}"
+        )
     if not np.all(np.isfinite(xPhys)):
         raise ValueError(f"{path}: xPhys must be finite")
     if xPhys.min() < 0.0 or xPhys.max() > 1.0:
@@ -75,7 +89,7 @@ def load_geometry(path: Path, *, binary: bool = True) -> Float[np.ndarray, "nely
                 f"it first (python -m sttopt.geometry_builders binarize)."
             )
 
-    return xPhys
+    return xPhys, element_size_m
 
 
 def base_elements(

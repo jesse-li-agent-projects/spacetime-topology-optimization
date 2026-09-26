@@ -29,6 +29,8 @@ from sttopt.run_config import RunConfig
 # configs/default.json, which happens to match today but isn't pinned to this
 # experiment.
 NELX, NELY = 180, 60
+# The source works in elements; any element size reproduces it.
+H = 1e-3
 NSTAGE = 8
 VOLFRAC = 0.5
 THETA = 0.1
@@ -69,8 +71,10 @@ STEP_BETA_T = {
 
 CONFIG = RunConfig(
     nloop=NLOOP,
+    width_m=NELX * H,
+    height_m=NELY * H,
     nelx=NELX,
-    nely=NELY,
+    load_length_m=0.0,  # the source's point load
     volfrac=VOLFRAC,
     nStage=NSTAGE,
     enable_stage_volume=True,
@@ -84,19 +88,19 @@ CONFIG = RunConfig(
     hotspot_aggregation="p_mean",
     hotspot_beta=200.0,
     hotspot_kappa=0.0,
-    hotspot_g0=0.35,
+    hotspot_g0_per_m=3.368,
     hotspot_refresh_period=25,
     beta_d_schedule=STEP_BETA_D,
     beta_t_schedule=STEP_BETA_T,
     print_base=PRINT_BASE,
-    rmin=RMIN,
-    time_filter_rmin=RMIN,
+    rmin_m=RMIN * H,
+    time_filter_rmin_m=RMIN * H,
     enable_continuity=True,
     continuity_tol=1e-6,
-    tool_radius=0.0,
+    tool_radius_m=0.0,
     curvature_beta=100.0,
-    lrmin=LRMIN,
-    rmin_cond=RMIN_COND,
+    lrmin_m=LRMIN * H,
+    rmin_cond_m=RMIN_COND * H,
     Emin=1e-9,
     Emax=1.0,
     nu=0.3,
@@ -107,6 +111,7 @@ CONFIG = RunConfig(
     r=0.05,
     rouf=100.0,
     a0=1.0,
+    raa0_total=0.216,  # raa0 = 1e-5 at 180x60, the source's
     mma_c=2500.0,
     move=0.01,
     tmove=0.01,

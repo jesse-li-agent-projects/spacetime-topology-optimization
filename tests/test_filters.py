@@ -44,14 +44,14 @@ def test_continuity_filter_returns_sparse():
 
 
 # --- continuity_filter properties (first-principles, no MATLAB fixture) ---------------
-# `L @ t` is defined to be each element's own value minus the unweighted mean of its
-# `lrmin`-neighbours (self excluded). Everything below follows from that definition
-# alone, so these pin the operator's *meaning* rather than its fixture values -- the
-# fixture test above only covers nelx=7, nely=5, lrmin=2.
+# `L @ t` is defined to be each element's own value minus the mean of its neighbours
+# (self excluded) weighted `max(0, lrmin - dist)`. Everything below follows from that
+# definition alone, so these pin the operator's *meaning* rather than its fixture values
+# -- the fixture test above only covers nelx=7, nely=5, lrmin=2.
 #
-# All the closed forms use lrmin=2, i.e. the 3x3 window minus self, which is the radius
-# the reference loop and every fixture use. Neighbour counts: 8 in the interior, 5 along
-# an edge, 3 at a corner.
+# All the closed forms use lrmin=2: the 4 orthogonal neighbours weigh 1 and the 4
+# diagonal ones `A`, and nothing further reaches.
+A = 2 - np.sqrt(2)
 
 
 def _column_index_field(nelx: int, nely: int) -> np.ndarray:
@@ -84,11 +84,12 @@ def test_continuity_filter_on_linear_ramp_closed_form():
     residual into the interior would penalize the very build order it exists to reward.
 
     On the two end columns the neighbourhood is one-sided and the residual is a fixed
-    closed form: an edge element has 5 neighbours (2 in its own column, 3 in the adjacent
-    one) so the mean sits 3/5 of a column away; a corner element has 3 neighbours (1 in
-    its own column, 2 in the adjacent one) so the mean sits 2/3 of a column away. The
-    sign is negative on the low-index end (the element is earlier than its neighbourhood)
-    and mirrored on the high-index end.
+    closed form. An edge element's neighbours are 2 in its own column (weight 1 each)
+    and, in the adjacent one, 1 of weight 1 and 2 of weight `A`, so the mean sits
+    `(1 + 2A) / (3 + 2A)` of a column away; a corner element's are 1 in its own column
+    and 1 + `A` in the adjacent one, so `(1 + A) / (2 + A)`. The sign is negative on the
+    low-index end (the element is earlier than its neighbourhood) and mirrored on the
+    high-index end.
     """
     for nelx, nely in [(6, 4), (5, 5), (7, 3)]:
         L = continuity_filter(nelx, nely, LRMIN)
@@ -96,8 +97,8 @@ def test_continuity_filter_on_linear_ramp_closed_form():
 
         np.testing.assert_allclose(out[:, 1:-1], 0.0, atol=1e-14)
 
-        expected_first = np.full(nely, -3 / 5)
-        expected_first[0] = expected_first[-1] = -2 / 3
+        expected_first = np.full(nely, -(1 + 2 * A) / (3 + 2 * A))
+        expected_first[0] = expected_first[-1] = -(1 + A) / (2 + A)
         np.testing.assert_allclose(out[:, 0], expected_first, atol=1e-14)
         np.testing.assert_allclose(out[:, -1], -expected_first, atol=1e-14)
 
@@ -113,8 +114,8 @@ def test_continuity_filter_row_and_diagonal_ramps():
     row_ramp = jj.astype(float)
     out_rows = _apply(L, row_ramp, nelx, nely)
     np.testing.assert_allclose(out_rows[1:-1, :], 0.0, atol=1e-14)
-    expected_first = np.full(nelx, -3 / 5)
-    expected_first[0] = expected_first[-1] = -2 / 3
+    expected_first = np.full(nelx, -(1 + 2 * A) / (3 + 2 * A))
+    expected_first[0] = expected_first[-1] = -(1 + A) / (2 + A)
     np.testing.assert_allclose(out_rows[0, :], expected_first, atol=1e-14)
     np.testing.assert_allclose(out_rows[-1, :], -expected_first, atol=1e-14)
 
@@ -123,17 +124,33 @@ def test_continuity_filter_row_and_diagonal_ramps():
 
 
 def test_continuity_filter_on_checkerboard_closed_form():
-    """The worst case the penalty exists to reject. An interior element's 8 neighbours
-    split 4/4 between the two checkerboard phases, so the neighbourhood mean is exactly
-    1/2 and the residual is +-1/2 -- the largest magnitude any 0/1 field can produce, and
-    an order of magnitude above the ramp's interior residual of 0."""
+    """The worst case the penalty exists to reject. An interior element's 4 orthogonal
+    neighbours are in the other checkerboard phase and its 4 diagonal ones in its own,
+    so the residual is `+-1 / (1 + A)`: the heavier neighbours all disagree, and the
+    ramp's interior residual is 0."""
     nelx, nely = 6, 5
     L = continuity_filter(nelx, nely, LRMIN)
     jj, ii = np.meshgrid(np.arange(nely), np.arange(nelx), indexing="ij")
     phase = ((ii + jj) % 2).astype(float)
 
     out = _apply(L, phase, nelx, nely)
-    np.testing.assert_allclose(out[1:-1, 1:-1], phase[1:-1, 1:-1] - 0.5, atol=1e-14)
+    np.testing.assert_allclose(
+        out[1:-1, 1:-1], (2 * phase[1:-1, 1:-1] - 1) / (1 + A), atol=1e-14
+    )
+
+
+def test_continuity_filter_varies_continuously_with_the_radius():
+    """The window's reach grows smoothly: a hair more than 2 elements weighs in the
+    distance-2 neighbours by that hair, where a window of `ceil(lrmin) - 1` elements
+    jumped from 3x3 to 5x5."""
+    L2 = continuity_filter(NELX, NELY, 2.0).toarray()
+    L2_plus = continuity_filter(NELX, NELY, 2.0 + 1e-9).toarray()
+    np.testing.assert_allclose(L2_plus, L2, atol=1e-8)
+
+
+def test_continuity_filter_needs_a_neighbor_in_reach():
+    with pytest.raises(ValueError, match="reaches no neighbor"):
+        continuity_filter(NELX, NELY, 1.0)
 
 
 def _reference_density_filter(nelx: int, nely: int, rmin: float) -> np.ndarray:

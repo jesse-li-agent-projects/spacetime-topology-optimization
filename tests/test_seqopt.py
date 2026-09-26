@@ -11,7 +11,7 @@ import sttopt.filters as filters
 import sttopt.seqopt as seqopt
 import sttopt.timefield as timefield
 import sttopt.torch_util as torch_util
-from conftest import default_seq_run_config
+from conftest import SEQ_ELEMENT_M, default_seq_run_config
 
 NELX, NELY = 7, 5
 
@@ -29,8 +29,10 @@ def _geometry() -> np.ndarray:
 
 def _problem(**overrides) -> seqopt.Problem:
     overrides.setdefault("tmove", 0.05)
-    config = default_seq_run_config(lrmin=1.5, rmin_cond=2.5, **overrides)
-    return seqopt.build_problem(config, _geometry(), device="cpu")
+    config = default_seq_run_config(
+        lrmin_m=1.5 * SEQ_ELEMENT_M, rmin_cond_m=2.5 * SEQ_ELEMENT_M, **overrides
+    )
+    return seqopt.build_problem(config, _geometry(), SEQ_ELEMENT_M, device="cpu")
 
 
 # An iteration that refreshes nothing: not 0 (which always recalibrates the hotspot),
@@ -81,10 +83,12 @@ def test_build_problem_drops_solid_that_cannot_reach_the_plate():
     left to contribute to the objective or to the volume the stage budgets use."""
     xPhys = _geometry()
     xPhys[0, -1] = 1.0  # an island in the top-right corner, clear of everything solid
-    config = default_seq_run_config(lrmin=1.5, rmin_cond=2.5, tmove=0.05)
+    config = default_seq_run_config(
+        lrmin_m=1.5 * SEQ_ELEMENT_M, rmin_cond_m=2.5 * SEQ_ELEMENT_M, tmove=0.05
+    )
 
     with pytest.warns(UserWarning, match="no path of material"):
-        problem = seqopt.build_problem(config, xPhys, device="cpu")
+        problem = seqopt.build_problem(config, xPhys, SEQ_ELEMENT_M, device="cpu")
 
     np.testing.assert_allclose(torch_util.to_numpy(problem.xPhys), _geometry())
 
@@ -108,7 +112,7 @@ def test_step_finite_and_design_vector_is_t_only(nStage):
     assert record.xmma.shape == (nel,)
     assert record.df.shape == (nel,)
 
-    m = (1 if problem.config.enable_continuity else 0) + len(problem.Nei) + 2 * nStage
+    m = (1 if problem.config.enable_continuity else 0) + 1 + 2 * nStage
     assert record.g.shape == (m,)
     assert record.dg.shape == (m, nel)
 
@@ -119,9 +123,8 @@ def test_enable_continuity_false_drops_the_continuity_constraint_row():
 
     state = seqopt.init_state(problem)
     _, record = seqopt.step(problem, state)
-    m = len(problem.Nei)
-    assert record.g.shape == (m,)
-    assert record.dg.shape == (m, nel)
+    assert record.g.shape == (1,)  # the start-point row alone
+    assert record.dg.shape == (1, nel)
 
 
 def test_objective_is_the_weighted_sum_of_its_three_terms():
@@ -172,7 +175,7 @@ def test_sensitivities_match_finite_differences(monkeypatch):
     chain rule are in the graph.
     """
     h = 1e-5
-    problem = _problem(nStage=2, time_filter_rmin=2.0)
+    problem = _problem(nStage=2, time_filter_rmin_m=2.0 * SEQ_ELEMENT_M)
     rng = np.random.default_rng(0)
     t_raw = rng.uniform(0.1, 0.9, size=(NELY, NELX))
     base_state = seqopt.init_state(problem)
@@ -221,7 +224,7 @@ def test_sensitivities_match_finite_differences(monkeypatch):
 def test_unfiltered_time_field_is_only_scaled():
     """At radius 0 the physical field is `t` scaled, not shifted, to end the build at 1:
     a field that stops short of 1 is stretched, and a start at 0 stays at 0."""
-    problem = _problem(nStage=0, time_filter_rmin=0.0)
+    problem = _problem(nStage=0, time_filter_rmin_m=0.0)
     assert problem.H is None
     t = 0.6 * seqopt.init_state(problem).t
 
@@ -235,7 +238,7 @@ def test_time_filter_attenuates_a_one_element_sawtooth():
     one-element one, and the filter's whole job is to make those expensive in the
     design variable. Pinning that it attenuates rather than merely alters the field.
     """
-    problem = _problem(nStage=0, time_filter_rmin=4.0)
+    problem = _problem(nStage=0, time_filter_rmin_m=4.0 * SEQ_ELEMENT_M)
     _, j = np.indices((NELY, NELX))
     ramp = np.tile(np.linspace(0.0, 1.0, NELY)[:, None], (1, NELX))
 

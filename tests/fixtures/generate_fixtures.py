@@ -59,19 +59,22 @@ ORACLE_FACTOR = 1.0
 _DEFAULT_CONFIG = run_config.RunConfig.from_dict(
     json.loads((OUT.parent.parent / "configs" / "default.json").read_text())
 )
+# The radii above are in elements, of the default size.
+_H = _DEFAULT_CONFIG.element_size_m
 CONFIG = dataclasses.replace(
     _DEFAULT_CONFIG,
+    width_m=NELX * _H,
+    height_m=NELY * _H,
     nelx=NELX,
-    nely=NELY,
     nStage=NSTAGE,
     volfrac=VOLFRAC,
     Theta=THETA,
     Tcr=TCR,
     print_base=TFIELD.name.lower(),
-    rmin=RMIN,
-    time_filter_rmin=RMIN,
-    lrmin=LRMIN,
-    rmin_cond=RMIN_COND,
+    rmin_m=RMIN * _H,
+    time_filter_rmin_m=RMIN * _H,
+    lrmin_m=LRMIN * _H,
+    rmin_cond_m=RMIN_COND * _H,
     nloop=NLOOP,
 )
 

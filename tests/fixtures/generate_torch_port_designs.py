@@ -84,6 +84,7 @@ from sttopt.run_config import RunConfig
 
 # Matches tests/test_e2e_slow.py's reproduction of the thesis Chapter 4.4 experiment.
 NSTAGE = 8
+WIDTH_M = 0.18
 VOLFRAC = 0.5
 THETA = 0.1
 TCR = 0.8
@@ -98,9 +99,9 @@ _EXTRA_CONFIG_FIELDS = dict(
     hotspot_aggregation="p_mean",
     hotspot_beta=200.0,
     hotspot_kappa=0.0,
-    hotspot_g0=0.35,
+    hotspot_g0_per_m=3.368,
     hotspot_refresh_period=25,
-    tool_radius=0.0,
+    tool_radius_m=0.0,
     curvature_beta=100.0,
     beta_d_schedule={
         "points": [
@@ -270,16 +271,20 @@ def generate(
         t0 = time.perf_counter()
         config = RunConfig(
             nloop=nloop,
+            # Both meshes span one part; the radii are in its elements.
+            width_m=WIDTH_M,
+            height_m=WIDTH_M * nely / nelx,
             nelx=nelx,
-            nely=nely,
+            load_length_m=0.0,
+            raa0_total=1e-5 * 2 * nelx * nely,  # raa0 = 1e-5, as generated
             volfrac=VOLFRAC,
             nStage=NSTAGE,
             Theta=THETA,
             Tcr=TCR,
             print_base=PRINT_BASE,
-            rmin=rmin,
-            lrmin=lrmin,
-            rmin_cond=rmin_cond,
+            rmin_m=rmin * WIDTH_M / nelx,
+            lrmin_m=lrmin * WIDTH_M / nelx,
+            rmin_cond_m=rmin_cond * WIDTH_M / nelx,
             **_EXTRA_CONFIG_FIELDS,
         )
         result = stto.run(config, beta_d=BETA_INIT, device=device)

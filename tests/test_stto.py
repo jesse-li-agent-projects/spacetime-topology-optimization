@@ -25,7 +25,7 @@ import sttopt.timefield as timefield
 import sttopt.torch_solve as torch_solve
 import sttopt.torch_util as torch_util
 import tests.reference.fem as fem_ref
-from conftest import FIXTURES_DIR, default_run_config
+from conftest import ELEMENT_M, FIXTURES_DIR, default_run_config
 
 VOLFRAC = 0.4
 TCR = 0.8
@@ -64,10 +64,10 @@ def _problem(
         uniformity_weight=uniformity_weight,
         Tcr=TCR,
         print_base=timefield.TimeField(tfield).name.lower(),
-        rmin=RMIN,
-        time_filter_rmin=RMIN,
-        lrmin=LRMIN,
-        rmin_cond=RMIN_COND,
+        rmin_m=RMIN * ELEMENT_M,
+        time_filter_rmin_m=RMIN * ELEMENT_M,
+        lrmin_m=LRMIN * ELEMENT_M,
+        rmin_cond_m=RMIN_COND * ELEMENT_M,
         **(config_overrides or {}),
     )
     return stto.build_problem(config, **kwargs)
@@ -156,7 +156,7 @@ def test_build_problem_rejects_the_1x1_mesh(tfield):
     with pytest.raises(ValueError):
         _problem(nelx=1, nely=1, tfield=tfield)
 
-    no_tool = {"tool_radius": 0.0}
+    no_tool = {"tool_radius_m": 0.0}
     _problem(nelx=1, nely=4, tfield=tfield, config_overrides=no_tool)
     _problem(nelx=4, nely=1, tfield=tfield, config_overrides=no_tool)
 
@@ -363,7 +363,7 @@ def test_step_assembled_sensitivities_match_finite_differences(monkeypatch):
         nely=nely,
         nStage=nStage,
         enable_stage_volume=True,
-        config_overrides={"hotspot_refresh_period": 2**62, "tool_radius": 2.0},
+        config_overrides={"hotspot_refresh_period": 2**62, "tool_radius_m": 2.0 * ELEMENT_M},
     )
     nel = nelx * nely
     assert problem.n == 2 * nel
@@ -373,13 +373,13 @@ def test_step_assembled_sensitivities_match_finite_differences(monkeypatch):
     _, record = stto.step(problem, state)
 
     # Row count follows from the stack `step` builds: volume, continuity (when enabled),
-    # one row per print-start element, an upper and a lower bound per stage, the hotspot
-    # row, and the tool-radius row (when enabled).
+    # the start-point row, an upper and a lower bound per stage, the hotspot row, and
+    # the tool-radius row (when enabled).
     n_continuity_rows = 1 if problem.config.enable_continuity else 0
     n_curvature_rows = (
-        0 if run_config.identically_zero(problem.config.tool_radius) else 1
+        0 if run_config.identically_zero(problem.config.tool_radius_m) else 1
     )
-    m = 1 + n_continuity_rows + len(problem.Nei) + 2 * nStage + 1 + n_curvature_rows
+    m = 1 + n_continuity_rows + 1 + 2 * nStage + 1 + n_curvature_rows
     assert record.df.shape == (problem.n,)
     assert record.g.shape == (m,)
     assert record.dg.shape == (m, problem.n)
@@ -728,9 +728,9 @@ def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
         Theta=0.1,
         Tcr=TCR,
         print_base="opposite_corner",
-        rmin=2.0,
-        lrmin=2.0,
-        rmin_cond=NEAR_BINARY_RMIN_COND,
+        rmin_m=2.0 * ELEMENT_M,
+        lrmin_m=2.0 * ELEMENT_M,
+        rmin_cond_m=NEAR_BINARY_RMIN_COND * ELEMENT_M,
     )
     problem = stto.build_problem(config)
     x = torch_util.to_tensor(x, problem.device, problem.dtype)
@@ -782,12 +782,12 @@ def test_step_would_have_produced_nan_without_the_nan_safe_rewrite():
     assert torch.any(torch.isnan(d_x))
 
 
-def _curvature_records(tool_radius):
-    """One `step` record with no tool-radius row and one at `tool_radius`, from the same
-    design, at iteration `QUIET_LOOP`."""
-    base = _problem(nelx=10, nely=8, config_overrides={"tool_radius": 0.0})
+def _curvature_records(tool_radius_m):
+    """One `step` record with no tool-radius row and one at `tool_radius_m`, from the
+    same design, at iteration `QUIET_LOOP`."""
+    base = _problem(nelx=10, nely=8, config_overrides={"tool_radius_m": 0.0})
     with_tool = stto.build_problem(
-        dataclasses.replace(base.config, tool_radius=tool_radius)
+        dataclasses.replace(base.config, tool_radius_m=tool_radius_m)
     )
     _, _, state = _draw_well_conditioned_state(base, np.random.default_rng(3))
     _, record = stto.step(base, state)
@@ -798,13 +798,15 @@ def _curvature_records(tool_radius):
 def test_tool_radius_appends_one_row_bounding_the_concave_curvature():
     """The row is the tool radius over the largest one the design admits, minus 1,
     since every iteration refreshes the calibration onto the true maximum."""
-    record, with_record = _curvature_records(2.0)
+    record, with_record = _curvature_records(2.0 * ELEMENT_M)
 
     assert with_record.g.shape == (record.g.shape[0] + 1,)
     np.testing.assert_allclose(with_record.g[:-1], record.g, rtol=1e-12)
-    admissible = with_record.diagnostics["admissible_tool_radius"]
+    admissible = with_record.diagnostics["admissible_tool_radius_m"]
     assert np.isfinite(admissible)  # non-vacuous: a random design has concave fronts
-    assert with_record.g[-1] == pytest.approx(2.0 / admissible - 1, rel=1e-10)
+    assert with_record.g[-1] == pytest.approx(
+        2.0 * ELEMENT_M / admissible - 1, rel=1e-10
+    )
     assert np.abs(with_record.dg[-1]).max() > 0
 
 
@@ -812,7 +814,7 @@ def test_tool_radius_at_zero_mid_schedule_is_an_inactive_row():
     """A ramp that has not yet left 0 already has its row, which a zero-radius tool
     satisfies with no gradient."""
     ramp = run_config.PiecewiseSchedule(
-        points=[[0, 0.0], [QUIET_LOOP + 10, 0.0], [QUIET_LOOP + 20, 3.0]]
+        points=[[0, 0.0], [QUIET_LOOP + 10, 0.0], [QUIET_LOOP + 20, 3.0 * ELEMENT_M]]
     )
     record, with_record = _curvature_records(ramp)
 
@@ -822,7 +824,7 @@ def test_tool_radius_at_zero_mid_schedule_is_an_inactive_row():
 
 
 def test_tool_radius_needs_an_interior_element():
-    config = dataclasses.replace(_problem().config, nelx=2, nely=6, tool_radius=1.0)
+    config = default_run_config(nelx=2, nely=6, tool_radius_m=ELEMENT_M)
     with pytest.raises(ValueError, match="interior element"):
         stto.build_problem(config)
 

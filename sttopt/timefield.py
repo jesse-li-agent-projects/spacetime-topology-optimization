@@ -399,12 +399,25 @@ def unit_length(tPhys: Float[Tensor, "nely nelx"]) -> float:
     """The nondimensional unit length, in elements: the square root of the design
     domain's area.
 
-    Every gradient here is taken per unit length rather than per element, so the same
-    physical field reads the same at any mesh resolution of the same domain, and a
-    weight on a gradient statistic carries across resolutions.
+    Every gradient here is taken per unit length rather than per element or per metre,
+    which keeps a field spanning `[0, 1]` at gradients of order 1 whatever the mesh or
+    the part's size -- the scale `GRAD_EPS` and `NORMAL_EPS` are set against. It is an
+    internal unit: a setting stated in metres converts through `unit_length_m`.
     """
     nely, nelx = tPhys.shape
     return (nelx * nely) ** 0.5
+
+
+def unit_length_m(tPhys: Float[Tensor, "nely nelx"], element_size_m: float) -> float:
+    """
+    `unit_length` in metres, e.g. to convert a gradient between per-unit-length and
+    per-metre.
+
+    :param tPhys: the time field, which gives the mesh shape
+    :param element_size_m: side of a square element
+    :return: the internal gradient unit's length in metres
+    """
+    return unit_length(tPhys) * element_size_m
 
 
 # Natural-coordinate offset of a 2x2 Gauss point, and the four points as

@@ -7,7 +7,8 @@ point-in-polygon on element centres (not hand-written index arithmetic), so a sh
 stays a readable list of vertices. All follow the repo's grid convention (row 0 is the
 top; see `conventions.md`) with the build plate at the bottom, and take their physical
 dimensions as keyword arguments defaulting to the thesis values, so a caller can vary
-them without editing the body.
+them without editing the body. The files the CLI writes state the domain size in metres
+(`width_m`/`height_m`), which is what gives a `seqopt` run its element size.
 """
 
 import argparse
@@ -16,6 +17,8 @@ from pathlib import Path
 import numpy as np
 from jaxtyping import Float
 from matplotlib.path import Path as MplPath
+
+import sttopt.units as units
 
 
 def _rasterize(
@@ -189,17 +192,17 @@ SHAPES = {
 def _resolution_to_mesh(
     width: float, height: float, resolution: int
 ) -> tuple[int, int]:
-    """`resolution` elements along the taller side; the other side's element count
-    follows from the aspect ratio, so a caller cannot silently distort the component by
-    picking mismatched `nelx`/`nely`.
+    """`resolution` square elements along the taller side; the other side's element
+    count follows from the aspect ratio, so a caller cannot silently distort the
+    component by picking mismatched `nelx`/`nely`.
+
+    :raises ValueError: if the shorter side is not a whole number of those elements
     """
-    if height >= width:
-        nely = resolution
-        nelx = max(1, round(resolution * width / height))
-    else:
-        nelx = resolution
-        nely = max(1, round(resolution * height / width))
-    return nelx, nely
+    h = max(width, height) / resolution
+    return (
+        units.element_count(width, h, "width"),
+        units.element_count(height, h, "height"),
+    )
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -226,6 +229,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     bina.add_argument("source", type=Path, help="an .npz file holding an xPhys key")
     bina.add_argument("--threshold", type=float, default=0.5)
     bina.add_argument("--out", type=Path, required=True)
+    bina.add_argument(
+        "--width-m",
+        type=float,
+        help="the source's width in metres, for a source that does not state its size",
+    )
 
     return parser.parse_args(argv)
 
@@ -240,8 +248,8 @@ def _cmd_generate(args: argparse.Namespace) -> None:
         args.out,
         xPhys=xPhys,
         shape=args.shape,
-        width=width,
-        height=height,
+        width_m=width / 1000,
+        height_m=height / 1000,
     )
     print(
         f"Wrote {args.out}: {args.shape} at {nelx}x{nely} elements, "
@@ -259,6 +267,12 @@ def _cmd_binarize(args: argparse.Namespace) -> None:
                 f"{sorted(data.keys())}"
             )
         xPhys = np.asarray(data["xPhys"])
+        width_m = float(data["width_m"]) if "width_m" in data else args.width_m
+    if width_m is None:
+        raise SystemExit(
+            f"{args.source}: no 'width_m' key found; pass --width-m to state the source's size"
+        )
+    nely, nelx = xPhys.shape
 
     binary = (xPhys >= args.threshold).astype(float)
     changed = int(np.count_nonzero((xPhys >= 0.5) != (binary > 0.5)))
@@ -271,7 +285,6 @@ def _cmd_binarize(args: argparse.Namespace) -> None:
     # A solid element with no path to the build plate (bottom row) can't be printed --
     # worth a loud warning, since thresholding can sever a thin member.
     solid = binary.astype(bool)
-    nely = solid.shape[0]
     labels, _ = label(solid)
     plate_labels = set(np.unique(labels[nely - 1, :][solid[nely - 1, :]]))
     reachable = (
@@ -288,6 +301,8 @@ def _cmd_binarize(args: argparse.Namespace) -> None:
     np.savez(
         args.out,
         xPhys=binary,
+        width_m=width_m,
+        height_m=width_m * nely / nelx,
         threshold=args.threshold,
         source=str(args.source),
     )

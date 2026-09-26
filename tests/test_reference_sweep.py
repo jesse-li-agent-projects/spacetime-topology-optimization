@@ -20,6 +20,8 @@ reaches cond ~1e10 and the dense-vs-sparse solvers legitimately part company aro
 1e-8 (see `test_gravity_compliance_matches_reference`).
 """
 
+import itertools
+
 import matlab_reference as ref
 import numpy as np
 import pytest
@@ -71,14 +73,27 @@ def test_density_filter_matches_reference(nelx, nely, rmin):
     assert rel(Hs, Hs_ref) < TIGHT
 
 
+def _dense_continuity_filter(nelx: int, nely: int, lrmin: float) -> np.ndarray:
+    """`filters.continuity_filter` restated as a dense loop over element pairs. Not the
+    MATLAB source's `ref.ref_continuity_filter`: the port weights the neighbours by
+    distance rather than averaging a `ceil(lrmin) - 1` square (`conventions.md`)."""
+    n = nelx * nely
+    W = np.zeros((n, n))
+    for e1, e2 in itertools.product(range(n), repeat=2):
+        if e1 != e2:
+            dist = np.hypot(e1 % nelx - e2 % nelx, e1 // nelx - e2 // nelx)
+            W[e1, e2] = max(0.0, lrmin - dist)
+    return np.eye(n) - W / W.sum(axis=1, keepdims=True)
+
+
 @pytest.mark.parametrize("nelx,nely", GRIDS)
-@pytest.mark.parametrize("lrmin", [2.0, 2.5, 3.0])
+@pytest.mark.parametrize("lrmin", [1.5, 2.0, 2.5, 3.0])
 def test_continuity_filter_matches_reference(nelx, nely, lrmin):
-    """The port builds `I - D^-1 A` from sparse ops; MATLAB materializes a dense
-    `eye(n) - L./M`. Same matrix, and it must stay that way at every radius/grid.
+    """The port builds `I - D^-1 W` from sparse ops rather than a dense matrix, and it
+    must stay the same matrix at every radius/grid.
     """
     L = filters.continuity_filter(nelx, nely, lrmin)
-    assert rel(L.toarray(), ref.ref_continuity_filter(nelx, nely, lrmin)) < TIGHT
+    assert rel(L.toarray(), _dense_continuity_filter(nelx, nely, lrmin)) < TIGHT
 
 
 @pytest.mark.parametrize("nelx,nely", [(7, 5), (5, 7), (9, 3), (4, 4)])

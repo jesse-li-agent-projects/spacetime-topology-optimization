@@ -9,6 +9,7 @@ import torch
 import sttopt.constraints as constraints
 import sttopt.filters as filters
 import sttopt.torch_util as torch_util
+import matlab_reference
 import tests.reference.constraints as constraints_ref
 from conftest import assert_close, load_fixture_npz, tt, tti
 
@@ -36,9 +37,10 @@ def test_constraints_match_fixture():
     assert tfield == 3
 
     H, Hs = _tensor_filter(nelx, nely, RMIN)
-    L = torch_util.csr_to_tensor(
-        filters.continuity_filter(nelx, nely, LRMIN), "cpu", torch.float64
-    )
+    # The fixture predates the distance-weighted continuity filter; its rows were built
+    # with the MATLAB source's, which the oracle keeps. matlab_reference is 1-indexed
+    # F-order only in its loops -- this matrix is already in sttopt's element order.
+    L = torch.from_numpy(matlab_reference.ref_continuity_filter(nelx, nely, LRMIN))
     # column 0 (all rows), per conventions.md's C-order element enumeration
     Nei = tti(np.arange(nely) * nelx)
 
@@ -62,17 +64,21 @@ def test_constraints_match_fixture():
         assert_close(dfx, dfdx_x[0], tier="algebraic")
         assert_close(dft, dfdx_t[0], tier="algebraic")
 
-        # (2) time-field continuity
+        # (2) time-field continuity. The fixture predates the mean form; its row was
+        # `2 * nel * tol` times the current one.
+        scale = 2 * nel * 1.0e-6
         fval, dfx, dft = constraints_ref.time_field_continuity(tPhys, L, H, Hs)
-        assert_close(fval, fval_all[1], tier="algebraic")
-        assert_close(dfx, dfdx_x[1], tier="algebraic")
-        assert_close(dft, dfdx_t[1], tier="algebraic")
+        assert_close(fval, fval_all[1] / scale, tier="algebraic")
+        assert_close(dfx, dfdx_x[1] / scale, tier="algebraic")
+        assert_close(dft, dfdx_t[1] / scale, tier="algebraic")
 
-        # (3) start-point
+        # (3) start-point. The fixture predates the single mean row; it has one row
+        # per base element, whose mean is the current row.
+        start = slice(2, 2 + nely)
         fval, dfx, dft = constraints_ref.start_point(tPhys, Nei, H, Hs)
-        assert_close(fval, fval_all[2 : 2 + nely], tier="algebraic")
-        assert_close(dfx, dfdx_x[2 : 2 + nely], tier="algebraic")
-        assert_close(dft, dfdx_t[2 : 2 + nely], tier="algebraic")
+        assert_close(fval, fval_all[start].mean(), tier="algebraic")
+        assert_close(dfx, dfdx_x[start].mean(axis=0), tier="algebraic")
+        assert_close(dft, dfdx_t[start].mean(axis=0), tier="algebraic")
 
         # (4) per-stage volume, upper/lower interleaved starting at row 2+nely
         base = 2 + nely
@@ -232,13 +238,13 @@ def test_start_point_fd():
             fval, _, _ = constraints_ref.start_point(tPhys, Nei, H, Hs)
             return fval
 
-        fd_t = np.zeros((len(Nei), nely * nelx))
+        fd_t = np.zeros(nely * nelx)
         for e in range(nely * nelx):
             j, i = e // nelx, e % nelx
             tp, tm = t_raw.clone(), t_raw.clone()
             tp[j, i] += h
             tm[j, i] -= h
-            fd_t[:, e] = (fval_of(tp) - fval_of(tm)) / (2 * h)
+            fd_t[e] = (fval_of(tp) - fval_of(tm)) / (2 * h)
 
         np.testing.assert_allclose(dft, fd_t, rtol=1e-5, atol=1e-8)
 
@@ -371,14 +377,12 @@ def test_start_point_layouts():
     for Nei, wrong_anchor in cases:
         tPhys_valid = tt(_distance_field(Nei, nely, nelx))
         fval, dfx, dft = constraints_ref.start_point(tPhys_valid, tti(Nei), H, Hs)
-        assert fval.shape == (len(Nei),)
-        assert dfx.shape == (len(Nei), nel)
-        assert dft.shape == (len(Nei), nel)
-        assert torch.all(fval < 1e-6)  # satisfied: Nei cells sit at the field's minimum
+        assert dfx.shape == dft.shape == (nel,)  # one row, whatever the base's size
+        assert fval < 1e-6  # satisfied: Nei cells sit at the field's minimum
 
         tPhys_invalid = tt(_distance_field(wrong_anchor, nely, nelx))
         fval_wrong, _, _ = constraints_ref.start_point(tPhys_invalid, tti(Nei), H, Hs)
-        assert torch.all(fval_wrong > 0.05)  # violated: Nei isn't where printing starts
+        assert fval_wrong > 0.05  # violated: Nei isn't where printing starts
 
 
 def test_stage_volume_bounds_xPhys_weighting():
@@ -578,14 +582,11 @@ def test_start_point_value_matches_hand_derived():
 
     fv_ref, dfx_ref, dft_ref = constraints_ref.start_point(tPhys.detach(), Nei, H, Hs)
     fv = constraints.start_point(tPhys, Nei)
-    for k in range(len(Nei)):
-        dfx, dft = torch.autograd.grad(
-            fv[k], (x, t), retain_graph=True, allow_unused=True
-        )
-        assert_close(fv[k].detach(), fv_ref[k], tier="algebraic")
-        assert dfx is None  # no density dependence, matching dfx_ref's all-zero row
-        assert torch.all(dfx_ref[k] == 0.0)
-        assert_close(dft.flatten(), dft_ref[k], tier="algebraic")
+    dfx, dft = torch.autograd.grad(fv, (x, t), allow_unused=True)
+    assert_close(fv.detach(), fv_ref, tier="algebraic")
+    assert dfx is None  # no density dependence, matching dfx_ref's all-zero row
+    assert torch.all(dfx_ref == 0.0)
+    assert_close(dft.flatten(), dft_ref, tier="algebraic")
 
 
 def test_stage_volume_bounds_value_matches_hand_derived():

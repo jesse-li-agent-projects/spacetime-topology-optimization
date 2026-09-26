@@ -31,8 +31,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--config",
         type=Path,
         help="path to a RunConfig JSON file (e.g. a previous run's output/<tag>/"
-        "config.json). Fields (nelx, nely, nloop, volfrac, nStage, Theta, Tcr, "
-        "print_base, rmin, lrmin, rmin_cond, beta_d_schedule, and the rest of "
+        "config.json). Fields (width_m, height_m, nelx, nloop, volfrac, nStage, "
+        "Theta, Tcr, print_base, rmin_m, lrmin_m, rmin_cond_m, beta_d_schedule, and the rest of "
         "build_problem's hyperparameters) are settable only through this file",
     )
     parser.add_argument(
@@ -147,6 +147,8 @@ def main(args: argparse.Namespace) -> None:
                     t=torch_util.to_numpy(state.t),
                     xPhys=torch_util.to_numpy(xPhys),
                     tPhys=torch_util.to_numpy(tPhys),
+                    width_m=config.width_m,
+                    height_m=config.height_m,
                 )
 
     np.savez(
@@ -156,6 +158,9 @@ def main(args: argparse.Namespace) -> None:
         xPhys=torch_util.to_numpy(xPhys),
         t=torch_util.to_numpy(state.t),
         tPhys=torch_util.to_numpy(tPhys),
+        # The domain size, so `geometry_builders binarize` can make a geometry of it.
+        width_m=config.width_m,
+        height_m=config.height_m,
         f=record.f,
         vol=record.vol,
         tru_max=record.tru_max,

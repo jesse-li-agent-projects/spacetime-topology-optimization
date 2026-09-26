@@ -18,7 +18,7 @@ Split into three layers, ordered from most to least diagnostic on failure:
 import pytest
 
 import sttopt.stto as stto
-from conftest import assert_close, default_run_config, load_fixture_npz
+from conftest import ELEMENT_M, assert_close, default_run_config, load_fixture_npz
 
 NELX, NELY = 7, 5
 NSTAGE = 3
@@ -38,10 +38,10 @@ CONFIG = default_run_config(
     Theta=THETA,
     Tcr=TCR,
     print_base=PRINT_BASE,
-    rmin=RMIN,
-    time_filter_rmin=RMIN,
-    lrmin=LRMIN,
-    rmin_cond=RMIN_COND,
+    rmin_m=RMIN * ELEMENT_M,
+    time_filter_rmin_m=RMIN * ELEMENT_M,
+    lrmin_m=LRMIN * ELEMENT_M,
+    rmin_cond_m=RMIN_COND * ELEMENT_M,
     nloop=NLOOP,
 )
 

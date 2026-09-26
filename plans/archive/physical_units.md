@@ -1,0 +1,52 @@
+# Physical units
+
+Goal: refining the mesh of one physical part leaves the optimization's behaviour the
+same, with no hand-rescaling of settings. `tests/test_resolution_scaling.py` checks it;
+each step below turned its `xfail`s into passes, and all six are done.
+
+The rule each step follows: state a term as an area mean (or a ratio of means) over the
+domain, and a length in metres. Relative roughness is the one deliberate exception; it
+handles an element-scale filtering issue, so its per-element "layer" is correct.
+
+## Steps
+
+1. **Config lengths in metres** (PR #152, done). `RunConfig` has `width_m`/`height_m`
+   and `nelx`; a geometry file states its size. The mesh-level code stays in elements.
+2. **`hotspot_g0` and iso-line curvature in SI** (1/m). `g0` was per
+   `timefield.unit_length`, the square root of the domain area, so padding a geometry
+   with void changed what it meant. `unit_length` stays as the internal gradient unit:
+   it keeps gradients of order 1, which `GRAD_EPS`/`NORMAL_EPS` are set against, at
+   any resolution or part size. Settings and diagnostics convert through
+   `unit_length_m`.
+3. **Mean-form constraint rows.** The continuity row becomes `mean(dev**2) / tol - 1`
+   (its `2 * nel` weight grows with refinement), and the start-point rows become one
+   row on the base's mean print time (one row per base element now). The continuity
+   row still does not converge until step 6.
+4. **Tip traction** over a physical length on the right edge, from the bottom-right
+   corner up, 1 mm by default, with exact integration of the nodal shape functions. A
+   point load's compliance grows as `log(1/h)`. A span converges once the mesh resolves
+   it (order ~1.8 from 2 elements); 1 mm is one element at 180x60, so the default
+   reaches that regime only on finer meshes. At 180x60 it lowers a uniform design's
+   compliance 1.3% from the point load's.
+5. **Measure MMA's `raa0`** against the per-variable gradient scale at 180x60 and
+   360x120. Mean-form terms have gradients of `O(1/n)` per variable, and `raa0` is
+   absolute. Change it (`raa0 / n`) only if the measurement shows it matters. Measured
+   at 90x30 and 180x60 (360x120 does not fit the GPU at `rmin_cond_m = 12 mm`):
+   `raa0` over the hotspot row's median per-variable gradient went 0.68 -> 3.1
+   (density) and 2.3 -> 15 (time), and over its 90th percentile 0.10 -> 0.39, so it
+   already outweighs that row's own curvature for most variables at 180x60. Now
+   `raa0_total / n`, with the defaults keeping `raa0 = 1e-5`.
+6. **`lrmin` redesign.** The continuity window is `ceil(lrmin) - 1` elements, square
+   and unweighted, so it jumps at whole numbers and its physical size depends on the
+   resolution. Needed, with step 3, for the continuity row to converge. Now weighted
+   `max(0, lrmin - dist)` like the density filter, without the element itself: its
+   reach changes continuously with the radius, and a radius reaching no neighbor
+   (`lrmin <= 1` element) is an error rather than a division by zero.
+
+## Left as they are
+
+- The calibrated `LogSumExp` bias: the calibration absorbs the `log(n) / beta`
+  constant, so only the uncalibrated value depends on the element count.
+- The pointwise maxima (hotspot severity, iso-line curvature) at re-entrant corners and
+  domain boundaries converge only as fast as the sampling approaches them; element-scale
+  noise has curvature `~1/h`. Both are properties of a maximum, not of a unit.

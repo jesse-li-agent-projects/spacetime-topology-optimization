@@ -30,6 +30,33 @@ def plane_stress_KE(nu: float) -> Float[np.ndarray, "8 8"]:
     return (A + nu * B) / (1 - nu**2) / 24
 
 
+def edge_load_shares(n_nodes: int, length: float) -> Float[np.ndarray, " n_nodes"]:
+    """The share of a unit force each node of a mesh edge carries when the force is a
+    uniform traction over `[0, length]` from the edge's first node, in elements.
+
+    Exact integrals of the nodal (hat) shape functions over the loaded span, so they sum
+    to 1 at any `length`, and `length -> 0` is a point load on the first node.
+
+    :param n_nodes: nodes along the edge, the first at the loaded span's start
+    :param length: loaded span, in elements; at most the edge's `n_nodes - 1`
+    :raises ValueError: if the span does not fit on the edge
+    """
+    if not 0 <= length <= n_nodes - 1:
+        raise ValueError(
+            f"a traction over {length} elements does not fit on an edge of {n_nodes - 1} elements"
+        )
+    if length == 0:
+        return np.eye(n_nodes)[0]
+
+    def hat_integral(s):
+        """Integral of the unit hat over `(-inf, s]`, in hat half-widths."""
+        s = np.clip(s, -1, 1)
+        return np.where(s < 0, (1 + s) ** 2 / 2, 1 - (1 - s) ** 2 / 2)
+
+    node = np.arange(n_nodes)
+    return (hat_integral(length - node) - hat_integral(-node)) / length
+
+
 def node_grid(nelx: int, nely: int) -> Int[np.ndarray, "nely+1 nelx+1"]:
     """Global node number (0-indexed) at each mesh corner position `(row, col)`.
 
