@@ -276,6 +276,7 @@ def generate(
             height_m=WIDTH_M * nely / nelx,
             nelx=nelx,
             load_length_m=0.0,
+            raa0_total=1e-5 * 2 * nelx * nely,  # raa0 = 1e-5, as generated
             volfrac=VOLFRAC,
             nStage=NSTAGE,
             Theta=THETA,

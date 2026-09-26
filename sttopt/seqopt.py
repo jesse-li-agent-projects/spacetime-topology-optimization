@@ -472,6 +472,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         mma_d,
         asyincr=config.asyincr,
         asydecr=config.asydecr,
+        raa0=config.raa0_total / problem.n,
         **mma_trust,
     )
 

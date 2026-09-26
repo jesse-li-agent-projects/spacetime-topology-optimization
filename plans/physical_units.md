@@ -30,7 +30,12 @@ handles an element-scale filtering issue, so its per-element "layer" is correct.
    compliance 1.3% from the point load's.
 5. **Measure MMA's `raa0`** against the per-variable gradient scale at 180x60 and
    360x120. Mean-form terms have gradients of `O(1/n)` per variable, and `raa0` is
-   absolute. Change it (`raa0 / n`) only if the measurement shows it matters.
+   absolute. Change it (`raa0 / n`) only if the measurement shows it matters. Measured
+   at 90x30 and 180x60 (360x120 does not fit the GPU at `rmin_cond_m = 12 mm`):
+   `raa0` over the hotspot row's median per-variable gradient went 0.68 -> 3.1
+   (density) and 2.3 -> 15 (time), and over its 90th percentile 0.10 -> 0.39, so it
+   already outweighs that row's own curvature for most variables at 180x60. Now
+   `raa0_total / n`, with the defaults keeping `raa0 = 1e-5`.
 6. **`lrmin` redesign.** The continuity window is `ceil(lrmin) - 1` elements, square
    and unweighted, so it jumps at whole numbers and its physical size depends on the
    resolution. Needed, with step 3, for the continuity row to converge.

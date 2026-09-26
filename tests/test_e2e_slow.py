@@ -111,6 +111,7 @@ CONFIG = RunConfig(
     r=0.05,
     rouf=100.0,
     a0=1.0,
+    raa0_total=0.216,  # raa0 = 1e-5 at 180x60, the source's
     mma_c=2500.0,
     move=0.01,
     tmove=0.01,

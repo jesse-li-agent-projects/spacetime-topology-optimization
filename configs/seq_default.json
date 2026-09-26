@@ -27,6 +27,7 @@
   "rouf": 100.0,
   "a0": 1.0,
   "mma_c": 2500.0,
+  "raa0_total": 0.12,
   "tmove": 0.01,
   "asyclamp_min_ratio": 0.02,
   "asyclamp_max_ratio": 20.0,

@@ -671,6 +671,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         mma_a,
         mma_c,
         mma_d,
+        raa0=config.raa0_total / problem.n,
         **mma_trust,
     )
 

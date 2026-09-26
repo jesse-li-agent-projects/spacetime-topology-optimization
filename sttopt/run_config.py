@@ -243,6 +243,10 @@ class RunConfig(_ConfigMixin):
         on the severity `tool_radius_m * concave curvature`, which is 1 on the bound.
     :param lrmin_m: continuity-filter radius, as in `SeqRunConfig`, as is
         `rmin_cond_m`.
+    :param raa0_total: MMA's curvature floor (`mma.mmasub`'s `raa0`), summed over the
+        design variables: each gets `raa0_total / n`. A term stated as a domain mean has
+        a gradient of order `1 / n` per variable, so a fixed `raa0` would outweigh it
+        more with every refinement.
     """
 
     # Frequently varied -- also exposed as a CLI flag in stto_cli.py.
@@ -286,6 +290,7 @@ class RunConfig(_ConfigMixin):
     rouf: Scheduled
     a0: float
     mma_c: float
+    raa0_total: float
     move: float
     tmove: Scheduled
 
@@ -398,6 +403,7 @@ class SeqRunConfig(_ConfigMixin):
     :param asyincr: factor the asymptotes relax by per iteration when a variable moves
         monotonically.
     :param asydecr: factor they tighten by when a variable oscillates.
+    :param raa0_total: as in `RunConfig`.
     """
 
     nloop: int
@@ -429,6 +435,7 @@ class SeqRunConfig(_ConfigMixin):
 
     a0: float
     mma_c: float
+    raa0_total: float
     tmove: float
     asyclamp_min_ratio: float
     asyclamp_max_ratio: float
