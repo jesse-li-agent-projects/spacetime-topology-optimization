@@ -388,12 +388,13 @@ def test_physical_time_field_holds_its_scale_out_of_the_gradient():
     """The time field is scaled to end the build at 1 by a detached maximum, so its
     gradient is the filtered field's divided by a constant scale."""
     problem = _problem()
+    device, dtype = problem.device, problem.dtype
     rng = np.random.default_rng(5)
     shape = (problem.config.nely, problem.config.nelx)
-    x = torch_util.to_tensor(rng.uniform(0.3, 0.7, size=shape), "cpu", torch.float64)
-    t = torch_util.to_tensor(rng.uniform(0.1, 0.9, size=shape), "cpu", torch.float64)
+    x = torch_util.to_tensor(rng.uniform(0.3, 0.7, size=shape), device, dtype)
+    t = torch_util.to_tensor(rng.uniform(0.1, 0.9, size=shape), device, dtype)
     t.requires_grad_(True)
-    cotangent = torch_util.to_tensor(rng.standard_normal(shape), "cpu", torch.float64)
+    cotangent = torch_util.to_tensor(rng.standard_normal(shape), device, dtype)
 
     _, tPhys = stto.physical_fields(problem, x, t, BETA_D)
     (got,) = torch.autograd.grad((cotangent * tPhys).sum(), t)
