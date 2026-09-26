@@ -22,7 +22,7 @@ from collections.abc import Callable
 from collections.abc import Sequence
 from functools import lru_cache
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 import matplotlib
 import numpy as np
@@ -31,6 +31,9 @@ from matplotlib.axes import Axes
 from matplotlib.collections import PolyCollection
 from matplotlib.colors import Colormap
 from matplotlib.figure import Figure
+
+if TYPE_CHECKING:
+    from torch import Tensor
 
 matplotlib.rcParams["savefig.bbox"] = "tight"
 matplotlib.rcParams["savefig.dpi"] = "300"
@@ -559,7 +562,9 @@ class RunPlotInputs(NamedTuple):
     curvature: Float[np.ndarray, "nely nelx"]
 
 
-def _iso_curvature_elements(tPhys_t, xPhys_t) -> np.ndarray:
+def _iso_curvature_elements(
+    tPhys_t: "Float[Tensor, 'nely nelx']", xPhys_t: "Float[Tensor, 'nely nelx']"
+) -> Float[np.ndarray, "nely nelx"]:
     """`timefield.iso_curvature` per element rather than per unit length, padded with
     `nan` onto the border elements it does not measure."""
     import sttopt.timefield as timefield
