@@ -179,12 +179,13 @@ def test_void_padding_leaves_the_parts_conductivity_unchanged(kappa):
     """The domain box is not physics: widening it with void the conductivity stencil
     cannot reach from the part must not change what the part measures."""
     ny, nx, pad = 20, 30, 20
-    rows, cols = np.indices((ny, nx))
-    t_part = ((ny - 1 - rows) + 0.3 * np.sin(cols / 5.0)) / ny
 
     def K_est(padding: int) -> np.ndarray:
         xPhys = np.hstack([np.ones((ny, nx)), np.zeros((ny, padding))])
-        t = np.hstack([t_part, np.tile(t_part[:, -1:], (1, padding))])
+        # Linear across the padding too, so the part's edge column reads the same
+        # gradient from a one-sided difference as from a central one.
+        rows, cols = np.indices(xPhys.shape)
+        t = ((ny - 1 - rows) + 0.3 * cols) / ny
         config = default_seq_run_config(hotspot_kappa=kappa, rmin_cond_m=0.012)
         problem = seqopt.build_problem(config, xPhys, 2e-3, device="cpu")
         K = seqopt.estimated_conductivity(problem, torch.from_numpy(t))
