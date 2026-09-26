@@ -30,17 +30,14 @@ class CalibratedLogSumExp:
     """
 
     def __init__(self, beta: "run_config.Scheduled"):
-        """:param beta: sharpness, possibly scheduled; `resolve` adopts one iteration's."""
-        self.beta_schedule = beta
-        self.beta = run_config.weight_at(beta, 0)
+        """:param beta: sharpness, possibly scheduled."""
+        self.beta = beta
         self.calibration = 0.0
 
-    def resolve(self, loop: int) -> None:
-        """Adopt iteration `loop`'s scheduled sharpness."""
-        self.beta = run_config.weight_at(self.beta_schedule, loop)
-
-    def aggregate(self, sev: Float[Tensor, " n"]) -> Float[Tensor, ""]:
-        """The calibrated smooth maximum of `sev`, differentiable in it."""
-        numer = torch.logsumexp(self.beta * sev, dim=0) / self.beta
+    def aggregate(self, sev: Float[Tensor, " n"], loop: int) -> Float[Tensor, ""]:
+        """The calibrated smooth maximum of `sev` at iteration `loop`'s sharpness,
+        differentiable in `sev`."""
+        beta = run_config.weight_at(self.beta, loop)
+        numer = torch.logsumexp(beta * sev, dim=0) / beta
         self.calibration = float(numer.detach()) - float(sev.detach().max())
         return numer - self.calibration

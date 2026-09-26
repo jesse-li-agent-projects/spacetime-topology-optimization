@@ -369,7 +369,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     t = state.t.clone().requires_grad_(True)
     tPhys = physical_timefield(problem, t)
 
-    hotspot_t = problem.hotspot(estimated_conductivity(problem, tPhys, loop), xPhys)
+    hotspot_t = problem.hotspot(
+        estimated_conductivity(problem, tPhys, loop), xPhys, loop
+    )
     # The roughness regularizer is not optional garnish: uniformity alone rewards a
     # sawtooth across the print direction (`timefield._gradient_cv`).
     metric = timefield.UniformityMetric(config.uniformity_metric)

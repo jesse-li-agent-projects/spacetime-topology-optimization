@@ -524,13 +524,11 @@ class PMean:
         self.r = r
         self.calibration = 1.0
 
-    def resolve(self, loop: int) -> None:
-        """No scheduled parameters to adopt."""
-
     def __call__(
-        self, K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"]
+        self, K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"], loop: int
     ) -> Float[Tensor, ""]:
-        """The calibrated aggregate, differentiable in `K_est` and `xPhys`.
+        """The calibrated aggregate, differentiable in `K_est` and `xPhys`. Nothing here
+        is scheduled, so `loop` is unused.
 
         Written in a NaN-safe form: `(T * x**r) ** p` differentiates to `inf` at
         `x == 0` (density does reach exact zero once the Heaviside projection
@@ -563,22 +561,23 @@ class LogSumExp(smooth_max.CalibratedLogSumExp):
 
     def __init__(self, beta: "run_config.Scheduled", r: float):
         """
-        :param beta: sharpness, possibly scheduled; `resolve` adopts one iteration's.
+        :param beta: sharpness, possibly scheduled
         :param r: the density exponent of the severity the calibration targets
         """
         super().__init__(beta)
         self.r = r
 
     def __call__(
-        self, K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"]
+        self, K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"], loop: int
     ) -> Float[Tensor, ""]:
-        """The calibrated aggregate, differentiable in `K_est` and `xPhys`."""
+        """The calibrated aggregate at iteration `loop`'s sharpness, differentiable in
+        `K_est` and `xPhys`."""
         shielded = torch.isinf(K_est)
         x_r = smooth_max.density_power(xPhys.flatten(), self.r)
         # `1 - inf` would poison the `-inf` reselect below through `inf * 0`.
         T = torch.where(shielded, torch.zeros_like(K_est), 1 - K_est)
         sev = torch.where(shielded, -torch.inf, T * x_r)
-        return self.aggregate(sev)
+        return self.aggregate(sev, loop)
 
 
 def make_aggregation(

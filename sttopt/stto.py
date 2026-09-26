@@ -582,9 +582,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     # Hotspot constraint, recalibrated on every call: its value is the true maximum
     # severity, its gradient the smooth surrogate's.
-    problem.hotspot.resolve(loop)
     K_est_t = estimated_conductivity(problem, xPhys, tPhys, loop)
-    hotspot_t = problem.hotspot(K_est_t, xPhys)
+    hotspot_t = problem.hotspot(K_est_t, xPhys, loop)
     g_hotspot_t = hotspot_t / Tcr - 1
     tru_max = float(hotspot_t.detach())
 
@@ -727,9 +726,8 @@ def _tool_radius_row(
     tool_radius_m = run_config.weight_at(config.tool_radius_m, loop)
     if problem.curvature is None:
         return None, concave_t, tool_radius_m
-    problem.curvature.resolve(loop)
     tool_radius = units.in_elements(tool_radius_m, config.element_size_m)
-    g_curvature_t = problem.curvature.aggregate(tool_radius * concave_t) - 1
+    g_curvature_t = problem.curvature.aggregate(tool_radius * concave_t, loop) - 1
     return g_curvature_t, concave_t, tool_radius_m
 
 
