@@ -668,7 +668,7 @@ def central_difference_gradient_vector(
     differences in the interior and one-sided differences on the mesh border.
 
     The local print direction, for anything that needs to know which way the build front
-    is moving. A *vector* per element, unlike `_central_difference_gradient`'s masked
+    is moving. A *vector* per element, unlike `central_difference_gradient`'s masked
     magnitudes and `_q4_gauss_gradient`'s per-Gauss-point samples.
 
     Central differences rather than `_q4_gauss_gradient` for the reason that makes them
@@ -688,18 +688,19 @@ def central_difference_gradient_vector(
     return dt_dx * unit, dt_dy * unit
 
 
-def _central_difference_gradient(
+def central_difference_gradient(
     tPhys: Float[Tensor, "nely nelx"], xPhys: Float[Tensor, "nely nelx"]
 ) -> Float[Tensor, " k"]:
     """`|grad tPhys|` from central differences, over the elements whose four orthogonal
     neighbours are all solid.
 
-    The change of operator is the whole point of the diagnostics built on this. A
-    central difference is blind to a one-element sawtooth -- both neighbours carry the
-    same offset and it cancels, exactly so where the amplitude is locally constant --
-    so these samples describe the field with the padding mode removed, which
-    `gradient_magnitude` cannot do. That same blindness is why this must never be
-    optimized: it would leave the mode entirely unconstrained.
+    The change of operator is the whole point of what is built on this. A central
+    difference is blind to a one-element sawtooth -- both neighbours carry the same
+    offset and it cancels, exactly so where the amplitude is locally constant -- so
+    these samples describe the field with the padding mode removed, which
+    `gradient_magnitude` cannot do. That same blindness is why no objective may rest on
+    this alone: it would leave the mode entirely unconstrained. A floor on it is the
+    opposite case: the sawtooth cannot pad a small gradient up to the floor.
 
     Stencils touching void are dropped rather than down-weighted: `t` over void is
     pinned by nothing physical, so a straddling difference reports on a free variable
@@ -742,7 +743,7 @@ def relative_sawtooth_amplitude(
     :param xPhys: density field, weighting `sawtooth_amplitude` and masking the stencils
     :return: the ratio, or zero when no fully-solid stencil qualifies
     """
-    g = _central_difference_gradient(tPhys, xPhys)
+    g = central_difference_gradient(tPhys, xPhys)
     if g.numel() == 0 or g.mean() == 0:
         return tPhys.new_zeros(())
     return sawtooth_amplitude(tPhys, xPhys) / (g.mean() / unit_length(tPhys))
@@ -751,7 +752,7 @@ def relative_sawtooth_amplitude(
 def central_difference_cv(
     tPhys: Float[Tensor, "nely nelx"], xPhys: Float[Tensor, "nely nelx"]
 ) -> Float[Tensor, ""]:
-    """Layer-uniformity CV over `_central_difference_gradient`'s samples: the
+    """Layer-uniformity CV over `central_difference_gradient`'s samples: the
     sawtooth-blind counterpart of `_gradient_cv`, and a diagnostic, never an objective.
 
     `_gradient_cv` is the quantity a run optimizes and this is the quantity a run should
@@ -763,7 +764,7 @@ def central_difference_cv(
     :return: the coefficient of variation, or zero when fewer than two stencils qualify
         or the mean gradient is zero
     """
-    sample = _central_difference_gradient(tPhys, xPhys)
+    sample = central_difference_gradient(tPhys, xPhys)
     if sample.numel() < 2:
         return tPhys.new_zeros(())
     mean = sample.mean()
@@ -779,7 +780,7 @@ def gradient_percentiles(
     xPhys: Float[Tensor, "nely nelx"],
     percentiles: tuple[float, ...] = (10.0, 50.0, 90.0),
 ) -> tuple[float, ...]:
-    """Percentiles of `|grad tPhys|` over `_central_difference_gradient`'s fully-solid
+    """Percentiles of `|grad tPhys|` over `central_difference_gradient`'s fully-solid
     stencils, per unit length.
 
     How thick the deposited layers are and how much that varies across the part, in the
@@ -793,7 +794,7 @@ def gradient_percentiles(
     :param percentiles: which percentiles to take, in [0, 100]
     :return: one value per requested percentile; zeros when no stencil qualifies
     """
-    sample = _central_difference_gradient(tPhys, xPhys)
+    sample = central_difference_gradient(tPhys, xPhys)
     if sample.numel() == 0:
         return tuple(0.0 for _ in percentiles)
     qs = torch.tensor(percentiles, dtype=sample.dtype, device=sample.device) / 100
