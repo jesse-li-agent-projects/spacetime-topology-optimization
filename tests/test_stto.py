@@ -150,8 +150,9 @@ def test_build_problem_rejects_the_1x1_mesh(tfield):
     """A 1x1 mesh degenerates two of `build_problem`'s pieces -- the distance time fields
     normalize by a zero max distance, and the continuity filter divides by a zero
     neighbour count -- so it must be rejected up front, before either produces a `nan` or
-    a divide-by-zero warning. Lone-1 meshes stay legal without a tool-radius row, which
-    needs an interior element (see `test_timefield.py`)."""
+    a divide-by-zero warning. Lone-1 meshes stay legal (see `test_timefield.py`) without
+    a tool-radius row, which needs an interior element (see
+    `test_tool_radius_needs_an_interior_element`)."""
     with pytest.raises(ValueError):
         _problem(nelx=1, nely=1, tfield=tfield)
 
