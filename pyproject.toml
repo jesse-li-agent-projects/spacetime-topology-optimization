@@ -33,6 +33,9 @@ testpaths = ["tests"]
 pythonpath = ["."]
 addopts = ["-m", "not slow", "--ignore=proj_utils"]
 norecursedirs = ["proj_utils"]
+# Any warning fails the test, so e.g. a requires_grad tensor cast to a Python scalar (a
+# silent autograd-graph break) can't slip through.
+filterwarnings = ["error"]
 markers = [
     "slow: full-length optimization runs (minutes to hours). Deselected by default; run with `-m slow`.",
 ]

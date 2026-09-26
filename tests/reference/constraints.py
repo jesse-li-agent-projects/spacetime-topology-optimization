@@ -41,6 +41,7 @@ def time_field_continuity(
     L: Tensor,
     H: Tensor,
     Hs: Float[Tensor, " nely*nelx"],
+    tol: float = 1.0e-6,
 ) -> tuple[float, Float[Tensor, " nely*nelx"], Float[Tensor, " nely*nelx"]]:
     """Time-field smoothness constraint: keeps each element's print time close to its local
     neighborhood average (`filters.continuity_filter`'s `L`), so the deposition sequence
@@ -53,7 +54,6 @@ def time_field_continuity(
     """
     nely, nelx = tPhys.shape
     nel = nely * nelx
-    tol = 1.0e-6
     deviation = L @ tPhys.flatten()
     fval = float(torch.sum(deviation**2) / (nel * tol) - 1)
     # the `2` is d(deviation**2)/dt = 2*deviation * d(deviation)/dt

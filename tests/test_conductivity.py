@@ -1038,12 +1038,16 @@ def test_hotspot_constraint_fd_density_near_binary():
 
 def _hotspot_value(xPhys, tPhys, e1, e2, w, aggregation=None, denom=None, base=None):
     """The uncalibrated hotspot aggregate (`PMean` unless given) and the `K_est` behind
-    it."""
+    it. The calibration is undone by the same float it was applied with, so the value
+    is the smooth maximum's and the graph is the calibrated aggregate's."""
     K_est = conductivity.estimated_conductivity(
         xPhys, tPhys, e1, e2, w, Q, ROUF, denom, base
     )
     aggregation = conductivity.PMean(P, R) if aggregation is None else aggregation
-    return aggregation(K_est, xPhys), K_est
+    value = aggregation(K_est, xPhys, 0)
+    if isinstance(aggregation, conductivity.PMean):
+        return value / aggregation.calibration, K_est
+    return value + aggregation.calibration, K_est
 
 
 def test_p_mean_matches_hand_derived_sensitivities_on_fixture():
@@ -1566,8 +1570,7 @@ def test_make_aggregation_rejects_an_unknown_aggregation():
 def test_calibration_takes_the_shape_of_each_aggregates_bias():
     """With `N` elements sharing the maximum and the rest negligible, the count
     multiplies P_MEAN and adds to LOGSUMEXP, which is what makes one calibration a
-    ratio and the other a difference. Before any refresh, each reports its biased
-    aggregate unaltered.
+    ratio and the other a difference. Either way the calibrated value is the maximum.
     """
     nel, beta, true_max = 12000, 200.0, 0.45
     xPhys = torch.ones(nel, 1, dtype=torch.float64)
@@ -1579,53 +1582,69 @@ def test_calibration_takes_the_shape_of_each_aggregates_bias():
         K_lse[:N] = 1 - true_max
 
         p_mean = conductivity.PMean(P, R)
-        assert float(p_mean(K_p_mean, xPhys)) == pytest.approx(
-            true_max * (N / nel) ** (1 / P)
-        )
-        assert float(p_mean(K_p_mean, xPhys, recalibrate=True)) == pytest.approx(
-            true_max
-        )
+        assert float(p_mean(K_p_mean, xPhys, 0)) == pytest.approx(true_max)
         assert p_mean.calibration == pytest.approx((nel / N) ** (1 / P))
 
         lse = conductivity.LogSumExp(beta, R)
-        assert float(lse(K_lse, xPhys)) == pytest.approx(true_max + np.log(N) / beta)
-        assert float(lse(K_lse, xPhys, recalibrate=True)) == pytest.approx(true_max)
+        assert float(lse(K_lse, xPhys, 0)) == pytest.approx(true_max)
+        assert lse.calibration == pytest.approx(np.log(N) / beta)
+
+
+def test_logsumexp_takes_the_sharpness_scheduled_for_the_calls_iteration():
+    """With `N` elements sharing the maximum, the calibration is `log(N)/beta`, so it
+    reveals which `beta` each call used."""
+    schedule = run_config.CosineSchedule(initial=50.0, decay_iterations=10, final=400.0)
+    nel, N = 1000, 10
+    xPhys = torch.ones(nel, 1, dtype=torch.float64)
+    K_est = torch.full((nel,), 1 + 1e3, dtype=torch.float64)
+    K_est[:N] = 0.55
+
+    lse = conductivity.LogSumExp(schedule, R)
+    for loop in (0, 5, 10):
+        lse(K_est, xPhys, loop)
+        beta = run_config.weight_at(schedule, loop)
         assert lse.calibration == pytest.approx(np.log(N) / beta)
 
 
 @pytest.mark.parametrize("aggregation", list(conductivity.Aggregation))
-def test_calibration_holds_until_the_next_refresh(aggregation):
-    """A call without `recalibrate` corrects its own field by the calibration the last
-    refresh measured on another one, in the shape of its aggregate's bias."""
+def test_calibration_is_held_out_of_the_gradient(aggregation):
+    """The calibration is measured from the field it corrects, yet the gradient is the
+    smooth surrogate's -- scaled by the calibration where that is a ratio -- rather than
+    the true maximum's, which reaches a single element."""
+    beta = 200.0
     rng = np.random.default_rng(204)
-    xPhys = tt(rng.uniform(0.5, 1.0, size=(4, 5)))
-    K_measured, K_later = tt(rng.uniform(0.0, 0.5, size=(2, 20)))
-    aggregate = conductivity.make_aggregation(aggregation, P, R, 200.0)
+    xPhys = tt(rng.uniform(0.5, 1.0, size=(4, 5))).requires_grad_(True)
+    K_est = tt(rng.uniform(0.0, 0.5, size=20)).requires_grad_(True)
+    aggregate = conductivity.make_aggregation(aggregation, P, R, beta)
 
-    raw = float(aggregate(K_later, xPhys))
-    aggregate(K_measured, xPhys, recalibrate=True)
-    expected = (
-        raw * aggregate.calibration
-        if aggregation == conductivity.Aggregation.P_MEAN
-        else raw - aggregate.calibration
-    )
-    assert float(aggregate(K_later, xPhys)) == pytest.approx(expected)
+    value = aggregate(K_est, xPhys, 0)
+    sev = (1 - K_est) * xPhys.flatten() ** R
+    assert float(value.detach()) == pytest.approx(float(sev.detach().max()))
+
+    if aggregation == conductivity.Aggregation.P_MEAN:
+        surrogate = aggregate.calibration * torch.mean(sev**P) ** (1 / P)
+    else:
+        surrogate = torch.logsumexp(beta * sev, dim=0) / beta
+    for leaf in (K_est, xPhys):
+        (got,) = torch.autograd.grad(value, leaf, retain_graph=True)
+        (want,) = torch.autograd.grad(surrogate, leaf, retain_graph=True)
+        torch.testing.assert_close(got, want, rtol=1e-10, atol=0.0)
 
 
 def test_p_mean_keeps_its_calibration_where_the_ratio_is_undefined():
     """A zero P_MEAN says nothing about the maximum -- every element contributed zero
-    -- so a refresh there leaves the calibration as it was. LOGSUMEXP's difference
-    always has a value, at negative severity included.
+    -- so it leaves the calibration as it was. LOGSUMEXP's difference always has a
+    value, at negative severity included.
     """
     xPhys = torch.ones(4, 5, dtype=torch.float64)
     p_mean = conductivity.PMean(P, R)
     p_mean.calibration = 1.3
-    p_mean(torch.ones(20, dtype=torch.float64), xPhys, recalibrate=True)
+    p_mean(torch.ones(20, dtype=torch.float64), xPhys, 0)
     assert p_mean.calibration == 1.3
 
     lse = conductivity.LogSumExp(200.0, R)
     K_est = torch.full((20,), 1.3, dtype=torch.float64)
-    assert float(lse(K_est, xPhys, recalibrate=True)) == pytest.approx(-0.3)
+    assert float(lse(K_est, xPhys, 0)) == pytest.approx(-0.3)
 
 
 def test_logsumexp_approaches_the_true_maximum_of_the_severity():
@@ -1636,13 +1655,13 @@ def test_logsumexp_approaches_the_true_maximum_of_the_severity():
     K_est = tt(rng.uniform(0.0, 0.8, size=20))
     true_max = float(((1 - K_est) * xPhys.flatten() ** R).max())
     aggregate = conductivity.LogSumExp(1e4, R)
-    assert float(aggregate(K_est, xPhys)) == pytest.approx(true_max, abs=5e-4)
+    assert float(aggregate(K_est, xPhys, 0)) == pytest.approx(true_max, abs=5e-4)
 
 
 def test_logsumexp_gradient_is_finite_at_zero_density_and_infinite_K():
     x = tt(np.array([[0.0, 0.5, 1.0, 1.0]])).requires_grad_(True)
     K_est = tt(np.array([0.2, 0.3, np.inf, 0.1])).requires_grad_(True)
-    value = conductivity.LogSumExp(25.0, R)(K_est, x)
+    value = conductivity.LogSumExp(25.0, R)(K_est, x, 0)
     d_K, d_x = torch.autograd.grad(value, (K_est, x))
     assert torch.isfinite(value)
     assert torch.isfinite(d_K).all() and torch.isfinite(d_x).all()

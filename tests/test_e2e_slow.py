@@ -38,7 +38,6 @@ TCR = 0.8
 PRINT_BASE = "opposite_corner"
 NLOOP = 800
 RMIN, LRMIN, RMIN_COND = 4.0, 2.0, 12.0
-BETA_INIT = 1.0
 # The MATLAB source's projection ramps: `beta_d` doubling every 50 iterations to 128,
 # `beta_t` rising by 5 every 30 to 50.
 STEP_BETA_D = {
@@ -89,7 +88,6 @@ CONFIG = RunConfig(
     hotspot_beta=200.0,
     hotspot_kappa=0.0,
     hotspot_g0_per_m=3.368,
-    hotspot_refresh_period=25,
     beta_d_schedule=STEP_BETA_D,
     beta_t_schedule=STEP_BETA_T,
     print_base=PRINT_BASE,
@@ -125,7 +123,7 @@ TRU_MAX_TOL = 0.008  # 1% of TRU_MAX_TARGET
 
 @pytest.mark.slow
 def test_thesis_4_4_reproduction():
-    result = stto.run(CONFIG, beta_d=BETA_INIT)
+    result = stto.run(CONFIG)
     record = result.records[-1]
 
     assert record.f < F_CEILING

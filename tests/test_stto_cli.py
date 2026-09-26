@@ -130,5 +130,3 @@ def test_cli_logs_scheduled_continuation(tmp_path, monkeypatch):
     np.testing.assert_allclose([e["Tcr"] for e in log], [5.0, 2.9, 0.8])
     np.testing.assert_allclose([e["beta_d"] for e in log], [1.0, 2.0, 4.0])
     assert all(e["beta_t"] == 20.0 for e in log)
-    # A change in the aggregate's sharpness refreshes its calibration.
-    assert all(e["recalibrated"] for e in log[1:])

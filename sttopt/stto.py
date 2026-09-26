@@ -349,9 +349,6 @@ def init_state(problem: Problem) -> State:
     # for fidelity.
     xold = torch.cat([x.flatten(), torch.zeros(nel, device=device, dtype=dtype)])
 
-    # The hotspot calibration is not seeded here: iteration 0 satisfies `step`'s
-    # `loop % hotspot_refresh_period == 0`, so it calibrates against this same seed
-    # before building its own hotspot row.
     beta_d = run_config.weight_at(config.beta_d_schedule, 0)
     beta_t = run_config.weight_at(config.beta_t_schedule, 0)
 
@@ -583,18 +580,10 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             torch.stack([stage_upper_t, -stage_upper_t - 1.0e-5], dim=1).flatten()
         )
 
-    # Hotspot constraint. A refresh recalibrates before the row is built, so the row's
-    # value and its gradient share one calibration. A scheduled change in the
-    # aggregate's sharpness, in `rouf`, or in the angular lobe's width moves its bias,
-    # so each refreshes too.
-    recalibrate = loop % config.hotspot_refresh_period == 0
-    recalibrate |= rouf != run_config.weight_at(config.rouf, loop - 1)
-    recalibrate |= run_config.weight_at(
-        config.hotspot_kappa, loop
-    ) != run_config.weight_at(config.hotspot_kappa, loop - 1)
-    recalibrate |= problem.hotspot.resolve(loop)
+    # Hotspot constraint, recalibrated on every call: its value is the true maximum
+    # severity, its gradient the smooth surrogate's.
     K_est_t = estimated_conductivity(problem, xPhys, tPhys, loop)
-    hotspot_t = problem.hotspot(K_est_t, xPhys, recalibrate=recalibrate)
+    hotspot_t = problem.hotspot(K_est_t, xPhys, loop)
     g_hotspot_t = hotspot_t / Tcr - 1
     tru_max = float(hotspot_t.detach())
 
@@ -625,7 +614,6 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         hotspot_kappa=run_config.weight_at(config.hotspot_kappa, loop),
         grey=float(((xPhys > 0.05) & (xPhys < 0.95)).double().mean()),
         calibration=problem.hotspot.calibration,
-        recalibrated=bool(recalibrate),
         penal=penal,
         uniformity_weight=uniformity_weight,
         Tcr=Tcr,
@@ -738,13 +726,8 @@ def _tool_radius_row(
     tool_radius_m = run_config.weight_at(config.tool_radius_m, loop)
     if problem.curvature is None:
         return None, concave_t, tool_radius_m
-    recalibrate = problem.curvature.resolve(loop)
-    recalibrate |= loop % config.hotspot_refresh_period == 0
-    recalibrate |= tool_radius_m != run_config.weight_at(config.tool_radius_m, loop - 1)
     tool_radius = units.in_elements(tool_radius_m, config.element_size_m)
-    g_curvature_t = (
-        problem.curvature.aggregate(tool_radius * concave_t, recalibrate) - 1
-    )
+    g_curvature_t = problem.curvature.aggregate(tool_radius * concave_t, loop) - 1
     return g_curvature_t, concave_t, tool_radius_m
 
 

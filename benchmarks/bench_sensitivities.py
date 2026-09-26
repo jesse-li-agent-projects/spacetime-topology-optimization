@@ -524,7 +524,7 @@ def _hotspot_value(xPhys, tPhys, e1, e2, w, p, q, r, rouf):
     """The production P_MEAN hotspot aggregate, uncalibrated, as one function to time and
     compile."""
     K_est = conductivity.estimated_conductivity(xPhys, tPhys, e1, e2, w, q, rouf)
-    return conductivity.PMean(p, r)(K_est, xPhys)
+    return conductivity.PMean(p, r)(K_est, xPhys, 0)
 
 
 def bench_hotspot(s, device, repeats, warmup, rows):

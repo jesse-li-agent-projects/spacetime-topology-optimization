@@ -24,31 +24,20 @@ class CalibratedLogSumExp:
     the sensitivity past a handful of elements at the cost of a bias the calibration
     carries back onto the true maximum. `-inf` severities drop out of the sum.
 
-    The calibration is run state, refreshed in place by a call with `recalibrate`.
+    Every call measures the calibration afresh and holds it out of the gradient, so the
+    value is the true maximum and the gradient is the smooth surrogate's. `calibration`
+    keeps the last one, for logging.
     """
 
     def __init__(self, beta: "run_config.Scheduled"):
-        """:param beta: sharpness, possibly scheduled; `resolve` adopts one iteration's."""
-        self.beta_schedule = beta
-        self.beta = run_config.weight_at(beta, 0)
+        """:param beta: sharpness, possibly scheduled."""
+        self.beta = beta
         self.calibration = 0.0
 
-    def resolve(self, loop: int) -> bool:
-        """Adopt iteration `loop`'s scheduled sharpness, reporting whether it moved --
-        which stales the calibration, since `beta` sets the aggregate's bias.
-        """
-        beta, self.beta = self.beta, run_config.weight_at(self.beta_schedule, loop)
-        return beta != self.beta
-
-    def aggregate(
-        self, sev: Float[Tensor, " n"], recalibrate: bool = False
-    ) -> Float[Tensor, ""]:
-        """The calibrated smooth maximum of `sev`, differentiable in it.
-
-        :param recalibrate: first refresh the calibration against this field's true
-            maximum.
-        """
-        numer = torch.logsumexp(self.beta * sev, dim=0) / self.beta
-        if recalibrate:
-            self.calibration = float(numer.detach()) - float(sev.detach().max())
+    def aggregate(self, sev: Float[Tensor, " n"], loop: int) -> Float[Tensor, ""]:
+        """The calibrated smooth maximum of `sev` at iteration `loop`'s sharpness,
+        differentiable in `sev`."""
+        beta = run_config.weight_at(self.beta, loop)
+        numer = torch.logsumexp(beta * sev, dim=0) / beta
+        self.calibration = float(numer.detach()) - float(sev.detach().max())
         return numer - self.calibration

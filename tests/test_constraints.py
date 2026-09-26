@@ -9,7 +9,6 @@ import torch
 import sttopt.constraints as constraints
 import sttopt.filters as filters
 import sttopt.torch_util as torch_util
-import matlab_reference
 import tests.reference.constraints as constraints_ref
 from conftest import assert_close, load_fixture_npz, tt, tti
 
@@ -37,10 +36,9 @@ def test_constraints_match_fixture():
     assert tfield == 3
 
     H, Hs = _tensor_filter(nelx, nely, RMIN)
-    # The fixture predates the distance-weighted continuity filter; its rows were built
-    # with the MATLAB source's, which the oracle keeps. matlab_reference is 1-indexed
-    # F-order only in its loops -- this matrix is already in sttopt's element order.
-    L = torch.from_numpy(matlab_reference.ref_continuity_filter(nelx, nely, LRMIN))
+    L = torch_util.csr_to_tensor(
+        filters.continuity_filter(nelx, nely, LRMIN), "cpu", torch.float64
+    )
     # column 0 (all rows), per conventions.md's C-order element enumeration
     Nei = tti(np.arange(nely) * nelx)
 
@@ -64,24 +62,22 @@ def test_constraints_match_fixture():
         assert_close(dfx, dfdx_x[0], tier="algebraic")
         assert_close(dft, dfdx_t[0], tier="algebraic")
 
-        # (2) time-field continuity. The fixture predates the mean form; its row was
-        # `2 * nel * tol` times the current one.
-        scale = 2 * nel * 1.0e-6
-        fval, dfx, dft = constraints_ref.time_field_continuity(tPhys, L, H, Hs)
-        assert_close(fval, fval_all[1] / scale, tier="algebraic")
-        assert_close(dfx, dfdx_x[1] / scale, tier="algebraic")
-        assert_close(dft, dfdx_t[1] / scale, tier="algebraic")
+        # (2) time-field continuity
+        fval, dfx, dft = constraints_ref.time_field_continuity(
+            tPhys, L, H, Hs, float(fx["continuity_tol"])
+        )
+        assert_close(fval, fval_all[1], tier="algebraic")
+        assert_close(dfx, dfdx_x[1], tier="algebraic")
+        assert_close(dft, dfdx_t[1], tier="algebraic")
 
-        # (3) start-point. The fixture predates the single mean row; it has one row
-        # per base element, whose mean is the current row.
-        start = slice(2, 2 + nely)
+        # (3) start-point
         fval, dfx, dft = constraints_ref.start_point(tPhys, Nei, H, Hs)
-        assert_close(fval, fval_all[start].mean(), tier="algebraic")
-        assert_close(dfx, dfdx_x[start].mean(axis=0), tier="algebraic")
-        assert_close(dft, dfdx_t[start].mean(axis=0), tier="algebraic")
+        assert_close(fval, fval_all[2], tier="algebraic")
+        assert_close(dfx, dfdx_x[2], tier="algebraic")
+        assert_close(dft, dfdx_t[2], tier="algebraic")
 
-        # (4) per-stage volume, upper/lower interleaved starting at row 2+nely
-        base = 2 + nely
+        # (4) per-stage volume, upper/lower interleaved starting at row 3
+        base = 3
         for i, t_stage in enumerate(np.linspace(0, 1, nStage + 1)[1:]):
             fu, fl, dfx, dft = constraints_ref.stage_volume_bounds(
                 xPhys, tPhys, dx, H, Hs, t_stage, volfrac, ROU

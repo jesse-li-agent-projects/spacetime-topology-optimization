@@ -7,6 +7,7 @@ A plain NumPy array and a torch tensor do not mix in an arithmetic expression (`
 `init_state` convert once at the boundary rather than relying on implicit interop.
 """
 
+import warnings
 from typing import NewType
 
 import numpy as np
@@ -77,7 +78,9 @@ def csr_to_tensor(
     csr.sort_indices()
     # Opt in explicitly (rather than let torch warn that it implicitly skipped them):
     # cheap here, since this runs once per `Problem`, not once per iteration.
-    with torch.sparse.check_sparse_tensor_invariants():
+    # Torch's once-per-process notice that sparse CSR support is in beta; not a defect here.
+    with torch.sparse.check_sparse_tensor_invariants(), warnings.catch_warnings():
+        warnings.filterwarnings("ignore", "Sparse CSR tensor support is in beta state")
         t = torch.sparse_csr_tensor(
             torch.as_tensor(csr.indptr, dtype=torch.int64),
             torch.as_tensor(csr.indices, dtype=torch.int64),

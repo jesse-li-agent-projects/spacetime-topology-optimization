@@ -76,6 +76,13 @@ CONFIG = dataclasses.replace(
     lrmin_m=LRMIN * _H,
     rmin_cond_m=RMIN_COND * _H,
     nloop=NLOOP,
+    # On regardless of the defaults, so the golden run stacks every kind of row. The
+    # default tolerance is violated ~1e3-fold on this small mesh, and MMA stalls.
+    enable_continuity=True,
+    continuity_tol=1e-3,
+    load_length_m=0.0,  # the point load the per-function fixture tests build
+    raa0_total=1e-5 * 2 * NELX * NELY,  # raa0 = 1e-5, `mmasub`'s default
+    enable_stage_volume=True,
 )
 
 
@@ -196,7 +203,7 @@ def main():
     move_1 = np.concatenate(
         [
             np.full(x_1.size, problem.config.move),
-            np.full(t_1.size, problem.config.tmove),
+            np.full(t_1.size, run_config.weight_at(problem.config.tmove, 0)),
         ]
     )
     trust_1 = mma.trust_region_params(
@@ -341,6 +348,7 @@ def main():
         nStage=NSTAGE,
         volfrac=VOLFRAC,
         tfield=int(TFIELD),
+        continuity_tol=CONFIG.continuity_tol,
     )
 
     np.savez(

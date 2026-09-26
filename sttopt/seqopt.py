@@ -353,9 +353,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     variable.
 
     Iterations are 0-indexed, as in `stto.step`. The `beta_t += 5` update (every 30
-    iterations after the first, capped at 50) takes effect the *next* iteration, and the
-    hotspot calibration refresh (every 25 iterations, starting at iteration 0) applies to
-    this iteration's objective, both matching `stto.step`. There is no Heaviside
+    iterations after the first, capped at 50) takes effect the *next* iteration, matching
+    `stto.step`. There is no Heaviside
     sharpening here: there is no density projection to sharpen.
     """
     config = problem.config
@@ -370,15 +369,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     t = state.t.clone().requires_grad_(True)
     tPhys = physical_timefield(problem, t)
 
-    # A scheduled change in the angular lobe's width moves the aggregate's bias, so it
-    # recalibrates off-cycle too, as `stto.step` does for `rouf` and `hotspot_beta`.
-    kappa_moved = run_config.weight_at(
-        config.hotspot_kappa, loop
-    ) != run_config.weight_at(config.hotspot_kappa, loop - 1)
     hotspot_t = problem.hotspot(
-        estimated_conductivity(problem, tPhys, loop),
-        xPhys,
-        recalibrate=loop % 25 == 0 or kappa_moved,
+        estimated_conductivity(problem, tPhys, loop), xPhys, loop
     )
     # The roughness regularizer is not optional garnish: uniformity alone rewards a
     # sawtooth across the print direction (`timefield._gradient_cv`).
