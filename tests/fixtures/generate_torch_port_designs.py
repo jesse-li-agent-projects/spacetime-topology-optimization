@@ -102,6 +102,8 @@ _EXTRA_CONFIG_FIELDS = dict(
     hotspot_g0_per_m=3.368,
     tool_radius_m=0.0,
     curvature_beta=100.0,
+    min_gradient_fraction=0.0,
+    min_gradient_beta=50.0,
     beta_d_schedule={
         "points": [
             [0, 1.0],

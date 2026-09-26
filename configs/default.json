@@ -42,6 +42,8 @@
   "curvature_beta": {
     "points": [[0, 10.0], [500, 10.0], [650, 100.0]]
   },
+  "min_gradient_fraction": 0.0,
+  "min_gradient_beta": 50.0,
   "lrmin_m": 0.002,
   "rmin_cond_m": 0.012,
   "Emin": 1e-09,
