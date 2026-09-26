@@ -197,6 +197,10 @@ class RunConfig(_ConfigMixin):
     :param width_m: design domain width.
     :param height_m: design domain height; must be a whole number of elements.
     :param nelx: element count across `width_m`, the mesh resolution.
+    :param load_length_m: span of the tip load, a uniform downward traction of unit
+        total force on the right edge, from the bottom-right corner up. `0` is a point
+        load on the corner node, whose compliance grows as `log(1 / h)` under
+        refinement.
     :param print_base: 3D-printing base/start location, naming a
         `timefield.TimeField` member (case-insensitively) for JSON.
     :param uniformity_metric: a `timefield.UniformityMetric` member name, as in
@@ -248,6 +252,7 @@ class RunConfig(_ConfigMixin):
     width_m: float
     height_m: float
     nelx: int
+    load_length_m: float
     volfrac: float
     nStage: int
     enable_stage_volume: bool

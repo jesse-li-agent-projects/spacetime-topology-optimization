@@ -202,11 +202,15 @@ def build_problem(
     ndof = 2 * (nelx + 1) * (nely + 1)
 
     # Fixed cantilever load case, stated geometrically rather than as a linear-index
-    # formula so it survives a change of node numbering: unit downward point load on the
-    # bottom-right node, left edge clamped in both directions.
+    # formula so it survives a change of node numbering: a unit downward traction on the
+    # right edge, from the bottom-right corner up, and the left edge clamped in both
+    # directions.
     nodes = fem.node_grid(nelx, nely)
     F = np.zeros(ndof)
-    F[2 * nodes[-1, -1] + 1] = -1.0
+    right_edge_up = nodes[::-1, -1]
+    F[2 * right_edge_up + 1] = -fem.edge_load_shares(
+        nely + 1, units.in_elements(config.load_length_m, h)
+    )
     left_edge = nodes[:, 0]
     fixeddofs = np.stack([2 * left_edge, 2 * left_edge + 1], axis=-1).ravel()
     freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)

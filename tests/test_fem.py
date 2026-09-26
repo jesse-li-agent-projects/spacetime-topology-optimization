@@ -69,3 +69,28 @@ def _y_dofs(nodes):
 def _dofs(nodes):
     """Both (x, y) dofs of the given nodes, interleaved per node."""
     return np.stack([_x_dofs(nodes), _y_dofs(nodes)], axis=-1).ravel()
+
+
+@pytest.mark.parametrize("length", [0.0, 0.25, 1.0, 1.5, 3.0, 5.0])
+def test_edge_load_shares_carry_the_whole_force(length):
+    assert fem.edge_load_shares(6, length).sum() == pytest.approx(1.0, rel=1e-14)
+
+
+def test_edge_load_shares_integrate_the_hat_functions():
+    """Over 1.5 elements from node 0: node 0's half hat whole, node 1's rising half and
+    `(2 - y)` up to 1.5, node 2's `(y - 1)` up to 1.5, each over the span."""
+    np.testing.assert_allclose(
+        fem.edge_load_shares(4, 1.5), [0.5 / 1.5, 0.875 / 1.5, 0.125 / 1.5, 0.0]
+    )
+
+
+def test_edge_load_shares_tend_to_a_point_load():
+    np.testing.assert_array_equal(fem.edge_load_shares(4, 0.0), [1.0, 0.0, 0.0, 0.0])
+    np.testing.assert_allclose(
+        fem.edge_load_shares(4, 1e-9), [1.0, 0.0, 0.0, 0.0], atol=1e-9
+    )
+
+
+def test_edge_load_shares_reject_a_span_longer_than_the_edge():
+    with pytest.raises(ValueError, match="does not fit"):
+        fem.edge_load_shares(4, 3.5)

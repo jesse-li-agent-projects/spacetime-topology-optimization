@@ -149,12 +149,17 @@ def test_tool_radius_row_converges():
     assert _order(values) >= MIN_ORDER, values
 
 
-@pytest.mark.xfail(
-    strict=True, reason="step 4: a point load's compliance grows as log(1/h)"
-)
 def test_tip_load_compliance_converges():
-    values = _at_each_resolution(_whole_compliance)
+    """Over a span every mesh here resolves; a span below the element size is a point
+    load to that mesh, which is what `test_a_point_load_does_not_converge` shows."""
+    values = _at_each_resolution(_whole_compliance, load_length_m=0.012)
     assert _order(values) >= MIN_ORDER, values
+
+
+def test_a_point_load_does_not_converge():
+    """The control for the test above: its compliance grows as `log(1/h)`."""
+    values = _at_each_resolution(_whole_compliance, load_length_m=0.0)
+    assert _order(values) < MIN_ORDER, values
 
 
 @pytest.mark.xfail(

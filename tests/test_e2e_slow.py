@@ -74,6 +74,7 @@ CONFIG = RunConfig(
     width_m=NELX * H,
     height_m=NELY * H,
     nelx=NELX,
+    load_length_m=0.0,  # the source's point load
     volfrac=VOLFRAC,
     nStage=NSTAGE,
     enable_stage_volume=True,

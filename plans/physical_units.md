@@ -24,7 +24,10 @@ handles an element-scale filtering issue, so its per-element "layer" is correct.
    row still does not converge until step 6.
 4. **Tip traction** over a physical length on the right edge, from the bottom-right
    corner up, 1 mm by default, with exact integration of the nodal shape functions. A
-   point load's compliance grows as `log(1/h)`.
+   point load's compliance grows as `log(1/h)`. A span converges once the mesh resolves
+   it (order ~1.8 from 2 elements); 1 mm is one element at 180x60, so the default
+   reaches that regime only on finer meshes. At 180x60 it lowers a uniform design's
+   compliance 1.3% from the point load's.
 5. **Measure MMA's `raa0`** against the per-variable gradient scale at 180x60 and
    360x120. Mean-form terms have gradients of `O(1/n)` per variable, and `raa0` is
    absolute. Change it (`raa0 / n`) only if the measurement shows it matters.

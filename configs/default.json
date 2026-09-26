@@ -2,6 +2,7 @@
   "width_m": 0.18,
   "height_m": 0.06,
   "nelx": 180,
+  "load_length_m": 0.001,
   "nloop": 800,
   "volfrac": 0.5,
   "nStage": 8,
