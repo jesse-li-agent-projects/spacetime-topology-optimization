@@ -43,6 +43,12 @@ CONFIG = default_run_config(
     lrmin_m=LRMIN * ELEMENT_M,
     rmin_cond_m=RMIN_COND * ELEMENT_M,
     nloop=NLOOP,
+    # as `generate_fixtures.py` pins them
+    enable_continuity=True,
+    continuity_tol=1e-3,
+    load_length_m=0.0,
+    raa0_total=1e-5 * 2 * NELX * NELY,
+    enable_stage_volume=True,
 )
 
 
@@ -51,10 +57,6 @@ def _run():
     return stto.run_from_state(problem, stto.init_state(problem), NLOOP)
 
 
-@pytest.mark.xfail(
-    reason="golden fixtures predate the roughness term; not regenerated while stto's objective is still changing",
-    strict=False,
-)
 def test_iteration1_assembly_matches_fixture():
     """Checks .f/.df and .g/.dg at iteration 1 against mma.npz's single-shot
     snapshot. .f in particular has no other coverage anywhere in this test suite --
@@ -74,10 +76,6 @@ def test_iteration1_assembly_matches_fixture():
     assert_close(record.dg, fx["dfdx_1"], tier="algebraic")
 
 
-@pytest.mark.xfail(
-    reason="golden fixtures predate calibrating the hotspot row at init_state; not regenerated while stto's objective is still changing",
-    strict=False,
-)
 def test_constraints_stacking_matches_fixture():
     """Cheap, order-sensitive check on top of test_constraints.py's per-constraint
     fixture tests: this validates that stto.step stacks .g/.dg rows in the
