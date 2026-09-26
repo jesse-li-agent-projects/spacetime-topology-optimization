@@ -1,11 +1,10 @@
 """First-principles tests for `sttopt.stto`: the wiring layer.
 
 Every module `stto.step` calls owns its own FD/fixture tests, and every one of those
-passing tells you nothing about whether `step` wires them together correctly. The FD
-test here checks `step`'s own `IterationRecord.df`/`.dg` against central differences of
-`step`'s own `.f`/`.g`, with respect to the raw design vector `[x; t]` that MMA actually
-optimizes -- "is the derivative of the thing it claims to differentiate", independent
-of the MATLAB fixtures.
+passing tells you nothing about whether `step` wires them together correctly. Autograd
+builds every sensitivity, so what wiring can get wrong is a graph cut autograd cannot
+see; the tests here pin which raw leaves each row reads, and the one deliberate cut
+`step`'s own fields make.
 
 `init_state`'s tests state the initialization invariant directly, rather than pinning
 whatever the current code happens to produce.
@@ -192,21 +191,12 @@ def test_init_state_seeds_the_raw_fields(tfield):
 
 # --- step: finite-difference check of the assembled sensitivities ---------------------
 
-# An iteration that refreshes nothing: not 0, and not a multiple of any refresh period
-# these tests use.
-QUIET_LOOP = 1
+# The iteration `_state_from_raw`'s states sit at.
+STATE_LOOP = 1
 
 
 def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, beta_t=10.0):
-    """A `State` at raw design point `[x_raw; t_raw]`.
-
-    `loop` is `QUIET_LOOP`, not 0, so the ensuing `step` runs an iteration that refreshes
-    nothing: iteration 0 always recalibrates the hotspot, and a refresh multiple would too.
-    `beta_t`, `beta_d` and the calibration then stay fixed across the call, so `.f`/`.g`
-    are smooth functions of the raw variables alone. (At a refresh iteration the
-    calibration jumps as a function of the design, and the reported gradient deliberately
-    does not account for that -- a different question from the one this test asks.)
-    """
+    """A `State` at raw design point `[x_raw; t_raw]`, at iteration `STATE_LOOP`."""
     device, dtype = problem.device, problem.dtype
     return stto.State(
         x=torch_util.to_tensor(x_raw, device, dtype),
@@ -215,7 +205,7 @@ def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, beta_t=10.0):
         xold2=torch.zeros(problem.n, device=device, dtype=dtype),
         low=torch.zeros(problem.n, device=device, dtype=dtype),
         upp=torch.zeros(problem.n, device=device, dtype=dtype),
-        loop=QUIET_LOOP,
+        loop=STATE_LOOP,
         beta_t=beta_t,
         beta_d=beta_d,
         U=None,
@@ -223,19 +213,11 @@ def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, beta_t=10.0):
 
 
 # `step` runs one whole-structure FEM solve plus one per stage, each on a differently
-# time-masked density field, and any of them can land near a mechanism -- at which point
-# FD noise blows up long before the analytic gradient does. Following `test_compliance.py`,
-# such draws are rejected and redrawn rather than papered over by loosening tolerances.
-#
-# The threshold is much looser than test_compliance.py's 1e5, and deliberately so. The
-# earliest stage (ti = 1/nStage) masks nearly the whole structure down to the Emin floor,
-# so its K_free is ill-conditioned *structurally*, for every draw and every mesh -- a 1e5
-# cutoff rejects 100% of draws and the test simply never runs. Measured across draws the
-# whole-structure and late-stage solves sit at ~2e3 while the first stage spans 5e4-2e8,
-# and an h-sweep (1e-5 / 1e-6 / 1e-7) shows every constraint row still agreeing with FD to
-# ~1e-11 absolute at the top of that range: the conditioning does not reach the gradients.
-# So the guard is set to catch genuinely degenerate draws, not the normal early-stage
-# range, and the tolerances below stay tight.
+# time-masked density field, and any of them can land near a mechanism. Following
+# `test_compliance.py`, such draws are rejected and redrawn rather than papered over by
+# loosening tolerances. The threshold is much looser than that file's 1e5: the earliest
+# stage masks nearly the whole structure down to the Emin floor, so its K_free spans
+# 5e4-2e8 across draws for every mesh, and a 1e5 cutoff would reject every draw.
 MAX_COND = 1e10
 
 
@@ -328,119 +310,106 @@ def test_sensitivity_rows_multi_row_matches_single_row_calls():
     torch.testing.assert_close(rows[1], row_b, rtol=1e-10, atol=0.0)
 
 
-def test_step_assembled_sensitivities_match_finite_differences(monkeypatch):
-    """`step`'s `IterationRecord.df` and `.dg` against central differences of its own
-    `.f`/`.g`, along random directions in the raw design vector `[x; t]`.
+def _draw_state(problem, rng):
+    x_raw = rng.uniform(0.3, 0.7, size=(problem.config.nely, problem.config.nelx))
+    t_raw = rng.uniform(0.1, 0.9, size=(problem.config.nely, problem.config.nelx))
+    return _state_from_raw(problem, x_raw, t_raw)
 
-    Autograd builds every row, so this does not check a chain rule. It checks what
-    autograd cannot see: a graph cut by a stray `.detach()` or host round-trip (which
-    `allow_unused` turns into a silent zero), or a custom backward misused in context.
-    Such an error moves the gradient along a generic direction, so a few random
-    directions per field find it for a small fraction of a per-element sweep's `step`
-    calls.
+
+def _reads(sensitivity: np.ndarray, nel: int) -> tuple[bool, bool]:
+    """Whether a sensitivity row reads the raw density and the raw time field. A leaf
+    the row does not reach is exactly zero, `allow_unused`'s fill."""
+    return bool(np.any(sensitivity[:nel] != 0)), bool(np.any(sensitivity[nel:] != 0))
+
+
+def test_step_constraint_rows_read_the_leaves_they_are_built_from():
+    """Autograd gets every chain rule right but cannot see a graph cut: a stray
+    `.detach()` or host round-trip leaves the row's block for that leaf silently zero.
+    So each row must read exactly the raw leaves its quantity depends on.
     """
-    nStage = 3
-    nelx, nely = 10, 8
-    # .f (a compliance) is noise-dominated at small h; the constraint rows reach
-    # truncation error at large h. Worst relative error over the directions below at
-    # h = 1e-4 / 1e-5 / 1e-6 / 1e-7: .f 1e-6 / 2e-6 / 3e-5 / 1e-4, .g 9e-6 / 9e-8 / 2e-8
-    # / 5e-7 -- measured before the angular stencil weight was on by default.
-    #
-    # The lobe and its directional divisor both read `grad t`, which makes the hotspot
-    # row markedly more curved in `t`: its worst direction goes from 4.6e-8 at
-    # `hotspot_kappa = 0` to 1.4e-6 at 2.3666, both at h = 1e-5, decaying as h**2 in
-    # each case. So h sits at 1e-6, where that direction reaches 7.5e-9 and `.f` is
-    # still an order of magnitude inside its own tolerance.
-    h = 1e-6
-    # Stage volume bounds on and a constant tool radius, so every kind of constraint row
-    # is present and live. The smooth-max calibrations are detached offsets re-measured
-    # from the design they are refreshed on, so on a refresh iteration `.g`'s hotspot and
-    # tool-radius rows move by an amount `.dg` deliberately does not carry -- `.dg` is the
-    # smooth surrogate's gradient, which is what MMA linearizes. Freezing the
-    # calibrations leaves rows the finite difference can see.
+    nelx, nely, nStage = 10, 8, 3
+    nel = nelx * nely
     problem = _problem(
         nelx=nelx,
         nely=nely,
         nStage=nStage,
-        enable_stage_volume=True,
-        config_overrides={"hotspot_refresh_period": 2**62, "tool_radius_m": 2.0 * ELEMENT_M},
+        # A tolerance the random draw roughly meets: at the default, its continuity row
+        # is violated ~1e3-fold and MMA's subproblem stalls.
+        config_overrides={
+            "enable_continuity": True,
+            "continuity_tol": 1e-2,
+            "tool_radius_m": 2.0 * ELEMENT_M,
+        },
     )
+    _, record = stto.step(problem, _draw_state(problem, np.random.default_rng(0)))
+
+    # Row order is `step`'s stack: volume, continuity, the start-point row, an upper and
+    # a lower bound per stage, the hotspot row, the tool-radius row.
+    density, time, both = (True, False), (False, True), (True, True)
+    expected = [density, time, time] + [both] * (2 * nStage) + [both, both]
+    assert record.dg.shape[0] == len(expected)
+    for i, (row, reads) in enumerate(zip(record.dg, expected)):
+        assert _reads(row, nel) == reads, f"row {i}"
+
+
+@pytest.mark.parametrize(
+    "term, overrides",
+    [
+        ("stage compliances", {"Theta": 1.0}),
+        ("uniformity", {"uniformity_weight": 1.0}),
+        ("roughness", {"roughness_weight": 1.0}),
+    ],
+)
+def test_step_objective_terms_read_the_time_field(term, overrides):
+    """The whole-structure compliance reads density alone; each further objective term
+    must add a time-field sensitivity, or its path to `t` is cut."""
+    nelx, nely = 10, 8
     nel = nelx * nely
-    assert problem.n == 2 * nel
+    off = {"Theta": 0.0, "uniformity_weight": 0.0, "roughness_weight": 0.0}
 
-    rng = np.random.default_rng(0)
-    x_raw, t_raw, state = _draw_well_conditioned_state(problem, rng)
-    _, record = stto.step(problem, state)
+    def reads(settings):
+        Theta = settings.pop("Theta")
+        uniformity_weight = settings.pop("uniformity_weight")
+        problem = _problem(
+            nelx=nelx,
+            nely=nely,
+            Theta=Theta,
+            uniformity_weight=uniformity_weight,
+            config_overrides=settings,
+        )
+        _, record = stto.step(problem, _draw_state(problem, np.random.default_rng(0)))
+        return _reads(record.df, nel)
 
-    # Row count follows from the stack `step` builds: volume, continuity (when enabled),
-    # the start-point row, an upper and a lower bound per stage, the hotspot row, and
-    # the tool-radius row (when enabled).
-    n_continuity_rows = 1 if problem.config.enable_continuity else 0
-    n_curvature_rows = (
-        0 if run_config.identically_zero(problem.config.tool_radius_m) else 1
-    )
-    m = 1 + n_continuity_rows + 1 + 2 * nStage + 1 + n_curvature_rows
-    assert record.df.shape == (problem.n,)
-    assert record.g.shape == (m,)
-    assert record.dg.shape == (m, problem.n)
+    assert reads(dict(off)) == (True, False)
+    assert reads({**off, **overrides}) == (True, True), term
 
-    # Non-vacuity: an all-but-zero gradient would pass the comparison below regardless.
-    assert np.abs(record.df).max() > 1e-3
-    assert np.abs(record.dg).max(axis=1).min() > 1e-3
 
-    # `step`'s gradient treats the time field's scale as a constant, so the finite
-    # difference has to hold it at the unperturbed value too.
-    def filtered_max(t):
-        t = torch_util.to_tensor(t, problem.device, problem.dtype)
-        return filters.apply_density_filter(t, problem.time_H, problem.time_Hs).max()
+def test_physical_time_field_holds_its_scale_out_of_the_gradient():
+    """The time field is scaled to end the build at 1 by a detached maximum, so its
+    gradient is the filtered field's divided by a constant scale."""
+    problem = _problem()
+    rng = np.random.default_rng(5)
+    shape = (problem.config.nely, problem.config.nelx)
+    x = torch_util.to_tensor(rng.uniform(0.3, 0.7, size=shape), "cpu", torch.float64)
+    t = torch_util.to_tensor(rng.uniform(0.1, 0.9, size=shape), "cpu", torch.float64)
+    t.requires_grad_(True)
+    cotangent = torch_util.to_tensor(rng.standard_normal(shape), "cpu", torch.float64)
 
-    base_scale = filtered_max(t_raw)
-    unscaled_physical_fields = stto.physical_fields
+    _, tPhys = stto.physical_fields(problem, x, t, BETA_D)
+    (got,) = torch.autograd.grad((cotangent * tPhys).sum(), t)
 
-    def physical_fields_at_base_scale(problem, x, t, beta_d):
-        xPhys, tPhys = unscaled_physical_fields(problem, x, t, beta_d)
-        return xPhys, tPhys * filtered_max(t) / base_scale
-
-    monkeypatch.setattr(stto, "physical_fields", physical_fields_at_base_scale)
-
-    def values_at(x_raw, t_raw):
-        _, rec = stto.step(problem, _state_from_raw(problem, x_raw, t_raw))
-        return rec.f, rec.g
-
-    # Each field gets its own directions: its gradient block can be orders of magnitude
-    # smaller than the other's, and an error in it would hide in a shared direction.
-    for field, block in (("x", slice(0, nel)), ("t", slice(nel, 2 * nel))):
-        for _ in range(2):
-            v = rng.standard_normal((nely, nelx))
-            if field == "x":
-                f_p, g_p = values_at(x_raw + h * v, t_raw)
-                f_m, g_m = values_at(x_raw - h * v, t_raw)
-            else:
-                f_p, g_p = values_at(x_raw, t_raw + h * v)
-                f_m, g_m = values_at(x_raw, t_raw - h * v)
-            df_v = record.df[block] @ v.ravel()
-            dg_v = record.dg[:, block] @ v.ravel()
-            fd_f = (f_p - f_m) / (2 * h)
-            fd_g = (g_p - g_m) / (2 * h)
-            np.testing.assert_allclose(
-                df_v, fd_f, rtol=1e-4, err_msg=f"df, {field} direction"
-            )
-            # A row that does not depend on this field is exactly zero on both sides.
-            np.testing.assert_allclose(
-                dg_v,
-                fd_g,
-                rtol=1e-6,
-                atol=1e-10,
-                err_msg=f"dg, {field} direction",
-            )
+    filtered = filters.apply_density_filter(t, problem.time_H, problem.time_Hs)
+    scale = float(filtered.detach().max())
+    (want,) = torch.autograd.grad((cotangent * filtered).sum() / scale, t)
+    torch.testing.assert_close(got, want, rtol=1e-12, atol=0.0)
 
 
 def test_step_objective_is_theta_weighted_sum_of_stage_compliances():
     """`IterationRecord.f` is the whole-structure compliance plus `Theta` times the sum
     of the per-stage gravity compliances -- so it must be exactly affine in `Theta`,
     with intercept the whole-structure compliance alone and slope the stage sum.
-    Recovering both from three `Theta` values pins the weighting independently of the FD
-    check (which sees the gradient, not the value), and `Theta == 0` recovers the pure
+    Recovering both from three `Theta` values pins the weighting, and `Theta == 0`
+    recovers the pure
     compliance problem the stage terms are layered onto.
     """
     nelx, nely, nStage = 10, 8, 3
@@ -562,7 +531,7 @@ def test_step_objective_adds_the_scheduled_roughness_term():
     noise = 10 * torch_solve.DEFAULT_CG_RTOL * abs(unweighted.f)
     # The weight is the schedule's value at the iteration `_state_from_raw` steps, not
     # its `initial` -- that is the part worth pinning.
-    applied = run_config.weight_at(run_config.schedule_from_dict(schedule), QUIET_LOOP)
+    applied = run_config.weight_at(run_config.schedule_from_dict(schedule), STATE_LOOP)
     assert scheduled.roughness_weight == applied
     assert applied * scheduled.roughness > 100 * noise  # non-vacuous
     np.testing.assert_allclose(
@@ -784,7 +753,7 @@ def test_step_would_have_produced_nan_without_the_nan_safe_rewrite():
 
 def _curvature_records(tool_radius_m):
     """One `step` record with no tool-radius row and one at `tool_radius_m`, from the
-    same design, at iteration `QUIET_LOOP`."""
+    same design, at iteration `STATE_LOOP`."""
     base = _problem(nelx=10, nely=8, config_overrides={"tool_radius_m": 0.0})
     with_tool = stto.build_problem(
         dataclasses.replace(base.config, tool_radius_m=tool_radius_m)
@@ -814,7 +783,7 @@ def test_tool_radius_at_zero_mid_schedule_is_an_inactive_row():
     """A ramp that has not yet left 0 already has its row, which a zero-radius tool
     satisfies with no gradient."""
     ramp = run_config.PiecewiseSchedule(
-        points=[[0, 0.0], [QUIET_LOOP + 10, 0.0], [QUIET_LOOP + 20, 3.0 * ELEMENT_M]]
+        points=[[0, 0.0], [STATE_LOOP + 10, 0.0], [STATE_LOOP + 20, 3.0 * ELEMENT_M]]
     )
     record, with_record = _curvature_records(ramp)
 

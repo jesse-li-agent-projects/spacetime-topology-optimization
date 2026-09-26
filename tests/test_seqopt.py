@@ -35,16 +35,15 @@ def _problem(**overrides) -> seqopt.Problem:
     return seqopt.build_problem(config, _geometry(), SEQ_ELEMENT_M, device="cpu")
 
 
-# An iteration that refreshes nothing: not 0 (which always recalibrates the hotspot),
-# and not a multiple of 25 or 30.
-QUIET_LOOP = 1
+# The iteration `_state_from_raw`'s states sit at.
+STATE_LOOP = 1
 
 
 def _state_from_raw(
     problem: seqopt.Problem, t_raw: np.ndarray, base: seqopt.State
 ) -> seqopt.State:
     t = torch_util.to_tensor(t_raw, problem.device, problem.dtype)
-    return dataclasses.replace(base, t=t, loop=QUIET_LOOP)
+    return dataclasses.replace(base, t=t, loop=STATE_LOOP)
 
 
 # --- init_state ----------------------------------------------------------------
@@ -165,57 +164,59 @@ def test_scheduled_roughness_weight_decays_during_the_run():
 # --- finite-difference check of df/dt and dg/dt ---------------------------------
 
 
-def test_sensitivities_match_finite_differences(monkeypatch):
-    """`step`'s `df`/`dg` against central differences of its own `f`/`g`, along random
-    directions in the raw time field.
-
-    Autograd builds every row, so this checks what autograd cannot see: a graph cut by
-    a stray `.detach()` or host round-trip, which moves the gradient along a generic
-    direction. Stage rows and the time filter are both on, so every row and the filter's
-    chain rule are in the graph.
-    """
-    h = 1e-5
-    problem = _problem(nStage=2, time_filter_rmin_m=2.0 * SEQ_ELEMENT_M)
+def test_constraint_rows_read_the_time_field():
+    """Autograd gets every chain rule right but cannot see a graph cut: a stray
+    `.detach()` or host round-trip leaves a row silently zero. `t` is the only leaf, so
+    every row must read it. Stage rows and continuity are both on, so every kind of row
+    is present."""
+    # A tolerance the random draw roughly meets: at the default, its continuity row is
+    # violated ~1e3-fold and MMA's subproblem stalls.
+    problem = _problem(nStage=2, enable_continuity=True, continuity_tol=1e-2)
     rng = np.random.default_rng(0)
-    t_raw = rng.uniform(0.1, 0.9, size=(NELY, NELX))
-    base_state = seqopt.init_state(problem)
-    state = _state_from_raw(problem, t_raw, base_state)
-
+    state = _state_from_raw(
+        problem, rng.uniform(0.1, 0.9, size=(NELY, NELX)), seqopt.init_state(problem)
+    )
     _, record = seqopt.step(problem, state)
-    assert np.abs(record.df).max() > 1e-6
-    assert np.abs(record.dg).max(axis=1).min() > 1e-8
+    for i, row in enumerate(record.dg):
+        assert np.any(row != 0), f"row {i}"
 
-    # `step`'s gradient treats the time field's scale as a constant, so the finite
-    # difference has to hold it at the unperturbed value too.
-    def unscaled_max(t):
-        t = torch_util.to_tensor(t, problem.device, problem.dtype)
-        if problem.H is not None:
-            t = filters.apply_density_filter(t, problem.H, problem.Hs)
-        return float(t.max())
 
-    base_scale = unscaled_max(t_raw)
-    scaled_physical_timefield = seqopt.physical_timefield
+@pytest.mark.parametrize(
+    "term", ["hotspot_weight", "uniformity_weight", "roughness_weight"]
+)
+def test_each_objective_term_reads_the_time_field(term):
+    """With only one term weighted, the objective's sensitivity is that term's alone, so
+    a cut in its path to `t` cannot hide behind the others."""
+    weights = {"hotspot_weight": 0.0, "uniformity_weight": 0.0, "roughness_weight": 0.0}
+    problem = _problem(**{**weights, term: 1.0})
+    rng = np.random.default_rng(0)
+    state = _state_from_raw(
+        problem, rng.uniform(0.1, 0.9, size=(NELY, NELX)), seqopt.init_state(problem)
+    )
+    _, record = seqopt.step(problem, state)
+    assert np.any(record.df != 0)
 
-    def physical_timefield_at_base_scale(problem, t):
-        tPhys = scaled_physical_timefield(problem, t)
-        return tPhys * unscaled_max(t.detach()) / base_scale
 
-    monkeypatch.setattr(seqopt, "physical_timefield", physical_timefield_at_base_scale)
+def test_physical_time_field_holds_its_scale_out_of_the_gradient():
+    """The time field is scaled to end the build at 1 by a detached maximum, so its
+    gradient is the filtered field's divided by a constant scale."""
+    problem = _problem(time_filter_rmin_m=2.0 * SEQ_ELEMENT_M)
+    assert problem.H is not None
+    rng = np.random.default_rng(5)
+    t = torch_util.to_tensor(
+        rng.uniform(0.1, 0.9, size=(NELY, NELX)), problem.device, problem.dtype
+    ).requires_grad_(True)
+    cotangent = torch_util.to_tensor(
+        rng.standard_normal((NELY, NELX)), problem.device, problem.dtype
+    )
 
-    def values_at(t):
-        _, rec = seqopt.step(problem, _state_from_raw(problem, t, base_state))
-        return rec.f, rec.g
+    tPhys = seqopt.physical_timefield(problem, t)
+    (got,) = torch.autograd.grad((cotangent * tPhys).sum(), t)
 
-    for _ in range(2):
-        v = rng.standard_normal((NELY, NELX))
-        f_p, g_p = values_at(t_raw + h * v)
-        f_m, g_m = values_at(t_raw - h * v)
-        np.testing.assert_allclose(
-            record.df @ v.ravel(), (f_p - f_m) / (2 * h), rtol=1e-4
-        )
-        np.testing.assert_allclose(
-            record.dg @ v.ravel(), (g_p - g_m) / (2 * h), rtol=1e-4, atol=1e-6
-        )
+    filtered = filters.apply_density_filter(t, problem.H, problem.Hs)
+    scale = float(filtered.detach().max())
+    (want,) = torch.autograd.grad((cotangent * filtered).sum() / scale, t)
+    torch.testing.assert_close(got, want, rtol=1e-12, atol=0.0)
 
 
 # --- the optional filter on t ---------------------------------------------------
