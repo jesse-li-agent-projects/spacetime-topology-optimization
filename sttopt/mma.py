@@ -11,6 +11,7 @@ conventions used to test it against the MATLAB source.
 """
 
 import warnings
+from collections.abc import Callable
 
 import torch
 from jaxtyping import Float
@@ -193,6 +194,62 @@ def mmasub(
     return xmma, ymma, zmma, lam, xsi, eta, mu, zet, s, low, upp
 
 
+# The source's cap on line-search halvings.
+_MAX_HALVINGS = 50
+# Chunks of halvings `[j0, j1)` for `subsolv`'s line search on a GPU, tuned on replays:
+# most Newton steps accept within the first few halvings, so the first chunk is small.
+_LINE_SEARCH_CHUNKS = ((0, 10), (10, _MAX_HALVINGS))
+
+
+def _line_search(
+    residual: Callable[..., Float[Tensor, "*k r"]],
+    olds: tuple[Tensor, ...],
+    dirs: tuple[Tensor, ...],
+    steg: Float[Tensor, ""],
+    residunorm: Float[Tensor, ""],
+    chunks: tuple[tuple[int, int], ...] | None,
+) -> tuple[tuple[Tensor, ...], Float[Tensor, ""], Float[Tensor, ""]]:
+    """`subsolv`'s backtracking line search: the first of `olds + steg/2**j * dirs`,
+    j = 0.._MAX_HALVINGS-1, whose residual norm does not exceed `residunorm`, else the
+    last one.
+
+    `chunks=None` tries one halving at a time, as the source does. Otherwise a chunk of
+    halvings is tried at once, which gives the same step with one host sync per chunk
+    instead of one per halving: faster on a GPU, but only extra work on a CPU.
+
+    :param residual: maps a point, or a batch of them along a leading dim of each of
+        `olds`' tensors, to its residual vector(s)
+    :return: the accepted point, and its residual's norm and max-abs entry
+    """
+    if chunks is None:
+        for j in range(_MAX_HALVINGS):
+            point = tuple(old + steg / 2.0**j * dv for old, dv in zip(olds, dirs))
+            residu = residual(*point)
+            resinew = torch.linalg.norm(residu)
+            # `not >` rather than `<=`, so a NaN norm is accepted as in the source.
+            if not resinew > residunorm:
+                break
+        return point, resinew, torch.abs(residu).max()
+
+    accept_end = torch.ones(1, device=steg.device, dtype=torch.bool)
+    for j0, j1 in chunks:
+        st = steg / 2.0 ** torch.arange(j0, j1, device=steg.device, dtype=steg.dtype)
+        cands = [
+            old + st.view(-1, *(1,) * dv.dim()) * dv for old, dv in zip(olds, dirs)
+        ]
+        residus = residual(*cands)
+        resinews = torch.linalg.norm(residus, dim=-1)
+        # `~(>)` accepts a NaN norm, as above. The appended True makes k = len(st)
+        # when nothing in the chunk is accepted.
+        accept = torch.cat([~(resinews > residunorm), accept_end])
+        k = int(accept.to(torch.uint8).argmax())
+        if k < len(st):
+            break
+    else:
+        k = len(st) - 1  # none accepted: the source keeps the smallest step
+    return tuple(cand[k] for cand in cands), resinews[k], torch.abs(residus[k]).max()
+
+
 def subsolv(
     m: int,
     n: int,
@@ -236,7 +293,11 @@ def subsolv(
     zet = torch.ones((), device=device, dtype=dtype)
     s = torch.ones(m, device=device, dtype=dtype)
     epsi = 1.0
+    one = torch.ones((), device=device, dtype=dtype)
+    chunks = None if device.type == "cpu" else _LINE_SEARCH_CHUNKS
 
+    # Takes one point, or a batch of them along a leading dim (the line search's
+    # candidates); `z`/`zet` are then (k,) rather than scalars.
     def residual(x, y, z, lam, xsi, eta, mu, zet, s, epsi):
         ux1 = upp - x
         xl1 = x - low
@@ -244,14 +305,14 @@ def subsolv(
         xl2 = xl1 * xl1
         uxinv1 = 1.0 / ux1
         xlinv1 = 1.0 / xl1
-        plam = p0 + P.T @ lam
-        qlam = q0 + Q.T @ lam
-        gvec = P @ uxinv1 + Q @ xlinv1
+        plam = p0 + lam @ P
+        qlam = q0 + lam @ Q
+        gvec = uxinv1 @ P.T + xlinv1 @ Q.T
         dpsidx = plam / ux2 - qlam / xl2
         rex = dpsidx - xsi + eta
         rey = c + d * y - mu - lam
-        rez = a0 - zet - a @ lam
-        relam = gvec - a * z - y + s - b
+        rez = a0 - zet - lam @ a
+        relam = gvec - a * z[..., None] - y + s - b
         rexsi = xsi * (x - alfa) - epsi
         reeta = eta * (beta - x) - epsi
         remu = mu * y - epsi
@@ -260,7 +321,18 @@ def subsolv(
         # epsi (a scalar barrier target) broadcasts in place of the source's
         # epsvecn/epsvecm (epsi*ones(n)/epsi*ones(m)); no need to materialize them.
         return torch.cat(
-            [rex, rey, rez[None], relam, rexsi, reeta, remu, rezet[None], res]
+            [
+                rex,
+                rey,
+                rez[..., None],
+                relam,
+                rexsi,
+                reeta,
+                remu,
+                rezet[..., None],
+                res,
+            ],
+            dim=-1,
         )
 
     while epsi > epsimin:
@@ -362,34 +434,16 @@ def subsolv(
             stmxx = (-1.01 * dxx / xx).max()
             stmalfa = (-1.01 * dx / (x - alfa)).max()
             stmbeta = (1.01 * dx / (beta - x)).max()
-            steg = 1.0 / max(
-                stmalfa, stmbeta, stmxx, torch.ones((), device=device, dtype=dtype)
+            steg = 1.0 / torch.stack([stmalfa, stmbeta, stmxx, one]).max()
+
+            (x, y, z, lam, xsi, eta, mu, zet, s), residunorm, residumax = _line_search(
+                lambda *point: residual(*point, epsi),
+                (x, y, z, lam, xsi, eta, mu, zet, s),
+                (dx, dy, dz, dlam, dxsi, deta, dmu, dzet, ds),
+                steg,
+                residunorm,
+                chunks,
             )
-
-            xold, yold, zold = x, y, z
-            lamold, xsiold, etaold = lam, xsi, eta
-            muold, zetold, sold = mu, zet, s
-
-            itto = 0
-            resinew = 2 * residunorm
-            while resinew > residunorm and itto < 50:
-                itto += 1
-                x = xold + steg * dx
-                y = yold + steg * dy
-                z = zold + steg * dz
-                lam = lamold + steg * dlam
-                xsi = xsiold + steg * dxsi
-                eta = etaold + steg * deta
-                mu = muold + steg * dmu
-                zet = zetold + steg * dzet
-                s = sold + steg * ds
-                residu = residual(x, y, z, lam, xsi, eta, mu, zet, s, epsi)
-                resinew = torch.linalg.norm(residu)
-                steg = steg / 2
-
-            residunorm = resinew
-            residumax = torch.abs(residu).max()
-            steg = 2 * steg
 
         if ittt > 198:
             warnings.warn(
