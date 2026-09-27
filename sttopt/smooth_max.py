@@ -15,20 +15,6 @@ def density_power(x: Float[Tensor, " n"], r: float) -> Float[Tensor, " n"]:
     return solid * torch.where(solid, x, torch.ones_like(x)) ** r
 
 
-def calibrated_logsumexp(
-    values: Float[Tensor, "*batch n"], beta: float
-) -> Float[Tensor, "*batch"]:
-    """The smooth maximum of each row of `values`, carried onto its true maximum: the
-    value is the row's max, the gradient `logsumexp(beta * values) / beta`'s.
-
-    For a smooth maximum nested inside another, where one calibration scalar cannot
-    carry every row: an uncalibrated inner maximum would overshoot by up to
-    `log(n) / beta`, loosening whatever bound the outer one feeds.
-    """
-    smooth = torch.logsumexp(beta * values, dim=-1) / beta
-    return smooth - (smooth - values.amax(dim=-1)).detach()
-
-
 class CalibratedLogSumExp:
     """`log(sum(exp(beta * sev))) / beta`, carried onto the true maximum of `sev` by a
     calibration offset.
@@ -40,7 +26,8 @@ class CalibratedLogSumExp:
 
     Every call measures the calibration afresh and holds it out of the gradient, so the
     value is the true maximum and the gradient is the smooth surrogate's. `calibration`
-    keeps the last one, for logging.
+    keeps the last one, for logging. Batched input calibrates each row on its own, so a
+    maximum nested inside another does not overshoot and loosen the outer bound.
     """
 
     def __init__(self, beta: "run_config.Scheduled"):
@@ -48,10 +35,12 @@ class CalibratedLogSumExp:
         self.beta = beta
         self.calibration = 0.0
 
-    def aggregate(self, sev: Float[Tensor, " n"], loop: int) -> Float[Tensor, ""]:
-        """The calibrated smooth maximum of `sev` at iteration `loop`'s sharpness,
-        differentiable in `sev`."""
+    def aggregate(
+        self, sev: Float[Tensor, "*batch n"], loop: int
+    ) -> Float[Tensor, "*batch"]:
+        """The calibrated smooth maximum of each row of `sev` at iteration `loop`'s
+        sharpness, differentiable in `sev`."""
         beta = run_config.weight_at(self.beta, loop)
-        numer = torch.logsumexp(beta * sev, dim=0) / beta
-        self.calibration = float(numer.detach()) - float(sev.detach().max())
+        numer = torch.logsumexp(beta * sev, dim=-1) / beta
+        self.calibration = (numer - sev.amax(dim=-1)).detach()
         return numer - self.calibration

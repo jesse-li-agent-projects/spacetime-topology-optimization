@@ -1988,7 +1988,7 @@ def test_calibrated_logsumexp_is_each_rows_max_with_the_smooth_gradient():
     rng = np.random.default_rng(12)
     values = tt(rng.standard_normal((5, 8))).requires_grad_(True)
     beta = 3.0
-    got = smooth_max.calibrated_logsumexp(values, beta)
+    got = smooth_max.CalibratedLogSumExp(beta).aggregate(values, 0)
     torch.testing.assert_close(got.detach(), values.detach().amax(-1))
 
     weights = tt(rng.standard_normal(5))

@@ -624,7 +624,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         grad_p90_per_m=grad_p90,
         hotspot_kappa=run_config.weight_at(config.hotspot_kappa, loop),
         grey=float(((xPhys > 0.05) & (xPhys < 0.95)).double().mean()),
-        calibration=problem.hotspot.calibration,
+        calibration=float(problem.hotspot.calibration),
         penal=penal,
         uniformity_weight=uniformity_weight,
         Tcr=Tcr,
@@ -778,13 +778,7 @@ def _min_gradient_row(
     min_ratio = float(torch.minimum(hard.amax(-1), (-hard).amax(-1)).min())
     if problem.min_gradient is None:
         return None, min_ratio
-    beta = run_config.weight_at(problem.config.min_gradient_beta, loop)
-    slopes = torch.cat(
-        [
-            smooth_max.calibrated_logsumexp(ratio, beta),
-            smooth_max.calibrated_logsumexp(-ratio, beta),
-        ]
-    )
+    slopes = problem.min_gradient.aggregate(torch.cat([ratio, -ratio]), loop)
     fraction = run_config.weight_at(problem.config.min_gradient_fraction, loop)
     return problem.min_gradient.aggregate(fraction - slopes, loop), min_ratio
 

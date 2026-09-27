@@ -19,7 +19,6 @@ import torch
 import sttopt.compliance as compliance
 import sttopt.filters as filters
 import sttopt.run_config as run_config
-import sttopt.smooth_max as smooth_max
 import sttopt.stto as stto
 import sttopt.timefield as timefield
 import sttopt.torch_solve as torch_solve
@@ -811,12 +810,9 @@ def test_min_gradient_floor_holds_its_median_out_of_the_gradient():
     rise = timefield.neighbour_rise(tPhys)
     ratio = rise / rise.detach().amax(-1).median()
     beta = problem.config.min_gradient_beta
-    slopes = torch.cat(
-        [
-            smooth_max.calibrated_logsumexp(ratio, beta),
-            smooth_max.calibrated_logsumexp(-ratio, beta),
-        ]
-    )
+    both = torch.cat([ratio, -ratio])
+    smooth = torch.logsumexp(beta * both, -1) / beta
+    slopes = smooth - (smooth - both.amax(-1)).detach()
     surrogate = torch.logsumexp(beta * (0.5 - slopes), 0) / beta
     (want,) = torch.autograd.grad(surrogate, tPhys)
     torch.testing.assert_close(got, want, rtol=1e-10, atol=0.0)
