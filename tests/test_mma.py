@@ -307,12 +307,14 @@ def test_subsolv_m_gt_n_smoke():
     )
 
 
-# One-halving chunks reproduce the source's sequential line search exactly.
-SEQUENTIAL_CHUNKS = tuple((j, j + 1) for j in range(50))
-
-
 @pytest.mark.parametrize(
-    "chunks", [mma._LINE_SEARCH_CHUNKS, SEQUENTIAL_CHUNKS, ((0, 3), (3, 50))]
+    "chunks",
+    [
+        None,
+        mma._LINE_SEARCH_CHUNKS,
+        tuple((j, j + 1) for j in range(50)),
+        ((0, 3), (3, 50)),
+    ],
 )
 @pytest.mark.parametrize(
     "norms, expected",
@@ -326,19 +328,21 @@ SEQUENTIAL_CHUNKS = tuple((j, j + 1) for j in range(50))
         ({}, 49),  # nothing accepted: the smallest step
     ],
 )
-def test_line_search_takes_first_accepted_halving(monkeypatch, chunks, norms, expected):
+def test_line_search_takes_first_accepted_halving(chunks, norms, expected):
     """`_line_search` takes the first halving `j` whose residual norm does not exceed
-    the current one (1.0 here), wherever the chunk boundaries fall."""
-    monkeypatch.setattr(mma, "_LINE_SEARCH_CHUNKS", chunks)
+    the current one (1.0 here), one at a time or wherever the chunk boundaries fall."""
 
     def residual(x, z):
         # z = 2**-j exactly, so each candidate's norm is looked up by its halving j.
-        js = torch.round(-torch.log2(z)).long().tolist()
-        return torch.tensor([[norms.get(j, 2.0)] for j in js], dtype=torch.float64)
+        js = torch.round(-torch.log2(z)).long().reshape(-1).tolist()
+        norm = torch.tensor([norms.get(j, 2.0) for j in js], dtype=torch.float64)
+        return norm.reshape(*z.shape, 1)
 
     olds = (torch.zeros(2, dtype=torch.float64), torch.zeros((), dtype=torch.float64))
     dirs = (torch.ones(2, dtype=torch.float64), torch.ones((), dtype=torch.float64))
-    (x, z), norm, resmax = mma._line_search(residual, olds, dirs, tt(1.0), tt(1.0))
+    (x, z), norm, resmax = mma._line_search(
+        residual, olds, dirs, tt(1.0), tt(1.0), chunks
+    )
     step = 2.0**-expected
     assert torch.equal(x, torch.full((2,), step, dtype=torch.float64))
     assert z.item() == step
@@ -370,26 +374,27 @@ def _badly_scaled_subproblem():
 @pytest.mark.parametrize("chunks", [mma._LINE_SEARCH_CHUNKS, ((0, 2), (2, 3), (3, 50))])
 def test_subsolv_does_not_depend_on_line_search_chunks(monkeypatch, chunks):
     """Batching the line search's halvings gives bit-identical results to trying them
-    one at a time, as the source does."""
+    one at a time, as the source does, whichever path `subsolv` picks by device."""
     args = _badly_scaled_subproblem()
-    tries = []
     line_search = mma._line_search
+    tries = []
 
-    def counting_line_search(residual, *rest):
-        def counted(*point):
-            tries[-1] += 1
-            return residual(*point)
+    def forced_line_search(forced_chunks):
+        def wrapped(residual, *rest_and_chunks):
+            def counted(*point):
+                tries[-1] += 1
+                return residual(*point)
 
-        tries.append(0)
-        return line_search(counted, *rest)
+            tries.append(0)
+            return line_search(counted, *rest_and_chunks[:-1], forced_chunks)
 
-    monkeypatch.setattr(mma, "_LINE_SEARCH_CHUNKS", SEQUENTIAL_CHUNKS)
-    monkeypatch.setattr(mma, "_line_search", counting_line_search)
+        return wrapped
+
+    monkeypatch.setattr(mma, "_line_search", forced_line_search(None))
     expected = mma.subsolv(*args)
     # Non-vacuity: some step must cross the boundaries of the chunkings under test.
     assert max(tries) >= 4
 
-    monkeypatch.setattr(mma, "_LINE_SEARCH_CHUNKS", chunks)
-    monkeypatch.setattr(mma, "_line_search", line_search)
+    monkeypatch.setattr(mma, "_line_search", forced_line_search(chunks))
     for got, want in zip(mma.subsolv(*args), expected):
         assert torch.equal(got, want)
