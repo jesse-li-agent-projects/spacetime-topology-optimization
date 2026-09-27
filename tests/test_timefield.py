@@ -801,7 +801,7 @@ def test_neighbour_rise_sees_an_uneven_pit_a_central_difference_reads_as_healthy
     central = timefield._central_difference_gradient(t, x)
     assert float(central[4]) > 0.5 * float(central.median())
 
-    rise = timefield.neighbour_rise(t, x)
+    rise = timefield.neighbour_rise(t)
     assert rise.shape == (9, 8)
     assert torch.all(rise[4] > 0)
 
@@ -816,10 +816,3 @@ def test_neighbour_rise_on_a_linear_field_is_its_gradient_along_each_neighbour()
     ring = np.array([(di, dj) for di, dj in timefield._RING])
     want = (ring[:, 1] * a + ring[:, 0] * b) / np.hypot(ring[:, 0], ring[:, 1]) * unit
     np.testing.assert_allclose(rise.numpy(), np.broadcast_to(want, rise.shape))
-
-
-def test_neighbour_rise_drops_blocks_touching_void():
-    t = torch.from_numpy(np.arange(25.0).reshape(5, 5))
-    x = torch.ones_like(t)
-    x[0, 0] = 0.0  # touches only the block centred on (1, 1)
-    assert timefield.neighbour_rise(t, x).shape == (8, 8)
