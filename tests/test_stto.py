@@ -340,15 +340,16 @@ def test_step_constraint_rows_read_the_leaves_they_are_built_from():
             "continuity_tol": 1e-2,
             "tool_radius_m": 2.0 * ELEMENT_M,
             "min_gradient_fraction": 0.5,
+            "gradient_smoothness_m": 2.0 * ELEMENT_M,
         },
     )
     _, record = stto.step(problem, _draw_state(problem, np.random.default_rng(0)))
 
     # Row order is `step`'s stack: volume, continuity, the start-point row, an upper and
     # a lower bound per stage, the hotspot row, the tool-radius row, the gradient floor
-    # (which reads `t` alone).
+    # and the gradient-smoothness row.
     density, time, both = (True, False), (False, True), (True, True)
-    expected = [density, time, time] + [both] * (2 * nStage) + [both, both, time]
+    expected = [density, time, time] + [both] * (2 * nStage) + [both] * 4
     assert record.dg.shape[0] == len(expected)
     for i, (row, reads) in enumerate(zip(record.dg, expected)):
         assert _reads(row, nel) == reads, f"row {i}"
@@ -754,68 +755,95 @@ def test_step_would_have_produced_nan_without_the_nan_safe_rewrite():
     assert torch.any(torch.isnan(d_x))
 
 
-def _min_gradient_records(fraction):
-    """One `step` record with no gradient-floor row and one at `fraction`, from the
+def _gradient_records(**overrides):
+    """One `step` record with neither gradient row and one with `overrides`, from the
     same design, at iteration `STATE_LOOP`, with the physical fields `step` read."""
-    base = _problem(nelx=10, nely=8, config_overrides={"min_gradient_fraction": 0.0})
-    with_floor = stto.build_problem(
-        dataclasses.replace(base.config, min_gradient_fraction=fraction)
+    base = _problem(
+        nelx=10,
+        nely=8,
+        config_overrides={"min_gradient_fraction": 0.0, "gradient_smoothness_m": 0.0},
     )
+    with_rows = stto.build_problem(dataclasses.replace(base.config, **overrides))
     _, _, state = _draw_well_conditioned_state(base, np.random.default_rng(3))
     _, record = stto.step(base, state)
-    _, with_record = stto.step(with_floor, state)
+    _, with_record = stto.step(with_rows, state)
     fields = stto.physical_fields(base, state.x, state.t, state.beta_d)
-    return record, with_record, fields
+    return record, with_record, fields, base.config.r
 
 
-def test_min_gradient_floor_appends_one_row_at_the_smallest_gradient():
-    """The row is the floor minus the smallest ascent or descent over the median ascent,
-    since every smooth maximum in it is calibrated onto the true one."""
-    record, with_record, (_, tPhys) = _min_gradient_records(0.5)
-    rise = timefield.neighbour_rise(tPhys)
-    ascent, descent = rise.amax(-1), (-rise).amax(-1)
-    ratio = float(torch.minimum(ascent, descent).min() / ascent.median())
-
-    assert with_record.g.shape == (record.g.shape[0] + 1,)
-    np.testing.assert_allclose(with_record.g[:-1], record.g, rtol=1e-12)
-    assert with_record.diagnostics["min_gradient_ratio"] == pytest.approx(ratio)
-    assert with_record.g[-1] == pytest.approx(0.5 - ratio, rel=1e-10)
+def _slope_and_frobenius(tPhys):
+    """Central-difference `|grad t|` and `||H||_F` at the interior elements, written out
+    from the 3x3 block rather than through `timefield`."""
+    t = tPhys.detach()
+    tx, ty = (t[1:-1, 2:] - t[1:-1, :-2]) / 2, (t[2:, 1:-1] - t[:-2, 1:-1]) / 2
+    txx = t[1:-1, 2:] - 2 * t[1:-1, 1:-1] + t[1:-1, :-2]
+    tyy = t[2:, 1:-1] - 2 * t[1:-1, 1:-1] + t[:-2, 1:-1]
+    txy = (t[2:, 2:] - t[2:, :-2] - t[:-2, 2:] + t[:-2, :-2]) / 4
+    return torch.hypot(tx, ty), torch.sqrt(txx**2 + tyy**2 + 2 * txy**2)
 
 
-def test_min_gradient_floor_at_zero_mid_schedule_is_inactive():
-    """A ramp that has not yet left 0 already has its row, which any gradient meets."""
+def test_gradient_rows_append_their_density_weighted_maxima():
+    """Each row is its true maximum severity minus its bound, since every smooth maximum
+    in it is calibrated onto the true one."""
+    record, with_record, (xPhys, tPhys), r = _gradient_records(
+        min_gradient_fraction=0.5, gradient_smoothness_m=2 * ELEMENT_M
+    )
+    slope, frobenius = _slope_and_frobenius(tPhys)
+    median = slope.median()
+    x_r = xPhys[1:-1, 1:-1] ** r
+    floor = float((x_r * (2 * 0.5 - slope / median)).max()) - 0.5
+    smoothness = float((x_r * frobenius * 2 / median).max()) - 1
+
+    assert with_record.g.shape == (record.g.shape[0] + 2,)
+    np.testing.assert_allclose(with_record.g[:-2], record.g, rtol=1e-12)
+    assert with_record.g[-2] == pytest.approx(floor, rel=1e-10)
+    assert with_record.g[-1] == pytest.approx(smoothness, rel=1e-10)
+
+
+def test_gradient_rows_at_zero_mid_schedule_are_inactive():
+    """A ramp that has not yet left 0 already has its row, which any field meets."""
     ramp = run_config.PiecewiseSchedule(
         points=[[0, 0.0], [STATE_LOOP + 10, 0.0], [STATE_LOOP + 20, 0.5]]
     )
-    record, with_record, _ = _min_gradient_records(ramp)
+    record, with_record, _, _ = _gradient_records(
+        min_gradient_fraction=ramp, gradient_smoothness_m=ramp
+    )
 
-    assert with_record.g.shape == (record.g.shape[0] + 1,)
-    ratio = with_record.diagnostics["min_gradient_ratio"]
-    assert with_record.g[-1] == pytest.approx(-ratio, rel=1e-10)
+    assert with_record.g.shape == (record.g.shape[0] + 2,)
+    assert with_record.g[-2] < 0
+    assert with_record.g[-1] == -1
 
 
-def test_min_gradient_floor_holds_its_median_out_of_the_gradient():
+def test_gradient_floor_holds_its_median_out_of_the_gradient():
     """The median sets the floor but is not differentiated through, so the gradient is
     the smooth maximum's with the median a constant."""
-    problem = _problem(nelx=10, nely=8, config_overrides={"min_gradient_fraction": 0.5})
+    problem = _problem(
+        nelx=10,
+        nely=8,
+        config_overrides={"min_gradient_fraction": 0.5, "gradient_smoothness_m": 0.0},
+    )
     rng = np.random.default_rng(7)
     shape = (problem.config.nely, problem.config.nelx)
-    tPhys = torch_util.to_tensor(
-        rng.uniform(0.0, 1.0, size=shape), problem.device, problem.dtype
-    ).requires_grad_(True)
+    xPhys, tPhys = (
+        torch_util.to_tensor(
+            rng.uniform(0.0, 1.0, size=shape), problem.device, problem.dtype
+        ).requires_grad_(True)
+        for _ in range(2)
+    )
 
-    row, _ = stto._min_gradient_row(problem, tPhys, STATE_LOOP)
-    (got,) = torch.autograd.grad(row, tPhys)
+    (row,) = stto._gradient_rows(problem, xPhys, tPhys, STATE_LOOP)
+    got = torch.autograd.grad(row, (xPhys, tPhys))
 
-    rise = timefield.neighbour_rise(tPhys)
-    ratio = rise / rise.detach().amax(-1).median()
+    grad, _ = timefield.central_derivatives(tPhys)
+    slope = torch.linalg.vector_norm(grad, dim=-1)
+    severity = xPhys[1:-1, 1:-1].flatten() ** problem.config.r * (
+        1.0 - slope / slope.detach().median()
+    )
     beta = problem.config.min_gradient_beta
-    both = torch.cat([ratio, -ratio])
-    smooth = torch.logsumexp(beta * both, -1) / beta
-    slopes = smooth - (smooth - both.amax(-1)).detach()
-    surrogate = torch.logsumexp(beta * (0.5 - slopes), 0) / beta
-    (want,) = torch.autograd.grad(surrogate, tPhys)
-    torch.testing.assert_close(got, want, rtol=1e-10, atol=0.0)
+    surrogate = torch.logsumexp(beta * severity, 0) / beta
+    want = torch.autograd.grad(surrogate, (xPhys, tPhys))
+    for g, w in zip(got, want):
+        torch.testing.assert_close(g, w, rtol=1e-10, atol=0.0)
 
 
 def _curvature_records(tool_radius_m):

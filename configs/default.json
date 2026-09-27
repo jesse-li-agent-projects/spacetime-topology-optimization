@@ -44,6 +44,8 @@
   },
   "min_gradient_fraction": 0.0,
   "min_gradient_beta": 50.0,
+  "gradient_smoothness_m": 0.0,
+  "gradient_smoothness_beta": 50.0,
   "lrmin_m": 0.002,
   "rmin_cond_m": 0.012,
   "Emin": 1e-09,

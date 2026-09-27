@@ -725,31 +725,25 @@ def _central_difference_gradient(
     return g[keep]
 
 
-# The 8-neighbour ring, as (row, column) offsets.
-_RING = ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1))
-
-
-def neighbour_rise(tPhys: Float[Tensor, "nely nelx"]) -> Float[Tensor, "k 8"]:
-    """Slope of `t` from each element to each of its 8 neighbours, `(t_nb - t) /
-    distance`, per unit length, over the interior elements.
-
-    An element is a local extremum of `t` exactly where its row has one sign, whatever
-    the slopes' sizes. A central difference cannot tell: it never reads the element
-    itself, so a pit below unevenly-rising neighbours reads as a healthy gradient. The
-    row's largest entry is the steepest ascent and minus its smallest the steepest
-    descent; on a smooth field both approach `|grad t|`.
+def central_derivatives(
+    tPhys: Float[Tensor, "nely nelx"],
+) -> tuple[Float[Tensor, "k 2"], Float[Tensor, "k 3"]]:
+    """The gradient `(t_x, t_y)` and Hessian `(t_xx, t_yy, t_xy)` of `t` at each interior
+    element by central differences over its 3x3 block, per element spacing, row-major:
+    the local quadratic model's terms, with `x` along the columns.
 
     :param tPhys: physical time field
-    :return: one row of 8 slopes per interior element, row-major; empty if there is none
+    :return: one row per interior element of each; empty if there is none
     """
-    nely, nelx = tPhys.shape
     centre = tPhys[1:-1, 1:-1]
-    rises = []
-    for di, dj in _RING:
-        rows, cols = slice(1 + di, nely - 1 + di), slice(1 + dj, nelx - 1 + dj)
-        rises.append((tPhys[rows, cols] - centre) / (di * di + dj * dj) ** 0.5)
-    rise = torch.stack(rises, dim=-1) * unit_length(tPhys)
-    return rise.reshape(-1, len(_RING))
+    east, west = tPhys[1:-1, 2:], tPhys[1:-1, :-2]
+    north, south = tPhys[2:, 1:-1], tPhys[:-2, 1:-1]
+    corners = tPhys[2:, 2:] - tPhys[2:, :-2] - tPhys[:-2, 2:] + tPhys[:-2, :-2]
+    grad = torch.stack([(east - west) / 2, (north - south) / 2], dim=-1)
+    hess = torch.stack(
+        [east - 2 * centre + west, north - 2 * centre + south, corners / 4], dim=-1
+    )
+    return grad.reshape(-1, 2), hess.reshape(-1, 3)
 
 
 def relative_sawtooth_amplitude(

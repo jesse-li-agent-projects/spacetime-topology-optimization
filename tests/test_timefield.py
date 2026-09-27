@@ -787,32 +787,30 @@ def test_iso_curvature_is_insensitive_to_noise_on_a_plateau():
     assert diff.abs().max() < 0.1
 
 
-def test_neighbour_rise_sees_an_uneven_pit_a_central_difference_reads_as_healthy():
+def test_an_uneven_pit_passes_a_gradient_floor_but_not_the_hessian_bound():
     """An element dropped just below neighbours that rise unevenly -- steeply on one
-    side, barely on the other -- keeps a central difference near the field's own, yet
-    has no descent: every slope in its row is positive."""
+    side, barely on the other -- keeps a central difference near the field's own. Its
+    Hessian gives it away: a pit needs `|grad t| < ||H||_F / sqrt(2)`."""
     nely, nelx = 5, 5
     _, j = np.indices((nely, nelx))
     t = torch.from_numpy(np.where(j >= 3, 3.0 * j, 1.0 * j) / 20.0)
-    t[2, 2] = 0.04  # below its left neighbours' 0.05; its right ones are at 0.45
-    x = torch.ones_like(t)
+    t[2, 2] = 0.04  # below all 8 neighbours; its right ones are at 0.45
 
-    # Both are over the 3x3 interior, row-major, so (2, 2) is sample 4.
-    central = timefield._central_difference_gradient(t, x)
-    assert float(central[4]) > 0.5 * float(central.median())
-
-    rise = timefield.neighbour_rise(t)
-    assert rise.shape == (9, 8)
-    assert torch.all(rise[4] > 0)
+    # Over the 3x3 interior, row-major, so (2, 2) is sample 4.
+    grad, hess = timefield.central_derivatives(t)
+    slope = torch.linalg.vector_norm(grad, dim=-1)
+    frobenius = torch.sqrt(hess[:, 0] ** 2 + hess[:, 1] ** 2 + 2 * hess[:, 2] ** 2)
+    assert float(slope[4]) > 0.5 * float(slope.median())
+    assert float(slope[4]) < float(frobenius[4]) / 2**0.5
 
 
-def test_neighbour_rise_on_a_linear_field_is_its_gradient_along_each_neighbour():
+def test_central_derivatives_are_exact_on_a_quadratic():
     nely, nelx = 6, 7
-    i, j = np.indices((nely, nelx))
-    a, b = 0.3, -0.1  # per element, along j and i
-    t = torch.from_numpy(a * j + b * i)
-    rise = timefield.neighbour_rise(t)
-    unit = timefield.unit_length(t)
-    ring = np.array([(di, dj) for di, dj in timefield._RING])
-    want = (ring[:, 1] * a + ring[:, 0] * b) / np.hypot(ring[:, 0], ring[:, 1]) * unit
-    np.testing.assert_allclose(rise.numpy(), np.broadcast_to(want, rise.shape))
+    i, j = np.indices((nely, nelx)).astype(float)
+    a, b, c, d, e = 0.3, -0.1, 0.05, 0.2, -0.4  # x along j, y along i
+    t = torch.from_numpy(a * j**2 + b * i * j + c * i**2 + d * j + e * i)
+    grad, hess = timefield.central_derivatives(t)
+    ic, jc = i[1:-1, 1:-1].flatten(), j[1:-1, 1:-1].flatten()
+    np.testing.assert_allclose(grad[:, 0], 2 * a * jc + b * ic + d, atol=1e-12)
+    np.testing.assert_allclose(grad[:, 1], b * jc + 2 * c * ic + e, atol=1e-12)
+    np.testing.assert_allclose(hess, np.broadcast_to([2 * a, 2 * c, b], hess.shape))

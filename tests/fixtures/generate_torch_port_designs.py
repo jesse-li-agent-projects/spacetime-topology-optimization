@@ -104,6 +104,8 @@ _EXTRA_CONFIG_FIELDS = dict(
     curvature_beta=100.0,
     min_gradient_fraction=0.0,
     min_gradient_beta=50.0,
+    gradient_smoothness_m=0.0,
+    gradient_smoothness_beta=50.0,
     beta_d_schedule={
         "points": [
             [0, 1.0],
