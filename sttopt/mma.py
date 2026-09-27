@@ -11,6 +11,7 @@ conventions used to test it against the MATLAB source.
 """
 
 import warnings
+from collections.abc import Callable
 
 import torch
 from jaxtyping import Float
@@ -198,6 +199,42 @@ def mmasub(
 _LINE_SEARCH_CHUNKS = ((0, 10), (10, 50))
 
 
+def _line_search(
+    residual: Callable[..., Float[Tensor, "k r"]],
+    olds: tuple[Tensor, ...],
+    dirs: tuple[Tensor, ...],
+    steg: Float[Tensor, ""],
+    residunorm: Float[Tensor, ""],
+) -> tuple[tuple[Tensor, ...], Float[Tensor, ""], Float[Tensor, ""]]:
+    """`subsolv`'s backtracking line search: the first of `olds + steg/2**j * dirs`,
+    j = 0..49, whose residual norm does not exceed `residunorm`, else the last one.
+
+    The source tries one halving at a time. Trying a chunk at once gives the same step
+    with one host sync per chunk instead of one per halving.
+
+    :param residual: maps a batch of points (each of `olds`' tensors with a leading
+        candidate dim) to their residual vectors
+    :return: the accepted point, and its residual's norm and max-abs entry
+    """
+    accept_end = torch.ones(1, device=steg.device, dtype=torch.bool)
+    for j0, j1 in _LINE_SEARCH_CHUNKS:
+        st = steg / 2.0 ** torch.arange(j0, j1, device=steg.device, dtype=steg.dtype)
+        cands = [
+            old + st.view(-1, *(1,) * dv.dim()) * dv for old, dv in zip(olds, dirs)
+        ]
+        residus = residual(*cands)
+        resinews = torch.linalg.norm(residus, dim=-1)
+        # `not >` rather than `<=`, so a NaN norm is accepted as in the source.
+        # The appended True makes k = len(st) when nothing in the chunk is.
+        accept = torch.cat([~(resinews > residunorm), accept_end])
+        k = int(accept.to(torch.uint8).argmax())
+        if k < len(st):
+            break
+    else:
+        k = len(st) - 1  # none accepted: the source keeps the smallest step
+    return tuple(cand[k] for cand in cands), resinews[k], torch.abs(residus[k]).max()
+
+
 def subsolv(
     m: int,
     n: int,
@@ -242,7 +279,6 @@ def subsolv(
     s = torch.ones(m, device=device, dtype=dtype)
     epsi = 1.0
     one = torch.ones((), device=device, dtype=dtype)
-    accept_end = torch.ones(1, device=device, dtype=torch.bool)
 
     # Takes one point, or a batch of them along a leading dim (the line search's
     # candidates); `z`/`zet` are then (k,) rather than scalars.
@@ -384,30 +420,13 @@ def subsolv(
             stmbeta = (1.01 * dx / (beta - x)).max()
             steg = 1.0 / torch.stack([stmalfa, stmbeta, stmxx, one]).max()
 
-            # The source halves steg until the residual norm stops increasing (at most
-            # 50 tries). Trying a chunk of halvings at once gives the same step with
-            # one host sync per chunk instead of one per halving.
-            olds = (x, y, z, lam, xsi, eta, mu, zet, s)
-            dirs = (dx, dy, dz, dlam, dxsi, deta, dmu, dzet, ds)
-            for j0, j1 in _LINE_SEARCH_CHUNKS:
-                st = steg / 2.0 ** torch.arange(j0, j1, device=device, dtype=dtype)
-                cands = [
-                    old + st.view(-1, *(1,) * dv.dim()) * dv
-                    for old, dv in zip(olds, dirs)
-                ]
-                residus = residual(*cands, epsi)
-                resinews = torch.linalg.norm(residus, dim=-1)
-                # `not >` rather than `<=`, so a NaN norm is accepted as in the source.
-                # The appended True makes k = len(st) when nothing in the chunk is.
-                accept = torch.cat([~(resinews > residunorm), accept_end])
-                k = int(accept.to(torch.uint8).argmax())
-                if k < len(st):
-                    break
-            else:
-                k = len(st) - 1  # none accepted: the source keeps the smallest step
-            x, y, z, lam, xsi, eta, mu, zet, s = (cand[k] for cand in cands)
-            residunorm = resinews[k]
-            residumax = torch.abs(residus[k]).max()
+            (x, y, z, lam, xsi, eta, mu, zet, s), residunorm, residumax = _line_search(
+                lambda *point: residual(*point, epsi),
+                (x, y, z, lam, xsi, eta, mu, zet, s),
+                (dx, dy, dz, dlam, dxsi, deta, dmu, dzet, ds),
+                steg,
+                residunorm,
+            )
 
         if ittt > 198:
             warnings.warn(

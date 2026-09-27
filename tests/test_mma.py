@@ -1,7 +1,11 @@
 """Tests for sttopt.mma against a golden-regression fixture (see conftest.py,
 conventions.md)."""
 
+import math
+
 import numpy as np
+import pytest
+import torch
 
 import sttopt.mma as mma
 from conftest import assert_close, load_fixture_npz, tt
@@ -301,3 +305,91 @@ def test_subsolv_m_gt_n_smoke():
         d=d,
         epsimin=epsimin,
     )
+
+
+# One-halving chunks reproduce the source's sequential line search exactly.
+SEQUENTIAL_CHUNKS = tuple((j, j + 1) for j in range(50))
+
+
+@pytest.mark.parametrize(
+    "chunks", [mma._LINE_SEARCH_CHUNKS, SEQUENTIAL_CHUNKS, ((0, 3), (3, 50))]
+)
+@pytest.mark.parametrize(
+    "norms, expected",
+    [
+        ({0: 0.5}, 0),
+        ({9: 0.5, 10: 0.5}, 9),
+        ({10: 0.5, 11: 0.5}, 10),
+        ({12: 0.5, 30: 0.5}, 12),
+        ({5: 1.0}, 5),  # equal to the current norm counts as accepted
+        ({3: math.nan, 5: 0.5}, 3),  # so does NaN, as in the source's `while >` test
+        ({}, 49),  # nothing accepted: the smallest step
+    ],
+)
+def test_line_search_takes_first_accepted_halving(monkeypatch, chunks, norms, expected):
+    """`_line_search` takes the first halving `j` whose residual norm does not exceed
+    the current one (1.0 here), wherever the chunk boundaries fall."""
+    monkeypatch.setattr(mma, "_LINE_SEARCH_CHUNKS", chunks)
+
+    def residual(x, z):
+        # z = 2**-j exactly, so each candidate's norm is looked up by its halving j.
+        js = torch.round(-torch.log2(z)).long().tolist()
+        return torch.tensor([[norms.get(j, 2.0)] for j in js], dtype=torch.float64)
+
+    olds = (torch.zeros(2, dtype=torch.float64), torch.zeros((), dtype=torch.float64))
+    dirs = (torch.ones(2, dtype=torch.float64), torch.ones((), dtype=torch.float64))
+    (x, z), norm, resmax = mma._line_search(residual, olds, dirs, tt(1.0), tt(1.0))
+    step = 2.0**-expected
+    assert torch.equal(x, torch.full((2,), step, dtype=torch.float64))
+    assert z.item() == step
+    want = norms.get(expected, 2.0)
+    torch.testing.assert_close(norm, tt(want), equal_nan=True)
+    torch.testing.assert_close(resmax, tt(abs(want)), equal_nan=True)
+
+
+def _badly_scaled_subproblem():
+    """A small subproblem whose coefficients span four orders of magnitude, so its
+    Newton steps need several halvings (well-scaled random ones need at most two)."""
+    n, m = 8, 3
+    rng = np.random.default_rng(0)
+
+    def spread(*shape):
+        return 10 ** rng.uniform(-2, 2, shape)
+
+    p0, q0, P, Q = spread(n), spread(n), spread(m, n), spread(m, n)
+    b = (P + Q).sum(1) * rng.uniform(0.5, 1.0, m)
+    bounds = [np.full(n, v) for v in (-1.0, 1.0, -0.8, 0.8)]  # low, upp, alfa, beta
+    return (m, n, 1e-7, *map(tt, bounds), tt(p0), tt(q0), tt(P), tt(Q), 1.0) + (
+        tt(np.zeros(m)),
+        tt(b),
+        tt(np.full(m, 1e3)),
+        tt(np.zeros(m)),
+    )
+
+
+@pytest.mark.parametrize("chunks", [mma._LINE_SEARCH_CHUNKS, ((0, 2), (2, 3), (3, 50))])
+def test_subsolv_does_not_depend_on_line_search_chunks(monkeypatch, chunks):
+    """Batching the line search's halvings gives bit-identical results to trying them
+    one at a time, as the source does."""
+    args = _badly_scaled_subproblem()
+    tries = []
+    line_search = mma._line_search
+
+    def counting_line_search(residual, *rest):
+        def counted(*point):
+            tries[-1] += 1
+            return residual(*point)
+
+        tries.append(0)
+        return line_search(counted, *rest)
+
+    monkeypatch.setattr(mma, "_LINE_SEARCH_CHUNKS", SEQUENTIAL_CHUNKS)
+    monkeypatch.setattr(mma, "_line_search", counting_line_search)
+    expected = mma.subsolv(*args)
+    # Non-vacuity: some step must cross the boundaries of the chunkings under test.
+    assert max(tries) >= 4
+
+    monkeypatch.setattr(mma, "_LINE_SEARCH_CHUNKS", chunks)
+    monkeypatch.setattr(mma, "_line_search", line_search)
+    for got, want in zip(mma.subsolv(*args), expected):
+        assert torch.equal(got, want)
