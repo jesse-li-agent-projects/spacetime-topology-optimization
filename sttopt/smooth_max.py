@@ -26,8 +26,7 @@ class CalibratedLogSumExp:
 
     Every call measures the calibration afresh and holds it out of the gradient, so the
     value is the true maximum and the gradient is the smooth surrogate's. `calibration`
-    keeps the last one, for logging. Batched input calibrates each row on its own, so a
-    maximum nested inside another does not overshoot and loosen the outer bound.
+    keeps the last one, for logging.
     """
 
     def __init__(self, beta: "run_config.Scheduled"):
@@ -35,12 +34,10 @@ class CalibratedLogSumExp:
         self.beta = beta
         self.calibration = 0.0
 
-    def aggregate(
-        self, sev: Float[Tensor, "*batch n"], loop: int
-    ) -> Float[Tensor, "*batch"]:
-        """The calibrated smooth maximum of each row of `sev` at iteration `loop`'s
-        sharpness, differentiable in `sev`."""
+    def aggregate(self, sev: Float[Tensor, " n"], loop: int) -> Float[Tensor, ""]:
+        """The calibrated smooth maximum of `sev` at iteration `loop`'s sharpness,
+        differentiable in `sev`."""
         beta = run_config.weight_at(self.beta, loop)
-        numer = torch.logsumexp(beta * sev, dim=-1) / beta
-        self.calibration = (numer - sev.amax(dim=-1)).detach()
+        numer = torch.logsumexp(beta * sev, dim=0) / beta
+        self.calibration = float(numer.detach()) - float(sev.detach().max())
         return numer - self.calibration

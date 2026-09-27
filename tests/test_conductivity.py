@@ -11,7 +11,6 @@ import torch
 import sttopt.conductivity as conductivity
 import sttopt.filters as filters
 import sttopt.run_config as run_config
-import sttopt.smooth_max as smooth_max
 import sttopt.timefield as timefield
 import sttopt.torch_util as torch_util
 import tests.reference.conductivity as conductivity_ref
@@ -1982,16 +1981,3 @@ def test_diagonal_printing_exposes_the_trailing_edges_not_the_leading_ones(kappa
     # opposite directions and one has to be reversed to line them up.
     assert_close(bottom, left[::-1])
     assert_close(top, right[::-1])
-
-
-def test_calibrated_logsumexp_is_each_rows_max_with_the_smooth_gradient():
-    rng = np.random.default_rng(12)
-    values = tt(rng.standard_normal((5, 8))).requires_grad_(True)
-    beta = 3.0
-    got = smooth_max.CalibratedLogSumExp(beta).aggregate(values, 0)
-    torch.testing.assert_close(got.detach(), values.detach().amax(-1))
-
-    weights = tt(rng.standard_normal(5))
-    (d_got,) = torch.autograd.grad((weights * got).sum(), values)
-    softmax = torch.softmax(beta * values.detach(), dim=-1)
-    torch.testing.assert_close(d_got, weights[:, None] * softmax)

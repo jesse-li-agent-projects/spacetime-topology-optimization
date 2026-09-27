@@ -629,7 +629,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         grad_p90_per_m=grad_p90,
         hotspot_kappa=run_config.weight_at(config.hotspot_kappa, loop),
         grey=float(((xPhys > 0.05) & (xPhys < 0.95)).double().mean()),
-        calibration=float(problem.hotspot.calibration),
+        calibration=problem.hotspot.calibration,
         penal=penal,
         uniformity_weight=uniformity_weight,
         Tcr=Tcr,
