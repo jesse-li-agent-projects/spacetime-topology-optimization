@@ -67,6 +67,19 @@ def default_run_config(*, nely: int | None = None, **overrides) -> RunConfig:
     return dataclasses.replace(base, **overrides)
 
 
+def with_matlab_print_base(problem):
+    """`problem` with the MATLAB source's print base for `tfield` 2 and 3, the whole left
+    column, where `timefield.base_elements` gives OPPOSITE_CORNER its corner alone -- for
+    tests pinned to results of that source."""
+    nelx, nely = problem.config.nelx, problem.config.nely
+    column = torch.arange(nely, device=problem.Nei.device) * nelx
+    return dataclasses.replace(
+        problem,
+        Nei=column,
+        hotspot_base=None if problem.hotspot_base is None else column,
+    )
+
+
 # The default config's element size, for tests that state a length in elements.
 ELEMENT_M = default_run_config().element_size_m
 
