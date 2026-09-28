@@ -242,7 +242,7 @@ def _well_conditioned(problem, state, beta_t):
             torch_util.to_numpy(field),
             p.config.Emin,
             p.config.Emax,
-            p.config.penal,
+            run_config.weight_at(p.config.penal, state.loop),
             edofMat,
             p.ndof,
         )

@@ -27,6 +27,8 @@ _FIXTURE_CONFIG = default_run_config(
     # Per-step volume change scales with `move`; the obj/vol test needs it clear of
     # what the printed "Vol." can resolve.
     move=0.03,
+    # The default's lower early penalty moves the volume less per step.
+    penal=3.0,
     # Set here rather than left to the default, which has been `false`: without the
     # stage volume rows the global volume constraint pins the mean from the first
     # iteration, and a volume that no longer moves within an iteration is one the
