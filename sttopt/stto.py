@@ -768,10 +768,11 @@ def _gradient_rows(
     `h / (sqrt(2) * min_gradient_fraction)`.
 
     Both severities are density-weighted like the other aggregated rows, so an
-    element's grows continuously as it turns solid rather than jumping at a threshold
-    (PR #166). The floor's, `x**r * (2 f - |grad t| / median)`, is `f` on the floor in
-    a solid element and 0 in void. The median, over the whole mesh, is held out of the
-    gradient, as a calibration is, so neither row can be met by lowering it.
+    element's severity grows continuously as it turns solid rather than jumping at a
+    threshold (PR #166). The floor's, `x**r * (2 f - |grad t| / median)`, is `f` on
+    the floor in a solid element and 0 in void. The median, over the whole mesh, is
+    held out of the gradient, as a calibration is, so neither row can be met by
+    lowering it.
     """
     config = problem.config
     active = [problem.min_gradient, problem.gradient_smoothness]
