@@ -12,7 +12,7 @@
   "uniformity_weight": 100.0,
   "roughness_weight": {
     "initial": 0.2,
-    "decay_iterations": 500,
+    "decay_iterations": 550,
     "final": 0.02
   },
   "Tcr": {
@@ -37,10 +37,10 @@
   "enable_continuity": false,
   "continuity_tol": 1e-06,
   "tool_radius_m": {
-    "points": [[0, 0.0], [300, 0.0], [400, 0.0025]]
+    "points": [[0, 0.0], [350, 0.0], [450, 0.0025]]
   },
   "curvature_beta": {
-    "points": [[0, 10.0], [500, 10.0], [650, 100.0]]
+    "points": [[0, 10.0], [450, 10.0], [550, 100.0]]
   },
   "min_gradient_fraction": 0.5,
   "min_gradient_beta": 20.0,
