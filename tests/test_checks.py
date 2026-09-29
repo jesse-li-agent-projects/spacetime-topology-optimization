@@ -90,3 +90,34 @@ def test_check_design_reads_the_binarized_design(problem):
         below = checks.check_design(problem, torch.full_like(t, eta - 0.1), t, 0)
     assert below["volume_fraction"] == 0.0
     assert below["start"]["solid_base_elements"] == 0
+
+
+def _grid(n=7):
+    y, x = np.mgrid[:n, :n] - n // 2
+    return x.astype(float), y.astype(float)
+
+
+def test_saddles_finds_the_centre_of_a_saddle_and_nothing_else():
+    x, y = _grid()
+    found = checks.saddles(x**2 - y**2, np.ones((7, 7), bool))
+    assert found[3, 3] and found.sum() == 1
+
+
+def test_saddles_ignores_a_linear_field_and_an_extremum():
+    x, y = _grid()
+    everywhere = np.ones((7, 7), bool)
+    # A linear field puts exact ties in the ring, which are no sign change
+    assert not checks.saddles(2 * x + y, everywhere).any()
+    assert not checks.saddles(x - y, everywhere).any()
+    assert not checks.saddles(x**2 + y**2, everywhere).any()
+
+
+def test_saddles_reads_the_ring_only_among_the_given_cells():
+    """The saddle's rising arms are void: over the solid alone, the centre is a
+    minimum of a single sign, not a saddle."""
+    x, y = _grid()
+    values = x**2 - y**2
+    solid = np.abs(x) <= np.abs(y)  # keeps the falling arms (along y) only
+    everywhere = np.ones((7, 7), bool)
+    assert checks.saddles(values, solid, everywhere)[3, 3]
+    assert not checks.saddles(values, solid, solid)[3, 3]

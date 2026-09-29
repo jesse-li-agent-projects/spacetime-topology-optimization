@@ -373,6 +373,14 @@ Each phase is one or more PRs. Keep the commits small (see `CLAUDE.local.md`). P
   Both are reported, not judged.
 - Log the saddle count, the local-minimum count, and the roughness of `log χ` at each
   snapshot.
+- **Done in Phase 5:** `checks.saddles(values, where, among)` (ties dropped), and the
+  saddle count over the part in `check_design`'s report. `plans/post_run_checks.md`'s
+  start/support checks and report already exist in `checks.py`.
+- **For Phases 6/7:** `check_design` is `stto`-specific, so each new script needs its
+  own (on the binarized design, `tPhys` recomputed from it). The domain-level check is
+  `checks.unsupported` with every element solid. The `log χ` roughness is
+  `timefield.roughness(log χ)`, the RMS 5-point residual, which reads element-scale
+  modes. The per-snapshot logging goes into the new CLIs.
 
 ### Phase 6: `stto_heat.py`, `stto_heat_cli.py`, a config
 

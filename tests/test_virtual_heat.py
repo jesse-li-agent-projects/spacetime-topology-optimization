@@ -9,6 +9,7 @@ import scipy.ndimage as ndi
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
+import sttopt.checks as checks
 import sttopt.fem as fem
 import sttopt.timefield as timefield
 import sttopt.virtual_heat as vh
@@ -158,17 +159,10 @@ def test_harmonic_field_has_no_interior_extremum_on_the_nodes(seed):
 
 
 def saddle_count(u, nelx, nely):
-    """Interior nodes where `u - u_node` changes sign 4 or more times around the 8-ring."""
+    """Interior nodes of the nodal field `u` that are discrete saddles."""
     interior = np.zeros((nely + 1, nelx + 1), bool)
     interior[1:-1, 1:-1] = True
-    ring = u[_node_rings(nelx, nely)] - u[:, None]
-    # A tie (e.g. along an iso-line of a linear field) is no sign, not a change
-    signs = np.where(np.abs(ring) > 1e-9 * np.ptp(u), np.sign(ring), 0)
-    count = 0
-    for n in np.flatnonzero(interior.ravel()):
-        s = signs[n][signs[n] != 0]
-        count += np.count_nonzero(s != np.roll(s, 1)) >= 4
-    return count
+    return int(checks.saddles(u.reshape(nely + 1, nelx + 1), interior).sum())
 
 
 @pytest.mark.parametrize("seed", range(5))
@@ -305,6 +299,8 @@ def test_config_placeholder_changes_nothing_it_does_not_name():
     assert {k for k in a.to_dict() if a.to_dict()[k] != b.to_dict()[k]} == {
         "drain_beta"
     }
+
+
 # -- Distance recovery and the drain's margin -------------------------------------------
 # Binary geometries at uniform mu. The reference is the geodesic distance through the
 # solid on a raster 4x finer (`timefield._solid_geodesic`), averaged onto the elements.
