@@ -731,6 +731,27 @@ def _central_difference_gradient(
     return g[keep]
 
 
+def central_derivatives(
+    tPhys: Float[Tensor, "nely nelx"],
+) -> tuple[Float[Tensor, "k 2"], Float[Tensor, "k 3"]]:
+    """The gradient `(t_x, t_y)` and Hessian `(t_xx, t_yy, t_xy)` of `t` at each interior
+    element by central differences over its 3x3 block, per element spacing, row-major:
+    the local quadratic model's terms, with `x` along the columns.
+
+    :param tPhys: physical time field
+    :return: one row per interior element of each; empty if there is none
+    """
+    centre = tPhys[1:-1, 1:-1]
+    east, west = tPhys[1:-1, 2:], tPhys[1:-1, :-2]
+    north, south = tPhys[2:, 1:-1], tPhys[:-2, 1:-1]
+    corners = tPhys[2:, 2:] - tPhys[2:, :-2] - tPhys[:-2, 2:] + tPhys[:-2, :-2]
+    grad = torch.stack([(east - west) / 2, (north - south) / 2], dim=-1)
+    hess = torch.stack(
+        [east - 2 * centre + west, north - 2 * centre + south, corners / 4], dim=-1
+    )
+    return grad.reshape(-1, 2), hess.reshape(-1, 3)
+
+
 def relative_sawtooth_amplitude(
     tPhys: Float[Tensor, "nely nelx"], xPhys: Float[Tensor, "nely nelx"]
 ) -> Float[Tensor, ""]:

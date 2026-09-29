@@ -94,6 +94,11 @@ class Problem:
     # Smooth maximum of the tool-radius curvature severity, holding its own
     # calibration, or None where `config.tool_radius_m` never leaves 0 and so has no row.
     curvature: smooth_max.CalibratedLogSumExp | None
+    # Smooth maximum of the gradient-floor severity, holding its own calibration, or
+    # None where `config.min_gradient_fraction` never leaves 0 and so has no row.
+    min_gradient: smooth_max.CalibratedLogSumExp | None
+    # Likewise for the gradient-smoothness severity and `config.gradient_smoothness_m`.
+    gradient_smoothness: smooth_max.CalibratedLogSumExp | None
     Nei: Int[Tensor, " k"]
 
     n: int  # number of MMA design variables: 2*nelx*nely (density half + time half)
@@ -280,6 +285,16 @@ def build_problem(
             None
             if run_config.identically_zero(config.tool_radius_m)
             else smooth_max.CalibratedLogSumExp(config.curvature_beta)
+        ),
+        min_gradient=(
+            None
+            if run_config.identically_zero(config.min_gradient_fraction)
+            else smooth_max.CalibratedLogSumExp(config.min_gradient_beta)
+        ),
+        gradient_smoothness=(
+            None
+            if run_config.identically_zero(config.gradient_smoothness_m)
+            else smooth_max.CalibratedLogSumExp(config.gradient_smoothness_beta)
         ),
         n=n,
         **float_fields,
@@ -594,6 +609,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     )
     if g_curvature_t is not None:
         g_parts.append(g_curvature_t[None])
+    g_parts.extend(row[None] for row in _gradient_rows(problem, xPhys, tPhys, loop))
     g_all = torch.cat(g_parts)
     dg_dx = torch.cat(
         [_sensitivity_rows(g, x, t) for g in g_parts],
@@ -625,6 +641,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         admissible_tool_radius_m=_admissible_tool_radius_m(
             concave_t.detach(), config.element_size_m
         ),
+        min_gradient_fraction=run_config.weight_at(config.min_gradient_fraction, loop),
+        gradient_smoothness_m=run_config.weight_at(config.gradient_smoothness_m, loop),
     )
 
     # -- Periodic state updates, deferred to take effect starting *next* iteration's
@@ -729,6 +747,61 @@ def _tool_radius_row(
     tool_radius = units.in_elements(tool_radius_m, config.element_size_m)
     g_curvature_t = problem.curvature.aggregate(tool_radius * concave_t, loop) - 1
     return g_curvature_t, concave_t, tool_radius_m
+
+
+def _gradient_rows(
+    problem: Problem,
+    xPhys: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+    loop: int,
+) -> list[Float[Tensor, ""]]:
+    """The gradient floor's row and the gradient-smoothness row, each only where the
+    run has it.
+
+    The floor keeps each element's central-difference `|grad t|` at least a fraction of
+    the median, which rules out the interior saddles, extrema and flat valleys of a
+    smooth field; none of these can be printed. A central difference never reads the
+    element itself, so alone it passes an element-scale pit (PR #166). Bounding the
+    Hessian, `||H||_F <= median / gradient_smoothness`, closes that: the local
+    quadratic's gradient stays within `h ||H||_F / sqrt(2)` of `grad t` across the
+    element, so no critical point fits in one while `gradient_smoothness_m` exceeds
+    `h / (sqrt(2) * min_gradient_fraction)`.
+
+    Both severities are density-weighted like the other aggregated rows, so an
+    element's severity grows continuously as it turns solid rather than jumping at a
+    threshold (PR #166). The floor's, `x**r * (2 f - |grad t| / median)`, is `f` on
+    the floor in a solid element and 0 in void. The median, over the whole mesh, is
+    held out of the gradient, as a calibration is, so neither row can be met by
+    lowering it.
+    """
+    config = problem.config
+    active = [problem.min_gradient, problem.gradient_smoothness]
+    if all(aggregate is None for aggregate in active):
+        return []
+    grad, hess = timefield.central_derivatives(tPhys)
+    if grad.numel() == 0:
+        # Nothing to bound; `grad.sum()` is a zero that keeps each row in the graph.
+        return [grad.sum() - 1 for aggregate in active if aggregate is not None]
+    slope = torch.linalg.vector_norm(grad, dim=-1)
+    median = slope.detach().median()
+    density_r = smooth_max.density_power(xPhys[1:-1, 1:-1].flatten(), config.r)
+    rows = []
+    if problem.min_gradient is not None:
+        fraction = run_config.weight_at(config.min_gradient_fraction, loop)
+        severity = density_r * (2 * fraction - slope / median)
+        rows.append(problem.min_gradient.aggregate(severity, loop) - fraction)
+    if problem.gradient_smoothness is not None:
+        length = units.in_elements(
+            run_config.weight_at(config.gradient_smoothness_m, loop),
+            config.element_size_m,
+        )
+        # `vector_norm`, unlike `sqrt`, has a finite gradient where `H` vanishes.
+        frobenius = torch.linalg.vector_norm(
+            hess * hess.new_tensor([1.0, 1.0, 2**0.5]), dim=-1
+        )
+        severity = density_r * frobenius * length / median
+        rows.append(problem.gradient_smoothness.aggregate(severity, loop) - 1)
+    return rows
 
 
 def _admissible_tool_radius_m(
