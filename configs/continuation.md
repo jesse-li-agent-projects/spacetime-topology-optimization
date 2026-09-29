@@ -47,16 +47,19 @@ Aligning the change points was measured as neutral (within run-to-run noise).
 
 ## Validated on
 
-MBB half-beam, `volfrac` 0.5, 1 mm elements, 800 iterations: 120x90 and 180x60, all four
+Cantilever, `volfrac` 0.5, 1 mm elements, 800 iterations: 120x90 and 180x60, all four
 `print_base` values at `Tcr` 0.4, spot checks at 0.8 and 0.6. It fails 180x60 at `Tcr`
 0.4 for `bottom_edge` and `corner`; `bottom_edge` fails there even without the gradient
-constraints. Runs up to PR #169 used the pre-#170 `opposite_corner` base (the whole left
-column), so a true corner base is untested. Results: PR #169.
+constraints. Results: PR #169.
+
+These runs predate #170. Their `opposite_corner` had the `edge` base (the whole left
+column) with a bottom-left corner-distance initial `t`. So a true corner base is
+untested, and the `edge` default is validated only with that other initial `t`.
 
 ## When tuning
 
-- **Replicate marginal cases.** 180x60 `opposite_corner` at `Tcr` 0.4 flipped between
-  pass and fail on a device change alone (CPU vs GPU) before the `penal` ramp. Judge a
+- **Replicate marginal cases.** 180x60 pre-#170 `opposite_corner` at `Tcr` 0.4 flipped
+  between pass and fail on a device change alone (CPU vs GPU) before the `penal` ramp. Judge a
   change on several runs, CPU and GPU, not one.
 - **Compare against a matched control**, the same schedule without the change.
 - **Watch the multipliers.** A hotspot and floor constraint both at `mma_c` means MMA is
