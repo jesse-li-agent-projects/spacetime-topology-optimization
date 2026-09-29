@@ -31,6 +31,10 @@ are constant from iteration 0.
 - **The gradient rows are on from the start.** Ramped in later (over 150-350, 250-400,
   400-550), pits and saddles form first and cannot be removed once the topology
   freezes. Beta 20: at 50 the floor's gradient concentrates and wins over the hotspot.
+- **`gradient_smoothness_m` sits at `element_size_m / min_gradient_fraction`** (rho =
+  h / (f L) = 1), stricter than the `h / (sqrt(2) f)` that already rules out a critical
+  point inside an element. This is margin by choice, and the time field should be
+  smooth anyway.
 - **`penal` is 2 until the hotspot is placed.** A softer SIMP penalty keeps the topology
   movable while the hotspot and the floor both act. 1 -> 3 is more reliable still but
   costs too much compliance, especially in shorter runs.
