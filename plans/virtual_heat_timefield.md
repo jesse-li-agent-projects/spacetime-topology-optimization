@@ -301,6 +301,15 @@ Each phase is one or more PRs. Keep the commits small (see `CLAUDE.local.md`). P
   - **The M-matrix property** of the assembled matrix for random log-uniform `χ` and
     for a `χ` contrast of 10⁶. **The discrete max principle** on nodes *and* on element
     means. If the element means violate it, report to the user; do not relax the test.
+    - **Measured:** the principle holds on the nodes but **not** on the element means.
+      With random log-uniform `χ` and random wall data, 12/40 Laplace fields at 10³
+      contrast and 26/40 at 10⁶ had a strict element-mean extremum (margins up to 8% of
+      the range). With ramp wall data: 0/40 at 10³, 5/40 at 10⁶. Drain fields: 0/40
+      maxima at both contrasts. An element mean is not a positive-weight average of its
+      neighbours' means. The user chose to record this as a strict xfail and go on. So
+      the guarantee is on the nodal field; `tPhys` and `checks.unsupported` can still
+      see a local minimum where `χ` has element-scale contrast. Phase 5 measures it on
+      real designs; the density filter on `μ` is the fix if it matters.
   - Multigrid-CG against a direct sparse solve, including the 10⁶ contrast.
   - FD checks of the adjoint w.r.t. `χ`, the Dirichlet values, and the rhs.
   - 1D analytic profiles: `cosh` (drain + Neumann) and linear (Laplace).
