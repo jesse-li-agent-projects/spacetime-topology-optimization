@@ -113,11 +113,10 @@ def test_saddles_ignores_a_linear_field_and_an_extremum():
 
 
 def test_saddles_reads_the_ring_only_among_the_given_cells():
-    """The saddle's rising arms are void: over the solid alone, the centre is a
-    minimum of a single sign, not a saddle."""
+    """The saddle's rising arms are void: over the solid alone, the centre has only
+    falling neighbours, so no sign change."""
     x, y = _grid()
     values = x**2 - y**2
     solid = np.abs(x) <= np.abs(y)  # keeps the falling arms (along y) only
-    everywhere = np.ones((7, 7), bool)
-    assert checks.saddles(values, solid, everywhere)[3, 3]
+    assert checks.saddles(values, solid)[3, 3]
     assert not checks.saddles(values, solid, solid)[3, 3]

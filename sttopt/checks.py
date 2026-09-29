@@ -3,8 +3,8 @@ produce rather than the continuous one MMA optimized (`plans/post_run_checks.md`
 
 Two conditions are hard, since a design that breaks them cannot be printed as
 sequenced: the print starts on the base, and every element is printed onto material
-already there. Everything else -- each constraint's value, compliance -- is reported
-as a margin, not judged. A failed hard check warns rather than failing the run: the
+already there. Everything else -- each constraint's value, compliance, the count of
+saddles in the time field -- is reported as a margin, not judged. A failed hard check warns rather than failing the run: the
 design is saved either way.
 """
 
@@ -86,7 +86,8 @@ def saddles(
     the 8-ring: a discrete saddle (a strict extremum has no change at all).
 
     Works on any grid, elements or nodes. Ring cells outside `among` or off the grid are
-    skipped, as are ties.
+    dropped from the sign sequence before the changes are counted, and so are ties:
+    differences under `SADDLE_TIE` of the range of `values` over `among`.
 
     :param values: the field, e.g. `tPhys`
     :param where: the cells to test, e.g. the solid
@@ -95,15 +96,16 @@ def saddles(
     """
     rows, cols = values.shape
     mask = np.ones_like(where) if among is None else among
-    padded = np.pad(values, 1)
-    inside = np.pad(mask, 1)
-    ring = np.stack(
-        [padded[1 + i : 1 + i + rows, 1 + j : 1 + j + cols] for i, j in _RING], axis=-1
-    )
-    ring_inside = np.stack(
-        [inside[1 + i : 1 + i + rows, 1 + j : 1 + j + cols] for i, j in _RING], axis=-1
-    )
-    diff = ring - values[..., None]
+
+    def ring(a):
+        padded = np.pad(a, 1)
+        return np.stack(
+            [padded[1 + i : 1 + i + rows, 1 + j : 1 + j + cols] for i, j in _RING],
+            axis=-1,
+        )
+
+    ring_inside = ring(mask)
+    diff = ring(values) - values[..., None]
     tie = SADDLE_TIE * float(np.ptp(values[mask])) if mask.any() else 0.0
     signs = np.where(ring_inside & (np.abs(diff) > tie), np.sign(diff), 0)
     out = np.zeros_like(where)
