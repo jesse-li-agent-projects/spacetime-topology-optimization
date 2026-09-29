@@ -1667,7 +1667,7 @@ def test_logsumexp_gradient_is_finite_at_zero_density_and_infinite_K():
     assert torch.isfinite(d_K).all() and torch.isfinite(d_x).all()
 
 
-# --- angular stencil weight (plans/angular_weight.md) --------------------------------
+# --- angular stencil weight (plans/archive/angular_weight.md) --------------------------------
 
 
 def _linear_timefield(nelx, nely, angle, gmag):
@@ -1799,7 +1799,7 @@ def test_uniform_material_scores_zero_severity_at_every_print_direction():
     """The reference is an ideal uniform layered fill, so fully solid material printed
     in any direction is exactly as shielded as its own reference -- the property that
     disqualifies a constant divisor once the stencil carries an angular weight
-    (plans/angular_weight.md).
+    (plans/archive/angular_weight.md).
     """
     nelx, nely, rmin_cond = 23, 23, 3.0
     e1, e2, w, stencil = _stencil(nelx, nely, rmin_cond)
