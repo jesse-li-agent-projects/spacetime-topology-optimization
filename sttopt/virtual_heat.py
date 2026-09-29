@@ -62,9 +62,10 @@ def _shape_gradients() -> Float[np.ndarray, "4 2 4"]:
 
 
 def plate_nodes(nelx: int, nely: int, print_base: str) -> Bool[np.ndarray, " nnodes"]:
-    """The build plate: the nodes of the left edge (`edge`) or the bottom edge
-    (`bottom_edge`).
+    """The build plate's nodes.
 
+    :param print_base: `edge` (the left edge) or `bottom_edge`
+    :return: a mask over the nodes
     :raises ValueError: for any other print base
     """
     plate = np.zeros((nely + 1, nelx + 1), bool)
@@ -88,11 +89,11 @@ def wall_arc(nelx: int, nely: int, print_base: str) -> Int[np.ndarray, " n_arc"]
     loop = np.concatenate(
         [nodes[0, :], nodes[1:, -1], nodes[-1, -2::-1], nodes[-2:0:-1, 0]]
     )
-    plate = plate_nodes(nelx, nely, print_base)[loop]
-    last = np.flatnonzero(plate)[-1]
+    on_plate = plate_nodes(nelx, nely, print_base)
+    last = np.flatnonzero(on_plate[loop])[-1]
     rotated = np.roll(loop, -(last + 1))
     # A plate is one contiguous run of the loop, so after the rotation it is the tail
-    return rotated[~plate_nodes(nelx, nely, print_base)[rotated]]
+    return rotated[~on_plate[rotated]]
 
 
 def element_means(
@@ -105,23 +106,31 @@ def element_means(
 def diffusivity(
     mu: Float[Tensor, "*batch nel"], contrast: float
 ) -> Float[Tensor, "*batch nel"]:
-    """`chi(mu) = contrast**(mu - 1/2)`: `chi = 1` at the initial `mu = 1/2`, and an
-    MMA step in `mu` is a relative change of `chi` at any value."""
+    """`chi(mu) = contrast**(mu - 1/2)`.
+
+    `chi = 1` at the initial `mu = 1/2`, and an MMA step in `mu` is a relative change of
+    `chi` at any value.
+    """
     return contrast ** (mu - 0.5)
+
+
+def part_mask(xPhys: Float[Tensor, "*shape"]) -> Bool[Tensor, "*shape"]:
+    """The elements that count as the part: `xPhys >= max(xPhys) / 2`.
+
+    Never empty: on a uniform grey start it is the whole domain, and on a binary design
+    it is the solid.
+    """
+    return xPhys >= xPhys.max() / 2
 
 
 def normalize(
     t: Float[Tensor, "nely nelx"], xPhys: Float[Tensor, "nely nelx"]
 ) -> Float[Tensor, "nely nelx"]:
-    """`t` scaled to 1 at its maximum over the part, `xPhys >= max(xPhys) / 2`, with the
-    scale treated as a constant.
+    """`t` scaled to 1 at its maximum over `part_mask`, the scale treated as a constant.
 
-    That set is never empty: on a uniform grey start it is the whole domain, and on a
-    binary design it is the solid. (`max(xPhys * t)` would scale a grey start at
-    `xPhys = 0.5` up to about 2.)
+    (`max(xPhys * t)` would scale a grey start at `xPhys = 0.5` up to about 2.)
     """
-    part = xPhys >= xPhys.max() / 2
-    return t / t[part].max().detach()
+    return t / t[part_mask(xPhys)].max().detach()
 
 
 @dataclass(frozen=True)
@@ -145,17 +154,16 @@ class ScalarMesh:
         device: torch.device,
         dtype: torch.dtype,
     ) -> "ScalarMesh":
-        def t(a, dt):
-            return torch.as_tensor(a, device=device, dtype=dt)
-
+        ints = dict(device=device, dtype=torch.int64)
+        floats = dict(device=device, dtype=dtype)
         return cls(
             nelx=nelx,
             nely=nely,
-            edof=t(fem.element_dof_map(nelx, nely, 1), torch.int64),
-            KE=t(fem.diffusion_KE(), dtype),
-            B=t(_shape_gradients(), dtype),
-            plate=t(plate_nodes(nelx, nely, print_base), torch.bool),
-            arc=t(wall_arc(nelx, nely, print_base), torch.int64),
+            edof=torch.as_tensor(fem.element_dof_map(nelx, nely, 1), **ints),
+            KE=torch.as_tensor(fem.diffusion_KE(), **floats),
+            B=torch.as_tensor(_shape_gradients(), **floats),
+            plate=torch.as_tensor(plate_nodes(nelx, nely, print_base), device=device),
+            arc=torch.as_tensor(wall_arc(nelx, nely, print_base), **ints),
         )
 
     @property
@@ -180,7 +188,14 @@ class ScalarMesh:
     ) -> Float[Tensor, " ndof"]:
         """`-div(chi grad u) + reaction u = F` with `u = g` on `fixed`.
 
+        :param chi: per-element diffusivity
+        :param g: the values on `fixed`; its other dofs are ignored
+        :param fixed: the Dirichlet dofs
+        :param rtol: CG relative-residual tolerance
+        :param F: the load, zero if `None`
+        :param reaction: per-element lumped reaction (drain) coefficient
         :param x0: a previous solution, the warm start (its fixed dofs are ignored)
+        :return: `u`
         """
         mask = ~fixed
         return torch_solve.lifted_femsolve(
@@ -205,12 +220,9 @@ class ScalarMesh:
         """`grad s / |grad s|` at the Gauss points: the unit direction in which `s`
         increases.
 
-        At the Gauss points rather than the element centre, which cannot see an
-        hourglass mode. No floor relative to the mean gradient (as
-        `timefield.iso_curvature` has): `T` falls exponentially, so such a floor
-        shortens `X` far from the plate and flattens the distance there (up to 58%
-        error on a flat front). Where `T` is too small to resolve, the direction is
-        noise either way; the drain's margin on the solve error is what prevents that.
+        At the Gauss points, since the element centre cannot see an hourglass mode.
+        No floor relative to the mean gradient, since `T` falls exponentially (see
+        `plans/virtual_heat_timefield.md`, Variant 1).
         """
         grad = self.gauss_gradients(s)
         norm2 = (grad**2).sum(dim=-1)
@@ -234,9 +246,17 @@ class ScalarMesh:
         rtol: float,
         x0: Float[Tensor, " ndof"] | None = None,
     ) -> Float[Tensor, " ndof"]:
-        """The distance `phi` fitted to the direction in which `s` increases (Crane et
-        al.'s step III): `div(w grad phi) = div(w X)`, `phi = 0` on the plate, zero flux
-        elsewhere. A least-squares fit, with no maximum principle."""
+        """The distance fitted to the direction in which `s` increases.
+
+        Crane et al.'s step III: `div(w grad phi) = div(w X)`, `phi = 0` on the plate,
+        zero flux elsewhere. A least-squares fit, with no maximum principle.
+
+        :param s: the field whose increase is the direction of time
+        :param w: per-element weight of the fit
+        :param rtol: CG relative-residual tolerance
+        :param x0: a previous `phi`, the warm start
+        :return: `phi`
+        """
         X = self.direction_field(s)
         return self.solve(
             w,
@@ -253,7 +273,7 @@ class TimeFieldSolution(NamedTuple):
     the next iteration's solves."""
 
     tPhys: Float[Tensor, "nely nelx"]
-    primary: Float[Tensor, " ndof"]  # T (heat) or the harmonic field (Laplace)
+    primary: Float[Tensor, " ndof"]  # T (heat), or the solved t (Laplace)
     poisson: Float[Tensor, " ndof"] | None  # phi, for the `poisson` map
 
 
@@ -266,7 +286,10 @@ def heat_time_field(
 ) -> TimeFieldSolution:
     """Variant 1: the time field from the drained heat equation through the material.
 
+    :param xPhys: physical densities
+    :param mu: diffusivity design field
     :param previous: the last iteration's solution, the warm start
+    :return: `tPhys` and the nodal solutions
     """
     shape = xPhys.shape
     density = torch.clamp(xPhys.flatten(), min=DENSITY_FLOOR)
@@ -286,7 +309,7 @@ def heat_time_field(
         t = 1 - T
     elif time_map == run_config.HeatTimeMap.NEG_LOG:
         with torch.no_grad():
-            part = xPhys.flatten() >= xPhys.max() / 2
+            part = part_mask(xPhys).flatten()
             floor = NEG_LOG_FLOOR * element_means(T, mesh.edof)[part].min()
         # Deep in void T falls below the solve error and can be negative; the clamp
         # only acts there, where T carries no resolved value to differentiate
@@ -345,8 +368,7 @@ def wall_coefficients(
 
 
 def wall_step(mesh: ScalarMesh) -> float:
-    """The largest rise of the wall data per arc node, `2 h / l_c`: twice the rise of
-    the linear ramp, so the ramp start sits inside the bounds."""
+    """`2 h / l_c`, the largest rise of the wall data per arc node: twice the ramp's."""
     return 2 / mesh.unit_length
 
 
@@ -375,10 +397,15 @@ def laplace_time_field(
     c: Float[Tensor, " n_arc"],
     previous: TimeFieldSolution | None = None,
 ) -> TimeFieldSolution:
-    """Variant 2: the harmonic time field over the whole domain. `xPhys` only sets the
-    normalization; the field does not see the part.
+    """Variant 2: the time field of `div(chi grad t) = 0` over the whole domain.
 
+    :param xPhys: physical densities; they only set the normalization, since the field
+        does not see the part
+    :param mu: diffusivity design field
+    :param a: wall-data rises walking forward, `unimodal_wall_data`
+    :param c: wall-data rises walking backward
     :param previous: the last iteration's solution, the warm start
+    :return: `tPhys` and the nodal solutions
     """
     shape = xPhys.shape
     chi = diffusivity(mu.flatten(), config.chi_contrast)
