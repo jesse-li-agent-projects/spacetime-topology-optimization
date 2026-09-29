@@ -10,6 +10,11 @@ This directory contains plans for agents.
     - A check on a saved `stto` design, binarized, that reports the margin of each
       condition it must meet: print start and support as hard checks, the constraint
       values and compliance as a report.
+- virtual_heat_timefield.md
+    - Two new scripts beside `stto.py` where the time field is the solution of a
+      virtual heat equation with the diffusivity as the design variable (Wu2025 §2.3
+      with a drain; and a Laplace variant with optimizable wall data), so the time
+      field has no local minima by construction. Large scope: ask the user often.
 Completed plans live in `plans/archive/` and are not summarized here to keep this
 index short. Only open one if you specifically need the history behind a past
 decision.
