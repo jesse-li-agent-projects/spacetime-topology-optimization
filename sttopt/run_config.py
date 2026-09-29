@@ -4,24 +4,25 @@ set for a run as a single serializable object -- `Problem.config` holds the exac
 produced it.
 
 `RunConfig`, `HeatRunConfig` and `LaplaceRunConfig` differ only in how the time field is
-parametrized, so they share `SpaceTimeConfig`. `RunConfig` and `SeqRunConfig` are kept
-flat and separate rather than sharing a base class over their ~14 overlapping fields: the two problems will not keep those fields in step (`seqopt`
-has no filter radius, no FEM parameters, ...), so an inheritance hierarchy would be
-fighting the two apart rather than helping. Only the JSON round-trip
-(`to_dict`/`from_dict`, including the unknown-key warning) is genuinely shared, via
-`_ConfigMixin`.
+parametrized, so they share `SpaceTimeConfig`. `SeqRunConfig` stays separate from them
+rather than sharing a base class over its ~14 overlapping fields: the problems will not
+keep those fields in step (`seqopt` has no filter radius, no FEM parameters, ...), so an
+inheritance hierarchy would be fighting them apart rather than helping. Only the JSON
+round-trip (`to_dict`/`from_dict`, including the unknown-key warning) is shared with
+it, via `_ConfigMixin`.
 
 `nloop` is also exposed as a CLI flag on each; every other field is reachable only via
 a `--config` JSON file or by constructing the dataclass directly in code. Run
 bookkeeping that isn't a `build_problem` hyperparameter (`--tag`, `--device`) lives on
 the CLI's `args`, not here.
 
-Neither config has dataclass defaults: `configs/default.json`/`configs/seq_default.json`
-are the single source of default settings, so a run's values are never split between
+No config has dataclass defaults: the `configs/*.json` files are the single source of
+default settings, so a run's values are never split between
 a config file and this module. That holds for a newly added field too, even though it
 means run records written before the field existed no longer load -- add the field to
 every config file instead. The one exception is a field whose default is the only
-behaviour older records could have had (`RunConfig.load_case`, `support_length_m`).
+behaviour older records could have had (`SpaceTimeConfig.load_case`,
+`support_length_m`).
 """
 
 import bisect
@@ -41,7 +42,7 @@ _T = TypeVar("_T", bound="_ConfigMixin")
 
 
 class _ConfigMixin:
-    """Shared JSON round-trip for `RunConfig`/`SeqRunConfig`. Not a dataclass itself --
+    """Shared JSON round-trip for the run configs. Not a dataclass itself --
     each subclass declares its own fields."""
 
     def __post_init__(self) -> None:

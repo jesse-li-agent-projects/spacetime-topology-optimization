@@ -74,13 +74,15 @@ class FieldTerms:
         device: torch.device,
         dtype: torch.dtype,
     ) -> "FieldTerms":
-        """
+        """The terms `config` enables, with tensors on `device` in `dtype`.
+
         :param base: the print-start elements
         :raises ValueError: if `config.tool_radius_m` is nonzero on a mesh with no
             interior element to measure curvature at
         """
         nelx, nely = config.nelx, config.nely
-        # The tool-radius constraint smooth-maxes over the elements `iso_curvature` measures
+        # The tool-radius constraint smooth-maxes over the elements `iso_curvature`
+        # measures
         if not run_config.identically_zero(config.tool_radius_m):
             measured = timefield.iso_curvature(
                 torch.zeros(nely, nelx, dtype=torch.float64)
@@ -95,7 +97,9 @@ class FieldTerms:
         hotspot_base = conductivity.infinite_base(normalization, base)
         ints = torch_util.to_tensors({"e1": e1, "e2": e2}, device, torch.int64)
 
-        def calibrated(setting: run_config.Scheduled, beta: run_config.Scheduled):
+        def calibrated(
+            setting: run_config.Scheduled, beta: run_config.Scheduled
+        ) -> smooth_max.CalibratedLogSumExp | None:
             if run_config.identically_zero(setting):
                 return None
             return smooth_max.CalibratedLogSumExp(beta)
@@ -179,7 +183,11 @@ class FieldTerms:
         in stack order. Each smooth maximum refreshes its calibration, so its value is
         the true maximum and its gradient the smooth surrogate's.
 
+        :param xPhys: physical densities
+        :param tPhys: physical time field
         :param K_est: `estimated_conductivity` of the same fields at `loop`
+        :param loop: iteration whose schedules apply
+        :return: each constraint's rows, in stack order
         """
         config = self.config
         h = config.element_size_m
@@ -228,6 +236,9 @@ class FieldTerms:
         layers of the part, and their gradients move material as well as print time.
 
         :param f: the structural objective, e.g. the compliance terms
+        :param xPhys: physical densities
+        :param tPhys: physical time field
+        :param loop: iteration whose weights apply
         """
         config = self.config
         uniformity = timefield.uniformity_penalty(
