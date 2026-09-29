@@ -226,12 +226,18 @@ def summary(report: dict) -> str:
     """
     `check_design`'s report as a few lines for the console.
 
-    :param report: a report from `check_design`
+    :param report: a report from `check_design`, or from `stto_heat.check_design`
     :return: the summary text
     """
     start, support = report["start"], report["support"]
+    # A virtual-heat report judges the start against the earliest element off the base
+    bound = (
+        f"tolerance {start['tolerance']}"
+        if "tolerance" in start
+        else f"earliest off the base at t = {start['earliest_off_base_t']}"
+    )
     lines = [
-        f"start:   {'pass' if start['passed'] else 'FAIL'} ({start['solid_base_elements']} solid base element(s), latest at t = {start['max_base_t']}, tolerance {start['tolerance']})",
+        f"start:   {'pass' if start['passed'] else 'FAIL'} ({start['solid_base_elements']} solid base element(s), latest at t = {start['max_base_t']}, {bound})",
         f"support: {'pass' if support['passed'] else 'FAIL'} ({support['unsupported']} unsupported element(s))",
         f"saddles in the time field over the part: {report['saddles']} (reported, not judged)",
     ]
