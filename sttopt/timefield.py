@@ -108,6 +108,10 @@ def base_elements(nelx: int, nely: int, variant: TimeField) -> Int[np.ndarray, "
     variants; calling this instead keeps the two from drifting apart as new variants
     are added.
 
+    OPPOSITE_CORNER starts at its corner element alone. The MATLAB source pins the whole
+    left column for it (`Nei=1:nely` for any `tfield` but 1), which made it an EDGE base
+    under a corner-distance seed.
+
     :param nelx: element count in x
     :param nely: element count in y
     :param variant: which time field the candidates are for
@@ -116,7 +120,9 @@ def base_elements(nelx: int, nely: int, variant: TimeField) -> Int[np.ndarray, "
     """
     if variant == TimeField.CORNER:
         return np.array([0])
-    elif variant in (TimeField.EDGE, TimeField.OPPOSITE_CORNER):
+    elif variant == TimeField.OPPOSITE_CORNER:
+        return np.array([(nely - 1) * nelx])  # bottom-left corner
+    elif variant == TimeField.EDGE:
         return np.arange(nely) * nelx  # column 0
     elif variant == TimeField.BOTTOM_EDGE:
         return (nely - 1) * nelx + np.arange(nelx)  # bottom row

@@ -21,6 +21,7 @@ the run, making a tight bound on it fragile.
 import pytest
 
 import sttopt.stto as stto
+from conftest import with_matlab_print_base
 from sttopt.run_config import RunConfig
 
 # Matches conductivity_estimation_2d/conductivity_estimation_stto_main.m directly
@@ -123,7 +124,9 @@ TRU_MAX_TOL = 0.008  # 1% of TRU_MAX_TARGET
 
 @pytest.mark.slow
 def test_thesis_4_4_reproduction():
-    result = stto.run(CONFIG)
+    # The thesis ran the MATLAB source.
+    problem = with_matlab_print_base(stto.build_problem(CONFIG))
+    result = stto.run_from_state(problem, stto.init_state(problem), CONFIG.nloop)
     record = result.records[-1]
 
     assert record.f < F_CEILING

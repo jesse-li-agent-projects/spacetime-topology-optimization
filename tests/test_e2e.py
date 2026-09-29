@@ -18,7 +18,13 @@ Split into three layers, ordered from most to least diagnostic on failure:
 import pytest
 
 import sttopt.stto as stto
-from conftest import ELEMENT_M, assert_close, default_run_config, load_fixture_npz
+from conftest import (
+    ELEMENT_M,
+    assert_close,
+    default_run_config,
+    load_fixture_npz,
+    with_matlab_print_base,
+)
 
 NELX, NELY = 7, 5
 NSTAGE = 3
@@ -52,8 +58,13 @@ CONFIG = default_run_config(
 )
 
 
+def _matlab_problem():
+    """`CONFIG`'s problem as the fixtures' MATLAB source set it up."""
+    return with_matlab_print_base(stto.build_problem(CONFIG))
+
+
 def _run():
-    problem = stto.build_problem(CONFIG)
+    problem = _matlab_problem()
     return stto.run_from_state(problem, stto.init_state(problem), NLOOP)
 
 
@@ -64,7 +75,7 @@ def test_iteration1_assembly_matches_fixture():
     or wrong per-stage `ti` in the objective sum would pass every other test here.
     """
     fx = load_fixture_npz("mma")
-    problem = stto.build_problem(CONFIG)
+    problem = _matlab_problem()
     state = stto.init_state(problem)
 
     _, record = stto.step(problem, state)
@@ -89,7 +100,7 @@ def test_constraints_stacking_matches_fixture():
     `mma.trust_region_params`), and the comparison would say nothing about row order.
     """
     fx = load_fixture_npz("constraints")
-    problem = stto.build_problem(CONFIG)
+    problem = _matlab_problem()
     state = stto.init_state(problem)
 
     _, record = stto.step(problem, state)
