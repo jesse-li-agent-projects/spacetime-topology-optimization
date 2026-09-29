@@ -12,6 +12,9 @@ This directory contains plans for agents.
       with a `kappa` continuation from the present isotropic behavior, and
       `Normalization.HALF_STENCIL`'s divisor generalized from a constant to a
       per-element directional reference.
+- constraint_normalization.md
+    - Not started, the problem only. Some constraints are `value / bound - 1` and some
+      `value - bound`, so their weight in MMA differs with the bound.
 - curvature_constraint.md
     - A hard MMA constraint keeping the concave curvature of `t`'s iso-lines below
       `1 / tool_radius`, so the print tool cannot collide with the part. Calibrated
