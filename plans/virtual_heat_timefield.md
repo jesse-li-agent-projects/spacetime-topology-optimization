@@ -284,8 +284,10 @@ Each phase is one or more PRs. Keep the commits small (see `CLAUDE.local.md`). P
 - Add inhomogeneous Dirichlet by lifting (above), and batched right-hand sides.
 - Give the CG tolerance of each scalar solve its own setting (see "solver precision").
 - Warm-start every scalar solve from the previous iteration's solution, as `stto` does
-  with `State.U`. Check whether the adjoint solve is warm-started too; ask the user
-  before you change it.
+  with `State.U`. The warm start must be detached (`femsolve` asserts this; an
+  undetached `x0` once leaked the multigrid hierarchy every step, commit 855eb76).
+  Check whether the adjoint solve is warm-started too; ask the user before you change
+  it.
 - **Tests:**
   - **Manufactured solutions**, with smooth `χ = exp(sin …)` sampled at the element
     centres. Choose `u` so that `∂u/∂n = 0` on the Neumann walls, so the production
