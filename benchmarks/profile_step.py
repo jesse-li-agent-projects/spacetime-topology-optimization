@@ -217,7 +217,7 @@ def main():
     print(f"device: {device}")
     print(f"mesh: {nelx}x{nely}, ndof={problem.ndof}")
     print(f"solves/step (if unbatched): {n_solves_per_step}")
-    print(f"npairs (hotspot neighbor list): {problem.e1.shape[0]}")
+    print(f"npairs (hotspot neighbor list): {problem.terms.e1.shape[0]}")
     print(f"warmup steps: {args.warmup}, timed steps: {args.iters}")
     print()
 

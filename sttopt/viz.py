@@ -666,7 +666,7 @@ def _load_stto_run(
         problem.ndof,
     )
     obj = float(obj)
-    K_est_t = stto.estimated_conductivity(problem, xPhys_t, tPhys_t)
+    K_est_t = problem.terms.estimated_conductivity(xPhys_t, tPhys_t)
     K_est = torch_util.to_numpy(K_est_t).reshape(config.nely, config.nelx)
     hotspot_severity = _hotspot_severity(xPhys, K_est)
     grad_magnitude, curvature = _time_field_geometry(

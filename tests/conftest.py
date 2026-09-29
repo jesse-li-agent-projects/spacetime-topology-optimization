@@ -74,10 +74,13 @@ def with_matlab_print_base(problem):
     tests pinned to results of that source."""
     nelx, nely = problem.config.nelx, problem.config.nely
     column = torch.arange(nely, device=problem.Nei.device) * nelx
+    terms = problem.terms
     return dataclasses.replace(
         problem,
         Nei=column,
-        hotspot_base=None if problem.hotspot_base is None else column,
+        terms=dataclasses.replace(
+            terms, hotspot_base=None if terms.hotspot_base is None else column
+        ),
     )
 
 

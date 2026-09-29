@@ -479,17 +479,17 @@ def test_the_first_step_calibrates_the_hotspot_constraint_against_the_seed():
     iteration, so the aggregate's bias is calibrated out before the first hotspot
     constraint is built rather than some periods into the run."""
     problem = _problem()
-    uncalibrated = problem.hotspot.calibration
+    uncalibrated = problem.terms.hotspot.calibration
     state = stto.init_state(problem)
     xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, BETA_D)
-    K_est = stto.estimated_conductivity(problem, xPhys, tPhys)
+    K_est = problem.terms.estimated_conductivity(xPhys, tPhys)
     finite = torch.isfinite(K_est)
     true_max = float(
         ((1 - K_est[finite]) * xPhys.flatten()[finite] ** problem.config.r).max()
     )
 
     _, record = stto.step(problem, state)
-    assert problem.hotspot.calibration != uncalibrated  # non-vacuous
+    assert problem.terms.hotspot.calibration != uncalibrated  # non-vacuous
     assert record.tru_max == pytest.approx(true_max, rel=1e-12)
 
 
@@ -834,7 +834,7 @@ def test_gradient_floor_holds_its_median_out_of_the_gradient():
     )
 
     (value,) = constraints.min_gradient(
-        xPhys, tPhys, problem.min_gradient, 0.5, problem.config.r, STATE_LOOP
+        xPhys, tPhys, problem.terms.min_gradient, 0.5, problem.config.r, STATE_LOOP
     )
     got = torch.autograd.grad(value, (xPhys, tPhys))
 
