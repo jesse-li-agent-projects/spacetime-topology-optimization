@@ -134,14 +134,18 @@ relative change of `χ` at any value.
   Then `k·l_c = √β` at `χ = 1`. The config field is `drain_beta`.
 - `T → t` is a config option: `one_minus`, `neg_log`, `poisson` (default; see the
   priority in Phase 8).
-- `neg_log`: `t = −log(T + T_eps)`, with `T_eps = 10⁻³ · min{T_e : ρ_e ≥ ½·max(ρ)}`
-  (detached; the same set as the normalization). A floor set from the actual minimum
-  on the part cannot clip part values at any β or geometry. A fixed floor such as
-  10⁻⁶ can.
+- `neg_log`: `t = −log(max(T, 0) + T_eps)`, with
+  `T_eps = 10⁻³ · min{T_e : ρ_e ≥ ½·max(ρ)}` (detached; the same set as the
+  normalization). A floor set from the actual minimum on the part cannot clip part
+  values at any β or geometry. A fixed floor such as 10⁻⁶ can. The clamp is for the
+  void: there `T` falls below the solve error and was measured negative (to −4e-8 on
+  the street grid at β = 25), which gave NaN. `t` in deep void is noise either way.
 - `poisson`:
-  - `X = −∇T / √(|∇T|² + ε²)` at the 2×2 Gauss points (not only at the cell centre,
-    which cannot see an hourglass mode). ε follows the `timefield.NORMAL_EPS`
-    convention of `iso_curvature`: `ε² = NORMAL_EPS · (weighted mean |∇T|)²`.
+  - `X = −∇T / |∇T|` at the 2×2 Gauss points (not only at the cell centre, which
+    cannot see an hourglass mode), with a guard against 0/0 only. **Not** the
+    `NORMAL_EPS` floor relative to the mean gradient: `T` falls exponentially, so that
+    floor shortens `X` far from the plate. Measured on a flat front (exact answer
+    linear): max error 0.14–0.58 over √β = 3–10 with the floor, 0 without.
   - Solve `∇·(w∇φ) = ∇·(wX)` with `w = ρ̃`, `φ = 0` on the plate, natural BCs
     elsewhere.
   - Sign: `T` is largest on the plate, so `−∇T` points away from it, and `φ`
@@ -336,6 +340,12 @@ Each phase is one or more PRs. Keep the commits small (see `CLAUDE.local.md`). P
     tolerance. The default β must keep the minimum `T` on the part ≥ 100× the
     measured absolute solve error on the worst geometry. Take the largest β that
     meets that margin. Report the table.
+    - **Result: β = 25 (√β = 5)** at CG rtol 10⁻⁸. min `T` on the part / absolute
+      CG error, worst geometry (street grid): 7.0e4, 8.3e3, **1.0e3**, 13, 0.025 at
+      √β = 3, 4, 5, 7, 10. The worm fails at √β = 7 too (72). Recovery at β = 25, max
+      / mean: `neg_log` ≤ 0.156 / 0.049, `poisson` ≤ 0.089 / 0.023 (annulus, street
+      grid); test tolerances 1.6–1.7× those. `X` from CG agrees with a direct solve
+      to 1.6e-3 on the part, `−log T` to 3.5e-4.
   - Wu's β uses a different `l_c` (the longest diffusion path). Convert Wu's values
     to this `l_c` before you compare with Fig. 2.6.
   - Variant 2: the ramp init reproduces the ramp exactly; `b` is unimodal for random

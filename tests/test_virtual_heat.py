@@ -1,11 +1,15 @@
 """`virtual_heat`: the maps from the design fields to `tPhys` of both variants."""
 
 import dataclasses
+import warnings
 
 import numpy as np
 import pytest
 import scipy.ndimage as ndi
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
 
+import sttopt.fem as fem
 import sttopt.timefield as timefield
 import sttopt.virtual_heat as vh
 from conftest import virtual_heat_config
@@ -192,15 +196,15 @@ OPTIONS = [(HeatRunConfig, m) for m in HeatTimeMap] + [
 ]
 
 
-def _time_field(cls, time_map, nelx, nely, drain_beta):
-    """`(mesh, f)`: `f(xPhys, mu, a, c) -> tPhys` for one variant and map, solved
-    tightly."""
+def _time_field(cls, time_map, nelx, nely, drain_beta, rtol=1e-13):
+    """`(mesh, f)`: `f(xPhys, mu, a, c) -> tPhys` for one variant and map, every solve
+    at `rtol`."""
     mesh = _mesh(nelx, nely)
-    tight = dict(poisson_cg_rtol=1e-13, time_map=time_map.value)
+    tight = dict(poisson_cg_rtol=rtol, time_map=time_map.value)
     if cls is HeatRunConfig:
-        tight |= dict(heat_cg_rtol=1e-13, drain_beta=drain_beta)
+        tight |= dict(heat_cg_rtol=rtol, drain_beta=drain_beta)
     else:
-        tight |= dict(laplace_cg_rtol=1e-13)
+        tight |= dict(laplace_cg_rtol=rtol)
     config = virtual_heat_config(cls, nelx=nelx, nely=nely, **tight)
     if cls is HeatRunConfig:
         return mesh, lambda x, mu, a, c: vh.heat_time_field(config, mesh, x, mu).tPhys
@@ -212,8 +216,10 @@ def _time_field(cls, time_map, nelx, nely, drain_beta):
 
 @pytest.mark.parametrize("cls,time_map", OPTIONS)
 def test_gradients_are_finite_in_deep_void(cls, time_map):
-    nelx, nely = 30, 12
-    mesh, f = _time_field(cls, time_map, nelx, nely, drain_beta=49.0)
+    """At a mesh the V-cycle coarsens and a production tolerance, so `T` deep in the
+    void is below the solve error (and can be negative) -- as in a real run."""
+    nelx, nely = 90, 30
+    mesh, f = _time_field(cls, time_map, nelx, nely, drain_beta=49.0, rtol=1e-8)
     x = torch.full((nely, nelx), 1e-9, dtype=F64)
     x[:, :10] = 1.0  # a solid block at the plate, and void everywhere beyond it
     x.requires_grad_()
@@ -230,11 +236,10 @@ def test_gradients_are_finite_in_deep_void(cls, time_map):
 @pytest.mark.parametrize("cls,time_map", OPTIONS)
 def test_gradient_matches_finite_differences(cls, time_map, monkeypatch):
     """The scales that are treated as constants by design (the normalization, the
-    `neg_log` floor, the direction field's `eps`) are frozen, so finite differences
+    `neg_log` floor) are frozen, so finite differences
     see the same function autograd differentiates."""
     monkeypatch.setattr(vh, "normalize", lambda t, xPhys: t / 0.7)
     monkeypatch.setattr(vh, "NEG_LOG_FLOOR", 0.0)
-    monkeypatch.setattr(timefield, "NORMAL_EPS", 0.0)
     nelx, nely = 10, 7  # coarse enough for the dense coarse solve alone: exact
     rng = np.random.default_rng(1)
     mesh, f = _time_field(cls, time_map, nelx, nely, drain_beta=9.0)
@@ -300,3 +305,121 @@ def test_config_placeholder_changes_nothing_it_does_not_name():
     assert {k for k in a.to_dict() if a.to_dict()[k] != b.to_dict()[k]} == {
         "drain_beta"
     }
+# -- Distance recovery and the drain's margin -------------------------------------------
+# Binary geometries at uniform mu. The reference is the geodesic distance through the
+# solid on a raster 4x finer (`timefield._solid_geodesic`), averaged onto the elements.
+
+FINE = 4
+DRAIN_BETA = (
+    25.0  # sqrt(beta) = 5, the largest value of the Phase 4 sweep that keeps the margin
+)
+
+
+def _rectangle(nx, ny, s):
+    return np.ones((ny * s, nx * s), bool)
+
+
+def _annulus(nx, ny, s):
+    """A ring on a base strip at the bottom edge."""
+    yy, xx = np.mgrid[: ny * s, : nx * s]
+    x, y = (xx + 0.5) / s, ny - (yy + 0.5) / s
+    r = np.hypot(x - nx / 2, y - ny / 2)
+    return ((r < 0.45 * ny) & (r > 0.25 * ny)) | (y < 0.1 * ny)
+
+
+def _worm(nx, ny, s):
+    """A band around a sine, from the plate at the left edge."""
+    yy, xx = np.mgrid[: ny * s, : nx * s]
+    x, y = (xx + 0.5) / s, ny - (yy + 0.5) / s
+    centre = ny / 2 + 0.3 * ny * np.sin(2 * np.pi * 1.5 * x / nx)
+    return np.abs(y - centre) < 0.12 * ny
+
+
+def _streets(nx, ny, s):
+    """Streets 4 elements wide around void blocks: many holes."""
+    yy, xx = np.mgrid[: ny * s, : nx * s]
+    x, y = (xx + 0.5) / s, (yy + 0.5) / s
+    return (np.mod(x, 20) < 4) | (np.mod(y, 20) < 4) | (x > nx - 4) | (y > ny - 4)
+
+
+GEOMETRIES = {
+    "rectangle": (_rectangle, 120, 40, "edge"),
+    "annulus": (_annulus, 80, 80, "bottom_edge"),
+    "worm": (_worm, 180, 60, "edge"),
+    "streets": (_streets, 180, 60, "edge"),
+}
+
+# Measured at DRAIN_BETA (max / mean error over the part, of a field normalized to 1):
+# neg_log up to 0.156 / 0.049 (annulus), poisson up to 0.089 / 0.023 (streets). The
+# tolerances are 1.6-1.7x those.
+RECOVERY_TOLERANCE = {"neg_log": (0.25, 0.08), "poisson": (0.15, 0.04)}
+
+
+def _reference_distance(build, nx, ny, base):
+    solid = build(nx, ny, FINE).ravel()
+    tf = timefield.TimeField[base.upper()]
+    base_f = timefield.base_elements(nx * FINE, ny * FINE, tf)
+    d = timefield._solid_geodesic(solid, base_f[solid[base_f]], nx * FINE, ny * FINE)
+    d = np.where(solid, d / FINE, np.nan).reshape(ny, FINE, nx, FINE)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # void elements: all nan
+        return np.nanmean(d, axis=(1, 3))
+
+
+def _geometry_config(geometry, **overrides):
+    _, nx, ny, base = GEOMETRIES[geometry]
+    return virtual_heat_config(
+        HeatRunConfig,
+        nelx=nx,
+        nely=ny,
+        print_base=base,
+        drain_beta=DRAIN_BETA,
+        heat_cg_rtol=1e-8,
+        poisson_cg_rtol=1e-8,
+        **overrides,
+    )
+
+
+@pytest.mark.parametrize("time_map", ["neg_log", "poisson"])
+@pytest.mark.parametrize("geometry", GEOMETRIES)
+def test_distance_recovery(geometry, time_map):
+    build, nx, ny, base = GEOMETRIES[geometry]
+    solid = build(nx, ny, 1)
+    ref = _reference_distance(build, nx, ny, base)
+    ref = ref / np.nanmax(ref[solid])
+    config = _geometry_config(geometry, time_map=time_map)
+    xPhys = torch.tensor(solid, dtype=F64)
+    mu = torch.full_like(xPhys, 0.5)
+    tPhys = vh.heat_time_field(config, _mesh(nx, ny, base), xPhys, mu).tPhys
+    err = np.abs(tPhys.numpy() - ref)[solid]
+    max_tol, mean_tol = RECOVERY_TOLERANCE[time_map]
+    assert err.max() <= max_tol and err.mean() <= mean_tol, (err.max(), err.mean())
+
+
+def test_drain_keeps_T_on_the_part_well_above_the_solve_error():
+    """On the geometry with the least margin in the sweep: min T on the part was 1e3
+    times the absolute CG error at 1e-8 against a direct solve. The requirement is
+    100x."""
+    build, nx, ny, base = GEOMETRIES["streets"]
+    solid = build(nx, ny, 1)
+    mesh = _mesh(nx, ny, base)
+    config = _geometry_config("streets", time_map="one_minus")
+    xPhys = torch.tensor(solid, dtype=F64)
+    mu = torch.full_like(xPhys, 0.5)
+    T = vh.heat_time_field(config, mesh, xPhys, mu).primary.numpy()
+
+    chi = np.clip(solid.ravel().astype(float), vh.DENSITY_FLOOR, None)
+    e = mesh.edof.numpy()
+    drain = DRAIN_BETA / mesh.unit_length**2 * np.eye(4) / 4
+    vals = chi[:, None, None] * fem.diffusion_KE() + drain
+    rows, cols = np.repeat(e, 4, 1).ravel(), np.tile(e, (1, 4)).ravel()
+    K = sp.csr_matrix((vals.ravel(), (rows, cols)), shape=(mesh.ndof,) * 2)
+    fixed = mesh.plate.numpy()
+    direct = fixed.astype(float)
+    free = ~fixed
+    rhs = -(K[free][:, fixed] @ direct[fixed])
+    direct[free] = spla.spsolve(K[free][:, free].tocsc(), rhs)
+
+    part = np.zeros(mesh.ndof, bool)
+    part[e[solid.ravel()].ravel()] = True
+    assert T[part].min() >= 100 * np.abs(T - direct)[part].max()

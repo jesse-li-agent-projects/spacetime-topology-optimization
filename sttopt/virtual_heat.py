@@ -30,7 +30,6 @@ from torch import Tensor
 
 import sttopt.fem as fem
 import sttopt.run_config as run_config
-import sttopt.timefield as timefield
 import sttopt.torch_fem as torch_fem
 import sttopt.torch_solve as torch_solve
 
@@ -202,22 +201,22 @@ class ScalarMesh:
         """`grad u` at each element's 2x2 Gauss points, per element length."""
         return torch.einsum("gdi,ei->egd", self.B, u[self.edof])
 
-    def direction_field(
-        self, s: Float[Tensor, " ndof"], weights: Float[Tensor, " nel"]
-    ) -> Float[Tensor, "nel 4 2"]:
-        """`grad s / sqrt(|grad s|**2 + eps**2)` at the Gauss points: the unit direction
-        in which `s` increases, shortened where `|grad s|` is small against the mean.
+    def direction_field(self, s: Float[Tensor, " ndof"]) -> Float[Tensor, "nel 4 2"]:
+        """`grad s / |grad s|` at the Gauss points: the unit direction in which `s`
+        increases.
 
         At the Gauss points rather than the element centre, which cannot see an
-        hourglass mode. `eps**2` is `timefield.NORMAL_EPS` times the squared
-        `weights`-weighted mean gradient, as in `timefield.iso_curvature`.
+        hourglass mode. No floor relative to the mean gradient (as
+        `timefield.iso_curvature` has): `T` falls exponentially, so such a floor
+        shortens `X` far from the plate and flattens the distance there (up to 58%
+        error on a flat front). Where `T` is too small to resolve, the direction is
+        noise either way; the drain's margin on the solve error is what prevents that.
         """
         grad = self.gauss_gradients(s)
         norm2 = (grad**2).sum(dim=-1)
-        with torch.no_grad():
-            w = weights[:, None].expand_as(norm2)
-            mean = (w * norm2.sqrt()).sum() / w.sum()
-        return grad / torch.sqrt(norm2 + timefield.NORMAL_EPS * mean**2)[..., None]
+        # Only against 0 / 0 at an exactly flat point
+        tiny = torch.finfo(grad.dtype).tiny
+        return grad / torch.sqrt(norm2 + tiny)[..., None]
 
     def divergence_load(
         self, w: Float[Tensor, " nel"], X: Float[Tensor, "nel 4 2"]
@@ -238,7 +237,7 @@ class ScalarMesh:
         """The distance `phi` fitted to the direction in which `s` increases (Crane et
         al.'s step III): `div(w grad phi) = div(w X)`, `phi = 0` on the plate, zero flux
         elsewhere. A least-squares fit, with no maximum principle."""
-        X = self.direction_field(s, w)
+        X = self.direction_field(s)
         return self.solve(
             w,
             torch.zeros_like(s),
@@ -289,7 +288,9 @@ def heat_time_field(
         with torch.no_grad():
             part = xPhys.flatten() >= xPhys.max() / 2
             floor = NEG_LOG_FLOOR * element_means(T, mesh.edof)[part].min()
-        t = -torch.log(T + floor)
+        # Deep in void T falls below the solve error and can be negative; the clamp
+        # only acts there, where T carries no resolved value to differentiate
+        t = -torch.log(torch.clamp(T, min=0) + floor)
     elif time_map == run_config.HeatTimeMap.POISSON:
         # T falls away from the plate, so time runs along -grad T
         phi = mesh.poisson_distance(
