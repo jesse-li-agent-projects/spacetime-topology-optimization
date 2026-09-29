@@ -12,6 +12,13 @@ assumption that the user would reject.
 Values marked *tentative* are starting points. Change them when results give a reason,
 and tell the user about the change and the evidence for it.
 
+**Keep a margin on every calibrated value.** Do not set a value at the edge of what a
+measurement allows. Results shift with the mesh, the geometry, the device and later
+code changes. State each margin in terms of the quantity that fails (for example "T on
+the part is ≥ 100× the solve error"), not as a distance in the setting. Record the
+measured limit and the margin in the PR. This applies to β, `C`, the CG tolerances,
+the test tolerances, and the schedule values.
+
 ## Goal
 
 Replace the time field `t` as a direct design variable with the solution of a
@@ -80,8 +87,10 @@ of `φ` we need `∇·X ≥ 0`, and `∇·X` (the iso-line curvature) is positiv
 diverging front. So the guarantee is lost in theory. The post-run check measures
 whether it is lost in practice.
 
-**Solver precision limits β.** On the part, `T` falls to about `exp(−√β)` (at `χ = 1`)
-or faster where `χ < 1`. CG stops on a *relative* residual, so where `T` is below the
+**Solver precision limits β.** On the part, `T` falls to about `exp(−√β·L/l_c)` (at
+`χ = 1`, with `L` the longest path from the plate through the part), or faster where
+`χ < 1`. `L/l_c` depends on the geometry: 1.7 for an `edge` plate on 180×60, and more
+for a path around holes. CG stops on a *relative* residual, so where `T` is below the
 absolute error there are no correct digits, and `−log T` or the direction of `∇T`
 there is noise. The allowed β therefore depends on the CG tolerance and on `χ_min`.
 Phase 4 measures it.
@@ -116,13 +125,15 @@ relative change of `χ` at any value.
 
 ### Variant 1
 
-- `α = β / l_c²`, where `l_c` is the domain extent normal to the build plate (width
-  for `edge`, height for `bottom_edge`). Then `k·l_c = √β` at `χ = 1`. The config
-  field is `drain_beta`.
+- `α = β / l_c²`, with `l_c = √(design area)`, the same unit length as
+  `timefield.unit_length`. It does not depend on the print base or on the geometry.
+  Then `k·l_c = √β` at `χ = 1`. The config field is `drain_beta`.
 - `T → t` is a config option: `one_minus`, `neg_log`, `poisson` (default; see the
   priority in Phase 8).
-- `neg_log`: `t = −log(T + T_eps)`, `T_eps = exp(−3√β)`. A fixed floor such as
-  10⁻⁶ would clip real part values at a large β.
+- `neg_log`: `t = −log(T + T_eps)`, with `T_eps = 10⁻³ · min{T_e : ρ_e ≥ ½·max(ρ)}`
+  (detached; the same set as the normalization). A floor set from the actual minimum
+  on the part cannot clip part values at any β or geometry. A fixed floor such as
+  10⁻⁶ can.
 - `poisson`:
   - `X = ∇T / √(|∇T|² + ε²)` at the 2×2 Gauss points (not only at the cell centre,
     which cannot see an hourglass mode). ε follows the `timefield.NORMAL_EPS`
@@ -295,11 +306,16 @@ Each phase is one or more PRs. Keep the commits small (see `CLAUDE.local.md`). P
     annulus, a sine "worm" (a band of material around `y = A sin(ωx)`, with the plate
     at one end), and a street grid (genus ≥ 1). The reference is
     `timefield._solid_geodesic` on a raster 4× finer. Measure the errors first, then
-    set the tolerances from them, and report both to the user.
-  - **The β sweep:** `√β = k·l_c ∈ {3, 5, 10}`. For each value, record the recovery
-    error, and the agreement of `−log T` and of `X` on the part with a direct sparse
-    solve at the production CG tolerance. The default β is the largest that agrees.
-    Report the table.
+    set the tolerances from them with a margin, and report both to the user.
+  - **The β sweep:** `√β = k·l_c ∈ {3, 4, 5, 7, 10}`, on the geometries with the
+    largest `L/l_c`: C1 with an `edge` plate, and the street grid. For each value,
+    record the recovery error, the minimum `T` on the part, and the agreement of
+    `−log T` and of `X` on the part with a direct sparse solve at the production CG
+    tolerance. The default β must keep the minimum `T` on the part ≥ 100× the
+    measured absolute solve error on the worst geometry. Take the largest β that
+    meets that margin. Report the table.
+  - Wu's β uses a different `l_c` (the longest diffusion path). Convert Wu's values
+    to this `l_c` before you compare with Fig. 2.6.
   - Variant 2: the ramp init reproduces the ramp exactly; `b` is unimodal for random
     `a`, `c`; no interior extrema over the domain for random `χ`; and a count of
     interior saddles (the 2D theorem says zero). Report counts that are not zero.
