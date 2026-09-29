@@ -21,7 +21,13 @@ import torch
 
 import sttopt.fem as fem
 import sttopt.load_cases as load_cases
-from sttopt.run_config import RunConfig, SeqRunConfig
+from sttopt.run_config import (
+    HeatRunConfig,
+    LaplaceRunConfig,
+    RunConfig,
+    SeqRunConfig,
+    SpaceTimeConfig,
+)
 
 
 def _as_numpy(x) -> np.ndarray:
@@ -82,6 +88,24 @@ def with_matlab_print_base(problem):
             terms, hotspot_base=None if terms.hotspot_base is None else column
         ),
     )
+
+
+def virtual_heat_config(cls, *, nelx=None, nely=None, **overrides):
+    """A `HeatRunConfig`/`LaplaceRunConfig` with `default_run_config`'s shared settings
+    (on a `nelx` x `nely` mesh, if given) and placeholder values for its own fields.
+
+    The placeholders are not tuned defaults; a test that depends on one sets it.
+    """
+    mesh = {} if nelx is None else {"nelx": nelx}
+    base = default_run_config(nely=nely, **mesh).to_dict()
+    shared_fields = {f.name for f in dataclasses.fields(SpaceTimeConfig)}
+    own = dict(chi_contrast=1e3, poisson_cg_rtol=1e-8, print_base="edge")
+    if cls is HeatRunConfig:
+        own |= dict(drain_beta=25.0, time_map="poisson", heat_cg_rtol=1e-8)
+    else:
+        own |= dict(time_map="identity", laplace_cg_rtol=1e-8)
+    shared = {k: v for k, v in base.items() if k in shared_fields}
+    return cls.from_dict(shared | own | overrides)
 
 
 # The default config's element size, for tests that state a length in elements.

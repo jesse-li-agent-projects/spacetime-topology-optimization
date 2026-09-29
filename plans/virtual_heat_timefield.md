@@ -139,12 +139,13 @@ relative change of `χ` at any value.
   on the part cannot clip part values at any β or geometry. A fixed floor such as
   10⁻⁶ can.
 - `poisson`:
-  - `X = ∇T / √(|∇T|² + ε²)` at the 2×2 Gauss points (not only at the cell centre,
+  - `X = −∇T / √(|∇T|² + ε²)` at the 2×2 Gauss points (not only at the cell centre,
     which cannot see an hourglass mode). ε follows the `timefield.NORMAL_EPS`
-    convention: 10⁻² of the weighted mean gradient.
+    convention of `iso_curvature`: `ε² = NORMAL_EPS · (weighted mean |∇T|)²`.
   - Solve `∇·(w∇φ) = ∇·(wX)` with `w = ρ̃`, `φ = 0` on the plate, natural BCs
     elsewhere.
-  - Sign: `X` points away from the plate, so `φ` increases away from it.
+  - Sign: `T` is largest on the plate, so `−∇T` points away from it, and `φ`
+    increases away from it.
 - The default β is chosen by the Phase 4 sweep, not in advance.
 
 ### Variant 2
@@ -155,8 +156,10 @@ relative change of `χ` at any value.
   `b = minimum(cumsum(a), reverse_cumsum(c))`, with `a, c ∈ [0, 1]` and each increment
   scaled by `2h/l_c`. This is the minimum of an increasing and a decreasing sequence,
   so it is unimodal by construction. A ramp needs increments of `h/l_c` per node, so
-  the ramp init sits at `a = ½`, inside the bounds. A plate node has priority at a
-  shared corner.
+  the ramp init sits inside the bounds: `a = ½` where the ramp rises along the arc,
+  `c = ½` where it falls, and 0 on the far wall, where it is flat (`a = c = ½`
+  everywhere would put a tent on the far wall). The code derives `a`, `c` from the
+  target wall values. A plate node has priority at a shared corner.
 - Use `torch.minimum`, not a softmin. Change to a softmin only if MMA chatters at the
   crossing node.
 - The overall scale of `b` is a flat direction, because `t` is normalized. Accept this.
@@ -338,6 +341,12 @@ Each phase is one or more PRs. Keep the commits small (see `CLAUDE.local.md`). P
   - Variant 2: the ramp init reproduces the ramp exactly; `b` is unimodal for random
     `a`, `c`; no interior extrema over the domain for random `χ`; and a count of
     interior saddles (the 2D theorem says zero). Report counts that are not zero.
+    - **Measured** (24×16, 20 fields each, 8-ring sign changes, ties dropped): no
+      saddle with uniform `χ`, with i.i.d. per-element `χ` up to 30× contrast, or
+      with a smooth `χ` (σ = 1–2 elements) at the full 10³. With i.i.d. `χ`: 0.95
+      per field at 100×, 3.85 at 300×, 9.5 at 10³. The theorem is continuous;
+      element-scale jumps of ~100× give discrete saddles, as for the element means
+      (Phase 3). Recorded as a strict xfail; the smooth case is a strict test.
   - Finite gradients everywhere, deep void included, for every option.
   - FD checks of the whole map w.r.t. `x`, `μ`, `a`, `c`.
   - Normalization: the threshold set on a uniform field, on a binary field, and on a
