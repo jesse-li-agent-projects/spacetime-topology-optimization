@@ -222,7 +222,7 @@ class RunConfig(_ConfigMixin):
         leaves the conductivity stencil purely radial; larger values narrow the lobe
         onto the direction opposite the local print direction, `2.37` matching Das2023
         Eq. (3.5)'s linear ramp at half maximum. Requires `half_stencil` normalization
-        -- see `conductivity._lobe` and `plans/angular_weight.md`.
+        -- see `conductivity._lobe` and `plans/archive/angular_weight.md`.
     :param hotspot_g0_per_m: the angular lobe's gradient scale, in `t` per metre: how
         much layering must exist before the print direction is believed. The lobe
         flattens to isotropic as `|grad t|` falls below it, which is what keeps the
@@ -230,7 +230,7 @@ class RunConfig(_ConfigMixin):
         below the run's own median `|grad t|` (`grad_p50_per_m`) and is not a tuning
         knob: a converged field's gradient distribution is tight, so a `g0` near the
         median attenuates `kappa` by a near-constant factor across the whole part, which
-        is a second `hotspot_kappa` rather than a floor (measured in `plans/angular_weight.md`, Phase 3 results).
+        is a second `hotspot_kappa` rather than a floor (measured in `plans/archive/angular_weight.md`, Phase 3 results).
     :param rmin_m: density-filter radius.
     :param time_filter_rmin_m: density-filter radius applied to `t`, as in
         `SeqRunConfig`; separate from `rmin_m` so the two fields can be smoothed
@@ -382,7 +382,7 @@ class SeqRunConfig(_ConfigMixin):
         leaves the conductivity stencil purely radial; larger values narrow the lobe
         onto the direction opposite the local print direction, `2.37` matching Das2023
         Eq. (3.5)'s linear ramp at half maximum. Requires `half_stencil` normalization
-        -- see `conductivity._lobe` and `plans/angular_weight.md`.
+        -- see `conductivity._lobe` and `plans/archive/angular_weight.md`.
     :param hotspot_g0_per_m: the angular lobe's gradient scale, in `t` per metre: how
         much layering must exist before the print direction is believed. The lobe
         flattens to isotropic as `|grad t|` falls below it, which is what keeps the
@@ -390,7 +390,7 @@ class SeqRunConfig(_ConfigMixin):
         below the run's own median `|grad t|` (`grad_p50_per_m`) and is not a tuning
         knob: a converged field's gradient distribution is tight, so a `g0` near the
         median attenuates `kappa` by a near-constant factor across the whole part, which
-        is a second `hotspot_kappa` rather than a floor (measured in `plans/angular_weight.md`, Phase 3 results).
+        is a second `hotspot_kappa` rather than a floor (measured in `plans/archive/angular_weight.md`, Phase 3 results).
     :param uniformity_metric: a `timefield.UniformityMetric` member name.
     :param roughness_weight: weight on `timefield.relative_roughness`, the objective's
         smoothness regularizer -- a number, or a `CosineSchedule` decaying one weight

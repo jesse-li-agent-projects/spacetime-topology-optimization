@@ -1,6 +1,6 @@
 # Handoff: tune the tool-radius constraint (Phase 5)
 
-Read `plans/curvature_constraint.md` first. This file is the brief for its Phase 5, and it
+Read `plans/archive/curvature_constraint.md` first. This file is the brief for its Phase 5, and it
 corrects that plan where the two disagree.
 
 ## Task

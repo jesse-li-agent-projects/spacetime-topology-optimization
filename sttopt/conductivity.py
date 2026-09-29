@@ -24,7 +24,7 @@ The paper's neighbor weight is radial *times angular*, the angular part favoring
 build direction. `neighbor_weights` below supplies only the radial factor; `_lobe` adds
 the angular one, read off the local `grad t` rather than off a fixed build direction,
 since deposition order is itself a design variable here. It is off at `kappa = 0`, which
-is exactly the radial-only stencil -- see `plans/angular_weight.md`.
+is exactly the radial-only stencil -- see `plans/archive/angular_weight.md`.
 
 One deliberate deviation from Das2025 Eq. (6) remains, load-bearing for this port and
 not a bug: the paper's Eq. (6) numerator weights a neighbor by its raw density `rho_j`,
@@ -295,7 +295,7 @@ def _lobe(
     :param dirs: the unit directions, whose zero rows mark "no direction" -- the stencil
         origin, which takes weight `1` since there is no angle to penalize. That is the
         one offset no lobe suppresses, so it does not cancel out of a ratio the way it
-        does on uniform material (`plans/angular_weight.md`).
+        does on uniform material (`plans/archive/angular_weight.md`).
     :param kappa: lobe concentration; `0` gives a uniform weight of `1`
     :param g0: the gradient scale at which the lobe reaches half its concentration
     """
