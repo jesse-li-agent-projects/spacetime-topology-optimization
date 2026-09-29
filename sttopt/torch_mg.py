@@ -98,19 +98,22 @@ def _on_node_grid(
 ) -> Tensor:
     """Apply `axis_op(tensor, k)` along the node grid's x then y axes of a dof vector.
 
-    Reshapes `(*batch, ndof)` to the `(*batch, nny, nnx, 2)` node grid (row-major nodes,
-    interleaved x/y dofs -- `fem.node_grid`'s convention), applies the 1D operator along
-    each spatial axis in turn, and flattens back. Both dof components transfer
-    identically, which is what "vector-valued transfer, acting per component" means here.
+    Reshapes `(*batch, ndof)` to the `(*batch, nny, nnx, d)` node grid (row-major nodes,
+    `d` interleaved dofs per node -- `fem.node_grid`'s convention), applies the 1D
+    operator along each spatial axis in turn, and flattens back. Every dof component
+    transfers identically, which is what "vector-valued transfer, acting per component"
+    means here.
     """
-    g = v.reshape(*v.shape[:-1], nny, nnx, 2)
+    g = v.reshape(*v.shape[:-1], nny, nnx, v.shape[-1] // (nny * nnx))
     g = axis_op(g.movedim(-2, -1), kx).movedim(-1, -2)
     g = axis_op(g.movedim(-3, -1), ky).movedim(-1, -3)
     return g.reshape(*v.shape[:-1], -1)
 
 
 @functools.lru_cache(maxsize=None)
-def element_dof_map_tensor(nelx: int, nely: int, device) -> Int[Tensor, "nel 8"]:
+def element_dof_map_tensor(
+    nelx: int, nely: int, device, dofs_per_node: int = 2
+) -> Int[Tensor, "nel k"]:
     """`fem.element_dof_map` as a device tensor, memoized.
 
     Every level's dof map is a pure function of that level's grid shape, so the 7200
@@ -118,7 +121,9 @@ def element_dof_map_tensor(nelx: int, nely: int, device) -> Int[Tensor, "nel 8"]
     host-to-device copies -- 7200 times over.
     """
     return torch.tensor(
-        fem.element_dof_map(nelx, nely), dtype=torch.int64, device=device
+        fem.element_dof_map(nelx, nely, dofs_per_node),
+        dtype=torch.int64,
+        device=device,
     )
 
 
@@ -134,22 +139,22 @@ def _child_elements(
 
 @functools.lru_cache(maxsize=None)
 def child_interpolation_matrices(
-    kx: int, ky: int, device=None, dtype=torch.float64
-) -> Float[Tensor, "kx*ky 8 8"]:
-    """Interpolation from one coarse element's 8 dofs to each child element's 8 dofs.
+    kx: int, ky: int, device=None, dtype=torch.float64, dofs_per_node: int = 2
+) -> Float[Tensor, "kx*ky k k"]:
+    """Interpolation from one coarse element's `k` dofs to each child element's `k`
+    dofs, `k = 4 * dofs_per_node`.
 
     `S[m]` maps the coarse element's nodal values to child element `m`'s nodal values
     under the same piecewise-linear interpolation the grid transfer uses. Derived by
     running that transfer on a one-coarse-element mesh rather than by writing the
     weights out, so the two can never drift apart.
     """
-    edof_coarse = torch.tensor(fem.element_dof_map(1, 1)[0], dtype=torch.int64)
-    edof_fine = torch.tensor(fem.element_dof_map(kx, ky), dtype=torch.int64)
-    basis = torch.zeros(8, 8, dtype=dtype)
-    basis[torch.arange(8), edof_coarse] = 1.0
-    fine = _on_node_grid(
-        basis, 2, 2, kx, ky, _interp_axis
-    )  # (8 coarse dofs, ndof_fine)
+    d = dofs_per_node
+    edof_coarse = torch.tensor(fem.element_dof_map(1, 1, d)[0], dtype=torch.int64)
+    edof_fine = torch.tensor(fem.element_dof_map(kx, ky, d), dtype=torch.int64)
+    basis = torch.zeros(4 * d, 4 * d, dtype=dtype)
+    basis[torch.arange(4 * d), edof_coarse] = 1.0
+    fine = _on_node_grid(basis, 2, 2, kx, ky, _interp_axis)  # (coarse dofs, ndof_fine)
     S = fine[:, edof_fine].permute(1, 2, 0)  # (m, fine local dof, coarse local dof)
     return S.to(device=device, dtype=dtype).contiguous()
 
@@ -206,8 +211,9 @@ class _Level:
     so it can also hand back the same operator restricted to a subset of batch rows
     (`select`), which is what lets `torch_fem.pcg` retire rows as they converge.
 
-    Exactly one of `density` (the fine level, whose `K` is `density * KE`) and `keff`
-    (a Galerkin-coarsened level, carrying an explicit 8x8 matrix per element) is set.
+    Exactly one of `density` (the fine level, whose `K` is `density * KE`, plus
+    `reaction * ME` where a reaction term is given) and `keff` (a Galerkin-coarsened
+    level, carrying an explicit matrix per element) is set.
     """
 
     nelx: int
@@ -219,6 +225,8 @@ class _Level:
     KE: Float[Tensor, "8 8"] | None = None
     density: Float[Tensor, "*batch nel"] | None = None
     keff: Float[Tensor, "*batch nel 8 8"] | None = None
+    reaction: Float[Tensor, "*batch nel"] | None = None
+    ME: Float[Tensor, "8 8"] | None = None
     kx: int = 1
     ky: int = 1
     chol: Float[Tensor, "*batch n n"] | None = None
@@ -226,7 +234,14 @@ class _Level:
     def __call__(self, v: Float[Tensor, "*batch ndof"]) -> Float[Tensor, "*batch ndof"]:
         if self.keff is None:
             return torch_fem.operator(
-                v, self.density, self.edofMat, self.KE, self.ndof, self.mask
+                v,
+                self.density,
+                self.edofMat,
+                self.KE,
+                self.ndof,
+                self.mask,
+                self.reaction,
+                self.ME,
             )
         return torch_fem.project(
             keff_matvec(
@@ -241,6 +256,7 @@ class _Level:
             self,
             diag=_select_rows(self.diag, rows, 1),
             density=_select_rows(self.density, rows, 1),
+            reaction=_select_rows(self.reaction, rows, 1),
             keff=_select_rows(self.keff, rows, 3),
             chol=_select_rows(self.chol, rows, 2),
         )
@@ -278,6 +294,8 @@ def build_hierarchy(
     nelx: int,
     nely: int,
     *,
+    reaction: Float[Tensor, "*batch nel"] | None = None,
+    ME: Float[Tensor, "8 8"] | None = None,
     max_coarse_elements: int = MAX_COARSE_ELEMENTS,
 ) -> list[_Level]:
     """Build the multigrid levels for one density field (or a batch of them).
@@ -292,13 +310,20 @@ def build_hierarchy(
     :param mask: fine-mesh free-dof mask.
     :param nelx: fine-mesh elements in x.
     :param nely: fine-mesh elements in y.
+    :param reaction: per-element scale of an optional reaction term `ME` (e.g. a
+        drain), added to the operator.
+    :param ME: reference element matrix of the reaction term.
     :param max_coarse_elements: stop coarsening at or below this element count.
     :return: levels from finest to coarsest.
     """
+    assert (reaction is None) == (ME is None), "reaction and ME come together"
     ndof = mask.shape[-1]
     device, dtype = density.device, density.dtype
+    d = KE.shape[-1] // 4  # dofs per node of the Q4 element
 
-    diag = torch_fem.jacobi_preconditioner_diag(density, edofMat, KE, ndof, mask)
+    diag = torch_fem.jacobi_preconditioner_diag(
+        density, edofMat, KE, ndof, mask, reaction, ME
+    )
     levels = [
         _Level(
             nelx=nelx,
@@ -309,6 +334,8 @@ def build_hierarchy(
             edofMat=edofMat,
             KE=KE,
             density=density,
+            reaction=reaction,
+            ME=ME,
         )
     ]
 
@@ -320,13 +347,18 @@ def build_hierarchy(
         kx, ky = coarsening_factors(top.nelx, top.nely)
         if (kx, ky) == (1, 1):
             break
-        S = child_interpolation_matrices(kx, ky, device=device, dtype=dtype)
+        S = child_interpolation_matrices(kx, ky, device, dtype, d)
         children = _child_elements(top.nelx, top.nely, kx, ky, device)
         if keff is None:
             # Level 0 is stored implicitly as density * KE, so start the recursion from
             # the four (kx*ky) fixed products S^T KE S rather than materializing it.
             G = torch.einsum("mpi,pq,mqj->mij", S, KE, S)
             keff = torch.einsum("...em,mij->...eij", density[..., children], G)
+            if reaction is not None:
+                GM = torch.einsum("mpi,pq,mqj->mij", S, ME, S)
+                keff = keff + torch.einsum(
+                    "...em,mij->...eij", reaction[..., children], GM
+                )
         else:
             keff = torch.einsum(
                 "mpi,...empq,mqj->...eij", S, keff[..., children, :, :], S
@@ -334,9 +366,9 @@ def build_hierarchy(
 
         top.kx, top.ky = kx, ky
         cnelx, cnely = top.nelx // kx, top.nely // ky
-        cedof = element_dof_map_tensor(cnelx, cnely, device)
-        cndof = 2 * (cnelx + 1) * (cnely + 1)
-        cmask = top.mask.reshape(top.nely + 1, top.nelx + 1, 2)[::ky, ::kx].reshape(-1)
+        cedof = element_dof_map_tensor(cnelx, cnely, device, d)
+        cndof = d * (cnelx + 1) * (cnely + 1)
+        cmask = top.mask.reshape(top.nely + 1, top.nelx + 1, d)[::ky, ::kx].reshape(-1)
         cdiag = _scatter(torch.diagonal(keff, dim1=-2, dim2=-1), cedof, cndof)
         cdiag = torch.where(cmask, cdiag, cdiag.new_ones(()))
         levels.append(
@@ -355,6 +387,8 @@ def build_hierarchy(
     if keff is None:
         # No coarsening was possible at all: factorize the fine level itself.
         keff = density[..., :, None, None] * KE
+        if reaction is not None:
+            keff = keff + reaction[..., :, None, None] * ME
     coarsest.chol = _dense_cholesky(
         keff, coarsest.edofMat, coarsest.ndof, coarsest.mask
     )

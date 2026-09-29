@@ -117,21 +117,33 @@ def project(
 def operator(
     v: Float[Tensor, "*batch ndof"],
     density: Float[Tensor, "*dbatch nel"],
-    edofMat: Int[Tensor, "nel 8"],
-    KE: Float[Tensor, "8 8"],
+    edofMat: Int[Tensor, "nel k"],
+    KE: Float[Tensor, "k k"],
     ndof: int,
     mask: Bool[Tensor, " ndof"],
+    reaction: Float[Tensor, "*dbatch nel"] | None = None,
+    ME: Float[Tensor, "k k"] | None = None,
 ) -> Float[Tensor, "*batch ndof"]:
-    """The projected, matrix-free operator `A(v) = P(K @ P(v))` that PCG runs against."""
-    return project(matvec(project(v, mask), density, edofMat, KE, ndof), mask)
+    """The projected, matrix-free operator `A(v) = P(K @ P(v))` that PCG runs against.
+
+    `K` is `sum_e density_e KE`, plus `sum_e reaction_e ME` where a reaction term (e.g.
+    a drain) is given.
+    """
+    v = project(v, mask)
+    Kv = matvec(v, density, edofMat, KE, ndof)
+    if reaction is not None:
+        Kv = Kv + matvec(v, reaction, edofMat, ME, ndof)
+    return project(Kv, mask)
 
 
 def jacobi_preconditioner_diag(
     density: Float[Tensor, "*batch nel"],
-    edofMat: Int[Tensor, "nel 8"],
-    KE: Float[Tensor, "8 8"],
+    edofMat: Int[Tensor, "nel k"],
+    KE: Float[Tensor, "k k"],
     ndof: int,
     mask: Bool[Tensor, " ndof"],
+    reaction: Float[Tensor, "*batch nel"] | None = None,
+    ME: Float[Tensor, "k k"] | None = None,
 ) -> Float[Tensor, "*batch ndof"]:
     """Diagonal of the projected operator, with fixed dofs set to 1.0.
 
@@ -140,6 +152,8 @@ def jacobi_preconditioner_diag(
     dofs.
     """
     diag = matvec_diagonal(density, edofMat, KE, ndof)
+    if reaction is not None:
+        diag = diag + matvec_diagonal(reaction, edofMat, ME, ndof)
     return torch.where(mask, diag, torch.ones((), dtype=diag.dtype, device=diag.device))
 
 
