@@ -62,8 +62,8 @@ def simp_density(
 def matvec(
     U: Float[Tensor, "*ubatch ndof"],
     density: Float[Tensor, "*dbatch nel"],
-    edofMat: Int[Tensor, "nel 8"],
-    KE: Float[Tensor, "8 8"],
+    edofMat: Int[Tensor, "nel k"],
+    KE: Float[Tensor, "k k"],
     ndof: int,
 ) -> Float[Tensor, "*batch ndof"]:
     """Matrix-free global stiffness matvec `K @ U`, `K` implicit from `density` and `KE`.
@@ -85,8 +85,8 @@ def matvec(
 
 def matvec_diagonal(
     density: Float[Tensor, "*batch nel"],
-    edofMat: Int[Tensor, "nel 8"],
-    KE: Float[Tensor, "8 8"],
+    edofMat: Int[Tensor, "nel k"],
+    KE: Float[Tensor, "k k"],
     ndof: int,
 ) -> Float[Tensor, "*batch ndof"]:
     """Matrix-free `diag(K)`: scatter-add of `diag(KE)` scaled by `density`."""
@@ -114,6 +114,24 @@ def project(
     return v * mask
 
 
+def lumped_reaction(
+    reaction: Float[Tensor, "*batch nel"], edofMat: Int[Tensor, "nel k"], ndof: int
+) -> Float[Tensor, "*batch ndof"]:
+    """The diagonal of a lumped reaction term (e.g. a drain): each element adds a
+    quarter of its `reaction` to each of its nodes' dofs.
+
+    Lumped rather than consistent, since a consistent mass matrix has positive
+    off-diagonals and breaks the discrete maximum principle.
+
+    :param reaction: per-element reaction coefficient, times the element area
+    :return: the per-dof diagonal
+    """
+    contrib = reaction[..., :, None].expand(*reaction.shape, edofMat.shape[-1]) / 4
+    batch_shape = contrib.shape[:-2]
+    out = contrib.new_zeros(*batch_shape, ndof)
+    return out.index_add(-1, edofMat.reshape(-1), contrib.reshape(*batch_shape, -1))
+
+
 def operator(
     v: Float[Tensor, "*batch ndof"],
     density: Float[Tensor, "*dbatch nel"],
@@ -121,18 +139,23 @@ def operator(
     KE: Float[Tensor, "k k"],
     ndof: int,
     mask: Bool[Tensor, " ndof"],
-    reaction: Float[Tensor, "*dbatch nel"] | None = None,
-    ME: Float[Tensor, "k k"] | None = None,
+    reaction_diag: Float[Tensor, "*dbatch ndof"] | None = None,
 ) -> Float[Tensor, "*batch ndof"]:
     """The projected, matrix-free operator `A(v) = P(K @ P(v))` that PCG runs against.
 
-    `K` is `sum_e density_e KE`, plus `sum_e reaction_e ME` where a reaction term (e.g.
-    a drain) is given.
+    :param v: the vector(s) to apply it to
+    :param density: per-element scale of `KE`
+    :param edofMat: element dof map
+    :param KE: reference element matrix
+    :param ndof: global dof count
+    :param mask: free-dof mask
+    :param reaction_diag: an optional diagonal added to `K`, `lumped_reaction`'s output
+    :return: `A(v)`
     """
     v = project(v, mask)
     Kv = matvec(v, density, edofMat, KE, ndof)
-    if reaction is not None:
-        Kv = Kv + matvec(v, reaction, edofMat, ME, ndof)
+    if reaction_diag is not None:
+        Kv = Kv + reaction_diag * v
     return project(Kv, mask)
 
 
@@ -142,18 +165,19 @@ def jacobi_preconditioner_diag(
     KE: Float[Tensor, "k k"],
     ndof: int,
     mask: Bool[Tensor, " ndof"],
-    reaction: Float[Tensor, "*batch nel"] | None = None,
-    ME: Float[Tensor, "k k"] | None = None,
+    reaction_diag: Float[Tensor, "*batch ndof"] | None = None,
 ) -> Float[Tensor, "*batch ndof"]:
     """Diagonal of the projected operator, with fixed dofs set to 1.0.
 
     The 1.0 makes the diagonal (and hence Jacobi's `1/diag` preconditioner) invertible
     on the projected system, where the true diagonal of `P(K @ P(.))` is 0 at fixed
     dofs.
+
+    :param reaction_diag: as in `operator`
     """
     diag = matvec_diagonal(density, edofMat, KE, ndof)
-    if reaction is not None:
-        diag = diag + matvec_diagonal(reaction, edofMat, ME, ndof)
+    if reaction_diag is not None:
+        diag = diag + reaction_diag
     return torch.where(mask, diag, torch.ones((), dtype=diag.dtype, device=diag.device))
 
 

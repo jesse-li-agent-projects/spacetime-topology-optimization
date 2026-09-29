@@ -79,6 +79,11 @@ def element_dof_map(
     node order `plane_stress_KE` and `diffusion_KE` expect. Element `e` (0-indexed, C
     order per conventions.md) corresponds to grid position `(e // nelx, e % nelx)`, and
     node numbering follows `node_grid`.
+
+    :param nelx: element count in x
+    :param nely: element count in y
+    :param dofs_per_node: 2 for elasticity, 1 for a scalar field
+    :return: the dof map, one row per element
     """
     nodes = node_grid(nelx, nely)
     # Local node order, counterclockwise against the physical y = -row axis: bottom
@@ -91,23 +96,16 @@ def element_dof_map(
 
 
 def diffusion_KE() -> Float[np.ndarray, "4 4"]:
-    """Element matrix of `-div(grad u)` for a unit-square bilinear quad, nodes in
-    `element_dof_map`'s order.
+    """Element matrix of `-div(grad u)` for a unit-square bilinear quad.
 
-    Independent of element size in 2D. Its off-diagonals (-1/6 along an edge, -1/3
-    across) are all negative, so a matrix assembled from any positive per-element
-    scaling of it is an M-matrix and has a discrete maximum principle.
+    Nodes are in `element_dof_map`'s order. Independent of element size in 2D. Its
+    off-diagonals (-1/6 along an edge, -1/3 across) are all negative, so a matrix
+    assembled from any positive per-element scaling of it is an M-matrix and has a
+    discrete maximum principle; `torch_fem.lumped_reaction` keeps that property.
+
+    :return: the 4x4 element matrix
     """
     return (
         np.array([[4, -1, -2, -1], [-1, 4, -1, -2], [-2, -1, 4, -1], [-1, -2, -1, 4]])
         / 6
     )
-
-
-def lumped_mass_ME() -> Float[np.ndarray, "4 4"]:
-    """Row-sum lumped mass matrix of a unit-square bilinear quad, in element areas.
-
-    Diagonal, so adding any positive multiple of it keeps an M-matrix one: unlike the
-    consistent mass matrix, whose positive off-diagonals break the maximum principle.
-    """
-    return np.eye(4) / 4

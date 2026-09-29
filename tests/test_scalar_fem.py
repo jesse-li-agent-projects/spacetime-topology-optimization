@@ -17,7 +17,6 @@ import sttopt.torch_fem as torch_fem  # noqa: E402
 import sttopt.torch_solve as torch_solve  # noqa: E402
 
 KE = torch.tensor(fem.diffusion_KE(), dtype=torch.float64)
-ME = torch.tensor(fem.lumped_mass_ME(), dtype=torch.float64)
 TIGHT = 1e-12  # CG tolerance far below every discretization error measured here
 
 
@@ -32,9 +31,8 @@ class Mesh:
         rows, cols = np.mgrid[: nely + 1, : nelx + 1]
         self.x, self.y = (cols * h).ravel(), ((nely - rows) * h).ravel()
         erows, ecols = np.mgrid[:nely, :nelx]
-        self.xc, self.yc = ((ecols + 0.5) * h).ravel(), (
-            (nely - erows - 0.5) * h
-        ).ravel()
+        self.xc = ((ecols + 0.5) * h).ravel()
+        self.yc = ((nely - erows - 0.5) * h).ravel()
         # Nodal share of the domain, in element areas: the lumped load's quadrature
         self.area = np.bincount(
             self.edof.numpy().ravel(),
@@ -51,7 +49,7 @@ class Mesh:
         e = self.edof.numpy()
         vals = chi[:, None, None] * fem.diffusion_KE()
         if reaction is not None:
-            vals = vals + reaction[:, None, None] * fem.lumped_mass_ME()
+            vals = vals + reaction[:, None, None] * np.eye(4) / 4  # lumped mass
         rows = np.repeat(e, 4, axis=1).ravel()
         cols = np.tile(e, (1, 4)).ravel()
         return sp.csr_matrix((vals.ravel(), (rows, cols)), shape=(self.ndof,) * 2)
@@ -72,7 +70,6 @@ def _solve(mesh, chi, F, g, fixed, reaction=None, rtol=TIGHT):
         mesh.nelx,
         mesh.nely,
         reaction=None if reaction is None else _t(reaction),
-        ME=None if reaction is None else ME,
         rtol=rtol,
     )
 
@@ -330,7 +327,7 @@ def test_a_warm_start_at_the_solution_needs_no_iteration():
     plate = mesh.x == 0
     reaction = _t(np.full(90 * 30, 0.05))
     args = (_t(chi), _t(np.zeros(mesh.ndof)), _t(plate.astype(float)), mesh.edof, KE)
-    kwargs = dict(reaction=reaction, ME=ME, rtol=1e-8)
+    kwargs = dict(reaction=reaction, rtol=1e-8)
     T = torch_solve.lifted_femsolve(*args, mesh.mask(plate), 90, 30, **kwargs)
     info = {}
     torch_solve.lifted_femsolve(
@@ -360,7 +357,7 @@ def test_gradcheck_through_chi_drain_dirichlet_values_and_rhs():
 
     def L(chi, reaction, F, g):
         u = torch_solve.lifted_femsolve(
-            chi, F, g, mesh.edof, KE, mask, 5, 4, reaction=reaction, ME=ME, rtol=1e-13
+            chi, F, g, mesh.edof, KE, mask, 5, 4, reaction=reaction, rtol=1e-13
         )
         return (w * u).sum()
 
@@ -392,7 +389,6 @@ def test_gradient_matches_finite_differences_through_the_v_cycle():
             nelx,
             nely,
             reaction=reaction,
-            ME=ME,
             rtol=1e-12,
         )
         return (w * T).sum()

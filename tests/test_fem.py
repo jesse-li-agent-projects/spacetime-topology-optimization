@@ -113,11 +113,6 @@ def test_diffusion_KE_is_exact_on_linear_fields():
     np.testing.assert_allclose(KE.sum(axis=1), 0.0, atol=1e-15)
 
 
-def test_diffusion_KE_and_lumped_mass_have_no_positive_off_diagonal():
-    for M in (fem.diffusion_KE(), fem.lumped_mass_ME()):
-        off = M - np.diag(np.diag(M))
-        assert off.max() <= 0
-
-
-def test_lumped_mass_carries_the_element_area():
-    assert fem.lumped_mass_ME().sum() == pytest.approx(1.0)
+def test_diffusion_KE_has_no_positive_off_diagonal():
+    KE = fem.diffusion_KE()
+    assert (KE - np.diag(np.diag(KE))).max() <= 0

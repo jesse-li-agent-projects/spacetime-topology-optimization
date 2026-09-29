@@ -66,8 +66,9 @@ class FemSolve(torch.autograd.Function):
         ctx,
         density: Float[Tensor, "*dbatch nel"],
         F: Float[Tensor, "*fbatch ndof"],
-        edofMat: Int[Tensor, "nel 8"],
-        KE: Float[Tensor, "8 8"],
+        reaction: Float[Tensor, "*dbatch nel"] | None,
+        edofMat: Int[Tensor, "nel k"],
+        KE: Float[Tensor, "k k"],
         mask: Bool[Tensor, " ndof"],
         nelx: int,
         nely: int,
@@ -79,8 +80,6 @@ class FemSolve(torch.autograd.Function):
         gamma: int,
         max_coarse_elements: int,
         info: dict | None,
-        reaction: Float[Tensor, "*dbatch nel"] | None,
-        ME: Float[Tensor, "8 8"] | None,
     ) -> Float[Tensor, "*batch ndof"]:
         levels = torch_mg.build_hierarchy(
             density,
@@ -90,7 +89,6 @@ class FemSolve(torch.autograd.Function):
             nelx,
             nely,
             reaction=reaction,
-            ME=ME,
             max_coarse_elements=max_coarse_elements,
         )
         precond = torch_mg.VCycle(levels, omega=omega, n_smooth=n_smooth, gamma=gamma)
@@ -107,7 +105,6 @@ class FemSolve(torch.autograd.Function):
         ctx.levels = levels
         ctx.edofMat = edofMat
         ctx.KE = KE
-        ctx.ME = ME
         ctx.mask = mask
         ctx.rtol = rtol
         ctx.max_iter = max_iter
@@ -145,19 +142,21 @@ class FemSolve(torch.autograd.Function):
             ctx.info["backward_n_iter"] = n_iter
 
         grad_density = grad_reaction = None
-        if ctx.needs_input_grad[0] or ctx.needs_input_grad[15]:
+        if ctx.needs_input_grad[0] or ctx.needs_input_grad[2]:
             Ue = U[..., ctx.edofMat]  # (*batch, nel, k)
             lam_e = lam[..., ctx.edofMat]  # (*batch, nel, k)
         if ctx.needs_input_grad[0]:
             grad_density = -torch.sum((lam_e @ ctx.KE) * Ue, dim=-1)
-        if ctx.needs_input_grad[15]:
-            grad_reaction = -torch.sum((lam_e @ ctx.ME) * Ue, dim=-1)
+        if ctx.needs_input_grad[2]:
+            # The lumped term puts a quarter of reaction_e on each element dof
+            grad_reaction = -torch.sum(lam_e * Ue, dim=-1) / 4
 
         grad_F = lam if ctx.needs_input_grad[1] else None
 
         return (
             grad_density,
             grad_F,
+            grad_reaction,
             None,  # edofMat
             None,  # KE
             None,  # mask
@@ -171,16 +170,14 @@ class FemSolve(torch.autograd.Function):
             None,  # gamma
             None,  # max_coarse_elements
             None,  # info
-            grad_reaction,
-            None,  # ME
         )
 
 
 def femsolve(
     density: Float[Tensor, "*dbatch nel"],
     F: Float[Tensor, "*fbatch ndof"],
-    edofMat: Int[Tensor, "nel 8"],
-    KE: Float[Tensor, "8 8"],
+    edofMat: Int[Tensor, "nel k"],
+    KE: Float[Tensor, "k k"],
     mask: Bool[Tensor, " ndof"],
     nelx: int,
     nely: int,
@@ -194,7 +191,6 @@ def femsolve(
     max_coarse_elements: int = torch_mg.MAX_COARSE_ELEMENTS,
     info: dict | None = None,
     reaction: Float[Tensor, "*dbatch nel"] | None = None,
-    ME: Float[Tensor, "8 8"] | None = None,
 ) -> Float[Tensor, "*batch ndof"]:
     """`FemSolve.apply` with `torch_mg.solve`'s keyword defaults bound in.
 
@@ -219,9 +215,8 @@ def femsolve(
     :param info: optional dict that receives `forward_n_iter`/`backward_n_iter`, for
         tests that assert on iteration counts (e.g. the self-adjoint zero-iteration
         adjoint solve).
-    :param reaction: per-element scale of an optional reaction term (e.g. a drain),
-        differentiable like `density`.
-    :param ME: reference element matrix of the reaction term.
+    :param reaction: per-element coefficient of an optional lumped reaction term
+        (e.g. a drain, `torch_fem.lumped_reaction`), differentiable like `density`.
     :return: `U`.
     """
     assert x0 is None or not x0.requires_grad, (
@@ -231,6 +226,7 @@ def femsolve(
     return FemSolve.apply(
         density,
         F,
+        reaction,
         edofMat,
         KE,
         mask,
@@ -244,8 +240,6 @@ def femsolve(
         gamma,
         max_coarse_elements,
         info,
-        reaction,
-        ME,
     )
 
 
@@ -260,15 +254,15 @@ def lifted_femsolve(
     nely: int,
     *,
     reaction: Float[Tensor, "*dbatch nel"] | None = None,
-    ME: Float[Tensor, "k k"] | None = None,
     **solve_kwargs,
 ) -> Float[Tensor, "*batch ndof"]:
-    """`K @ u = F` on the free dofs with `u = g` on the fixed ones: inhomogeneous
-    Dirichlet data by lifting, `u = femsolve(F - K g) + g`.
+    """`femsolve` with inhomogeneous Dirichlet data `g` on the fixed dofs.
 
-    Built from differentiable operations, so a downstream gradient reaches `g`,
-    `density` and `reaction` through autograd.
+    By lifting, `u = femsolve(F - K g) + g`, built from differentiable operations, so a
+    downstream gradient reaches `g`, `density` and `reaction` through autograd.
 
+    :param density: as in `femsolve`, as are `F`, `edofMat`, `KE`, `mask`, `nelx`,
+        `nely` and `reaction`
     :param g: the Dirichlet values; only its fixed dofs (where `mask` is `False`) are
         read
     :param solve_kwargs: forwarded to `femsolve` (`rtol`, `x0`, ...); a warm start `x0`
@@ -278,7 +272,7 @@ def lifted_femsolve(
     lift = g * ~mask
     K_lift = torch_fem.matvec(lift, density, edofMat, KE, mask.shape[-1])
     if reaction is not None:
-        K_lift = K_lift + torch_fem.matvec(lift, reaction, edofMat, ME, mask.shape[-1])
+        K_lift = K_lift + torch_fem.lumped_reaction(reaction, edofMat, mask.shape[-1]) * lift
     free = femsolve(
         density,
         F - K_lift,
@@ -288,7 +282,6 @@ def lifted_femsolve(
         nelx,
         nely,
         reaction=reaction,
-        ME=ME,
         **solve_kwargs,
     )
     return free + lift
