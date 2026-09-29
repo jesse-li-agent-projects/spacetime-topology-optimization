@@ -86,6 +86,7 @@ def main(args: argparse.Namespace) -> None:
 
     import numpy as np
 
+    import sttopt.checks as checks
     import sttopt.stto as stto
     import sttopt.torch_util as torch_util
 
@@ -147,6 +148,7 @@ def main(args: argparse.Namespace) -> None:
                     t=torch_util.to_numpy(state.t),
                     xPhys=torch_util.to_numpy(xPhys),
                     tPhys=torch_util.to_numpy(tPhys),
+                    loop=state.loop,
                     width_m=config.width_m,
                     height_m=config.height_m,
                 )
@@ -166,6 +168,11 @@ def main(args: argparse.Namespace) -> None:
         tru_max=record.tru_max,
         uniformity=record.uniformity,
     )
+    report = checks.check_design(problem, state.x, state.t, state.loop)
+    checks.report_path(output_dir / "final_design.npz").write_text(
+        json.dumps(report, indent=2)
+    )
+    print(checks.summary(report))
 
 
 if __name__ == "__main__":

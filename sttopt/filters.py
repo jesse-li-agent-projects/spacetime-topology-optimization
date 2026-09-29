@@ -108,10 +108,19 @@ def continuity_filter(nelx: int, nely: int, lrmin: float) -> sp.csr_matrix:
 def heaviside_projection(
     xTilde: Float[Tensor, "*dims"], beta: float, eta: float
 ) -> Float[Tensor, "*dims"]:
-    """Project a filtered density field toward 0/1 via a smoothed threshold at `eta`.
+    """
+    Project a filtered density field toward 0/1 via a smoothed threshold at `eta`.
 
     `beta` controls sharpness (linear as `beta -> 0`, a step function as `beta -> inf`).
+    `beta = inf` is that step itself, the design a finite `beta` approaches.
+
+    :param xTilde: filtered density
+    :param beta: sharpness
+    :param eta: threshold
+    :return: projected density
     """
+    if math.isinf(beta):
+        return torch.heaviside(xTilde - eta, xTilde.new_tensor(0.5))
     denom = math.tanh(beta * eta) + math.tanh(beta * (1 - eta))
     return (math.tanh(beta * eta) + torch.tanh(beta * (xTilde - eta))) / denom
 

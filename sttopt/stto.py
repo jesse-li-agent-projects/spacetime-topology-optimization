@@ -472,6 +472,91 @@ def estimated_conductivity(
     )
 
 
+def _stage_times(nStage: int) -> list[float]:
+    """
+    The gravity stages' boundaries, as fractions of the build.
+
+    :param nStage: number of stages
+    :return: the `nStage` upper boundaries, ending at 1
+    """
+    return [float(ti) for ti in np.linspace(0, 1, nStage + 1)[1:]]
+
+
+def constraint_values(
+    problem: Problem,
+    xPhys: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+    K_est: Float[Tensor, " nel"],
+    loop: int,
+    beta_t: float,
+) -> dict[str, Float[Tensor, " k"]]:
+    """
+    Every constraint's values at iteration `loop`'s settings, keyed by the
+    `constraints` function (or `"hotspot"`) that gives them, in the reference loop's
+    row order (`tests/matlab_reference_loop.py` is the authority for it).
+
+    The one statement of the constraint stack, so a check on a finished design reads
+    the constraints the run optimized. Each smooth maximum refreshes its calibration,
+    so its value is the true maximum and its gradient the smooth surrogate's.
+
+    :param problem: the problem being optimized
+    :param xPhys: physical densities
+    :param tPhys: physical time field
+    :param K_est: `estimated_conductivity` of the same fields at `loop`
+    :param loop: iteration whose schedules apply
+    :param beta_t: time-field projection sharpness
+    :return: each constraint's rows, in stack order
+    """
+    config = problem.config
+    h = config.element_size_m
+    g = {
+        "global_volume_fraction": constraints.global_volume_fraction(
+            xPhys, config.volfrac
+        )
+    }
+    if config.enable_continuity:
+        g["time_field_continuity"] = constraints.time_field_continuity(
+            tPhys, problem.L, config.continuity_tol
+        )
+    g["start_point"] = constraints.start_point(tPhys, problem.Nei)
+    if config.enable_stage_volume:
+        g["stage_volume_bounds"] = constraints.stage_volume_bounds(
+            xPhys, tPhys, _stage_times(config.nStage), config.volfrac, beta_t
+        )
+    Tcr = run_config.weight_at(config.Tcr, loop)
+    g["hotspot"] = (problem.hotspot(K_est, xPhys, loop) / Tcr - 1)[None]
+    if problem.curvature is not None:
+        g["tool_radius"] = constraints.tool_radius(
+            xPhys,
+            tPhys,
+            problem.curvature,
+            units.in_elements(run_config.weight_at(config.tool_radius_m, loop), h),
+            config.r,
+            loop,
+        )
+    if problem.min_gradient is not None:
+        g["min_gradient"] = constraints.min_gradient(
+            xPhys,
+            tPhys,
+            problem.min_gradient,
+            run_config.weight_at(config.min_gradient_fraction, loop),
+            config.r,
+            loop,
+        )
+    if problem.gradient_smoothness is not None:
+        g["gradient_smoothness"] = constraints.gradient_smoothness(
+            xPhys,
+            tPhys,
+            problem.gradient_smoothness,
+            units.in_elements(
+                run_config.weight_at(config.gradient_smoothness_m, loop), h
+            ),
+            config.r,
+            loop,
+        )
+    return g
+
+
 def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     """Run one optimization iteration: build the objective + every constraint's value
     in the reference's exact order, differentiate the whole graph by autograd
@@ -512,7 +597,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     # whole_compliance's solve and every gravity stage's go into one batched FemSolve
     # call; `torch_fem.pcg` retires each row as it converges, so the batch costs no more
     # row-iterations than solving the rows one at a time would.
-    stage_times = [float(ti) for ti in np.linspace(0, 1, nStage + 1)[1:]]
+    stage_times = _stage_times(nStage)
     c_t, stage_cs, U_new = compliance.batched_whole_and_gravity_compliance(
         xPhys,
         tPhys,
@@ -568,77 +653,22 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         xmax - xmin,
     )
 
-    # -- Constraints, stacked in the reference loop's exact order. `tests/
-    # matlab_reference_loop.py` is the authority for this order. --
     vol_diag = float(xPhys.detach().sum() / (nelx * nely))
 
-    g_parts: list[Tensor] = [constraints.global_volume_fraction(xPhys, config.volfrac)]
-    if config.enable_continuity:
-        g_parts.append(
-            constraints.time_field_continuity(tPhys, problem.L, config.continuity_tol)
-        )
-    g_parts.append(constraints.start_point(tPhys, problem.Nei))
-    if config.enable_stage_volume:
-        g_parts.append(
-            constraints.stage_volume_bounds(
-                xPhys, tPhys, stage_times, config.volfrac, beta_t
-            )
-        )
-
-    # Hotspot constraint, recalibrated on every call: its value is the true maximum
-    # severity, its gradient the smooth surrogate's.
     K_est_t = estimated_conductivity(problem, xPhys, tPhys, loop)
-    hotspot_t = problem.hotspot(K_est_t, xPhys, loop)
-    g_hotspot_t = hotspot_t / Tcr - 1
-    tru_max = float(hotspot_t.detach())
-
-    g_parts.append(g_hotspot_t[None])
-
-    h = config.element_size_m
+    g_parts = constraint_values(problem, xPhys, tPhys, K_est_t, loop, beta_t)
+    g_hotspot_t = g_parts["hotspot"][0]
+    tru_max = (float(g_hotspot_t.detach()) + 1) * Tcr
     tool_radius_m = run_config.weight_at(config.tool_radius_m, loop)
-    if problem.curvature is not None:
-        g_parts.append(
-            constraints.tool_radius(
-                xPhys,
-                tPhys,
-                problem.curvature,
-                units.in_elements(tool_radius_m, h),
-                config.r,
-                loop,
-            )
-        )
-    if problem.min_gradient is not None:
-        g_parts.append(
-            constraints.min_gradient(
-                xPhys,
-                tPhys,
-                problem.min_gradient,
-                run_config.weight_at(config.min_gradient_fraction, loop),
-                config.r,
-                loop,
-            )
-        )
-    if problem.gradient_smoothness is not None:
-        g_parts.append(
-            constraints.gradient_smoothness(
-                xPhys,
-                tPhys,
-                problem.gradient_smoothness,
-                units.in_elements(
-                    run_config.weight_at(config.gradient_smoothness_m, loop), h
-                ),
-                config.r,
-                loop,
-            )
-        )
-    g_all = torch.cat(g_parts)
+
+    g_all = torch.cat(list(g_parts.values()))
     # Per part, not on `g_all`: a row of the stack would also backpropagate zeros
     # through every other part's graph, the hotspot's included (~35% slower per step, PR #173).
     dg_dx = torch.cat(
-        [_sensitivity_rows(g, x, t) for g in g_parts],
+        [_sensitivity_rows(g, x, t) for g in g_parts.values()],
         dim=0,
     )
-    diagnostics = _hotspot_diagnostics(hotspot_t, K_est_t, xPhys, config.r)
+    diagnostics = _hotspot_diagnostics(g_hotspot_t, K_est_t, xPhys, config.r)
     with torch.no_grad():
         unit_m = timefield.unit_length_m(tPhys, config.element_size_m)
         grad_p10, grad_p50, grad_p90 = (
@@ -763,17 +793,24 @@ def _admissible_tool_radius_m(
 
 
 def _hotspot_diagnostics(
-    hotspot_t: Float[Tensor, ""],
+    g_hotspot_t: Float[Tensor, ""],
     K_est_t: Float[Tensor, " nel"],
     xPhys: Float[Tensor, "nely nelx"],
     r: float,
 ) -> dict:
-    """The true maximum severity and where it sits, and how many elements share the
-    hotspot constraint's sensitivity -- `n_eff`, the participation ratio of
-    `|d hotspot / d K_est|`. A large `n_eff` means the constraint acts like a mean over
-    the part rather than on its maximum.
     """
-    (grad,) = torch.autograd.grad(hotspot_t, K_est_t, retain_graph=True)
+    The true maximum severity and where it sits, and how many elements share the
+    hotspot constraint's sensitivity -- `n_eff`, the participation ratio of
+    `|d g_hotspot / d K_est|`. A large `n_eff` means the constraint acts like a mean over
+    the part rather than on its maximum.
+
+    :param g_hotspot_t: the hotspot constraint's value, connected to `K_est_t`
+    :param K_est_t: estimated conductivity
+    :param xPhys: physical densities
+    :param r: severity exponent
+    :return: `true_max`, `hot_row`, `hot_col`, `n_eff`, ...
+    """
+    (grad,) = torch.autograd.grad(g_hotspot_t, K_est_t, retain_graph=True)
     with torch.no_grad():
         a = torch.nan_to_num(grad.abs(), posinf=0.0)
         n_eff = float(a.sum() ** 2 / (a**2).sum()) if bool((a > 0).any()) else 0.0

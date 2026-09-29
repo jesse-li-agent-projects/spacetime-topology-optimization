@@ -1,6 +1,8 @@
 """Tests for `sttopt.filters`: golden-regression fixture checks for H/Hs/L, FD checks
 for the Heaviside projection."""
 
+import math
+
 import numpy as np
 import pytest
 import torch
@@ -197,6 +199,14 @@ def test_heaviside_projection_derivative_matches_fd(beta, eta):
     ) / (2 * h)
     analytic = heaviside_projection_derivative(xTilde, beta, eta)
     np.testing.assert_allclose(analytic, fd, rtol=1e-5, atol=1e-6)
+
+
+def test_heaviside_projection_at_infinite_beta_is_the_finite_limit():
+    eta = 0.3
+    xTilde = torch.tensor([0.0, 0.2, 0.29, eta, 0.31, 0.6, 1.0], dtype=torch.float64)
+    step = heaviside_projection(xTilde, math.inf, eta)
+    np.testing.assert_array_equal(step, [0, 0, 0, 0.5, 1, 1, 1])
+    np.testing.assert_allclose(heaviside_projection(xTilde, 1e4, eta), step, atol=1e-12)
 
 
 def test_heaviside_projection_derivative_at_eta_exactly():
