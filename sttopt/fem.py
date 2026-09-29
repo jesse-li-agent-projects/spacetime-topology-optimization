@@ -69,13 +69,16 @@ def node_grid(nelx: int, nely: int) -> Int[np.ndarray, "nely+1 nelx+1"]:
     return np.arange((nely + 1) * (nelx + 1)).reshape(nely + 1, nelx + 1)
 
 
-def element_dof_map(nelx: int, nely: int) -> Int[np.ndarray, "n 8"]:
+def element_dof_map(
+    nelx: int, nely: int, dofs_per_node: int = 2
+) -> Int[np.ndarray, "n 4*dofs_per_node"]:
     """Per-element global dof indices (0-indexed), in element order matching `xPhys.flatten()`.
 
-    Each row lists the 8 dofs (x, y for each of the 4 corner nodes) of one element,
-    the corners taken in the local node order `plane_stress_KE` expects. Element `e`
-    (0-indexed, C order per conventions.md) corresponds to grid position
-    `(e // nelx, e % nelx)`, and node numbering follows `node_grid`.
+    Each row lists the dofs of the 4 corner nodes of one element (x, y per node for
+    elasticity, one value per node for a scalar field), the corners taken in the local
+    node order `plane_stress_KE` and `diffusion_KE` expect. Element `e` (0-indexed, C
+    order per conventions.md) corresponds to grid position `(e // nelx, e % nelx)`, and
+    node numbering follows `node_grid`.
     """
     nodes = node_grid(nelx, nely)
     # Local node order, counterclockwise against the physical y = -row axis: bottom
@@ -83,4 +86,28 @@ def element_dof_map(nelx: int, nely: int) -> Int[np.ndarray, "n 8"]:
     corners = np.stack(
         [nodes[1:, :-1], nodes[1:, 1:], nodes[:-1, 1:], nodes[:-1, :-1]], axis=-1
     ).reshape(-1, 4)
-    return np.stack([2 * corners, 2 * corners + 1], axis=-1).reshape(-1, 8)
+    d = dofs_per_node
+    return np.stack([d * corners + i for i in range(d)], axis=-1).reshape(-1, 4 * d)
+
+
+def diffusion_KE() -> Float[np.ndarray, "4 4"]:
+    """Element matrix of `-div(grad u)` for a unit-square bilinear quad, nodes in
+    `element_dof_map`'s order.
+
+    Independent of element size in 2D. Its off-diagonals (-1/6 along an edge, -1/3
+    across) are all negative, so a matrix assembled from any positive per-element
+    scaling of it is an M-matrix and has a discrete maximum principle.
+    """
+    return (
+        np.array([[4, -1, -2, -1], [-1, 4, -1, -2], [-2, -1, 4, -1], [-1, -2, -1, 4]])
+        / 6
+    )
+
+
+def lumped_mass_ME() -> Float[np.ndarray, "4 4"]:
+    """Row-sum lumped mass matrix of a unit-square bilinear quad, in element areas.
+
+    Diagonal, so adding any positive multiple of it keeps an M-matrix one: unlike the
+    consistent mass matrix, whose positive off-diagonals break the maximum principle.
+    """
+    return np.eye(4) / 4
