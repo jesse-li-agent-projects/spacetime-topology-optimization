@@ -633,7 +633,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         )
     g_all = torch.cat(g_parts)
     # Per part, not on `g_all`: a row of the stack would also backpropagate zeros
-    # through every other part's graph, the hotspot's included (~35% slower per step).
+    # through every other part's graph, the hotspot's included (~35% slower per step, PR #173).
     dg_dx = torch.cat(
         [_sensitivity_rows(g, x, t) for g in g_parts],
         dim=0,
