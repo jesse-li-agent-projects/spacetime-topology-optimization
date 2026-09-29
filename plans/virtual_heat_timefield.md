@@ -283,6 +283,9 @@ Each phase is one or more PRs. Keep the commits small (see `CLAUDE.local.md`). P
   from `χ_e`.
 - Add inhomogeneous Dirichlet by lifting (above), and batched right-hand sides.
 - Give the CG tolerance of each scalar solve its own setting (see "solver precision").
+- Warm-start every scalar solve from the previous iteration's solution, as `stto` does
+  with `State.U`. Check whether the adjoint solve is warm-started too; ask the user
+  before you change it.
 - **Tests:**
   - **Manufactured solutions**, with smooth `χ = exp(sin …)` sampled at the element
     centres. Choose `u` so that `∂u/∂n = 0` on the Neumann walls, so the production
@@ -344,7 +347,9 @@ Each phase is one or more PRs. Keep the commits small (see `CLAUDE.local.md`). P
 
 The same structure as `stto.py` (`Problem`/`State`/`IterationRecord`/`build_problem`/
 `init_state`/`step`/`run`/`run_from_state`) on the Phase 1 modules. Follow the CLI
-layout for fast `--help` from `CLAUDE.local.md`. Add an E2E smoke test (a small mesh,
+layout for fast `--help` from `CLAUDE.local.md`. `State` carries the last solution of
+each scalar solve (`T`, and `φ` for `poisson`) as the warm start of the next. Add an
+E2E smoke test (a small mesh,
 a few iterations, finite values, and a decrease of the objective or of the
 infeasibility).
 
