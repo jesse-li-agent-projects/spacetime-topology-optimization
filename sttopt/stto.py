@@ -37,6 +37,7 @@ import sttopt.constraints as constraints
 import sttopt.fem as fem
 import sttopt.filters as filters
 import sttopt.gravity as gravity
+import sttopt.load_cases as load_cases
 import sttopt.mma as mma
 import sttopt.run_config as run_config
 import sttopt.sensitivity as sensitivity
@@ -206,20 +207,14 @@ def build_problem(
     KE = fem.plane_stress_KE(config.nu)
     edofMat = fem.element_dof_map(nelx, nely)
     ndof = 2 * (nelx + 1) * (nely + 1)
-
-    # Fixed cantilever load case, stated geometrically rather than as a linear-index
-    # formula so it survives a change of node numbering: a unit downward traction on the
-    # right edge, from the bottom-right corner up, and the left edge clamped in both
-    # directions.
-    nodes = fem.node_grid(nelx, nely)
-    F = np.zeros(ndof)
-    right_edge_up = nodes[::-1, -1]
-    F[2 * right_edge_up + 1] = -fem.edge_load_shares(
-        nely + 1, units.in_elements(config.load_length_m, h)
+    F, freedofs = load_cases.load_case(
+        load_cases.LoadCase(config.load_case),
+        nelx,
+        nely,
+        config.load_length_m,
+        config.support_length_m,
+        h,
     )
-    left_edge = nodes[:, 0]
-    fixeddofs = np.stack([2 * left_edge, 2 * left_edge + 1], axis=-1).ravel()
-    freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)
 
     H, Hs = filters.density_filter(nelx, nely, units.in_elements(config.rmin_m, h))
     time_H = time_Hs = None

@@ -18,7 +18,8 @@ Neither config has dataclass defaults: `configs/default.json`/`configs/seq_defau
 are the single source of default settings, so a run's values are never split between
 a config file and this module. That holds for a newly added field too, even though it
 means run records written before the field existed no longer load -- add the field to
-every config file instead.
+every config file instead. The one exception is a field whose default is the only
+behaviour older records could have had (`RunConfig.load_case`, `support_length_m`).
 """
 
 import bisect
@@ -31,6 +32,7 @@ from typing import TypeVar
 
 import numpy as np
 
+import sttopt.load_cases as load_cases
 import sttopt.units as units
 
 _T = TypeVar("_T", bound="_ConfigMixin")
@@ -197,10 +199,12 @@ class RunConfig(_ConfigMixin):
     :param width_m: design domain width.
     :param height_m: design domain height; must be a whole number of elements.
     :param nelx: element count across `width_m`, the mesh resolution.
-    :param load_length_m: span of the tip load, a uniform downward traction of unit
-        total force on the right edge, from the bottom-right corner up. `0` is a point
-        load on the corner node, whose compliance grows as `log(1 / h)` under
-        refinement.
+    :param load_length_m: span of each corner load of `load_case`, a uniform traction
+        of unit total force along the right edge from its corner. `0` is a point load on
+        the corner node, whose compliance grows as `log(1 / h)` under refinement.
+    :param load_case: a `load_cases.LoadCase` member value.
+    :param support_length_m: span of each clamped patch, for a `load_case` that has
+        patches.
     :param print_base: 3D-printing base/start location, naming a
         `timefield.TimeField` member (case-insensitively) for JSON.
     :param uniformity_metric: a `timefield.UniformityMetric` member name, as in
@@ -276,6 +280,8 @@ class RunConfig(_ConfigMixin):
     height_m: float
     nelx: int
     load_length_m: float
+    load_case: str = "cantilever"
+    support_length_m: float = 0.004
     volfrac: float
     nStage: int
     enable_stage_volume: bool
@@ -325,6 +331,7 @@ class RunConfig(_ConfigMixin):
     def __post_init__(self) -> None:
         super().__post_init__()
         self.nely  # raises now, at load, on a height that is not whole elements
+        load_cases.LoadCase(self.load_case)  # likewise on an unknown case
 
     @property
     def element_size_m(self) -> float:

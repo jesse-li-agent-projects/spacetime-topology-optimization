@@ -20,6 +20,7 @@ import numpy as np
 import torch
 
 import sttopt.fem as fem
+import sttopt.load_cases as load_cases
 from sttopt.run_config import RunConfig, SeqRunConfig
 
 
@@ -133,15 +134,12 @@ def point_load_problem(nelx: int, nely: int) -> tuple[np.ndarray, np.ndarray, in
     generated under: unit downward point load on the bottom-right node, left edge
     clamped in both directions. This is the geometry MATLAB's `F(2*(nelx+1)*(nely+1))
     = -1` / `fixeddofs = 1:2*(nely+1)` denote; keeping it here rather than restating
-    those formulas per test file keeps it in step with `stto.build_problem`.
+    those formulas per test file keeps it in step with `load_cases`.
     """
-    nodes = fem.node_grid(nelx, nely)
-    ndof = 2 * nodes.size
-    F = np.zeros(ndof)
-    F[2 * nodes[-1, -1] + 1] = -1.0
-    left_edge = nodes[:, 0]
-    fixeddofs = np.stack([2 * left_edge, 2 * left_edge + 1], axis=-1).ravel()
-    return F, np.setdiff1d(np.arange(ndof), fixeddofs), ndof
+    F, freedofs = load_cases.load_case(
+        load_cases.LoadCase.CANTILEVER, nelx, nely, 0.0, 0.0, 1.0
+    )
+    return F, freedofs, len(F)
 
 
 def reindex_matlab_reference_nodes(
