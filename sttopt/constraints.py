@@ -101,6 +101,9 @@ def stage_volume_bounds(
 
     An upper and a lower bound per stage, interleaved. The lower bound is the negated
     upper one with a `1e-5` slack, so its sensitivity is exactly the negated upper's.
+
+    Deprecated: it is incompatible with uniform layer heights, which deposit volume in
+    proportion to the cross-section rather than to `t_stage`.
     """
     nely, nelx = xPhys.shape
     scale = nelx * nely * volfrac
