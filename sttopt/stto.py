@@ -473,7 +473,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     tflat = state.t.flatten()
     xval = _flatten_pair(xflat, tflat)
     move_limit = _flatten_pair(
-        torch.full_like(xflat, config.move),
+        torch.full_like(xflat, run_config.weight_at(config.move, loop)),
         torch.full_like(tflat, run_config.weight_at(config.tmove, loop)),
     )
 

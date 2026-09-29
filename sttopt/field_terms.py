@@ -41,7 +41,7 @@ class FieldTerms:
     """Fixed setup of the shared terms. The smooth maxima hold their own calibration,
     which `constraints` refreshes in place."""
 
-    config: run_config.RunConfig
+    config: run_config.SpaceTimeConfig
     e1: Int[Tensor, " npairs"]
     e2: Int[Tensor, " npairs"]
     w: Float[Tensor, " npairs"]
@@ -69,7 +69,7 @@ class FieldTerms:
     @classmethod
     def build(
         cls,
-        config: run_config.RunConfig,
+        config: run_config.SpaceTimeConfig,
         base: Int[np.ndarray, " k"],
         device: torch.device,
         dtype: torch.dtype,

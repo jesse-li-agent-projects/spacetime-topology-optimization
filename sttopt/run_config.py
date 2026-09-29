@@ -1,9 +1,11 @@
-"""`RunConfig`/`SeqRunConfig`: the full hyperparameter set for a `stto`/`seqopt` run as
-a single serializable object -- `Problem.config` holds the exact one a `Problem` was
-built from, and every run directory carries a JSON record of exactly what produced it.
+"""`RunConfig`/`SeqRunConfig` and the virtual-heat configs: the full hyperparameter
+set for a run as a single serializable object -- `Problem.config` holds the exact one a
+`Problem` was built from, and every run directory carries a JSON record of exactly what
+produced it.
 
-The two configs are kept flat and separate rather than sharing a base class over their
-~14 overlapping fields: the two problems will not keep those fields in step (`seqopt`
+`RunConfig`, `HeatRunConfig` and `LaplaceRunConfig` differ only in how the time field is
+parametrized, so they share `SpaceTimeConfig`. `RunConfig` and `SeqRunConfig` are kept
+flat and separate rather than sharing a base class over their ~14 overlapping fields: the two problems will not keep those fields in step (`seqopt`
 has no filter radius, no FEM parameters, ...), so an inheritance hierarchy would be
 fighting the two apart rather than helping. Only the JSON round-trip
 (`to_dict`/`from_dict`, including the unknown-key warning) is genuinely shared, via
@@ -187,10 +189,12 @@ def final_value(setting: Scheduled) -> float:
 
 
 @dataclass(kw_only=True)
-class RunConfig(_ConfigMixin):
+class SpaceTimeConfig(_ConfigMixin):
     """
-    Full hyperparameter set for a single space-time topology optimization run,
-    mirroring `stto.build_problem`'s parameters.
+    The settings every space-time optimization shares, whatever design variables give
+    its time field: the mesh, the load case, the density field, the compliance and
+    gravity-stage objective, the hotspot measure and the time-field constraints and
+    regularizers.
 
     Lengths are in metres (the `_m` fields), so refining the mesh is a change to `nelx`
     alone. `nely` follows from the design domain's aspect ratio, since elements are
@@ -214,10 +218,6 @@ class RunConfig(_ConfigMixin):
     :param roughness_weight: weight on `timefield.relative_roughness`, a number or a
         `CosineSchedule`, as in `SeqRunConfig` -- whose docstring explains why the
         uniformity term needs it.
-    :param enable_stage_volume: whether the per-stage volume bounds
-        (`constraints.stage_volume_bounds`) are in the MMA constraint stack at all.
-        `nStage` still sets the `Theta`-weighted stage compliances either way. Keep it
-        off: the bounds are deprecated.
     :param Tcr: bound on the hotspot severity, possibly scheduled. The severity never
         exceeds 1, so a ramp from above 1 is inactive until it crosses 1: start it there,
         or its active part is a step.
@@ -237,11 +237,6 @@ class RunConfig(_ConfigMixin):
         median attenuates `kappa` by a near-constant factor across the whole part, which
         is a second `hotspot_kappa` rather than a floor (measured in `plans/archive/angular_weight.md`, Phase 3 results).
     :param rmin_m: density-filter radius.
-    :param time_filter_rmin_m: density-filter radius applied to `t`, as in
-        `SeqRunConfig`; separate from `rmin_m` so the two fields can be smoothed
-        differently. 0 leaves `t` unfiltered.
-    :param enable_continuity: whether the time-field continuity constraint is in the
-        MMA constraint stack at all, as in `SeqRunConfig`, as is `continuity_tol`.
     :param tool_radius_m: print tool radius, possibly scheduled. Bounds the concave
         curvature of the time field's iso-lines (`timefield.iso_curvature`) to
         `1 / tool_radius_m`, so the tool cannot collide with printed material. `0` is a
@@ -264,15 +259,16 @@ class RunConfig(_ConfigMixin):
         `tool_radius_m`.
     :param gradient_smoothness_beta: `LogSumExp` sharpness of that bound's smooth
         maximum.
-    :param lrmin_m: continuity-filter radius, as in `SeqRunConfig`, as is
-        `rmin_cond_m`.
+    :param rmin_cond_m: as in `SeqRunConfig`.
     :param raa0_total: MMA's curvature floor (`mma.mmasub`'s `raa0`), summed over the
         design variables: each gets `raa0_total / n`. A term stated as a domain mean has
         a gradient of order `1 / n` per variable, so a fixed `raa0` would outweigh it
         more with every refinement.
+    :param move: MMA trust-region half-width, possibly scheduled. `RunConfig` applies
+        it to the density variables alone.
     """
 
-    # Frequently varied -- also exposed as a CLI flag in stto_cli.py.
+    # Frequently varied -- also exposed as a CLI flag.
     nloop: int
 
     # Config-file-only.
@@ -284,7 +280,6 @@ class RunConfig(_ConfigMixin):
     support_length_m: float = 0.004
     volfrac: float
     nStage: int
-    enable_stage_volume: bool
     Theta: float
     uniformity_metric: str
     uniformity_weight: Scheduled
@@ -297,16 +292,12 @@ class RunConfig(_ConfigMixin):
     hotspot_g0_per_m: float
     print_base: str
     rmin_m: float
-    time_filter_rmin_m: float
-    enable_continuity: bool
-    continuity_tol: float
     tool_radius_m: Scheduled
     curvature_beta: Scheduled
     min_gradient_fraction: Scheduled
     min_gradient_beta: Scheduled
     gradient_smoothness_m: Scheduled
     gradient_smoothness_beta: Scheduled
-    lrmin_m: float
     rmin_cond_m: float
     Emin: float
     Emax: float
@@ -320,8 +311,7 @@ class RunConfig(_ConfigMixin):
     a0: float
     mma_c: float
     raa0_total: float
-    move: float
-    tmove: Scheduled
+    move: Scheduled
 
     # The density/time projection sharpnesses, scheduled like any other setting; the
     # long-standing ramps are `Interpolation.STEP` schedules in the config files.
@@ -340,6 +330,116 @@ class RunConfig(_ConfigMixin):
     @property
     def nely(self) -> int:
         return units.element_count(self.height_m, self.element_size_m, "height_m")
+
+
+@dataclass(kw_only=True)
+class RunConfig(SpaceTimeConfig):
+    """
+    Hyperparameters of a `stto` run, where the time field is a design variable of its
+    own, mirroring `stto.build_problem`'s parameters.
+
+    :param enable_stage_volume: whether the per-stage volume bounds
+        (`constraints.stage_volume_bounds`) are in the MMA constraint stack at all.
+        `nStage` still sets the `Theta`-weighted stage compliances either way. Keep it
+        off: the bounds are deprecated.
+    :param time_filter_rmin_m: density-filter radius applied to `t`, as in
+        `SeqRunConfig`; separate from `rmin_m` so the two fields can be smoothed
+        differently. 0 leaves `t` unfiltered.
+    :param enable_continuity: whether the time-field continuity constraint is in the
+        MMA constraint stack at all, as in `SeqRunConfig`, as is `continuity_tol`.
+    :param lrmin_m: continuity-filter radius, as in `SeqRunConfig`.
+    :param tmove: MMA trust-region half-width on the time variables, possibly
+        scheduled.
+    """
+
+    enable_stage_volume: bool
+    time_filter_rmin_m: float
+    enable_continuity: bool
+    continuity_tol: float
+    lrmin_m: float
+    tmove: Scheduled
+
+
+# The print bases a virtual-heat time field supports: a build plate along a whole edge.
+# A near-point base puts a log singularity in the field and has no physical use.
+_PLATE_BASES = ("edge", "bottom_edge")
+
+
+def _check_plate_base(print_base: str) -> None:
+    if print_base.lower() not in _PLATE_BASES:
+        raise ValueError(
+            f"print_base must be one of {_PLATE_BASES} for a virtual-heat time field, got {print_base!r}"
+        )
+
+
+class HeatTimeMap(StrEnum):
+    """How `HeatRunConfig` maps the virtual temperature `T` to the time field."""
+
+    ONE_MINUS = "one_minus"  # t = 1 - T (Wu2025)
+    NEG_LOG = "neg_log"  # t = -log T
+    POISSON = "poisson"  # the distance fitted to the direction of grad T
+
+
+class LaplaceTimeMap(StrEnum):
+    """How `LaplaceRunConfig` maps the harmonic field to the time field."""
+
+    IDENTITY = "identity"
+    POISSON = "poisson"  # the distance fitted to the direction of the field's gradient
+
+
+@dataclass(kw_only=True)
+class HeatRunConfig(SpaceTimeConfig):
+    """
+    Hyperparameters of a `stto_heat` run, where the time field comes from a virtual heat
+    equation with a drain, `div(chi grad T) - alpha T = 0`, `T = 1` on the build plate
+    and `chi` the density times an optimized diffusivity. `T` has no interior maximum,
+    so the time field has no local minimum over the part.
+
+    :param drain_beta: the drain as `alpha * l_c**2`, `l_c` the square root of the
+        design area; `sqrt(drain_beta)` is the decay rate of `T` per `l_c` at `chi = 1`.
+    :param chi_contrast: the diffusivity range, `chi(mu) = chi_contrast**(mu - 1/2)` for
+        a design variable `mu` on `[0, 1]`.
+    :param time_map: a `HeatTimeMap` member value.
+    :param heat_cg_rtol: relative-residual tolerance of the heat solve.
+    :param poisson_cg_rtol: relative-residual tolerance of the Poisson solve of the
+        `poisson` time map.
+    """
+
+    drain_beta: float
+    chi_contrast: float
+    time_map: str
+    heat_cg_rtol: float
+    poisson_cg_rtol: float
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        _check_plate_base(self.print_base)
+        HeatTimeMap(self.time_map)
+
+
+@dataclass(kw_only=True)
+class LaplaceRunConfig(SpaceTimeConfig):
+    """
+    Hyperparameters of a `stto_laplace` run, where the time field is harmonic,
+    `div(chi grad t) = 0`, with `t = 0` on the build plate, optimized unimodal data on
+    every other wall, and `chi` an optimized diffusivity over the whole domain. The
+    field has no interior extremum over the domain.
+
+    :param chi_contrast: as in `HeatRunConfig`.
+    :param time_map: a `LaplaceTimeMap` member value.
+    :param laplace_cg_rtol: relative-residual tolerance of the Laplace solve.
+    :param poisson_cg_rtol: as in `HeatRunConfig`.
+    """
+
+    chi_contrast: float
+    time_map: str
+    laplace_cg_rtol: float
+    poisson_cg_rtol: float
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        _check_plate_base(self.print_base)
+        LaplaceTimeMap(self.time_map)
 
 
 @dataclass(kw_only=True)
