@@ -594,12 +594,43 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     g_parts.append(g_hotspot_t[None])
 
-    g_curvature_t, concave_t, tool_radius_m = _tool_radius_constraint(
-        problem, xPhys, tPhys, loop
-    )
-    if g_curvature_t is not None:
-        g_parts.append(g_curvature_t[None])
-    g_parts.extend(g[None] for g in _gradient_constraints(problem, xPhys, tPhys, loop))
+    h = config.element_size_m
+    tool_radius_m = run_config.weight_at(config.tool_radius_m, loop)
+    if problem.curvature is not None:
+        g_parts.append(
+            constraints.tool_radius(
+                xPhys,
+                tPhys,
+                problem.curvature,
+                units.in_elements(tool_radius_m, h),
+                config.r,
+                loop,
+            )
+        )
+    if problem.min_gradient is not None:
+        g_parts.append(
+            constraints.min_gradient(
+                xPhys,
+                tPhys,
+                problem.min_gradient,
+                run_config.weight_at(config.min_gradient_fraction, loop),
+                config.r,
+                loop,
+            )
+        )
+    if problem.gradient_smoothness is not None:
+        g_parts.append(
+            constraints.gradient_smoothness(
+                xPhys,
+                tPhys,
+                problem.gradient_smoothness,
+                units.in_elements(
+                    run_config.weight_at(config.gradient_smoothness_m, loop), h
+                ),
+                config.r,
+                loop,
+            )
+        )
     g_all = torch.cat(g_parts)
     dg_dx = torch.cat(
         [_sensitivity_rows(g, x, t) for g in g_parts],
@@ -629,7 +660,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         beta_t=beta_t,
         tool_radius_m=tool_radius_m,
         admissible_tool_radius_m=_admissible_tool_radius_m(
-            concave_t.detach(), config.element_size_m
+            xPhys.detach(), tPhys.detach(), config.element_size_m, config.r
         ),
         min_gradient_fraction=run_config.weight_at(config.min_gradient_fraction, loop),
         gradient_smoothness_m=run_config.weight_at(config.gradient_smoothness_m, loop),
@@ -713,94 +744,18 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     return new_state, record
 
 
-def _tool_radius_constraint(
-    problem: Problem,
-    xPhys: Float[Tensor, "nely nelx"],
-    tPhys: Float[Tensor, "nely nelx"],
-    loop: int,
-) -> tuple[Float[Tensor, ""] | None, Float[Tensor, " n"], float]:
-    """The tool-radius constraint on the concave curvature of the iso-lines, `None`
-    where the run has no such constraint, with the concave curvature per measured
-    element (density-weighted, per element) and iteration `loop`'s tool radius `R`, in
-    metres.
-
-    The severity is `R * concave curvature`, so the constraint is its smooth maximum
-    minus the bound of 1.
-    """
-    config = problem.config
-    kappa_t = timefield.iso_curvature(tPhys, xPhys)
-    unit = timefield.unit_length(tPhys)
-    density_r = smooth_max.density_power(xPhys[1:-1, 1:-1].flatten(), config.r)
-    concave_t = -kappa_t.flatten() / unit * density_r
-    tool_radius_m = run_config.weight_at(config.tool_radius_m, loop)
-    if problem.curvature is None:
-        return None, concave_t, tool_radius_m
-    tool_radius = units.in_elements(tool_radius_m, config.element_size_m)
-    g_curvature_t = problem.curvature.aggregate(tool_radius * concave_t, loop) - 1
-    return g_curvature_t, concave_t, tool_radius_m
-
-
-def _gradient_constraints(
-    problem: Problem,
-    xPhys: Float[Tensor, "nely nelx"],
-    tPhys: Float[Tensor, "nely nelx"],
-    loop: int,
-) -> list[Float[Tensor, ""]]:
-    """The gradient floor's constraint and the gradient-smoothness constraint, each only
-    where the run has it.
-
-    The floor keeps each element's central-difference `|grad t|` at least a fraction of
-    the median, which rules out the interior saddles, extrema and flat valleys of a
-    smooth field; none of these can be printed. A central difference never reads the
-    element itself, so alone it passes an element-scale pit (PR #166). Bounding the
-    Hessian, `||H||_F <= median / gradient_smoothness`, closes that: the local
-    quadratic's gradient stays within `h ||H||_F / sqrt(2)` of `grad t` across the
-    element, so no critical point fits in one while `gradient_smoothness_m` exceeds
-    `h / (sqrt(2) * min_gradient_fraction)`.
-
-    Both severities are density-weighted like the other aggregated constraints, so an
-    element's severity grows continuously as it turns solid rather than jumping at a
-    threshold (PR #166). The floor's, `x**r * (2 f - |grad t| / median)`, is `f` on
-    the floor in a solid element and 0 in void. The median, over the whole mesh, is
-    held out of the gradient, as a calibration is, so neither constraint can be met by
-    lowering it.
-    """
-    config = problem.config
-    active = [problem.min_gradient, problem.gradient_smoothness]
-    if all(aggregate is None for aggregate in active):
-        return []
-    grad, hess = timefield.central_derivatives(tPhys)
-    if grad.numel() == 0:
-        # Nothing to bound; `grad.sum()` is a zero that keeps each constraint in the
-        # graph.
-        return [grad.sum() - 1 for aggregate in active if aggregate is not None]
-    slope = torch.linalg.vector_norm(grad, dim=-1)
-    median = slope.detach().median()
-    density_r = smooth_max.density_power(xPhys[1:-1, 1:-1].flatten(), config.r)
-    values = []
-    if problem.min_gradient is not None:
-        fraction = run_config.weight_at(config.min_gradient_fraction, loop)
-        severity = density_r * (2 * fraction - slope / median)
-        values.append(problem.min_gradient.aggregate(severity, loop) - fraction)
-    if problem.gradient_smoothness is not None:
-        length = units.in_elements(
-            run_config.weight_at(config.gradient_smoothness_m, loop),
-            config.element_size_m,
-        )
-        # `vector_norm`, unlike `sqrt`, has a finite gradient where `H` vanishes.
-        frobenius = torch.linalg.vector_norm(
-            hess * hess.new_tensor([1.0, 1.0, 2**0.5]), dim=-1
-        )
-        severity = density_r * frobenius * length / median
-        values.append(problem.gradient_smoothness.aggregate(severity, loop) - 1)
-    return values
-
-
 def _admissible_tool_radius_m(
-    concave: Float[Tensor, " n"], element_size_m: float
+    xPhys: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+    element_size_m: float,
+    r: float,
 ) -> float:
     """The largest tool radius that no iso-line's concave curvature (density-weighted,
-    per element) forbids; `inf` where nothing is concave."""
+    per element, as in `constraints.tool_radius`) forbids; `inf` where nothing is
+    concave."""
+    kappa = timefield.iso_curvature(tPhys, xPhys).flatten()
+    density_r = smooth_max.density_power(xPhys[1:-1, 1:-1].flatten(), r)
+    concave = -kappa / timefield.unit_length(tPhys) * density_r
     worst = float(concave.max()) if concave.numel() else 0.0
     return element_size_m / worst if worst > 0 else float("inf")
 

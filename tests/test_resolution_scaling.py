@@ -22,6 +22,7 @@ import sttopt.filters as filters
 import sttopt.seqopt as seqopt
 import sttopt.stto as stto
 import sttopt.torch_util as torch_util
+import sttopt.units as units
 from conftest import default_run_config, default_seq_run_config
 
 WIDTH_M, HEIGHT_M = 0.18, 0.06
@@ -143,9 +144,13 @@ def test_mean_hotspot_severity_converges():
 def test_tool_radius_constraint_converges():
     """At iteration 0 the calibration puts the constraint on the tool radius times the
     true concave curvature, so it is a physical quantity."""
-    values = _at_each_resolution(
-        lambda p, x, t: stto._tool_radius_constraint(p, x, t, 0)[0]
-    )
+
+    def tool_radius(problem, x, t):
+        c = problem.config
+        radius = units.in_elements(c.tool_radius_m, c.element_size_m)
+        return constraints.tool_radius(x, t, problem.curvature, radius, c.r, 0)
+
+    values = _at_each_resolution(tool_radius)
     assert values[-1] > -1  # non-vacuous: the iso-lines are concave
     assert _order(values) >= MIN_ORDER, values
 

@@ -17,6 +17,7 @@ import pytest
 import torch
 
 import sttopt.compliance as compliance
+import sttopt.constraints as constraints
 import sttopt.filters as filters
 import sttopt.run_config as run_config
 import sttopt.stto as stto
@@ -832,7 +833,9 @@ def test_gradient_floor_holds_its_median_out_of_the_gradient():
         for _ in range(2)
     )
 
-    (value,) = stto._gradient_constraints(problem, xPhys, tPhys, STATE_LOOP)
+    (value,) = constraints.min_gradient(
+        xPhys, tPhys, problem.min_gradient, 0.5, problem.config.r, STATE_LOOP
+    )
     got = torch.autograd.grad(value, (xPhys, tPhys))
 
     grad, _ = timefield.central_derivatives(tPhys)
