@@ -55,7 +55,7 @@ CONFIG = default_run_config(
     load_length_m=0.0,
     raa0_total=1e-5 * 2 * NELX * NELY,
     enable_stage_volume=True,
-    # the fixtures predate the gradient rows and the penal ramp
+    # the fixtures predate the gradient constraints and the penal ramp
     min_gradient_fraction=0.0,
     gradient_smoothness_m=0.0,
     penal=3.0,

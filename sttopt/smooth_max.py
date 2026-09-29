@@ -1,5 +1,5 @@
-"""Calibrated smooth maxima of per-element severity fields, for constraint rows that
-bound the worst element of a field rather than its average."""
+"""Calibrated smooth maxima of per-element severity fields, for constraints that bound
+the worst element of a field rather than its average."""
 
 import torch
 from jaxtyping import Float

@@ -150,7 +150,7 @@ def test_build_problem_rejects_the_1x1_mesh(tfield):
     normalize by a zero max distance, and the continuity filter divides by a zero
     neighbour count -- so it must be rejected up front, before either produces a `nan` or
     a divide-by-zero warning. Lone-1 meshes stay legal (see `test_timefield.py`) without
-    a tool-radius row, which needs an interior element (see
+    a tool-radius constraint, which needs an interior element (see
     `test_tool_radius_needs_an_interior_element`)."""
     with pytest.raises(ValueError):
         _problem(nelx=1, nely=1, tfield=tfield)
@@ -333,8 +333,8 @@ def test_step_constraint_rows_read_the_leaves_they_are_built_from():
         nelx=nelx,
         nely=nely,
         nStage=nStage,
-        # A tolerance the random draw roughly meets: at the default, its continuity row
-        # is violated ~1e3-fold and MMA's subproblem stalls.
+        # A tolerance the random draw roughly meets: at the default, its continuity
+        # constraint is violated ~1e3-fold and MMA's subproblem stalls.
         config_overrides={
             "enable_continuity": True,
             "continuity_tol": 1e-2,
@@ -345,9 +345,9 @@ def test_step_constraint_rows_read_the_leaves_they_are_built_from():
     )
     _, record = stto.step(problem, _draw_state(problem, np.random.default_rng(0)))
 
-    # Row order is `step`'s stack: volume, continuity, the start-point row, an upper and
-    # a lower bound per stage, the hotspot row, the tool-radius row, the gradient floor
-    # and the gradient-smoothness row.
+    # The Jacobian rows follow `step`'s stack: volume, continuity, start point, an upper
+    # and a lower bound per stage, hotspot, tool radius, gradient floor and gradient
+    # smoothness.
     density, time, both = (True, False), (False, True), (True, True)
     expected = [density, time, time] + [both] * (2 * nStage) + [both] * 4
     assert record.dg.shape[0] == len(expected)
@@ -473,10 +473,10 @@ def test_step_objective_adds_the_weighted_uniformity_penalty():
     np.testing.assert_allclose(f_100, f_0 + 100.0 * uniformity, rtol=1e-9)
 
 
-def test_the_first_step_calibrates_the_hotspot_row_against_the_seed():
+def test_the_first_step_calibrates_the_hotspot_constraint_against_the_seed():
     """Iteration 0 already reports the seed's true maximum severity: it is a refresh
-    iteration, so the aggregate's bias is calibrated out before the first hotspot row is
-    built rather than some periods into the run."""
+    iteration, so the aggregate's bias is calibrated out before the first hotspot
+    constraint is built rather than some periods into the run."""
     problem = _problem()
     uncalibrated = problem.hotspot.calibration
     state = stto.init_state(problem)
@@ -492,12 +492,12 @@ def test_the_first_step_calibrates_the_hotspot_row_against_the_seed():
     assert record.tru_max == pytest.approx(true_max, rel=1e-12)
 
 
-def test_enable_continuity_false_drops_the_continuity_constraint_row():
-    """Disabling continuity removes its row rather than relaxing it, so the start-point
-    rows follow the volume row directly."""
+def test_enable_continuity_false_drops_the_continuity_constraint():
+    """Disabling continuity removes its constraint rather than relaxing it, so the
+    start-point constraint follows the volume constraint directly."""
     # Both ends of the comparison are set here rather than left to the default, which
-    # the row count would otherwise silently follow -- it has been `false`, which makes
-    # this a config compared against itself.
+    # the constraint count would otherwise silently follow -- it has been `false`, which
+    # makes this a config compared against itself.
     base_config = _problem().config
     problem = stto.build_problem(
         dataclasses.replace(base_config, enable_continuity=False)
@@ -756,8 +756,8 @@ def test_step_would_have_produced_nan_without_the_nan_safe_rewrite():
 
 
 def _gradient_records(**overrides):
-    """One `step` record with neither gradient row and one with `overrides`, from the
-    same design, at iteration `STATE_LOOP`, with the physical fields `step` read."""
+    """One `step` record with neither gradient constraint and one with `overrides`, from
+    the same design, at iteration `STATE_LOOP`, with the physical fields `step` read."""
     base = _problem(
         nelx=10,
         nely=8,
@@ -782,9 +782,9 @@ def _slope_and_frobenius(tPhys):
     return torch.hypot(tx, ty), torch.sqrt(txx**2 + tyy**2 + 2 * txy**2)
 
 
-def test_gradient_rows_append_their_density_weighted_maxima():
-    """Each row is its true maximum severity minus its bound, since every smooth maximum
-    in it is calibrated onto the true one."""
+def test_gradient_constraints_append_their_density_weighted_maxima():
+    """Each constraint is its true maximum severity minus its bound, since every smooth
+    maximum in it is calibrated onto the true one."""
     record, with_record, (xPhys, tPhys), r = _gradient_records(
         min_gradient_fraction=0.5, gradient_smoothness_m=2 * ELEMENT_M
     )
@@ -800,8 +800,9 @@ def test_gradient_rows_append_their_density_weighted_maxima():
     assert with_record.g[-1] == pytest.approx(smoothness, rel=1e-10)
 
 
-def test_gradient_rows_at_zero_mid_schedule_are_inactive():
-    """A ramp that has not yet left 0 already has its row, which any field meets."""
+def test_gradient_constraints_at_zero_mid_schedule_are_inactive():
+    """A ramp that has not yet left 0 already has its constraint, which any field
+    meets."""
     ramp = run_config.PiecewiseSchedule(
         points=[[0, 0.0], [STATE_LOOP + 10, 0.0], [STATE_LOOP + 20, 0.5]]
     )
@@ -831,8 +832,8 @@ def test_gradient_floor_holds_its_median_out_of_the_gradient():
         for _ in range(2)
     )
 
-    (row,) = stto._gradient_rows(problem, xPhys, tPhys, STATE_LOOP)
-    got = torch.autograd.grad(row, (xPhys, tPhys))
+    (value,) = stto._gradient_constraints(problem, xPhys, tPhys, STATE_LOOP)
+    got = torch.autograd.grad(value, (xPhys, tPhys))
 
     grad, _ = timefield.central_derivatives(tPhys)
     slope = torch.linalg.vector_norm(grad, dim=-1)
@@ -847,12 +848,12 @@ def test_gradient_floor_holds_its_median_out_of_the_gradient():
 
 
 def _curvature_records(tool_radius_m):
-    """One `step` record with no tool-radius row and one at `tool_radius_m`, from the
-    same design, at iteration `STATE_LOOP`."""
+    """One `step` record with no tool-radius constraint and one at `tool_radius_m`, from
+    the same design, at iteration `STATE_LOOP`."""
     base = _problem(
         nelx=10,
         nely=8,
-        # so the tool-radius row is the last one
+        # so the tool-radius constraint is the last one
         config_overrides={
             "tool_radius_m": 0.0,
             "min_gradient_fraction": 0.0,
@@ -868,9 +869,9 @@ def _curvature_records(tool_radius_m):
     return record, with_record
 
 
-def test_tool_radius_appends_one_row_bounding_the_concave_curvature():
-    """The row is the tool radius over the largest one the design admits, minus 1,
-    since every iteration refreshes the calibration onto the true maximum."""
+def test_tool_radius_appends_one_constraint_bounding_the_concave_curvature():
+    """The constraint is the tool radius over the largest one the design admits, minus
+    1, since every iteration refreshes the calibration onto the true maximum."""
     record, with_record = _curvature_records(2.0 * ELEMENT_M)
 
     assert with_record.g.shape == (record.g.shape[0] + 1,)
@@ -883,8 +884,9 @@ def test_tool_radius_appends_one_row_bounding_the_concave_curvature():
     assert np.abs(with_record.dg[-1]).max() > 0
 
 
-def test_tool_radius_at_zero_mid_schedule_is_an_inactive_row():
-    """A ramp that has not yet left 0 already has its row, which a zero-radius tool
+def test_tool_radius_at_zero_mid_schedule_is_an_inactive_constraint():
+    """A ramp that has not yet left 0 already has its constraint, which a zero-radius
+    tool
     satisfies with no gradient."""
     ramp = run_config.PiecewiseSchedule(
         points=[[0, 0.0], [STATE_LOOP + 10, 0.0], [STATE_LOOP + 20, 3.0 * ELEMENT_M]]

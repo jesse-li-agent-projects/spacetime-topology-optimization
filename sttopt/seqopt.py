@@ -343,14 +343,13 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     value, differentiate by autograd (`t` is the sole leaf), call `mma.mmasub`, and
     unpack the result into the next state.
 
-    Constraints are stacked in a fixed order: `constraints.time_field_continuity`
-    (when `config.enable_continuity`), then `constraints.start_point`, then (when
-    `config.nStage > 0`) the interleaved upper/lower stage-volume rows.
-    `constraints.stage_volume_bounds` is called with
-    `volfrac = xPhys.mean()`, which makes its scale factor `nelx*nely*volfrac ==
-    xPhys.sum()` -- the row becomes "fraction *of the part* deposited by `t_stage`,
-    versus `t_stage`", the right statement once density is fixed rather than a design
-    variable.
+    Constraints are stacked in a fixed order: `constraints.time_field_continuity` (when
+    `config.enable_continuity`), then `constraints.start_point`, then (when
+    `config.nStage > 0`) the interleaved upper/lower stage-volume constraints.
+    `constraints.stage_volume_bounds` is called with `volfrac = xPhys.mean()`, which
+    makes its scale factor `nelx*nely*volfrac == xPhys.sum()` -- the constraint becomes
+    "fraction *of the part* deposited by `t_stage`, versus `t_stage`", the right
+    statement once density is fixed rather than a design variable.
 
     Iterations are 0-indexed, as in `stto.step`. The `beta_t += 5` update (every 30
     iterations after the first, capped at 50) takes effect the *next* iteration, matching

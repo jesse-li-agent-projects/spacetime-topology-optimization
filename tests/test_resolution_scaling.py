@@ -140,10 +140,12 @@ def test_mean_hotspot_severity_converges():
     assert _order(values) >= MIN_ORDER, values
 
 
-def test_tool_radius_row_converges():
-    """At iteration 0 the calibration puts the row on the tool radius times the true
-    concave curvature, so it is a physical quantity."""
-    values = _at_each_resolution(lambda p, x, t: stto._tool_radius_row(p, x, t, 0)[0])
+def test_tool_radius_constraint_converges():
+    """At iteration 0 the calibration puts the constraint on the tool radius times the
+    true concave curvature, so it is a physical quantity."""
+    values = _at_each_resolution(
+        lambda p, x, t: stto._tool_radius_constraint(p, x, t, 0)[0]
+    )
     assert values[-1] > -1  # non-vacuous: the iso-lines are concave
     assert _order(values) >= MIN_ORDER, values
 
@@ -170,13 +172,13 @@ def test_continuity_row_converges():
     assert _order(values) >= MIN_ORDER, values
 
 
-def test_constraint_row_count_is_independent_of_resolution():
-    rows = []
+def test_constraint_count_is_independent_of_resolution():
+    counts = []
     for n in NELX[:2]:
         problem = _problem(n, nStage=2)
         _, record = stto.step(problem, stto.init_state(problem))
-        rows.append(len(record.g))
-    assert rows[0] == rows[1]
+        counts.append(len(record.g))
+    assert counts[0] == counts[1]
 
 
 @pytest.mark.parametrize("kappa", [0.0, 2.3666])

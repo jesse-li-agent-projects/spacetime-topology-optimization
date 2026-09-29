@@ -30,7 +30,7 @@ _FIXTURE_CONFIG = default_run_config(
     # The default's lower early penalty moves the volume less per step.
     penal=3.0,
     # Set here rather than left to the default, which has been `false`: without the
-    # stage volume rows the global volume constraint pins the mean from the first
+    # stage volume constraints the global volume constraint pins the mean from the first
     # iteration, and a volume that no longer moves within an iteration is one the
     # obj/vol test cannot read either quantity from. `move` alone does not recover it.
     enable_stage_volume=True,

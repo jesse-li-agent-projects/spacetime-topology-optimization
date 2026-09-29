@@ -25,8 +25,8 @@ This directory contains plans for agents.
 - post_run_checks.md
     - Not started. A check on a saved design that reads the physical fields and
       reports the margin of each condition the design must meet (print start,
-      constraint rows, true hotspot max, connectivity), since a row can pass while
-      the condition behind it slips.
+      constraint values, true hotspot max, connectivity), since a constraint can pass
+      while the condition behind it slips.
 Completed plans live in `plans/archive/` and are not summarized here to keep this
 index short. Only open one if you specifically need the history behind a past
 decision.

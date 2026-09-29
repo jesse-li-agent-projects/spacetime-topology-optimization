@@ -605,7 +605,7 @@ def test_stage_volume_bounds_value_matches_hand_derived():
     assert_close(fl.detach(), fl_ref, tier="algebraic")
     assert_close(dfx.flatten(), dfx_ref, tier="algebraic")
     assert_close(dft.flatten(), dft_ref, tier="algebraic")
-    # The lower row's sensitivity is the upper's explicit negation, not a second
+    # The lower bound's sensitivity is the upper's explicit negation, not a second
     # autograd call (plans/torch_port_part2.md Phase 3.4).
     assert_close(-dfx.flatten(), -dfx_ref, tier="algebraic")
     assert_close(-dft.flatten(), -dft_ref, tier="algebraic")

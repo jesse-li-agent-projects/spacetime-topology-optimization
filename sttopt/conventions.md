@@ -136,9 +136,9 @@ equal print times would walk straight into.
 
 The continuity filter (`filters.continuity_filter`) averages the neighbors weighted
 `max(0, lrmin - dist)`, not the source's unweighted square of `ceil(lrmin) - 1`
-elements: that window's physical size jumped with the mesh, so the continuity row could
-not converge under refinement (`plans/archive/physical_units.md`, step 6). The MATLAB
-oracle keeps the source's form, for the fixtures built with it.
+elements: that window's physical size jumped with the mesh, so the continuity constraint
+could not converge under refinement (`plans/archive/physical_units.md`, step 6). The
+MATLAB oracle keeps the source's form, for the fixtures built with it.
 
 ## Time-field treatment: `stto` vs. `seqopt`
 
