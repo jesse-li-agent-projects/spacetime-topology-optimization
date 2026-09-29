@@ -266,7 +266,8 @@ Each phase is one or more PRs. Keep the commits small (see `CLAUDE.local.md`). P
 ### Phase 2: `stto` study at a 4 mm tool radius (compute)
 
 - The dev set (below) with `stto`, `tool_radius_m` final value 4 mm, 800 iterations,
-  3 replicates per cell (at least one on GPU).
+  one run per cell. Rerun a marginal cell (a hotspot or tool-radius row of the
+  binarized-design report within 0.05 of 0) on the other device (CPU vs GPU).
 - **Report the compliance change from iteration 600 to 800 in each run.** This
   indicates the expected compliance of a 600-iteration schedule.
 - Also do one quick run of load case D, to check that its optimum is not trivial (for
