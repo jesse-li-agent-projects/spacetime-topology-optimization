@@ -8,9 +8,12 @@ a separate function. Sensitivities come from autograd (Phase 3.4,
 in `tests/reference/constraints.py` (`tests/test_reference_sweep.py`). See
 `conventions.md` for array-order and tolerance conventions.
 
-Each function returns the constraint's value alone; callers (the main optimization
-loop) get sensitivities from autograd and assemble the final MMA-input matrix.
+Each function returns its constraint values alone, as a 1-D tensor with one entry per
+constraint; callers (the main optimization loop) stack them and get sensitivities from
+autograd.
 """
+
+from typing import Sequence
 
 import torch
 from jaxtyping import Float, Int
@@ -21,18 +24,18 @@ import sttopt.compliance as compliance
 
 def global_volume_fraction(
     xPhys: Float[Tensor, "nely nelx"], volfrac: float
-) -> Float[Tensor, ""]:
+) -> Float[Tensor, " 1"]:
     """Global printable-volume-fraction constraint: total deposited material vs. `volfrac`,
     differentiable end to end w.r.t. `xPhys`.
     """
     nely, nelx = xPhys.shape
     scale = nelx * nely * volfrac
-    return torch.sum(xPhys) / scale - 1
+    return (torch.sum(xPhys) / scale - 1)[None]
 
 
 def time_field_continuity(
     tPhys: Float[Tensor, "nely nelx"], L: Tensor, tolerance: float = 1.0e-6
-) -> Float[Tensor, ""]:
+) -> Float[Tensor, " 1"]:
     """Time-field smoothness constraint: keeps each element's print time close to its local
     neighborhood average (`filters.continuity_filter`'s `L`), so the deposition sequence
     sweeps coherently across the mesh instead of jumping between distant elements.
@@ -55,12 +58,12 @@ def time_field_continuity(
     :return: the constraint value, non-positive when satisfied
     """
     deviation = L @ tPhys.flatten()
-    return torch.mean(deviation**2) / tolerance - 1
+    return (torch.mean(deviation**2) / tolerance - 1)[None]
 
 
 def start_point(
     tPhys: Float[Tensor, "nely nelx"], Nei: Int[Tensor, " k"]
-) -> Float[Tensor, ""]:
+) -> Float[Tensor, " 1"]:
     """
     Print-start constraint: the deposition-origin element(s) must start printing at t=0
     (up to machine precision).
@@ -76,30 +79,32 @@ def start_point(
     :param Nei: deposition-origin element numbers, 0-indexed per `conventions.md`
     :return: the constraint value, non-positive when satisfied
     """
-    return tPhys.flatten()[Nei].mean() - 1.0e-9
+    return (tPhys.flatten()[Nei].mean() - 1.0e-9)[None]
 
 
 def stage_volume_bounds(
     xPhys: Float[Tensor, "nely nelx"],
     tPhys: Float[Tensor, "nely nelx"],
-    t_stage: float,
+    stage_times: Sequence[float],
     volfrac: float,
     beta_t: float,
-) -> Float[Tensor, ""]:
-    """Per-stage material deposition budget's *upper* bound: at stage boundary `t_stage`
-    (a fraction of the build, in (0, 1]), the volume fraction deposited so far must stay
+) -> Float[Tensor, " 2*n_stage"]:
+    """Per-stage material deposition budget: at each stage boundary `t_stage` (a
+    fraction of the build, in (0, 1]), the volume fraction deposited so far must stay
     within a small slack of `t_stage` itself -- an even deposition schedule spends the
     build's material at the rate the build advances, via a smooth stage-membership mask
     (`compliance.time_mask`, sharpness `beta_t`) rather than a hard time cutoff.
 
-    The lower bound is an explicit negation of the upper's *value*, so callers build
-    `fval_lower = -fval_upper - 1.0e-5` themselves rather than evaluating a second
-    expression. The sensitivity is not negated by convention -- a caller differentiating
-    both constraints gets `dfdx_lower == -dfdx_upper` to floating-point precision, not
-    by a hand-applied negation.
+    An upper and a lower bound per stage, interleaved. The lower bound is the negated
+    upper one with a `1e-5` slack, so its sensitivity is exactly the negated upper's.
     """
     nely, nelx = xPhys.shape
     scale = nelx * nely * volfrac
-    t_mask = compliance.time_mask(tPhys, t_stage, beta_t)
-    xtJoint = xPhys * t_mask
-    return torch.sum(xtJoint) / scale - t_stage
+    upper = torch.stack(
+        [
+            torch.sum(xPhys * compliance.time_mask(tPhys, t_stage, beta_t)) / scale
+            - t_stage
+            for t_stage in stage_times
+        ]
+    )
+    return torch.stack([upper, -upper - 1.0e-5], dim=1).flatten()

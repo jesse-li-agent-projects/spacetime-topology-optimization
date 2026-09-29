@@ -570,30 +570,19 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     # -- Constraints, stacked in the reference loop's exact order. `tests/
     # matlab_reference_loop.py` is the authority for this order. --
-    g_vol_t = constraints.global_volume_fraction(xPhys, config.volfrac)
     vol_diag = float(xPhys.detach().sum() / (nelx * nely))
 
-    g_parts: list[Tensor] = [g_vol_t[None]]
+    g_parts: list[Tensor] = [constraints.global_volume_fraction(xPhys, config.volfrac)]
     if config.enable_continuity:
-        g_cont_t = constraints.time_field_continuity(
-            tPhys, problem.L, config.continuity_tol
-        )
-        g_parts.append(g_cont_t[None])
-
-    g_parts.append(constraints.start_point(tPhys, problem.Nei)[None])
-
-    if config.enable_stage_volume:
-        stage_upper_t = [  # per-stage volume bounds
-            constraints.stage_volume_bounds(
-                xPhys, tPhys, float(t_stage), config.volfrac, beta_t
-            )
-            for t_stage in stage_times
-        ]
-        stage_upper_t = torch.stack(stage_upper_t)
-
-        # Interleaves upper_0, lower_0, upper_1, lower_1, ...
         g_parts.append(
-            torch.stack([stage_upper_t, -stage_upper_t - 1.0e-5], dim=1).flatten()
+            constraints.time_field_continuity(tPhys, problem.L, config.continuity_tol)
+        )
+    g_parts.append(constraints.start_point(tPhys, problem.Nei))
+    if config.enable_stage_volume:
+        g_parts.append(
+            constraints.stage_volume_bounds(
+                xPhys, tPhys, stage_times, config.volfrac, beta_t
+            )
         )
 
     # Hotspot constraint, recalibrated on every call: its value is the true maximum

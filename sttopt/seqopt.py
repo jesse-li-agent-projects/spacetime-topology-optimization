@@ -399,25 +399,17 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     xval = tflat
 
     # -- Constraints, in the fixed documented order above. --
-    g_start_t = constraints.start_point(tPhys, problem.Nei)
-    g_parts = [g_start_t[None]]
+    g_parts = []
     if config.enable_continuity:
-        g_cont_t = constraints.time_field_continuity(
-            tPhys, problem.L, config.continuity_tol
+        g_parts.append(
+            constraints.time_field_continuity(tPhys, problem.L, config.continuity_tol)
         )
-        g_parts.insert(0, g_cont_t[None])
-
+    g_parts.append(constraints.start_point(tPhys, problem.Nei))
     if nStage > 0:
         stage_times = [float(ti) for ti in np.linspace(0, 1, nStage + 1)[1:]]
         volfrac = float(xPhys.mean())  # xPhys.sum() == nelx*nely*volfrac, see docstring
-        stage_upper_t = torch.stack(
-            [
-                constraints.stage_volume_bounds(xPhys, tPhys, t_stage, volfrac, beta_t)
-                for t_stage in stage_times
-            ]
-        )
         g_parts.append(
-            torch.stack([stage_upper_t, -stage_upper_t - 1.0e-5], dim=1).flatten()
+            constraints.stage_volume_bounds(xPhys, tPhys, stage_times, volfrac, beta_t)
         )
 
     g_all = torch.cat(g_parts)
