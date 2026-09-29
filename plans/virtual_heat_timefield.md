@@ -119,7 +119,8 @@ relative change of `χ` at any value.
 - `α = β / l_c²`, where `l_c` is the domain extent normal to the build plate (width
   for `edge`, height for `bottom_edge`). Then `k·l_c = √β` at `χ = 1`. The config
   field is `drain_beta`.
-- `T → t` is a config option: `one_minus`, `neg_log`, `poisson`.
+- `T → t` is a config option: `one_minus`, `neg_log`, `poisson` (default; see the
+  priority in Phase 8).
 - `neg_log`: `t = −log(T + T_eps)`, `T_eps = exp(−3√β)`. A fixed floor such as
   10⁻⁶ would clip real part values at a large β.
 - `poisson`:
@@ -147,7 +148,8 @@ relative change of `χ` at any value.
   Do not add a gauge constraint unless it causes trouble.
 - The inhomogeneous Dirichlet data enters by lifting: `rhs = −K_fd·g`. `FemSolve`
   already returns `dL/dF`, so autograd carries the gradient to `a` and `c`.
-- `T → t` options: `identity`, `poisson`. `poisson` uses `w = 1`, `φ = 0` on the
+- `T → t` options: `identity` (default; see the priority in Phase 8), `poisson`.
+  `poisson` uses `w = 1`, `φ = 0` on the
   plate, and natural BCs on the walls, so the walls then act only through the
   direction of `X`.
 
@@ -346,16 +348,24 @@ from a snapshot, and log `sttopt.__file__`.
 
 Steps (Variant 1 first, then Variant 2 on the same steps):
 1. **Hotspot only** (tool radius, `min_gradient`, `gradient_smoothness` off). Get
-   *any* schedule to pass on C1. Then pass on all 3 cells. Carry both candidate
-   `T → t` options through this step (Variant 1: `neg_log`, `poisson`; Variant 2:
-   `identity`, `poisson`). Then drop the weaker one of each pair, with the user's
-   agreement.
-2. `uniformity_weight` 0 against > 0: is `_gradient_cv` still needed?
+   *any* schedule to pass on C1. Then pass on all 3 cells. Tune only the primary
+   `T → t` option of each variant (see "`T → t` priority" below).
+2. `uniformity_weight` 0 against > 0: is `_gradient_cv` still needed? (Variant 1
+   only. Variant 2 `identity` needs it.)
 3. Add back the tool radius, then `min_gradient`, then `gradient_smoothness`, one at a
    time. Re-tune after each one.
 4. Variant 2 only: if the ramp init is not robust, try the alternative init (above).
 5. Compress from 800 to 600 iterations (start by scaling the change points by 0.75).
    Use the same pass criteria. If it fails, report the gap to the user.
+
+**`T → t` priority.** The user chose these on a hunch, to start tuning early:
+- Variant 1: `poisson`.
+- Variant 2: `identity`, with `_gradient_cv` (`uniformity_weight > 0`) for uniform
+  layers.
+
+The other options (`neg_log` for Variant 1, `poisson` for Variant 2) are *lower
+priority, not rejected*. Phase 4 still implements and tests them. Tune them only
+if the primary option fails, or if the user asks.
 
 Judge a change against a matched control (the same schedule without the change).
 Replicate the marginal cells on CPU and GPU. Watch the multipliers: rows at `mma_c`
