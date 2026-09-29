@@ -3,5 +3,6 @@
 !default.json
 !seq_default.json
 !heat_default.json
+!laplace_default.json
 !.gitignore
 !continuation.md
