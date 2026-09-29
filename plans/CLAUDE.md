@@ -12,6 +12,9 @@ This directory contains plans for agents.
       with a `kappa` continuation from the present isotropic behavior, and
       `Normalization.HALF_STENCIL`'s divisor generalized from a constant to a
       per-element directional reference.
+- constraint_normalization.md
+    - Not started, the problem only. Some constraints are `value / bound - 1` and some
+      `value - bound`, so their weight in MMA differs with the bound.
 - curvature_constraint.md
     - A hard MMA constraint keeping the concave curvature of `t`'s iso-lines below
       `1 / tool_radius`, so the print tool cannot collide with the part. Calibrated
@@ -22,8 +25,8 @@ This directory contains plans for agents.
 - post_run_checks.md
     - Not started. A check on a saved design that reads the physical fields and
       reports the margin of each condition the design must meet (print start,
-      constraint rows, true hotspot max, connectivity), since a row can pass while
-      the condition behind it slips.
+      constraint values, true hotspot max, connectivity), since a constraint can pass
+      while the condition behind it slips.
 Completed plans live in `plans/archive/` and are not summarized here to keep this
 index short. Only open one if you specifically need the history behind a past
 decision.

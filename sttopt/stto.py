@@ -3,7 +3,7 @@ conductivity/mma together into the actual space-time topology optimization itera
 
 Every module this file calls already owns its own math and its own fixture/FD tests;
 this file's only job is *wiring* -- building the stacked objective/constraint arrays
-MMA expects, in the exact row order the MATLAB main loop uses, and threading the
+MMA expects, in the exact constraint order the MATLAB main loop uses, and threading the
 iteration-dependent state (`beta_d`, `beta_t`, `xold1`/`xold2`, `low`/`upp`, and the
 raw x/t fields) from one call to the next. See
 `conventions.md` for array-order conventions and `tests/matlab_reference_loop.py` (a
@@ -92,10 +92,11 @@ class Problem:
     # Smooth maximum of the hotspot severity, holding its own calibration.
     hotspot: conductivity.PMean | conductivity.LogSumExp
     # Smooth maximum of the tool-radius curvature severity, holding its own
-    # calibration, or None where `config.tool_radius_m` never leaves 0 and so has no row.
+    # calibration, or None where `config.tool_radius_m` never leaves 0 and so has no
+    # constraint.
     curvature: smooth_max.CalibratedLogSumExp | None
     # Smooth maximum of the gradient-floor severity, holding its own calibration, or
-    # None where `config.min_gradient_fraction` never leaves 0 and so has no row.
+    # None where `config.min_gradient_fraction` never leaves 0 and so has no constraint.
     min_gradient: smooth_max.CalibratedLogSumExp | None
     # Likewise for the gradient-smoothness severity and `config.gradient_smoothness_m`.
     gradient_smoothness: smooth_max.CalibratedLogSumExp | None
@@ -191,7 +192,7 @@ def build_problem(
         raise ValueError(
             f"nelx and nely cannot both be 1, got nelx={nelx}, nely={nely}"
         )
-    # The tool-radius row smooth-maxes over the elements `iso_curvature` measures
+    # The tool-radius constraint smooth-maxes over the elements `iso_curvature` measures
     if not run_config.identically_zero(config.tool_radius_m):
         measured = timefield.iso_curvature(torch.zeros(nely, nelx, dtype=torch.float64))
         if measured.numel() == 0:
@@ -404,8 +405,8 @@ def _sensitivity_rows(
     t: Float[Tensor, "nely nelx"],
 ) -> Float[Tensor, "k n"]:
     """Sensitivities of `k` independent scalar outputs (e.g. one per element, or one per
-    stage, or a single row passed as `value[None]`) w.r.t. both raw leaves, as `(k, n)`
-    in MMA's `[density; time]` layout.
+    stage, or a single value passed as `value[None]`) w.r.t. both raw leaves, as
+    `(k, n)` in MMA's `[density; time]` layout.
 
     Every step of the chain is autograd's, the density filter included. That is only
     affordable because `filters.apply_density_filter` multiplies through
@@ -473,7 +474,7 @@ def estimated_conductivity(
 
 def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     """Run one optimization iteration: build the objective + every constraint's value
-    in the reference's exact row order, differentiate the whole graph by autograd
+    in the reference's exact order, differentiate the whole graph by autograd
     (`plans/torch_port_part2.md` Phase 3.4 -- `x`/`t` are the autograd leaves, per
     Decision 4; the filter and Heaviside projection are ordinary forward operations,
     not accompanied by a hand-derived `dx` chain-rule factor), call `mma.mmasub`, and
@@ -486,7 +487,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     on the returned state, so a scheduled change takes effect starting the next `step`
     call rather than rescaling this iteration's own `g_all`/`dg_dx`/`xPhys` mid-loop --
     a deliberate simplification, not a fidelity gap. The hotspot calibration refresh
-    instead applies to this iteration's own hotspot row, as in the MATLAB source.
+    instead applies to this iteration's own hotspot constraint, as in the MATLAB source.
     """
     config = problem.config
     nely, nelx, nStage = config.nely, config.nelx, config.nStage
@@ -568,31 +569,20 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     )
 
     # -- Constraints, stacked in the reference loop's exact order. `tests/
-    # matlab_reference_loop.py` is the authority for this row order. --
-    g_vol_t = constraints.global_volume_fraction(xPhys, config.volfrac)
+    # matlab_reference_loop.py` is the authority for this order. --
     vol_diag = float(xPhys.detach().sum() / (nelx * nely))
 
-    g_parts: list[Tensor] = [g_vol_t[None]]
+    g_parts: list[Tensor] = [constraints.global_volume_fraction(xPhys, config.volfrac)]
     if config.enable_continuity:
-        g_cont_t = constraints.time_field_continuity(
-            tPhys, problem.L, config.continuity_tol
-        )
-        g_parts.append(g_cont_t[None])
-
-    g_parts.append(constraints.start_point(tPhys, problem.Nei)[None])
-
-    if config.enable_stage_volume:
-        stage_upper_t = [  # per-stage volume bounds
-            constraints.stage_volume_bounds(
-                xPhys, tPhys, float(t_stage), config.volfrac, beta_t
-            )
-            for t_stage in stage_times
-        ]
-        stage_upper_t = torch.stack(stage_upper_t)
-
-        # Interleaves upper_0, lower_0, upper_1, lower_1, ...
         g_parts.append(
-            torch.stack([stage_upper_t, -stage_upper_t - 1.0e-5], dim=1).flatten()
+            constraints.time_field_continuity(tPhys, problem.L, config.continuity_tol)
+        )
+    g_parts.append(constraints.start_point(tPhys, problem.Nei))
+    if config.enable_stage_volume:
+        g_parts.append(
+            constraints.stage_volume_bounds(
+                xPhys, tPhys, stage_times, config.volfrac, beta_t
+            )
         )
 
     # Hotspot constraint, recalibrated on every call: its value is the true maximum
@@ -604,13 +594,46 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     g_parts.append(g_hotspot_t[None])
 
-    g_curvature_t, concave_t, tool_radius_m = _tool_radius_row(
-        problem, xPhys, tPhys, loop
-    )
-    if g_curvature_t is not None:
-        g_parts.append(g_curvature_t[None])
-    g_parts.extend(row[None] for row in _gradient_rows(problem, xPhys, tPhys, loop))
+    h = config.element_size_m
+    tool_radius_m = run_config.weight_at(config.tool_radius_m, loop)
+    if problem.curvature is not None:
+        g_parts.append(
+            constraints.tool_radius(
+                xPhys,
+                tPhys,
+                problem.curvature,
+                units.in_elements(tool_radius_m, h),
+                config.r,
+                loop,
+            )
+        )
+    if problem.min_gradient is not None:
+        g_parts.append(
+            constraints.min_gradient(
+                xPhys,
+                tPhys,
+                problem.min_gradient,
+                run_config.weight_at(config.min_gradient_fraction, loop),
+                config.r,
+                loop,
+            )
+        )
+    if problem.gradient_smoothness is not None:
+        g_parts.append(
+            constraints.gradient_smoothness(
+                xPhys,
+                tPhys,
+                problem.gradient_smoothness,
+                units.in_elements(
+                    run_config.weight_at(config.gradient_smoothness_m, loop), h
+                ),
+                config.r,
+                loop,
+            )
+        )
     g_all = torch.cat(g_parts)
+    # Per part, not on `g_all`: a row of the stack would also backpropagate zeros
+    # through every other part's graph, the hotspot's included (~35% slower per step, PR #173).
     dg_dx = torch.cat(
         [_sensitivity_rows(g, x, t) for g in g_parts],
         dim=0,
@@ -639,7 +662,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         beta_t=beta_t,
         tool_radius_m=tool_radius_m,
         admissible_tool_radius_m=_admissible_tool_radius_m(
-            concave_t.detach(), config.element_size_m
+            xPhys.detach(), tPhys.detach(), config.element_size_m, config.r
         ),
         min_gradient_fraction=run_config.weight_at(config.min_gradient_fraction, loop),
         gradient_smoothness_m=run_config.weight_at(config.gradient_smoothness_m, loop),
@@ -723,92 +746,18 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     return new_state, record
 
 
-def _tool_radius_row(
-    problem: Problem,
-    xPhys: Float[Tensor, "nely nelx"],
-    tPhys: Float[Tensor, "nely nelx"],
-    loop: int,
-) -> tuple[Float[Tensor, ""] | None, Float[Tensor, " n"], float]:
-    """The tool-radius constraint on the concave curvature of the iso-lines, `None`
-    where the run has no such row, with the concave curvature per measured element
-    (density-weighted, per element) and iteration `loop`'s tool radius `R`, in metres.
-
-    The severity is `R * concave curvature`, so the row is its smooth maximum minus the
-    bound of 1.
-    """
-    config = problem.config
-    kappa_t = timefield.iso_curvature(tPhys, xPhys)
-    unit = timefield.unit_length(tPhys)
-    density_r = smooth_max.density_power(xPhys[1:-1, 1:-1].flatten(), config.r)
-    concave_t = -kappa_t.flatten() / unit * density_r
-    tool_radius_m = run_config.weight_at(config.tool_radius_m, loop)
-    if problem.curvature is None:
-        return None, concave_t, tool_radius_m
-    tool_radius = units.in_elements(tool_radius_m, config.element_size_m)
-    g_curvature_t = problem.curvature.aggregate(tool_radius * concave_t, loop) - 1
-    return g_curvature_t, concave_t, tool_radius_m
-
-
-def _gradient_rows(
-    problem: Problem,
-    xPhys: Float[Tensor, "nely nelx"],
-    tPhys: Float[Tensor, "nely nelx"],
-    loop: int,
-) -> list[Float[Tensor, ""]]:
-    """The gradient floor's row and the gradient-smoothness row, each only where the
-    run has it.
-
-    The floor keeps each element's central-difference `|grad t|` at least a fraction of
-    the median, which rules out the interior saddles, extrema and flat valleys of a
-    smooth field; none of these can be printed. A central difference never reads the
-    element itself, so alone it passes an element-scale pit (PR #166). Bounding the
-    Hessian, `||H||_F <= median / gradient_smoothness`, closes that: the local
-    quadratic's gradient stays within `h ||H||_F / sqrt(2)` of `grad t` across the
-    element, so no critical point fits in one while `gradient_smoothness_m` exceeds
-    `h / (sqrt(2) * min_gradient_fraction)`.
-
-    Both severities are density-weighted like the other aggregated rows, so an
-    element's severity grows continuously as it turns solid rather than jumping at a
-    threshold (PR #166). The floor's, `x**r * (2 f - |grad t| / median)`, is `f` on
-    the floor in a solid element and 0 in void. The median, over the whole mesh, is
-    held out of the gradient, as a calibration is, so neither row can be met by
-    lowering it.
-    """
-    config = problem.config
-    active = [problem.min_gradient, problem.gradient_smoothness]
-    if all(aggregate is None for aggregate in active):
-        return []
-    grad, hess = timefield.central_derivatives(tPhys)
-    if grad.numel() == 0:
-        # Nothing to bound; `grad.sum()` is a zero that keeps each row in the graph.
-        return [grad.sum() - 1 for aggregate in active if aggregate is not None]
-    slope = torch.linalg.vector_norm(grad, dim=-1)
-    median = slope.detach().median()
-    density_r = smooth_max.density_power(xPhys[1:-1, 1:-1].flatten(), config.r)
-    rows = []
-    if problem.min_gradient is not None:
-        fraction = run_config.weight_at(config.min_gradient_fraction, loop)
-        severity = density_r * (2 * fraction - slope / median)
-        rows.append(problem.min_gradient.aggregate(severity, loop) - fraction)
-    if problem.gradient_smoothness is not None:
-        length = units.in_elements(
-            run_config.weight_at(config.gradient_smoothness_m, loop),
-            config.element_size_m,
-        )
-        # `vector_norm`, unlike `sqrt`, has a finite gradient where `H` vanishes.
-        frobenius = torch.linalg.vector_norm(
-            hess * hess.new_tensor([1.0, 1.0, 2**0.5]), dim=-1
-        )
-        severity = density_r * frobenius * length / median
-        rows.append(problem.gradient_smoothness.aggregate(severity, loop) - 1)
-    return rows
-
-
 def _admissible_tool_radius_m(
-    concave: Float[Tensor, " n"], element_size_m: float
+    xPhys: Float[Tensor, "nely nelx"],
+    tPhys: Float[Tensor, "nely nelx"],
+    element_size_m: float,
+    r: float,
 ) -> float:
     """The largest tool radius that no iso-line's concave curvature (density-weighted,
-    per element) forbids; `inf` where nothing is concave."""
+    per element, as in `constraints.tool_radius`) forbids; `inf` where nothing is
+    concave."""
+    kappa = timefield.iso_curvature(tPhys, xPhys).flatten()
+    density_r = smooth_max.density_power(xPhys[1:-1, 1:-1].flatten(), r)
+    concave = -kappa / timefield.unit_length(tPhys) * density_r
     worst = float(concave.max()) if concave.numel() else 0.0
     return element_size_m / worst if worst > 0 else float("inf")
 
@@ -820,9 +769,9 @@ def _hotspot_diagnostics(
     r: float,
 ) -> dict:
     """The true maximum severity and where it sits, and how many elements share the
-    hotspot row's sensitivity -- `n_eff`, the participation ratio of `|d row / d K_est|`.
-    A large `n_eff` means the row acts like a mean over the part rather than on its
-    maximum.
+    hotspot constraint's sensitivity -- `n_eff`, the participation ratio of
+    `|d hotspot / d K_est|`. A large `n_eff` means the constraint acts like a mean over
+    the part rather than on its maximum.
     """
     (grad,) = torch.autograd.grad(hotspot_t, K_est_t, retain_graph=True)
     with torch.no_grad():

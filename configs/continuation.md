@@ -9,7 +9,7 @@ Change points fall every 100 iterations from 150, so each phase does one job.
 
 | Iterations | Phase | What moves |
 |---|---|---|
-| 0-150 | topology forms | `beta_d` 1 -> 8, `beta_t` 10 -> 35; `penal` held at 2; `Tcr` held at 1 (row inactive) |
+| 0-150 | topology forms | `beta_d` 1 -> 8, `beta_t` 10 -> 35; `penal` held at 2; `Tcr` held at 1 (constraint inactive) |
 | 150-250 | hotspot | `Tcr` 1 -> target; `beta_d` 8 -> 32; `beta_t` reaches 50 at 240 |
 | 250-350 | freeze | `beta_d` 32 -> 128; `penal` reaches 3 (ramp from 150) |
 | 350-450 | tool radius | `tool_radius_m` 0 -> 2.5 mm |
@@ -28,8 +28,8 @@ are constant from iteration 0.
   An earlier onset costs compliance (about 3% from iteration 1 at `Tcr` 0.8, 7-8% for
   a 50-250 ramp at 0.4); ending after ~250 leaves too few mobile iterations and ends
   infeasible.
-- **The gradient rows are on from the start.** Ramped in later (over 150-350, 250-400,
-  400-550), pits and saddles form first and cannot be removed once the topology
+- **The gradient constraints are on from the start.** Ramped in later (over 150-350,
+  250-400, 400-550), pits and saddles form first and cannot be removed once the topology
   freezes. Beta 20: at 50 the floor's gradient concentrates and wins over the hotspot.
 - **`gradient_smoothness_m` sits at `element_size_m / min_gradient_fraction`** (rho =
   h / (f L) = 1), stricter than the `h / (sqrt(2) f)` that already rules out a critical
@@ -49,9 +49,9 @@ Aligning the change points was measured as neutral (within run-to-run noise).
 
 MBB half-beam, `volfrac` 0.5, 1 mm elements, 800 iterations: 120x90 and 180x60, all four
 `print_base` values at `Tcr` 0.4, spot checks at 0.8 and 0.6. It fails 180x60 at `Tcr`
-0.4 for `bottom_edge` and `corner`; `bottom_edge` fails there even without the
-gradient rows. Runs up to PR #169 used the pre-#170 `opposite_corner` base (the whole
-left column), so a true corner base is untested. Results: PR #169.
+0.4 for `bottom_edge` and `corner`; `bottom_edge` fails there even without the gradient
+constraints. Runs up to PR #169 used the pre-#170 `opposite_corner` base (the whole left
+column), so a true corner base is untested. Results: PR #169.
 
 ## When tuning
 
@@ -59,7 +59,7 @@ left column), so a true corner base is untested. Results: PR #169.
   pass and fail on a device change alone (CPU vs GPU) before the `penal` ramp. Judge a
   change on several runs, CPU and GPU, not one.
 - **Compare against a matched control**, the same schedule without the change.
-- **Watch the multipliers.** A hotspot and floor row both at `mma_c` means MMA is
+- **Watch the multipliers.** A hotspot and floor constraint both at `mma_c` means MMA is
   violating both; that is a schedule conflict, not an infeasible problem.
 - **Shorter runs**: scaling every change point by `nloop / 800` keeps `Tcr` 0.8 valid
   down to 400, but 180x60 at `Tcr` 0.4 rises above compliance 200 below 800.

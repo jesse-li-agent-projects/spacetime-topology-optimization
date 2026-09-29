@@ -343,14 +343,13 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     value, differentiate by autograd (`t` is the sole leaf), call `mma.mmasub`, and
     unpack the result into the next state.
 
-    Constraints are stacked in a fixed order: `constraints.time_field_continuity`
-    (when `config.enable_continuity`), then `constraints.start_point`, then (when
-    `config.nStage > 0`) the interleaved upper/lower stage-volume rows.
-    `constraints.stage_volume_bounds` is called with
-    `volfrac = xPhys.mean()`, which makes its scale factor `nelx*nely*volfrac ==
-    xPhys.sum()` -- the row becomes "fraction *of the part* deposited by `t_stage`,
-    versus `t_stage`", the right statement once density is fixed rather than a design
-    variable.
+    Constraints are stacked in a fixed order: `constraints.time_field_continuity` (when
+    `config.enable_continuity`), then `constraints.start_point`, then (when
+    `config.nStage > 0`) the interleaved upper/lower stage-volume constraints.
+    `constraints.stage_volume_bounds` is called with `volfrac = xPhys.mean()`, which
+    makes its scale factor `nelx*nely*volfrac == xPhys.sum()` -- the constraint becomes
+    "fraction *of the part* deposited by `t_stage`, versus `t_stage`", the right
+    statement once density is fixed rather than a design variable.
 
     Iterations are 0-indexed, as in `stto.step`. The `beta_t += 5` update (every 30
     iterations after the first, capped at 50) takes effect the *next* iteration, matching
@@ -400,25 +399,17 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     xval = tflat
 
     # -- Constraints, in the fixed documented order above. --
-    g_start_t = constraints.start_point(tPhys, problem.Nei)
-    g_parts = [g_start_t[None]]
+    g_parts = []
     if config.enable_continuity:
-        g_cont_t = constraints.time_field_continuity(
-            tPhys, problem.L, config.continuity_tol
+        g_parts.append(
+            constraints.time_field_continuity(tPhys, problem.L, config.continuity_tol)
         )
-        g_parts.insert(0, g_cont_t[None])
-
+    g_parts.append(constraints.start_point(tPhys, problem.Nei))
     if nStage > 0:
         stage_times = [float(ti) for ti in np.linspace(0, 1, nStage + 1)[1:]]
         volfrac = float(xPhys.mean())  # xPhys.sum() == nelx*nely*volfrac, see docstring
-        stage_upper_t = torch.stack(
-            [
-                constraints.stage_volume_bounds(xPhys, tPhys, t_stage, volfrac, beta_t)
-                for t_stage in stage_times
-            ]
-        )
         g_parts.append(
-            torch.stack([stage_upper_t, -stage_upper_t - 1.0e-5], dim=1).flatten()
+            constraints.stage_volume_bounds(xPhys, tPhys, stage_times, volfrac, beta_t)
         )
 
     g_all = torch.cat(g_parts)

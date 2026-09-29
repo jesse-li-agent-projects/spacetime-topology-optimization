@@ -521,7 +521,7 @@ def test_global_volume_fraction_value_matches_hand_derived():
     fv_ref, dfx_ref, dft_ref = constraints_ref.global_volume_fraction(
         xPhys.detach(), dx, H, Hs, volfrac
     )
-    fv = constraints.global_volume_fraction(xPhys, volfrac)
+    (fv,) = constraints.global_volume_fraction(xPhys, volfrac)
     dfx, dft = torch.autograd.grad(fv, (x, t), allow_unused=True)
 
     assert_close(fv.detach(), fv_ref, tier="algebraic")
@@ -542,7 +542,7 @@ def test_time_field_continuity_value_matches_hand_derived():
     fv_ref, dfx_ref, dft_ref = constraints_ref.time_field_continuity(
         tPhys.detach(), L, H, Hs
     )
-    fv = constraints.time_field_continuity(tPhys, L)
+    (fv,) = constraints.time_field_continuity(tPhys, L)
     dfx, dft = torch.autograd.grad(fv, (x, t), allow_unused=True)
 
     assert_close(fv.detach(), fv_ref, tier="algebraic")
@@ -577,7 +577,7 @@ def test_start_point_value_matches_hand_derived():
     x, t, xPhys, tPhys = _filtered_leaves(nelx, nely, H, Hs, rng)
 
     fv_ref, dfx_ref, dft_ref = constraints_ref.start_point(tPhys.detach(), Nei, H, Hs)
-    fv = constraints.start_point(tPhys, Nei)
+    (fv,) = constraints.start_point(tPhys, Nei)
     dfx, dft = torch.autograd.grad(fv, (x, t), allow_unused=True)
     assert_close(fv.detach(), fv_ref, tier="algebraic")
     assert dfx is None  # no density dependence, matching dfx_ref's all-zero row
@@ -597,15 +597,14 @@ def test_stage_volume_bounds_value_matches_hand_derived():
     fu_ref, fl_ref, dfx_ref, dft_ref = constraints_ref.stage_volume_bounds(
         xPhys.detach(), tPhys.detach(), dx, H, Hs, t_stage, volfrac, ROU
     )
-    fu = constraints.stage_volume_bounds(xPhys, tPhys, t_stage, volfrac, ROU)
-    dfx, dft = torch.autograd.grad(fu, (x, t))
-    fl = -fu - 1.0e-5
+    fu, fl = constraints.stage_volume_bounds(xPhys, tPhys, [t_stage], volfrac, ROU)
+    dfx, dft = torch.autograd.grad(fu, (x, t), retain_graph=True)
+    dfx_lower, dft_lower = torch.autograd.grad(fl, (x, t))
 
     assert_close(fu.detach(), fu_ref, tier="algebraic")
     assert_close(fl.detach(), fl_ref, tier="algebraic")
     assert_close(dfx.flatten(), dfx_ref, tier="algebraic")
     assert_close(dft.flatten(), dft_ref, tier="algebraic")
-    # The lower row's sensitivity is the upper's explicit negation, not a second
-    # autograd call (plans/torch_port_part2.md Phase 3.4).
-    assert_close(-dfx.flatten(), -dfx_ref, tier="algebraic")
-    assert_close(-dft.flatten(), -dft_ref, tier="algebraic")
+    # The hand-derived lower bound's sensitivity is the upper's explicit negation.
+    assert_close(dfx_lower.flatten(), -dfx_ref, tier="algebraic")
+    assert_close(dft_lower.flatten(), -dft_ref, tier="algebraic")

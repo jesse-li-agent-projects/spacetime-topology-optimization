@@ -122,7 +122,7 @@ def test_enable_continuity_false_drops_the_continuity_constraint_row():
 
     state = seqopt.init_state(problem)
     _, record = seqopt.step(problem, state)
-    assert record.g.shape == (1,)  # the start-point row alone
+    assert record.g.shape == (1,)  # the start-point constraint alone
     assert record.dg.shape == (1, nel)
 
 
@@ -167,10 +167,10 @@ def test_scheduled_roughness_weight_decays_during_the_run():
 def test_constraint_rows_read_the_time_field():
     """Autograd gets every chain rule right but cannot see a graph cut: a stray
     `.detach()` or host round-trip leaves a row silently zero. `t` is the only leaf, so
-    every row must read it. Stage rows and continuity are both on, so every kind of row
-    is present."""
-    # A tolerance the random draw roughly meets: at the default, its continuity row is
-    # violated ~1e3-fold and MMA's subproblem stalls.
+    every row must read it. Stage constraints and continuity are both on, so every kind
+    of constraint is present."""
+    # A tolerance the random draw roughly meets: at the default, its continuity
+    # constraint is violated ~1e3-fold and MMA's subproblem stalls.
     problem = _problem(nStage=2, enable_continuity=True, continuity_tol=1e-2)
     rng = np.random.default_rng(0)
     state = _state_from_raw(

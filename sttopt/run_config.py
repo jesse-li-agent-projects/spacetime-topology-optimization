@@ -240,7 +240,7 @@ class RunConfig(_ConfigMixin):
     :param tool_radius_m: print tool radius, possibly scheduled. Bounds the concave
         curvature of the time field's iso-lines (`timefield.iso_curvature`) to
         `1 / tool_radius_m`, so the tool cannot collide with printed material. `0` is a
-        tool that cannot collide; the constraint row exists only if the schedule is
+        tool that cannot collide; the constraint exists only if the schedule is
         nonzero somewhere, so a ramp up from `0` is the continuation.
     :param curvature_beta: `LogSumExp` sharpness of that constraint's smooth maximum,
         on the severity `tool_radius_m * concave curvature`, which is 1 on the bound.
@@ -248,8 +248,8 @@ class RunConfig(_ConfigMixin):
         density-weighted, as a fraction of the median over the mesh, possibly
         scheduled. A vanishing gradient is an interior saddle or extremum of `t`, which
         a tool of any finite radius cannot print, or which is printed without support.
-        `0` is no floor; the row exists only if the schedule is nonzero somewhere, like
-        `tool_radius_m`'s.
+        `0` is no floor; the constraint exists only if the schedule is nonzero
+        somewhere, like `tool_radius_m`'s.
     :param min_gradient_beta: `LogSumExp` sharpness of that floor's smooth maximum.
     :param gradient_smoothness_m: shortest length over which the gradient of `t` may
         change by the median gradient -- a bound on its Hessian, density-weighted,

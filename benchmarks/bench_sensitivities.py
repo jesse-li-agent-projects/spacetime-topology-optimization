@@ -456,8 +456,8 @@ def bench_constraints(s, device, repeats, warmup, rows):
                 50.0,
             ),
             lambda xPhys, tPhys: constraints.stage_volume_bounds(
-                xPhys, tPhys, 0.5, VOLFRAC, 50.0
-            ),
+                xPhys, tPhys, [0.5], VOLFRAC, 50.0
+            )[0],
         ),
     ]
 
