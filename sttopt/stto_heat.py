@@ -228,8 +228,7 @@ def constraint_values(
 ) -> dict[str, Float[Tensor, " k"]]:
     """
     Every constraint's values at iteration `loop`'s settings, in stack order: the
-    global volume, then `FieldTerms.constraints`. The heat equation makes `stto`'s
-    start-point and continuity rows unnecessary.
+    global volume, then `FieldTerms.constraints`.
 
     :param xPhys: physical densities
     :param tPhys: physical time field
