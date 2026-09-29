@@ -11,6 +11,7 @@ import pytest
 import torch
 
 import sttopt.checks as checks
+import sttopt.run_config as run_config
 import sttopt.stto_heat as stto_heat
 import sttopt.stto_heat_cli as stto_heat_cli
 from sttopt.run_config import HeatRunConfig
@@ -111,3 +112,28 @@ def test_cli_writes_the_run_artefacts(tmp_path, monkeypatch):
         json.loads(checks.report_path(out / "final_design.npz").read_text())["loop"]
         == 3
     )
+
+
+@pytest.mark.filterwarnings("ignore:subsolv:RuntimeWarning")
+def test_a_step_stays_finite_when_void_is_later_than_the_part():
+    """A solid block at the plate and void beyond it: `t` in the void exceeds 1, the
+    part's maximum. At a non-integer `penal`, the gravity stages must still be finite."""
+    config = _config()
+    problem = stto_heat.build_problem(config, device="cpu")
+    state = stto_heat.init_state(problem)
+    x = torch.full_like(state.x, 1e-3)
+    x[:, :8] = 1.0
+    loop = 200  # penal ramps 2 -> 3 over 150-350
+    state = dataclasses.replace(
+        state,
+        x=x,
+        loop=loop,
+        beta_d=run_config.weight_at(config.beta_d_schedule, loop),
+        beta_t=run_config.weight_at(config.beta_t_schedule, loop),
+    )
+    assert run_config.weight_at(config.penal, loop) % 1 != 0
+    _, heat = stto_heat.physical_fields(problem, state.x, state.mu, state.beta_d)
+    assert float(heat.tPhys.max()) > 1  # non-vacuous
+    _, record = stto_heat.step(problem, state)
+    assert np.isfinite(record.f) and np.isfinite(record.g).all()
+    assert np.isfinite(record.dg).all()

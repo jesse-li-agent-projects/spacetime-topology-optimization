@@ -303,7 +303,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     c_t, stage_cs, U_new = compliance.batched_whole_and_gravity_compliance(
         xPhys,
-        tPhys,
+        # The stage masks assume t <= 1, but void can be later than the whole part;
+        # beyond 1 a mask turns negative, and a negative density NaNs under SIMP
+        torch.clamp(tPhys, max=1),
         problem.KE,
         problem.edofMat,
         config.Emin,

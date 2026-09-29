@@ -11,6 +11,7 @@ import pytest
 import torch
 
 import sttopt.checks as checks
+import sttopt.run_config as run_config
 import sttopt.stto_laplace as stto_laplace
 import sttopt.stto_laplace_cli as stto_laplace_cli
 from sttopt.run_config import LaplaceRunConfig
@@ -116,3 +117,29 @@ def test_cli_writes_the_run_artefacts(tmp_path, monkeypatch):
     assert {"x", "mu", "a", "c", "xPhys", "tPhys"} <= set(design.files)
     report = json.loads(checks.report_path(out / "final_design.npz").read_text())
     assert report["loop"] == 3
+
+
+@pytest.mark.filterwarnings("ignore:subsolv:RuntimeWarning")
+def test_a_step_stays_finite_when_void_is_later_than_the_part():
+    """As in `test_stto_heat`: `t` in the void beyond the part exceeds 1."""
+    config = _config()
+    problem = stto_laplace.build_problem(config, device="cpu")
+    state = stto_laplace.init_state(problem)
+    x = torch.full_like(state.x, 1e-3)
+    x[:, :8] = 1.0
+    loop = 200  # penal ramps 2 -> 3 over 150-350
+    state = dataclasses.replace(
+        state,
+        x=x,
+        loop=loop,
+        beta_d=run_config.weight_at(config.beta_d_schedule, loop),
+        beta_t=run_config.weight_at(config.beta_t_schedule, loop),
+    )
+    assert run_config.weight_at(config.penal, loop) % 1 != 0
+    _, sol = stto_laplace.physical_fields(
+        problem, state.x, state.mu, state.a, state.c, state.beta_d
+    )
+    assert float(sol.tPhys.max()) > 1  # non-vacuous
+    _, record = stto_laplace.step(problem, state)
+    assert np.isfinite(record.f) and np.isfinite(record.g).all()
+    assert np.isfinite(record.dg).all()
