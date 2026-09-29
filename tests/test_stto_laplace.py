@@ -114,7 +114,5 @@ def test_cli_writes_the_run_artefacts(tmp_path, monkeypatch):
     assert {"log_chi_roughness", "wall_peak"} <= lines[-1].keys()
     design = np.load(out / "final_design.npz")
     assert {"x", "mu", "a", "c", "xPhys", "tPhys"} <= set(design.files)
-    assert (
-        json.loads(checks.report_path(out / "final_design.npz").read_text())["loop"]
-        == 3
-    )
+    report = json.loads(checks.report_path(out / "final_design.npz").read_text())
+    assert report["loop"] == 3

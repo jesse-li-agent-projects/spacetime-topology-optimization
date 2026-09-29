@@ -6,8 +6,9 @@ domain, and the wall data `a`, `c` (`virtual_heat.unimodal_wall_data`), all on `
 `tPhys` solves `div(chi(mu) grad t) = 0` with `t = 0` on the build plate and the
 unimodal wall data on every other wall, so it has no interior extremum over the domain
 by construction. The field does not see the part: the guarantee is over the domain,
-and `check_design` reports the part-level check as well. Everything else is as in
-`stto_heat`.
+and `check_design` reports the part-level check as well. Compliance, the gravity
+stages, the hotspot and time-field terms (`field_terms`) and the MMA step (`mma`) are
+shared with the other space-time scripts.
 
 `State` carries the last solutions as the next iteration's warm start, detached.
 """
@@ -206,9 +207,13 @@ def physical_fields(
 
 
 def init_state(problem: Problem) -> State:
-    """The initial state: uniform density at `volfrac`, uniform diffusivity `chi = 1`
-    (`mu = 1/2`), and the wall data of the linear ramp away from the plate, which makes
-    the initial `t` that ramp."""
+    """The initial state: uniform density and diffusivity, and the ramp wall data.
+
+    Density at `volfrac`, `chi = 1` (`mu = 1/2`), and the wall data of the linear ramp
+    away from the plate, which makes the initial `t` that ramp.
+
+    :return: the state before the first iteration
+    """
     config = problem.config
     shape = (config.nely, config.nelx)
     kw = dict(device=problem.device, dtype=problem.dtype)
@@ -230,7 +235,10 @@ def init_state(problem: Problem) -> State:
 
 
 def _flatten(*parts: Tensor) -> Float[Tensor, " n"]:
-    """MMA's `[density; diffusivity; a; c]` layout."""
+    """The design groups in MMA's `[density; diffusivity; a; c]` layout.
+
+    :return: the parts, each flattened, concatenated
+    """
     return torch.cat([p.flatten() for p in parts])
 
 
@@ -243,8 +251,7 @@ def constraint_values(
 ) -> dict[str, Float[Tensor, " k"]]:
     """
     Every constraint's values at iteration `loop`'s settings, in stack order: the
-    global volume, then `FieldTerms.constraints`. The plate and the maximum principle
-    make `stto`'s start-point and continuity rows unnecessary.
+    global volume, then `FieldTerms.constraints`.
 
     :param xPhys: physical densities
     :param tPhys: physical time field
@@ -263,8 +270,12 @@ def constraint_values(
 def _sensitivity_rows(
     outputs: Float[Tensor, " k"], leaves: tuple[Tensor, ...]
 ) -> Float[Tensor, "k n"]:
-    """Sensitivities of `k` scalar outputs w.r.t. every design group, as `(k, n)` in
-    MMA's `[density; diffusivity; a; c]` layout."""
+    """Sensitivities of `k` scalar outputs w.r.t. every design group.
+
+    :param outputs: `k` scalars sharing one autograd graph
+    :param leaves: the design groups, in MMA's `[density; diffusivity; a; c]` order
+    :return: `(k, n)` rows in that layout
+    """
     return torch.cat(sensitivity.jacobian_rows(outputs, leaves), dim=-1)
 
 
@@ -273,6 +284,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     by autograd (through the time-field solve's adjoint), and an MMA step on
     `[x; mu; a; c]` with one scheduled move limit for every group.
 
+    :param problem: the problem being optimized
     :param state: the state after `state.loop` iterations
     :return: the next state, and this iteration's record
     """
@@ -420,6 +432,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 def run(config: run_config.LaplaceRunConfig, **problem_kwargs) -> RunResult:
     """Build the setup and run `config.nloop` iterations from `init_state`.
 
+    :param config: the run's settings
     :param problem_kwargs: forwarded to `build_problem` (`device`, `dtype`)
     :return: the run
     """
@@ -430,6 +443,9 @@ def run(config: run_config.LaplaceRunConfig, **problem_kwargs) -> RunResult:
 def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
     """Run `nloop` iterations from any starting state, collecting the trajectory.
 
+    :param problem: the problem being optimized
+    :param state: where the iteration starts
+    :param nloop: iterations to run
     :return: the run
     """
     xPhys_traj, tPhys_traj, x_traj, mu_traj, wall_traj, records = [], [], [], [], [], []
@@ -463,15 +479,11 @@ def _grey_fraction(xPhys: Float[Tensor, "nely nelx"]) -> float:
 
 def check_design(problem: Problem, state: State) -> dict:
     """
-    Check a design on the binarized design, with `tPhys` solved again (it reads the
-    density only through the normalization). The report has the layout of
-    `checks.check_design`'s, so `checks.summary` reads it.
+    Check a design on the binarized design, in `checks.check_design`'s report layout.
 
-    Start: the base is printed first, i.e. no solid element off the base is earlier than
-    a solid base element. Support and the saddle count are over the part, as in
-    `checks.check_design`. The same two checks over the whole domain, where the
-    maximum principle applies, are reported under `domain`, not judged. A failed hard
-    check warns.
+    Start (the base is printed first), support and saddles are over the part. The local
+    minima and saddles over the whole domain, where the maximum principle applies, are
+    reported under `domain`, not judged. A failed hard check warns.
 
     :param problem: the problem the design was optimized for
     :param state: the design, and the iteration whose schedules apply
