@@ -10,6 +10,7 @@ design is saved either way.
 
 import math
 import warnings
+from pathlib import Path
 
 import numpy as np
 from jaxtyping import Bool, Float, Int
@@ -27,6 +28,11 @@ START_TOLERANCE = 1e-5
 
 # How many offending elements a report lists by position.
 _MAX_LISTED = 20
+
+
+def report_path(design: Path) -> Path:
+    """Where a saved design's check report is written: beside it."""
+    return design.with_name(f"{design.stem}_checks.json")
 
 
 def unsupported(
@@ -143,3 +149,25 @@ def _physics_report(
         constraints={name: torch_util.to_numpy(v).tolist() for name, v in g.items()},
         compliance=float(c),
     )
+
+
+def summary(report: dict) -> str:
+    """`check_design`'s report as a few lines for the console."""
+    start, support = report["start"], report["support"]
+    verdict = lambda passed: "pass" if passed else "FAIL"
+    lines = [
+        f"start:   {verdict(start['passed'])} ({start['solid_base_elements']} solid base element(s), latest at t = {start['max_base_t']}, tolerance {start['tolerance']})",
+        f"support: {verdict(support['passed'])} ({support['unsupported']} unsupported element(s))",
+    ]
+    if "constraints" in report:
+        lines.append("binarized constraints, worst row (<= 0 satisfied):")
+        width = max(map(len, report["constraints"]))
+        lines += [
+            f"  {name:<{width}} {max(values):+.4g}"
+            for name, values in report["constraints"].items()
+        ]
+        lines.append(f"binarized compliance: {report['compliance']:.6g}")
+    lines.append(
+        f"volume fraction: {report['volume_fraction']:.4f}, grey fraction before binarizing: {report['grey_fraction']:.4f}"
+    )
+    return "\n".join(lines)

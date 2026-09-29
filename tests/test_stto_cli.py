@@ -9,10 +9,16 @@ import json
 import re
 
 import numpy as np
+import pytest
 
+import sttopt.checks_cli as checks_cli
 import sttopt.stto_cli as stto_cli
 import sttopt.stto as stto
 from conftest import ELEMENT_M, default_run_config
+
+# A few iterations do not make a printable design, so the final checks warn; they are
+# tested in `test_checks.py`.
+pytestmark = pytest.mark.filterwarnings("ignore:print (start|support):UserWarning")
 
 # The mesh, nStage and the radii are config-file-only (not CLI flags), so this
 # fixture's overrides for them go through --config rather than argv.
@@ -55,6 +61,27 @@ def test_cli_smoke(tmp_path, monkeypatch):
     stto_cli.main(args)
 
     assert (tmp_path / "output" / "smoke" / "final_design.npz").exists()
+
+
+def test_checks_cli_reproduces_the_runs_own_check(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    stto_cli.main(stto_cli.parse_args(_argv(tmp_path, "checked")))
+    report = tmp_path / "output" / "checked" / "final_design_checks.json"
+    written = json.loads(report.read_text())
+    report.unlink()
+
+    checks_cli.main(checks_cli.parse_args([str(report.with_name("final_design.npz"))]))
+
+    rerun = json.loads(report.read_text())
+    # The physics differs in the last bits between two runs on the GPU.
+    physics = ("constraints", "compliance")
+    assert {k: v for k, v in rerun.items() if k not in physics} == {
+        k: v for k, v in written.items() if k not in physics
+    }
+    assert rerun["compliance"] == pytest.approx(written["compliance"], rel=1e-12)
+    assert rerun["constraints"].keys() == written["constraints"].keys()
+    for name, values in written["constraints"].items():
+        np.testing.assert_allclose(rerun["constraints"][name], values, rtol=1e-12)
 
 
 def _reference_run(config):

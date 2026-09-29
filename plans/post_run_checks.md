@@ -27,6 +27,7 @@ binarized, connected geometry.
   grey fraction of the continuous design. The continuous design's constraint values are
   already in `iterations.jsonl`.
 - **A failed hard check warns; it does not fail the run.** The design is saved either
-  way. The report is written as `checks.json` beside the design so a sweep can read it.
+  way. The report is written as `<design>_checks.json` beside the design so a sweep can
+  read it.
 - `subsolv` cap hits are a property of the run, not the design, and are left to
   `iterations.jsonl`.
