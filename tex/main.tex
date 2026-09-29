@@ -58,4 +58,68 @@
 
 \[\kappa = \frac{\sum_{j \in S_e} \rho_j w_j \lambda_j }{\sum_{j \in S_e} w_j / 2}\]
 
+\section{Gradient floor and Hessian bound}
+
+Together, a floor on $|\nabla t|$ and a bound on the Hessian of $t$ leave no interior critical point of $t$ inside any solid element.
+
+\subsection*{1. Local quadratic model}
+From central differences, estimate gradient $\mathbf{g}$ and Hessian $\mathbf{H}$:
+\[
+    \mathbf{g} = \begin{pmatrix} t_x \\ t_y \end{pmatrix}, \qquad
+    \mathbf{H} = \begin{pmatrix} t_{xx} & t_{xy} \\ t_{xy} & t_{yy} \end{pmatrix}
+\]
+They define a quadratic model around the element centre $\mathbf{c}$:
+\[
+    t(\mathbf{c} + \mathbf{d}) \approx t(\mathbf{c}) + \mathbf{g}^\top \mathbf{d} + \tfrac{1}{2} \mathbf{d}^\top \mathbf{H} \mathbf{d}
+    \quad \Longrightarrow \quad
+    \nabla t(\mathbf{c} + \mathbf{d}) = \mathbf{g} + \mathbf{H} \mathbf{d}
+\]
+
+\subsection*{2. The gradient changes little across the element}
+Constraint: Critical point of this model should be outside the element, so:
+\[\left| \nabla t(\mathbf{c} + \mathbf{d}) \right| = \left|\mathbf{g} + \mathbf{H} \mathbf{d}\right|> 0\]
+
+From Pythagoras, $|\mathbf{d}| \le h/\sqrt{2}$. Then:
+\[
+    |\mathbf{H} \mathbf{d}|
+    \le \|\mathbf{H}\|_2 \, |\mathbf{d}|
+    \le \|\mathbf{H}\|_F \, \frac{h}{\sqrt{2}},
+    \qquad
+    \|\mathbf{H}\|_F = \sqrt{t_{xx}^2 + t_{yy}^2 + 2 t_{xy}^2}
+\]
+So, constrain
+\[
+    |\mathbf{g}| > \|\mathbf{H}\|_F \, \frac{h}{\sqrt{2}}
+\]
+
+\subsection*{4. The two constraints}
+Let $m$ be the median of $|\mathbf{g}|$ over the mesh, held constant in the sensitivities. For a solid element, with floor fraction $f$ and smoothness length $L$:
+\[
+    \text{floor:} \quad |\mathbf{g}| \ge f\, m,
+    \qquad
+    \text{smoothness:} \quad \|\mathbf{H}\|_F \le \frac{m}{L}
+\]
+
+\subsection*{5. Combined}
+A critical point would need
+\[
+    f\, m \le |\mathbf{g}| \le \|\mathbf{H}\|_F \, \frac{h}{\sqrt{2}} \le \frac{m}{L} \, \frac{h}{\sqrt{2}}
+\]
+so none exists in the element if
+\[
+    f > \frac{h}{\sqrt{2}\, L}
+    \quad \Longleftrightarrow \quad
+    L > \frac{h}{\sqrt{2}\, f}
+\]
+
+\section{Heat equation}
+$$\nabla\cdot\big(k(x)\,\nabla u\big) = 0, \qquad 0 < \lambda \le k(x) \le \Lambda .$$
+
+Let $k(x) = e^{w(x)}$.
+\[0 = \nabla \cdot (k \nabla u) = k \Delta u + \nabla k \cdot \nabla u = e^w \Delta u + e^w \nabla w \cdot \nabla u\]
+\[\nabla u \cdot \nabla w = -\Delta u\]
+
+\end{document}
+
+
 \end{document}
