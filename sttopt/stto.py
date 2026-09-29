@@ -473,7 +473,12 @@ def estimated_conductivity(
 
 
 def _stage_times(nStage: int) -> list[float]:
-    """The gravity stages' boundaries, as fractions of the build."""
+    """
+    The gravity stages' boundaries, as fractions of the build.
+
+    :param nStage: number of stages
+    :return: the `nStage` upper boundaries, ending at 1
+    """
     return [float(ti) for ti in np.linspace(0, 1, nStage + 1)[1:]]
 
 
@@ -485,7 +490,8 @@ def constraint_values(
     loop: int,
     beta_t: float,
 ) -> dict[str, Float[Tensor, " k"]]:
-    """Every constraint's values at iteration `loop`'s settings, keyed by the
+    """
+    Every constraint's values at iteration `loop`'s settings, keyed by the
     `constraints` function (or `"hotspot"`) that gives them, in the reference loop's
     row order (`tests/matlab_reference_loop.py` is the authority for it).
 
@@ -493,7 +499,13 @@ def constraint_values(
     the constraints the run optimized. Each smooth maximum refreshes its calibration,
     so its value is the true maximum and its gradient the smooth surrogate's.
 
+    :param problem: the problem being optimized
+    :param xPhys: physical densities
+    :param tPhys: physical time field
     :param K_est: `estimated_conductivity` of the same fields at `loop`
+    :param loop: iteration whose schedules apply
+    :param beta_t: time-field projection sharpness
+    :return: each constraint's rows, in stack order
     """
     config = problem.config
     h = config.element_size_m
@@ -786,10 +798,17 @@ def _hotspot_diagnostics(
     xPhys: Float[Tensor, "nely nelx"],
     r: float,
 ) -> dict:
-    """The true maximum severity and where it sits, and how many elements share the
+    """
+    The true maximum severity and where it sits, and how many elements share the
     hotspot constraint's sensitivity -- `n_eff`, the participation ratio of
     `|d g_hotspot / d K_est|`. A large `n_eff` means the constraint acts like a mean over
     the part rather than on its maximum.
+
+    :param g_hotspot_t: the hotspot constraint's value, connected to `K_est_t`
+    :param K_est_t: estimated conductivity
+    :param xPhys: physical densities
+    :param r: severity exponent
+    :return: `true_max`, `hot_row`, `hot_col`, `n_eff`, ...
     """
     (grad,) = torch.autograd.grad(g_hotspot_t, K_est_t, retain_graph=True)
     with torch.no_grad():

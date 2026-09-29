@@ -31,7 +31,12 @@ _MAX_LISTED = 20
 
 
 def report_path(design: Path) -> Path:
-    """Where a saved design's check report is written: beside it."""
+    """
+    Where a saved design's check report is written: beside it.
+
+    :param design: path of the saved design
+    :return: path of its report
+    """
     return design.with_name(f"{design.stem}_checks.json")
 
 
@@ -40,12 +45,18 @@ def unsupported(
     tPhys: Float[np.ndarray, "nely nelx"],
     base: Int[np.ndarray, " k"],
 ) -> Bool[np.ndarray, "nely nelx"]:
-    """Solid elements off `base` with no 8-connected solid neighbor printed strictly
+    """
+    Solid elements off `base` with no 8-connected solid neighbor printed strictly
     before them.
 
     Empty exactly when every solid element connects to a solid base element through
     material printed in order: following earlier neighbors from any solid element
     must end somewhere, and only the base may end it.
+
+    :param solid: which elements are solid
+    :param tPhys: each element's print time
+    :param base: flat indices of the base elements
+    :return: which solid elements are unsupported
     """
     nely, nelx = solid.shape
     s, t = solid.flatten(), tPhys.flatten()
@@ -63,10 +74,15 @@ def check_design(
     t: Float[Tensor, "nely nelx"],
     loop: int,
 ) -> dict:
-    """Check a design, as raw design variables, at iteration `loop`'s settings.
+    """
+    Check a design, as raw design variables, at iteration `loop`'s settings.
 
     Warns once per failed hard check. Refreshes `problem`'s smooth-max calibrations.
 
+    :param problem: the problem the design was optimized for
+    :param x: design densities
+    :param t: design time field
+    :param loop: iteration whose schedules (`beta`, `penal`, ...) apply
     :return: a JSON-serializable report; `passed` is whether both hard checks passed
     """
     beta_d = run_config.weight_at(problem.config.beta_d_schedule, loop)
@@ -123,7 +139,14 @@ def _physics_report(
     tPhys: Float[Tensor, "nely nelx"],
     loop: int,
 ) -> dict:
-    """Every constraint's values and the compliance, at iteration `loop`'s settings."""
+    """
+    Every constraint's values and the compliance, at iteration `loop`'s settings.
+
+    :param xBin: binarized densities
+    :param tPhys: physical time field
+    :param loop: iteration whose schedules apply
+    :return: `constraints` (name to values) and `compliance`
+    """
     config = problem.config
     K_est = stto.estimated_conductivity(problem, xBin, tPhys, loop)
     g = stto.constraint_values(
@@ -152,12 +175,16 @@ def _physics_report(
 
 
 def summary(report: dict) -> str:
-    """`check_design`'s report as a few lines for the console."""
+    """
+    `check_design`'s report as a few lines for the console.
+
+    :param report: a report from `check_design`
+    :return: the summary text
+    """
     start, support = report["start"], report["support"]
-    verdict = lambda passed: "pass" if passed else "FAIL"
     lines = [
-        f"start:   {verdict(start['passed'])} ({start['solid_base_elements']} solid base element(s), latest at t = {start['max_base_t']}, tolerance {start['tolerance']})",
-        f"support: {verdict(support['passed'])} ({support['unsupported']} unsupported element(s))",
+        f"start:   {'pass' if start['passed'] else 'FAIL'} ({start['solid_base_elements']} solid base element(s), latest at t = {start['max_base_t']}, tolerance {start['tolerance']})",
+        f"support: {'pass' if support['passed'] else 'FAIL'} ({support['unsupported']} unsupported element(s))",
     ]
     if "constraints" in report:
         lines.append("binarized constraints, worst row (<= 0 satisfied):")
