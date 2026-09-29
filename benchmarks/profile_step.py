@@ -127,10 +127,9 @@ def build_realistic_state(
     return stto.State(
         x=x_t.clone(),
         t=t_t.clone(),
-        xold1=xval.clone(),
-        xold2=xval.clone(),
-        low=xval - 0.1,
-        upp=xval + 0.1,
+        mma=mma.History(
+            xold1=xval.clone(), xold2=xval.clone(), low=xval - 0.1, upp=xval + 0.1
+        ),
         loop=LOOP,
         beta_t=BETA_T,
         beta_d=BETA_D,
@@ -217,7 +216,7 @@ def main():
     print(f"device: {device}")
     print(f"mesh: {nelx}x{nely}, ndof={problem.ndof}")
     print(f"solves/step (if unbatched): {n_solves_per_step}")
-    print(f"npairs (hotspot neighbor list): {problem.e1.shape[0]}")
+    print(f"npairs (hotspot neighbor list): {problem.terms.e1.shape[0]}")
     print(f"warmup steps: {args.warmup}, timed steps: {args.iters}")
     print()
 

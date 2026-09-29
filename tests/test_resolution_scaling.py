@@ -133,7 +133,7 @@ def test_mean_hotspot_severity_converges():
     """Over the elements the print base does not shield, so every one is finite."""
 
     def mean_severity(p, x, t):
-        K = stto.estimated_conductivity(p, x, t, 0)
+        K = p.terms.estimated_conductivity(x, t, 0)
         finite = torch.isfinite(K)
         return ((1 - K[finite]) * x.flatten()[finite] ** p.config.r).mean()
 
@@ -148,7 +148,7 @@ def test_tool_radius_constraint_converges():
     def tool_radius(problem, x, t):
         c = problem.config
         radius = units.in_elements(c.tool_radius_m, c.element_size_m)
-        return constraints.tool_radius(x, t, problem.curvature, radius, c.r, 0)
+        return constraints.tool_radius(x, t, problem.terms.curvature, radius, c.r, 0)
 
     values = _at_each_resolution(tool_radius)
     assert values[-1] > -1  # non-vacuous: the iso-lines are concave

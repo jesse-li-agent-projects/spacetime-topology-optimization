@@ -32,15 +32,15 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 import sttopt.compliance as compliance
-import sttopt.conductivity as conductivity
 import sttopt.constraints as constraints
 import sttopt.fem as fem
+import sttopt.field_terms as field_terms
 import sttopt.filters as filters
 import sttopt.gravity as gravity
+import sttopt.load_cases as load_cases
 import sttopt.mma as mma
 import sttopt.run_config as run_config
 import sttopt.sensitivity as sensitivity
-import sttopt.smooth_max as smooth_max
 import sttopt.timefield as timefield
 import sttopt.torch_fem as torch_fem
 import sttopt.torch_util as torch_util
@@ -50,7 +50,7 @@ import sttopt.units as units
 @dataclass(frozen=True)
 class Problem:
     """Fixed problem setup: everything that doesn't change across iterations, except
-    `hotspot`'s calibration.
+    the smooth maxima's calibrations in `terms`.
 
     Built once by `build_problem` and passed to every `step` call. `step` refreshes that
     calibration in place, so it is not a pure function of `State`.
@@ -76,30 +76,8 @@ class Problem:
     time_Hs: Float[Tensor, " nel"] | None
     L: Tensor  # sparse CSR, shape (nel, nel)
     C: Tensor  # sparse CSR, shape ((nelx+1)*(nely+1), nel)
-    e1: Int[Tensor, " npairs"]
-    e2: Int[Tensor, " npairs"]
-    w: Float[Tensor, " npairs"]
-    # Constant `K_est` divisor for `config.hotspot_normalization`, or None where the
-    # divisor is per-element -- `conductivity.constant_denominator`.
-    hotspot_denom: float | None
-    # Fixed geometry the angular stencil weight reads, or None where
-    # `config.hotspot_kappa` leaves the stencil purely radial -- see
-    # `conductivity.angular_stencil`.
-    hotspot_stencil: conductivity.AngularStencil | None
-    # Print base elements the hotspot measure treats as infinitely dense, or None where
-    # the normalization needs no print base -- `conductivity.infinite_base`.
-    hotspot_base: Int[Tensor, " k"] | None
-    # Smooth maximum of the hotspot severity, holding its own calibration.
-    hotspot: conductivity.PMean | conductivity.LogSumExp
-    # Smooth maximum of the tool-radius curvature severity, holding its own
-    # calibration, or None where `config.tool_radius_m` never leaves 0 and so has no
-    # constraint.
-    curvature: smooth_max.CalibratedLogSumExp | None
-    # Smooth maximum of the gradient-floor severity, holding its own calibration, or
-    # None where `config.min_gradient_fraction` never leaves 0 and so has no constraint.
-    min_gradient: smooth_max.CalibratedLogSumExp | None
-    # Likewise for the gradient-smoothness severity and `config.gradient_smoothness_m`.
-    gradient_smoothness: smooth_max.CalibratedLogSumExp | None
+    # The hotspot measure and the time-field constraints and regularizers
+    terms: field_terms.FieldTerms
     Nei: Int[Tensor, " k"]
 
     n: int  # number of MMA design variables: 2*nelx*nely (density half + time half)
@@ -111,10 +89,7 @@ class State:
 
     x: Float[Tensor, "nely nelx"]  # raw density (unfiltered MMA output)
     t: Float[Tensor, "nely nelx"]  # raw time field (unfiltered MMA output)
-    xold1: Float[Tensor, " n"]
-    xold2: Float[Tensor, " n"]
-    low: Float[Tensor, " n"]
-    upp: Float[Tensor, " n"]
+    mma: mma.History
     loop: int  # iterations already done, i.e. the index of the one `step` runs next
     beta_t: float  # gravity/stage-mask sigmoid sharpness
     beta_d: float  # Heaviside projection sharpness
@@ -192,34 +167,20 @@ def build_problem(
         raise ValueError(
             f"nelx and nely cannot both be 1, got nelx={nelx}, nely={nely}"
         )
-    # The tool-radius constraint smooth-maxes over the elements `iso_curvature` measures
-    if not run_config.identically_zero(config.tool_radius_m):
-        measured = timefield.iso_curvature(torch.zeros(nely, nelx, dtype=torch.float64))
-        if measured.numel() == 0:
-            raise ValueError(
-                f"tool_radius_m needs an interior element to measure curvature at, but iso_curvature measures none on a nelx={nelx}, nely={nely} mesh"
-            )
     h = config.element_size_m
-    rmin_cond = units.in_elements(config.rmin_cond_m, h)
 
     tfield = timefield.TimeField[config.print_base.upper()]
     KE = fem.plane_stress_KE(config.nu)
     edofMat = fem.element_dof_map(nelx, nely)
     ndof = 2 * (nelx + 1) * (nely + 1)
-
-    # Fixed cantilever load case, stated geometrically rather than as a linear-index
-    # formula so it survives a change of node numbering: a unit downward traction on the
-    # right edge, from the bottom-right corner up, and the left edge clamped in both
-    # directions.
-    nodes = fem.node_grid(nelx, nely)
-    F = np.zeros(ndof)
-    right_edge_up = nodes[::-1, -1]
-    F[2 * right_edge_up + 1] = -fem.edge_load_shares(
-        nely + 1, units.in_elements(config.load_length_m, h)
+    F, freedofs = load_cases.load_case(
+        load_cases.LoadCase(config.load_case),
+        nelx,
+        nely,
+        config.load_length_m,
+        config.support_length_m,
+        h,
     )
-    left_edge = nodes[:, 0]
-    fixeddofs = np.stack([2 * left_edge, 2 * left_edge + 1], axis=-1).ravel()
-    freedofs = np.setdiff1d(np.arange(ndof), fixeddofs)
 
     H, Hs = filters.density_filter(nelx, nely, units.in_elements(config.rmin_m, h))
     time_H = time_Hs = None
@@ -231,29 +192,18 @@ def build_problem(
         time_Hs = torch_util.to_tensor(time_Hs_np, device, dtype)
     L = filters.continuity_filter(nelx, nely, units.in_elements(config.lrmin_m, h))
     C = gravity.gravity_load_matrix(nelx, nely)
-    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
-    hotspot_denom = conductivity.constant_denominator(
-        conductivity.Normalization(config.hotspot_normalization), rmin_cond
-    )
 
     # Print-start element(s), per constraints.start_point's own docstring.
     Nei = timefield.base_elements(nelx, nely, tfield)
-    hotspot_base = conductivity.infinite_base(
-        conductivity.Normalization(config.hotspot_normalization), Nei
-    )
 
     n = 2 * nelx * nely
 
     # Batch every float-valued and every int-valued raw array into one boundary crossing
     # each, rather than a `to_tensor` call per field (plans/torch_port_review_followup.md
     # Phase 5). Keys match `Problem`'s field names so they splat straight in below.
-    float_fields = torch_util.to_tensors(
-        {"KE": KE, "F": F, "Hs": Hs, "w": w}, device, dtype
-    )
+    float_fields = torch_util.to_tensors({"KE": KE, "F": F, "Hs": Hs}, device, dtype)
     int_fields = torch_util.to_tensors(
-        {"edofMat": edofMat, "freedofs": freedofs, "e1": e1, "e2": e2, "Nei": Nei},
-        device,
-        torch.int64,
+        {"edofMat": edofMat, "freedofs": freedofs, "Nei": Nei}, device, torch.int64
     )
     return Problem(
         config=config,
@@ -266,37 +216,7 @@ def build_problem(
         time_Hs=time_Hs,
         L=torch_util.csr_to_tensor(L, device, dtype),
         C=torch_util.csr_to_tensor(C, device, dtype),
-        hotspot_denom=hotspot_denom,
-        hotspot_stencil=conductivity.angular_stencil(
-            int_fields["e1"],
-            int_fields["e2"],
-            nelx,
-            rmin_cond,
-            dtype,
-            config.hotspot_kappa,
-        ),
-        hotspot_base=None if hotspot_base is None else int_fields["Nei"],
-        hotspot=conductivity.make_aggregation(
-            conductivity.Aggregation(config.hotspot_aggregation),
-            config.p,
-            config.r,
-            config.hotspot_beta,
-        ),
-        curvature=(
-            None
-            if run_config.identically_zero(config.tool_radius_m)
-            else smooth_max.CalibratedLogSumExp(config.curvature_beta)
-        ),
-        min_gradient=(
-            None
-            if run_config.identically_zero(config.min_gradient_fraction)
-            else smooth_max.CalibratedLogSumExp(config.min_gradient_beta)
-        ),
-        gradient_smoothness=(
-            None
-            if run_config.identically_zero(config.gradient_smoothness_m)
-            else smooth_max.CalibratedLogSumExp(config.gradient_smoothness_beta)
-        ),
+        terms=field_terms.FieldTerms.build(config, Nei, device, dtype),
         n=n,
         **float_fields,
         **int_fields,
@@ -360,9 +280,7 @@ def init_state(problem: Problem) -> State:
         dtype,
     )
 
-    # MATLAB's xold1=xold2=[x(:); zeros(nel,1)] -- provably unread (the first two
-    # iterations both take mmasub's `iteration < 2` reinit branch), reproduced anyway
-    # for fidelity.
+    # MATLAB's xold1=xold2=[x(:); zeros(nel,1)], reproduced for fidelity
     xold = torch.cat([x.flatten(), torch.zeros(nel, device=device, dtype=dtype)])
 
     beta_d = run_config.weight_at(config.beta_d_schedule, 0)
@@ -371,10 +289,7 @@ def init_state(problem: Problem) -> State:
     return State(
         x=x,
         t=t,
-        xold1=xold,
-        xold2=xold.clone(),
-        low=torch.zeros(problem.n, device=device, dtype=dtype),
-        upp=torch.zeros(problem.n, device=device, dtype=dtype),
+        mma=mma.History.initial(xold),
         loop=0,
         beta_t=beta_t,
         beta_d=beta_d,
@@ -429,49 +344,6 @@ def _sensitivity_rows(
     return _flatten_pair(*sensitivity.jacobian_rows(outputs, (x, t)))
 
 
-def estimated_conductivity(
-    problem: Problem,
-    xPhys: Float[Tensor, "nely nelx"],
-    tPhys: Float[Tensor, "nely nelx"],
-    loop: int | None = None,
-) -> Float[Tensor, " nel"]:
-    """The `K_est` field behind the run's hotspot term, with every conductivity setting
-    taken from `problem`.
-
-    The one path to that field, so offline tooling cannot report a hotspot measure the
-    run never optimized -- rebuilding this call by hand once plotted the print base as
-    the worst hotspot in the domain (PR #98).
-
-    :param loop: the iteration whose scheduled settings apply, or `None` for the values
-        a finished run settles on.
-    """
-    config = problem.config
-    rouf = (
-        run_config.final_value(config.rouf)
-        if loop is None
-        else run_config.weight_at(config.rouf, loop)
-    )
-    kappa = (
-        run_config.final_value(config.hotspot_kappa)
-        if loop is None
-        else run_config.weight_at(config.hotspot_kappa, loop)
-    )
-    return conductivity.estimated_conductivity(
-        xPhys,
-        tPhys,
-        problem.e1,
-        problem.e2,
-        problem.w,
-        config.q,
-        rouf,
-        problem.hotspot_denom,
-        problem.hotspot_base,
-        problem.hotspot_stencil,
-        kappa,
-        config.hotspot_g0_per_m * timefield.unit_length_m(tPhys, config.element_size_m),
-    )
-
-
 def _stage_times(nStage: int) -> list[float]:
     """
     The gravity stages' boundaries, as fractions of the build.
@@ -502,13 +374,12 @@ def constraint_values(
     :param problem: the problem being optimized
     :param xPhys: physical densities
     :param tPhys: physical time field
-    :param K_est: `estimated_conductivity` of the same fields at `loop`
+    :param K_est: `FieldTerms.estimated_conductivity` of the same fields at `loop`
     :param loop: iteration whose schedules apply
     :param beta_t: time-field projection sharpness
     :return: each constraint's rows, in stack order
     """
     config = problem.config
-    h = config.element_size_m
     g = {
         "global_volume_fraction": constraints.global_volume_fraction(
             xPhys, config.volfrac
@@ -523,38 +394,7 @@ def constraint_values(
         g["stage_volume_bounds"] = constraints.stage_volume_bounds(
             xPhys, tPhys, _stage_times(config.nStage), config.volfrac, beta_t
         )
-    Tcr = run_config.weight_at(config.Tcr, loop)
-    g["hotspot"] = (problem.hotspot(K_est, xPhys, loop) / Tcr - 1)[None]
-    if problem.curvature is not None:
-        g["tool_radius"] = constraints.tool_radius(
-            xPhys,
-            tPhys,
-            problem.curvature,
-            units.in_elements(run_config.weight_at(config.tool_radius_m, loop), h),
-            config.r,
-            loop,
-        )
-    if problem.min_gradient is not None:
-        g["min_gradient"] = constraints.min_gradient(
-            xPhys,
-            tPhys,
-            problem.min_gradient,
-            run_config.weight_at(config.min_gradient_fraction, loop),
-            config.r,
-            loop,
-        )
-    if problem.gradient_smoothness is not None:
-        g["gradient_smoothness"] = constraints.gradient_smoothness(
-            xPhys,
-            tPhys,
-            problem.gradient_smoothness,
-            units.in_elements(
-                run_config.weight_at(config.gradient_smoothness_m, loop), h
-            ),
-            config.r,
-            loop,
-        )
-    return g
+    return g | problem.terms.constraints(xPhys, tPhys, K_est, loop)
 
 
 def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
@@ -577,13 +417,11 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     config = problem.config
     nely, nelx, nStage = config.nely, config.nelx, config.nStage
     nel = nelx * nely
-    device, dtype = problem.device, problem.dtype
 
     loop = state.loop
     beta_t = state.beta_t
     beta_d = state.beta_d
     penal = run_config.weight_at(config.penal, loop)
-    uniformity_weight = run_config.weight_at(config.uniformity_weight, loop)
     Tcr = run_config.weight_at(config.Tcr, loop)
     rouf = run_config.weight_at(config.rouf, loop)
 
@@ -623,17 +461,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         f_val_t = f_val_t + config.Theta * cg_t
     stage_obj = config.Theta * sum(float(cg_t.detach()) for cg_t in stage_cs)
 
-    # Layer-uniformity penalty on the time field. Weighted by xPhys, so it measures the
-    # layers of the part, and its gradient moves material as well as print time.
-    uniformity_t = timefield.uniformity_penalty(
-        tPhys, timefield.UniformityMetric(config.uniformity_metric), weights=xPhys
-    )
-    f_val_t = f_val_t + uniformity_weight * uniformity_t
-    # The uniformity penalty alone rewards a sawtooth across the print direction
-    # (`timefield._gradient_cv`).
-    rough_t = timefield.relative_roughness(tPhys, weights=xPhys)
-    roughness_weight = run_config.weight_at(config.roughness_weight, loop)
-    f_val_t = f_val_t + roughness_weight * rough_t
+    objective = problem.terms.objective(f_val_t, xPhys, tPhys, loop)
+    f_val_t = objective.value
 
     f_val = float(f_val_t.detach())
     df_dx = _sensitivity_rows(f_val_t[None], x, t)[0]
@@ -643,19 +472,14 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     xflat = state.x.flatten()
     tflat = state.t.flatten()
     xval = _flatten_pair(xflat, tflat)
-    xmin = torch.zeros_like(xval)
-    xmax = torch.ones_like(xval)
-    mma_trust = mma.trust_region_params(
-        _flatten_pair(
-            torch.full_like(xflat, config.move),
-            torch.full_like(tflat, run_config.weight_at(config.tmove, loop)),
-        ),
-        xmax - xmin,
+    move_limit = _flatten_pair(
+        torch.full_like(xflat, run_config.weight_at(config.move, loop)),
+        torch.full_like(tflat, run_config.weight_at(config.tmove, loop)),
     )
 
     vol_diag = float(xPhys.detach().sum() / (nelx * nely))
 
-    K_est_t = estimated_conductivity(problem, xPhys, tPhys, loop)
+    K_est_t = problem.terms.estimated_conductivity(xPhys, tPhys, loop)
     g_parts = constraint_values(problem, xPhys, tPhys, K_est_t, loop, beta_t)
     g_hotspot_t = g_parts["hotspot"][0]
     tru_max = (float(g_hotspot_t.detach()) + 1) * Tcr
@@ -668,7 +492,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         [_sensitivity_rows(g, x, t) for g in g_parts.values()],
         dim=0,
     )
-    diagnostics = _hotspot_diagnostics(g_hotspot_t, K_est_t, xPhys, config.r)
+    diagnostics = problem.terms.hotspot_diagnostics(g_hotspot_t, K_est_t, xPhys)
     with torch.no_grad():
         unit_m = timefield.unit_length_m(tPhys, config.element_size_m)
         grad_p10, grad_p50, grad_p90 = (
@@ -682,17 +506,17 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         grad_p90_per_m=grad_p90,
         hotspot_kappa=run_config.weight_at(config.hotspot_kappa, loop),
         grey=float(((xPhys > 0.05) & (xPhys < 0.95)).double().mean()),
-        calibration=problem.hotspot.calibration,
+        calibration=problem.terms.hotspot.calibration,
         penal=penal,
-        uniformity_weight=uniformity_weight,
+        uniformity_weight=objective.uniformity_weight,
         Tcr=Tcr,
         rouf=rouf,
         hotspot_beta=run_config.weight_at(config.hotspot_beta, loop),
         beta_d=beta_d,
         beta_t=beta_t,
         tool_radius_m=tool_radius_m,
-        admissible_tool_radius_m=_admissible_tool_radius_m(
-            xPhys.detach(), tPhys.detach(), config.element_size_m, config.r
+        admissible_tool_radius_m=problem.terms.admissible_tool_radius_m(
+            xPhys.detach(), tPhys.detach()
         ),
         min_gradient_fraction=run_config.weight_at(config.min_gradient_fraction, loop),
         gradient_smoothness_m=run_config.weight_at(config.gradient_smoothness_m, loop),
@@ -705,42 +529,26 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     # -- Gradient region ends: mmasub is not part of the autograd graph. df_dx/g_all/
     # dg_dx are the last gradient-carrying values, detached here on their way in.
-    # xval/xmin/xmax never required grad -- they're built from state.x/state.t, the
-    # detached fields, not the x/t leaves above.
-    m = len(g_all)
-    mma_a = torch.zeros(m, device=device, dtype=dtype)
-    mma_c = torch.full((m,), config.mma_c, device=device, dtype=dtype)
-    mma_d = torch.zeros(m, device=device, dtype=dtype)
-    xmma, ymma, zmma, lam, xsi, mma_eta, mu, zet, s, low, upp = mma.mmasub(
-        m,
-        problem.n,
+    # xval never required grad -- it's built from state.x/state.t, the detached
+    # fields, not the x/t leaves above.
+    xmma, lam, mma_history = mma.unit_box_step(
+        state.mma,
         loop,
         xval,
-        xmin,
-        xmax,
-        state.xold1,
-        state.xold2,
+        move_limit,
         f_val,
         df_dx.detach(),
         g_all.detach(),
         dg_dx.detach(),
-        state.low,
-        state.upp,
-        config.a0,
-        mma_a,
-        mma_c,
-        mma_d,
+        a0=config.a0,
+        c=config.mma_c,
         raa0=config.raa0_total / problem.n,
-        **mma_trust,
     )
 
     new_state = State(
         x=xmma[:nel].reshape(nely, nelx),
         t=xmma[nel:].reshape(nely, nelx),
-        xold1=xval,
-        xold2=state.xold1,
-        low=low,
-        upp=upp,
+        mma=mma_history,
         loop=loop + 1,
         beta_t=beta_t,
         beta_d=beta_d,
@@ -760,69 +568,20 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         obj=obj_final_only,
         vol=vol_diag,
         tru_max=tru_max,
-        uniformity=float(uniformity_t.detach()),
-        roughness=float(rough_t.detach()),
-        roughness_weight=roughness_weight,
+        uniformity=float(objective.uniformity.detach()),
+        roughness=float(objective.roughness.detach()),
+        roughness_weight=objective.roughness_weight,
         f=float(f_val),
         df=torch_util.to_numpy(df_dx),
         xmma=torch_util.to_numpy(xmma),
-        low=torch_util.to_numpy(low),
-        upp=torch_util.to_numpy(upp),
+        low=torch_util.to_numpy(mma_history.low),
+        upp=torch_util.to_numpy(mma_history.upp),
         lam=torch_util.to_numpy(lam),
         g=torch_util.to_numpy(g_all),
         dg=torch_util.to_numpy(dg_dx),
         diagnostics=diagnostics,
     )
     return new_state, record
-
-
-def _admissible_tool_radius_m(
-    xPhys: Float[Tensor, "nely nelx"],
-    tPhys: Float[Tensor, "nely nelx"],
-    element_size_m: float,
-    r: float,
-) -> float:
-    """The largest tool radius that no iso-line's concave curvature (density-weighted,
-    per element, as in `constraints.tool_radius`) forbids; `inf` where nothing is
-    concave."""
-    kappa = timefield.iso_curvature(tPhys, xPhys).flatten()
-    density_r = smooth_max.density_power(xPhys[1:-1, 1:-1].flatten(), r)
-    concave = -kappa / timefield.unit_length(tPhys) * density_r
-    worst = float(concave.max()) if concave.numel() else 0.0
-    return element_size_m / worst if worst > 0 else float("inf")
-
-
-def _hotspot_diagnostics(
-    g_hotspot_t: Float[Tensor, ""],
-    K_est_t: Float[Tensor, " nel"],
-    xPhys: Float[Tensor, "nely nelx"],
-    r: float,
-) -> dict:
-    """
-    The true maximum severity and where it sits, and how many elements share the
-    hotspot constraint's sensitivity -- `n_eff`, the participation ratio of
-    `|d g_hotspot / d K_est|`. A large `n_eff` means the constraint acts like a mean over
-    the part rather than on its maximum.
-
-    :param g_hotspot_t: the hotspot constraint's value, connected to `K_est_t`
-    :param K_est_t: estimated conductivity
-    :param xPhys: physical densities
-    :param r: severity exponent
-    :return: `true_max`, `hot_row`, `hot_col`, `n_eff`, ...
-    """
-    (grad,) = torch.autograd.grad(g_hotspot_t, K_est_t, retain_graph=True)
-    with torch.no_grad():
-        a = torch.nan_to_num(grad.abs(), posinf=0.0)
-        n_eff = float(a.sum() ** 2 / (a**2).sum()) if bool((a > 0).any()) else 0.0
-        severity = conductivity.severity(K_est_t, xPhys, r)
-        imax = int(severity.argmax())
-    nelx = xPhys.shape[1]
-    return dict(
-        true_max=float(severity[imax]),
-        hot_row=imax // nelx,
-        hot_col=imax % nelx,
-        n_eff=n_eff,
-    )
 
 
 def run(config: run_config.RunConfig, **problem_kwargs) -> RunResult:

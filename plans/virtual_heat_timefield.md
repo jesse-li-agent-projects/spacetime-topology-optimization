@@ -266,7 +266,8 @@ Each phase is one or more PRs. Keep the commits small (see `CLAUDE.local.md`). P
 ### Phase 2: `stto` study at a 4 mm tool radius (compute)
 
 - The dev set (below) with `stto`, `tool_radius_m` final value 4 mm, 800 iterations,
-  3 replicates per cell (at least one on GPU).
+  one run per cell. Rerun a marginal cell (a hotspot or tool-radius row of the
+  binarized-design report within 0.05 of 0) on the other device (CPU vs GPU).
 - **Report the compliance change from iteration 600 to 800 in each run.** This
   indicates the expected compliance of a 600-iteration schedule.
 - Also do one quick run of load case D, to check that its optimum is not trivial (for
@@ -283,6 +284,11 @@ Each phase is one or more PRs. Keep the commits small (see `CLAUDE.local.md`). P
   from `χ_e`.
 - Add inhomogeneous Dirichlet by lifting (above), and batched right-hand sides.
 - Give the CG tolerance of each scalar solve its own setting (see "solver precision").
+- Warm-start every scalar solve from the previous iteration's solution, as `stto` does
+  with `State.U`. The warm start must be detached (`femsolve` asserts this; an
+  undetached `x0` once leaked the multigrid hierarchy every step, commit 855eb76).
+  Check whether the adjoint solve is warm-started too; ask the user before you change
+  it.
 - **Tests:**
   - **Manufactured solutions**, with smooth `χ = exp(sin …)` sampled at the element
     centres. Choose `u` so that `∂u/∂n = 0` on the Neumann walls, so the production
@@ -344,7 +350,9 @@ Each phase is one or more PRs. Keep the commits small (see `CLAUDE.local.md`). P
 
 The same structure as `stto.py` (`Problem`/`State`/`IterationRecord`/`build_problem`/
 `init_state`/`step`/`run`/`run_from_state`) on the Phase 1 modules. Follow the CLI
-layout for fast `--help` from `CLAUDE.local.md`. Add an E2E smoke test (a small mesh,
+layout for fast `--help` from `CLAUDE.local.md`. `State` carries the last solution of
+each scalar solve (`T`, and `φ` for `poisson`) as the warm start of the next. Add an
+E2E smoke test (a small mesh,
 a few iterations, finite values, and a decrease of the objective or of the
 infeasibility).
 

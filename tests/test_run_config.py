@@ -10,9 +10,12 @@ import sttopt.units as units
 from conftest import default_run_config, default_seq_run_config
 from sttopt.run_config import (
     CosineSchedule,
+    HeatRunConfig,
+    LaplaceRunConfig,
     PiecewiseSchedule,
     RunConfig,
     SeqRunConfig,
+    SpaceTimeConfig,
     identically_zero,
     weight_at,
 )
@@ -190,3 +193,57 @@ def test_a_height_that_is_not_whole_elements_is_rejected_at_load():
 def test_a_whole_number_of_elements_converts_exactly(nelx, elements):
     h = 0.18 / nelx
     assert units.in_elements(elements * h, h) == elements
+
+
+_STTO_ONLY = {f.name for f in dataclasses.fields(RunConfig)} - {
+    f.name for f in dataclasses.fields(SpaceTimeConfig)
+}
+
+
+def _virtual_heat_config(cls, **overrides):
+    """A `cls` with the default config's shared settings and placeholder values for its
+    own fields."""
+    shared = {
+        k: v for k, v in default_run_config().to_dict().items() if k not in _STTO_ONLY
+    }
+    own = dict(chi_contrast=1e3, poisson_cg_rtol=1e-8, print_base="edge")
+    if cls is HeatRunConfig:
+        own |= dict(drain_beta=25.0, time_map="poisson", heat_cg_rtol=1e-8)
+    else:
+        own |= dict(time_map="identity", laplace_cg_rtol=1e-8)
+    return cls.from_dict(shared | own | overrides)
+
+
+def test_the_shared_base_leaves_stto_only_the_fields_the_pde_replaces():
+    assert _STTO_ONLY == {
+        "enable_stage_volume",
+        "time_filter_rmin_m",
+        "enable_continuity",
+        "continuity_tol",
+        "lrmin_m",
+        "tmove",
+    }
+
+
+@pytest.mark.parametrize("cls", [HeatRunConfig, LaplaceRunConfig])
+def test_virtual_heat_configs_round_trip(cls):
+    config = _virtual_heat_config(cls)
+    assert cls.from_dict(config.to_dict()) == config
+
+
+@pytest.mark.parametrize("cls", [HeatRunConfig, LaplaceRunConfig])
+@pytest.mark.parametrize("base", ["corner", "opposite_corner"])
+def test_virtual_heat_configs_reject_a_base_that_is_not_a_plate(cls, base):
+    with pytest.raises(ValueError, match="print_base"):
+        _virtual_heat_config(cls, print_base=base)
+
+
+@pytest.mark.parametrize(
+    "cls,other_variants_map",
+    [(HeatRunConfig, "identity"), (LaplaceRunConfig, "neg_log")],
+)
+def test_virtual_heat_configs_reject_the_other_variants_time_map(
+    cls, other_variants_map
+):
+    with pytest.raises(ValueError, match=other_variants_map):
+        _virtual_heat_config(cls, time_map=other_variants_map)

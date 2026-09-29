@@ -148,7 +148,7 @@ def _physics_report(
     :return: `constraints` (name to values) and `compliance`
     """
     config = problem.config
-    K_est = stto.estimated_conductivity(problem, xBin, tPhys, loop)
+    K_est = problem.terms.estimated_conductivity(xBin, tPhys, loop)
     g = stto.constraint_values(
         problem,
         xBin,
