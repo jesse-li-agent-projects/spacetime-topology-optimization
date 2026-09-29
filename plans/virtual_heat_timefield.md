@@ -12,6 +12,10 @@ assumption that the user would reject.
 Values marked *tentative* are starting points. Change them when results give a reason,
 and tell the user about the change and the evidence for it.
 
+**Style review after each phase.** When a phase is complete, the implementing agent
+starts a Sonnet subagent that runs the `style-review` skill on that phase's changes.
+Apply its findings before the PR goes to review.
+
 **Keep a margin on every calibrated value.** Do not set a value at the edge of what a
 measurement allows. Results shift with the mesh, the geometry, the device and later
 code changes. State each margin in terms of the quantity that fails (for example "T on
