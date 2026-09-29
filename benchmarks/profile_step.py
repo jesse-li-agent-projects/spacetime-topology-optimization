@@ -127,10 +127,9 @@ def build_realistic_state(
     return stto.State(
         x=x_t.clone(),
         t=t_t.clone(),
-        xold1=xval.clone(),
-        xold2=xval.clone(),
-        low=xval - 0.1,
-        upp=xval + 0.1,
+        mma=mma.History(
+            xold1=xval.clone(), xold2=xval.clone(), low=xval - 0.1, upp=xval + 0.1
+        ),
         loop=LOOP,
         beta_t=BETA_T,
         beta_d=BETA_D,

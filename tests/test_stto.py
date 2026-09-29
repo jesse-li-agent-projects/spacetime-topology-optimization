@@ -19,6 +19,7 @@ import torch
 import sttopt.compliance as compliance
 import sttopt.constraints as constraints
 import sttopt.filters as filters
+import sttopt.mma as mma
 import sttopt.run_config as run_config
 import sttopt.stto as stto
 import sttopt.timefield as timefield
@@ -202,10 +203,7 @@ def _state_from_raw(problem, x_raw, t_raw, *, beta_d=BETA_D, beta_t=10.0):
     return stto.State(
         x=torch_util.to_tensor(x_raw, device, dtype),
         t=torch_util.to_tensor(t_raw, device, dtype),
-        xold1=torch.zeros(problem.n, device=device, dtype=dtype),
-        xold2=torch.zeros(problem.n, device=device, dtype=dtype),
-        low=torch.zeros(problem.n, device=device, dtype=dtype),
-        upp=torch.zeros(problem.n, device=device, dtype=dtype),
+        mma=mma.History.initial(torch.zeros(problem.n, device=device, dtype=dtype)),
         loop=STATE_LOOP,
         beta_t=beta_t,
         beta_d=beta_d,
@@ -713,10 +711,7 @@ def test_step_produces_no_nan_gradients_on_a_near_binary_snapshot():
     state = stto.State(
         x=x,
         t=t,
-        xold1=xval,
-        xold2=xval.clone(),
-        low=xval - 0.1,
-        upp=xval + 0.1,
+        mma=mma.History(xold1=xval, xold2=xval.clone(), low=xval - 0.1, upp=xval + 0.1),
         loop=800,
         beta_t=50.0,
         beta_d=128.0,

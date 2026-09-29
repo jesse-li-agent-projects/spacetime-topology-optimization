@@ -89,10 +89,7 @@ class State:
 
     x: Float[Tensor, "nely nelx"]  # raw density (unfiltered MMA output)
     t: Float[Tensor, "nely nelx"]  # raw time field (unfiltered MMA output)
-    xold1: Float[Tensor, " n"]
-    xold2: Float[Tensor, " n"]
-    low: Float[Tensor, " n"]
-    upp: Float[Tensor, " n"]
+    mma: mma.History
     loop: int  # iterations already done, i.e. the index of the one `step` runs next
     beta_t: float  # gravity/stage-mask sigmoid sharpness
     beta_d: float  # Heaviside projection sharpness
@@ -283,9 +280,7 @@ def init_state(problem: Problem) -> State:
         dtype,
     )
 
-    # MATLAB's xold1=xold2=[x(:); zeros(nel,1)] -- provably unread (the first two
-    # iterations both take mmasub's `iteration < 2` reinit branch), reproduced anyway
-    # for fidelity.
+    # MATLAB's xold1=xold2=[x(:); zeros(nel,1)], reproduced for fidelity
     xold = torch.cat([x.flatten(), torch.zeros(nel, device=device, dtype=dtype)])
 
     beta_d = run_config.weight_at(config.beta_d_schedule, 0)
@@ -294,10 +289,7 @@ def init_state(problem: Problem) -> State:
     return State(
         x=x,
         t=t,
-        xold1=xold,
-        xold2=xold.clone(),
-        low=torch.zeros(problem.n, device=device, dtype=dtype),
-        upp=torch.zeros(problem.n, device=device, dtype=dtype),
+        mma=mma.History.initial(xold),
         loop=0,
         beta_t=beta_t,
         beta_d=beta_d,
@@ -425,7 +417,6 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     config = problem.config
     nely, nelx, nStage = config.nely, config.nelx, config.nStage
     nel = nelx * nely
-    device, dtype = problem.device, problem.dtype
 
     loop = state.loop
     beta_t = state.beta_t
@@ -481,14 +472,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     xflat = state.x.flatten()
     tflat = state.t.flatten()
     xval = _flatten_pair(xflat, tflat)
-    xmin = torch.zeros_like(xval)
-    xmax = torch.ones_like(xval)
-    mma_trust = mma.trust_region_params(
-        _flatten_pair(
-            torch.full_like(xflat, config.move),
-            torch.full_like(tflat, run_config.weight_at(config.tmove, loop)),
-        ),
-        xmax - xmin,
+    move_limit = _flatten_pair(
+        torch.full_like(xflat, config.move),
+        torch.full_like(tflat, run_config.weight_at(config.tmove, loop)),
     )
 
     vol_diag = float(xPhys.detach().sum() / (nelx * nely))
@@ -543,42 +529,26 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     # -- Gradient region ends: mmasub is not part of the autograd graph. df_dx/g_all/
     # dg_dx are the last gradient-carrying values, detached here on their way in.
-    # xval/xmin/xmax never required grad -- they're built from state.x/state.t, the
-    # detached fields, not the x/t leaves above.
-    m = len(g_all)
-    mma_a = torch.zeros(m, device=device, dtype=dtype)
-    mma_c = torch.full((m,), config.mma_c, device=device, dtype=dtype)
-    mma_d = torch.zeros(m, device=device, dtype=dtype)
-    xmma, ymma, zmma, lam, xsi, mma_eta, mu, zet, s, low, upp = mma.mmasub(
-        m,
-        problem.n,
+    # xval never required grad -- it's built from state.x/state.t, the detached
+    # fields, not the x/t leaves above.
+    xmma, lam, mma_history = mma.unit_box_step(
+        state.mma,
         loop,
         xval,
-        xmin,
-        xmax,
-        state.xold1,
-        state.xold2,
+        move_limit,
         f_val,
         df_dx.detach(),
         g_all.detach(),
         dg_dx.detach(),
-        state.low,
-        state.upp,
-        config.a0,
-        mma_a,
-        mma_c,
-        mma_d,
+        a0=config.a0,
+        c=config.mma_c,
         raa0=config.raa0_total / problem.n,
-        **mma_trust,
     )
 
     new_state = State(
         x=xmma[:nel].reshape(nely, nelx),
         t=xmma[nel:].reshape(nely, nelx),
-        xold1=xval,
-        xold2=state.xold1,
-        low=low,
-        upp=upp,
+        mma=mma_history,
         loop=loop + 1,
         beta_t=beta_t,
         beta_d=beta_d,
@@ -604,8 +574,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         f=float(f_val),
         df=torch_util.to_numpy(df_dx),
         xmma=torch_util.to_numpy(xmma),
-        low=torch_util.to_numpy(low),
-        upp=torch_util.to_numpy(upp),
+        low=torch_util.to_numpy(mma_history.low),
+        upp=torch_util.to_numpy(mma_history.upp),
         lam=torch_util.to_numpy(lam),
         g=torch_util.to_numpy(g_all),
         dg=torch_util.to_numpy(dg_dx),

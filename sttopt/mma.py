@@ -12,6 +12,7 @@ conventions used to test it against the MATLAB source.
 
 import warnings
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import torch
 from jaxtyping import Float
@@ -54,6 +55,74 @@ def trust_region_params(
         "asyclamp_max": asyclamp_max_ratio * asyinit,
         "move": asyinit,
     }
+
+
+@dataclass(frozen=True)
+class History:
+    """What `mmasub` carries from one iteration to the next: the last two design points
+    and the asymptotes."""
+
+    xold1: Float[Tensor, " n"]
+    xold2: Float[Tensor, " n"]
+    low: Float[Tensor, " n"]
+    upp: Float[Tensor, " n"]
+
+    @classmethod
+    def initial(cls, xold: Float[Tensor, " n"]) -> "History":
+        """Before the first iteration. `mmasub` re-initializes all four while
+        `iteration < 2`, so none of the values is read."""
+        zeros = torch.zeros_like(xold)
+        return cls(xold1=xold, xold2=xold.clone(), low=zeros, upp=zeros.clone())
+
+
+def unit_box_step(
+    history: History,
+    iteration: int,
+    xval: Float[Tensor, " n"],
+    move_limit: Float[Tensor, " n"],
+    f0val: float,
+    df0dx: Float[Tensor, " n"],
+    fval: Float[Tensor, " m"],
+    dfdx: Float[Tensor, "m n"],
+    *,
+    a0: float,
+    c: float,
+    raa0: float,
+) -> tuple[Float[Tensor, " n"], Float[Tensor, " m"], History]:
+    """One MMA iteration on design variables that each lie on `[0, 1]`, with a trust
+    region of half-width `move_limit` (`trust_region_params`) and every constraint
+    relaxed at the same cost `c`.
+
+    :return: `(xmma, lam, history)`, the new point, the constraint multipliers, and the
+        history for the next call
+    """
+    m = len(fval)
+    xmin = torch.zeros_like(xval)
+    xmax = torch.ones_like(xval)
+    zeros = torch.zeros(m, device=xval.device, dtype=xval.dtype)
+    xmma, _, _, lam, *_, low, upp = mmasub(
+        m,
+        len(xval),
+        iteration,
+        xval,
+        xmin,
+        xmax,
+        history.xold1,
+        history.xold2,
+        f0val,
+        df0dx,
+        fval,
+        dfdx,
+        history.low,
+        history.upp,
+        a0,
+        zeros,
+        torch.full_like(zeros, c),
+        zeros.clone(),
+        raa0=raa0,
+        **trust_region_params(move_limit, xmax - xmin),
+    )
+    return xmma, lam, History(xold1=xval, xold2=history.xold1, low=low, upp=upp)
 
 
 def mmasub(
