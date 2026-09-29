@@ -12,11 +12,11 @@
   "uniformity_weight": 100.0,
   "roughness_weight": {
     "initial": 0.2,
-    "decay_iterations": 500,
+    "decay_iterations": 550,
     "final": 0.02
   },
   "Tcr": {
-    "points": [[0, 5.0], [150, 5.0], [250, 0.8]]
+    "points": [[0, 1.0], [150, 1.0], [250, 0.8]]
   },
   "hotspot_normalization": "half_stencil",
   "hotspot_aggregation": "logsumexp",
@@ -37,21 +37,23 @@
   "enable_continuity": false,
   "continuity_tol": 1e-06,
   "tool_radius_m": {
-    "points": [[0, 0.0], [300, 0.0], [400, 0.0025]]
+    "points": [[0, 0.0], [350, 0.0], [450, 0.0025]]
   },
   "curvature_beta": {
-    "points": [[0, 10.0], [500, 10.0], [650, 100.0]]
+    "points": [[0, 10.0], [450, 10.0], [550, 100.0]]
   },
-  "min_gradient_fraction": 0.0,
-  "min_gradient_beta": 50.0,
-  "gradient_smoothness_m": 0.0,
-  "gradient_smoothness_beta": 50.0,
+  "min_gradient_fraction": 0.5,
+  "min_gradient_beta": 20.0,
+  "gradient_smoothness_m": 0.002,
+  "gradient_smoothness_beta": 20.0,
   "lrmin_m": 0.002,
   "rmin_cond_m": 0.012,
   "Emin": 1e-09,
   "Emax": 1.0,
   "nu": 0.3,
-  "penal": 3.0,
+  "penal": {
+    "points": [[0, 2.0], [150, 2.0], [350, 3.0]]
+  },
   "eta": 0.5,
   "p": 25.0,
   "q": 3.0,

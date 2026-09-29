@@ -242,7 +242,7 @@ def _well_conditioned(problem, state, beta_t):
             torch_util.to_numpy(field),
             p.config.Emin,
             p.config.Emax,
-            p.config.penal,
+            run_config.weight_at(p.config.penal, state.loop),
             edofMat,
             p.ndof,
         )
@@ -849,7 +849,16 @@ def test_gradient_floor_holds_its_median_out_of_the_gradient():
 def _curvature_records(tool_radius_m):
     """One `step` record with no tool-radius row and one at `tool_radius_m`, from the
     same design, at iteration `STATE_LOOP`."""
-    base = _problem(nelx=10, nely=8, config_overrides={"tool_radius_m": 0.0})
+    base = _problem(
+        nelx=10,
+        nely=8,
+        # so the tool-radius row is the last one
+        config_overrides={
+            "tool_radius_m": 0.0,
+            "min_gradient_fraction": 0.0,
+            "gradient_smoothness_m": 0.0,
+        },
+    )
     with_tool = stto.build_problem(
         dataclasses.replace(base.config, tool_radius_m=tool_radius_m)
     )

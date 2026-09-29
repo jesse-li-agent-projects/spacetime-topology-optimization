@@ -213,6 +213,9 @@ class RunConfig(_ConfigMixin):
     :param enable_stage_volume: whether the per-stage volume bounds
         (`constraints.stage_volume_bounds`) are in the MMA constraint stack at all.
         `nStage` still sets the `Theta`-weighted stage compliances either way.
+    :param Tcr: bound on the hotspot severity, possibly scheduled. The severity never
+        exceeds 1, so a ramp from above 1 is inactive until it crosses 1: start it there,
+        or its active part is a step.
     :param hotspot_normalization: as in `SeqRunConfig`, as are the other `hotspot_*`
         fields.
     :param hotspot_kappa: angular-weight lobe concentration, possibly scheduled. `0`
