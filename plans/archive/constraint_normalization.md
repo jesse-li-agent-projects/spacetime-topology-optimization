@@ -1,6 +1,7 @@
 # Constraint normalization
 
-Not started: this states the problem only.
+Closed without changes: every active constraint is already of order 1 (see
+"Conclusion").
 
 MMA's constraint handling is not scale-free. `mma_c` penalizes each constraint's
 violation linearly, and the multipliers, the elastic cap and `raa0`'s damping all act
@@ -25,3 +26,15 @@ The stto constraints use both forms:
 
 Normalizing any of these changes MMA's steps, so it changes results and the golden
 fixtures, and a tuned schedule (`configs/continuation.md`) may need retuning.
+
+## Conclusion
+
+The goal is constraints of order 1, not the `value / bound - 1` form as such.
+
+- Gradient floor: dividing by the median makes it invariant to the scale of `|grad t|`.
+  Its value is of order `fraction`, which is meant to stay of order 1 (0.5, constant,
+  in `configs/default.json`). Revisit only if `fraction` is set far below that.
+- Stage volume: both terms are fractions of the part's volume, so of order 1. The
+  bounds are also deprecated, being incompatible with uniform layer heights.
+- Print start: `t` is in [0, 1], so the value is of order 1. The bound is about 0, so a
+  ratio form does not apply.
