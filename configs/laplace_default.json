@@ -64,5 +64,6 @@
   "chi_contrast": 1000.0,
   "time_map": "identity",
   "poisson_cg_rtol": 1e-08,
-  "laplace_cg_rtol": 1e-08
+  "laplace_cg_rtol": 1e-08,
+  "wall_filter_rmin_m": 0.004
 }

@@ -355,6 +355,29 @@ def ramp_wall(mesh: ScalarMesh) -> Float[Tensor, " n_arc"]:
     return _ramp(mesh) / wall_scale(mesh)
 
 
+def wall_filter(n_arc: int, rmin: float) -> Float[np.ndarray, "n_arc n_arc"]:
+    """The density filter's weights `max(0, rmin - distance)` along the wall arc.
+
+    Past each end the arc continues into the plate, where `t = 0`, so the data is
+    reflected there with its sign flipped, about the plate corner node: a ramp rising
+    from the plate passes unchanged, and the filtered data of a nonnegative wall design
+    stays nonnegative (each flipped term is farther away than its original).
+
+    :param n_arc: nodes on the arc
+    :param rmin: filter radius, in elements; at most 1 leaves the data unfiltered
+    """
+    k = np.arange(n_arc)
+    weight = lambda d: np.maximum(0.0, rmin - np.abs(d))
+    H = weight(k[:, None] - k[None, :])
+    H[k, k] = max(rmin, 1.0)  # the node itself, also where the radius reaches no other
+    # The plate corners sit at -1 and n_arc; node j reflects to -2 - j and 2 n_arc - j
+    H -= weight(k[:, None] + 2 + k[None, :])
+    H -= weight(2 * n_arc - k[None, :] - k[:, None])
+    # By the full cone's sum, which a ramp needs to pass unchanged near the ends
+    full = max(rmin, 1.0) + 2 * weight(np.arange(1, int(np.ceil(rmin)))).sum()
+    return H / full
+
+
 def laplace_time_field(
     config: run_config.LaplaceRunConfig,
     mesh: ScalarMesh,

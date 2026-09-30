@@ -65,6 +65,7 @@ class Problem:
     terms: field_terms.FieldTerms
     # The scalar mesh the time field is solved on, with the plate and the wall arc
     mesh: virtual_heat.ScalarMesh
+    wall_filter: Float[Tensor, "n_arc n_arc"]  # `virtual_heat.wall_filter`
     Nei: Int[Tensor, " k"]  # the elements on the build plate
     n: int  # MMA design variables: 2*nelx*nely + n_arc
 
@@ -172,6 +173,13 @@ def build_problem(
         C=torch_util.csr_to_tensor(C, device, dtype),
         terms=field_terms.FieldTerms.build(config, Nei, device, dtype),
         mesh=mesh,
+        wall_filter=torch_util.to_tensor(
+            virtual_heat.wall_filter(
+                len(mesh.arc), units.in_elements(config.wall_filter_rmin_m, h)
+            ),
+            device,
+            dtype,
+        ),
         n=2 * nelx * nely + len(mesh.arc),
         **floats,
         **ints,
@@ -193,7 +201,7 @@ def physical_fields(
 
     :param x: raw density, filtered and Heaviside-projected at sharpness `beta_d`
     :param mu: diffusivity design field
-    :param wall: wall design along the arc
+    :param wall: wall design along the arc, filtered along it
     :param beta_d: projection sharpness
     :param previous: the last solution, the warm start
     :return: `(xPhys, solution)`, `solution.tPhys` the time field
@@ -201,9 +209,16 @@ def physical_fields(
     xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
     xPhys = filters.heaviside_projection(xTilde, beta_d, problem.config.eta)
     solution = virtual_heat.laplace_time_field(
-        problem.config, problem.mesh, xPhys, mu, wall, previous
+        problem.config, problem.mesh, xPhys, mu, problem.wall_filter @ wall, previous
     )
     return xPhys, solution
+
+
+def wall_data(
+    problem: Problem, wall: Float[Tensor, " n_arc"]
+) -> Float[Tensor, " n_arc"]:
+    """The Dirichlet data `b` on the wall arc that `physical_fields` solves with."""
+    return problem.wall_filter @ wall * virtual_heat.wall_scale(problem.mesh)
 
 
 def init_state(problem: Problem) -> State:
@@ -342,7 +357,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             for g in timefield.gradient_percentiles(tPhys.detach(), xPhys.detach())
         )
         log_chi = torch.log(virtual_heat.diffusivity(state.mu, config.chi_contrast))
-        b = state.wall * virtual_heat.wall_scale(problem.mesh)
+        b = wall_data(problem, state.wall)
     diagnostics.update(
         stage_obj=config.Theta * sum(float(cg.detach()) for cg in stage_cs),
         grad_p10_per_m=grad_p10,
@@ -449,7 +464,6 @@ def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
     :return: the run
     """
     xPhys_traj, tPhys_traj, x_traj, mu_traj, wall_traj, records = [], [], [], [], [], []
-    scale = virtual_heat.wall_scale(problem.mesh)
 
     def record_fields(state: State) -> None:
         with torch.no_grad():
@@ -465,7 +479,7 @@ def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
         tPhys_traj.append(laplace.tPhys)
         x_traj.append(state.x.clone())
         mu_traj.append(state.mu.clone())
-        wall_traj.append(state.wall * scale)
+        wall_traj.append(wall_data(problem, state.wall))
 
     record_fields(state)
     for _ in range(nloop):

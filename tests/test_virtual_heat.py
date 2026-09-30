@@ -109,6 +109,23 @@ def test_ramp_init_reproduces_the_ramp(base):
     np.testing.assert_allclose(tPhys.numpy(), distance / distance.max(), atol=1e-12)
 
 
+@pytest.mark.parametrize("rmin", [2.5, 4.0])
+def test_wall_filter_passes_a_ramp_from_the_plate_and_keeps_the_data_nonnegative(rmin):
+    n = 50
+    W = vh.wall_filter(n, rmin)
+    k = np.arange(n)
+    ramp = np.minimum(k + 1, n - k).astype(float)  # rising from both plate corners
+    reach = int(np.ceil(rmin))
+    np.testing.assert_allclose((W @ ramp)[: n // 2 - reach], ramp[: n // 2 - reach])
+    np.testing.assert_allclose((W @ ramp)[n // 2 + reach :], ramp[n // 2 + reach :])
+    rng = np.random.default_rng(0)
+    assert (W @ rng.uniform(0, 1, (n, 500))).min() >= 0
+
+
+def test_wall_filter_within_one_element_is_the_identity():
+    np.testing.assert_array_equal(vh.wall_filter(20, 1.0), np.eye(20))
+
+
 def _unimodal(rng, n):
     """Random wall data on `[0, 1]` with one peak: the smaller of a rising and a
     falling running sum."""

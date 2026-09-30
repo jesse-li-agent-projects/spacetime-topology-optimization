@@ -430,12 +430,16 @@ class LaplaceRunConfig(SpaceTimeConfig):
     :param time_map: a `LaplaceTimeMap` member value.
     :param laplace_cg_rtol: relative-residual tolerance of the Laplace solve.
     :param poisson_cg_rtol: as in `HeatRunConfig`.
+    :param wall_filter_rmin_m: radius of the density-style filter on the wall design
+        along the wall arc; without it the wall data is noisy node to node, since each
+        node moves a whole wall region of `t`. 0 leaves it unfiltered.
     """
 
     chi_contrast: float
     time_map: str
     laplace_cg_rtol: float
     poisson_cg_rtol: float
+    wall_filter_rmin_m: float = 0.0
 
     def __post_init__(self) -> None:
         super().__post_init__()
