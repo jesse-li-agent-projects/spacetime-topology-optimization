@@ -465,6 +465,22 @@ Replicate the marginal cells on CPU and GPU. Watch the multipliers: rows at `mma
 mean a schedule conflict. Record the final schedule and its reasons in a
 `configs/*.md` note, as `configs/continuation.md` does for `stto`.
 
+**Variant 2 status (paused 2026-09-30, to finish Variant 1 first).** Runs in
+`/tmp/claude-1001/phase8/work/output/w19_*`–`w21_*`; gates as above (hotspot, tool
+radius, `min_gradient` ≤ 0.01 as optimized; start on the nodes; interior support).
+- `identity` with unimodal wall data failed S at step 1 (hotspot +0.13 to +0.62: the
+  single peak went to the tip of a branch to the clamped wall). `poisson` passed step
+  1 on all cells but failed S whenever the tool radius was on.
+- `identity` with free, filtered wall data (current code): step 1 passes on C1, D, S
+  (compliance 0.95–1.002 × `stto`). On S the wall data finds two peaks, the ends of
+  the top bar, with a dip where the diagonal joins it. Steps 3a–3c pass on C1 and D.
+  S passes 3b on both devices; it fails 3a on one of two runs (tool radius +0.15)
+  and 3c on CPU (`min_gradient` +0.055, at the top bar's merge point, where
+  `|grad t| → 0`). `stto` also fails S with all constraints (hotspot +0.59).
+- Open: how to judge S with all constraints; the S 3c GPU replicate; step 5
+  (600 iterations). Undulating wall data on D lies in the void only; the time field on
+  the part is clean, so it is left as it is.
+
 ### Phase 9: validation matrix
 
 A Graeco-Latin 4×4 square: rows = load case, columns = volfrac (0.3, 0.5, 0.7, and
