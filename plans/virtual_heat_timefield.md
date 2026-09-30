@@ -234,9 +234,18 @@ it refers to this case.
 
 On the **dev set**, a schedule passes when:
 - the hotspot row is ≤ 0 on the binarized design (`checks.py` report),
-- the tool-radius row is ≤ 0 on the binarized design,
-- the start and support checks pass (support = no local minimum over the part), and
+- the tool-radius row is ≤ 0 on the binarized design (Variant 2 only; the user
+  dropped it for Variant 1: the heat fronts meet in seams around holes, and the
+  iso-lines there have near-zero concave radius),
+- the start and support checks pass, and
 - the compliance is ≤ 1.10 × the matched `stto` control.
+
+Support (all three scripts, `checks.support_report`) = no unsupported element in the
+part's interior (all 4 edge neighbours solid; outside the domain is void). An
+unsupported element on the boundary reads as a steep overhang; the user accepts it as
+printable (a heuristic). Every unsupported element measured in Phase 8 was on the
+boundary, mostly ties within one layer. Variant 2 is judged on the domain-level check
+instead; its part-level counts are reported.
 
 On the validation matrix, report these values. Do not gate on them.
 
@@ -370,7 +379,8 @@ Each phase is one or more PRs. Keep the commits small (see `CLAUDE.local.md`). P
   it.
 - Add a domain-level check for Variant 2 (the same test with every element counted as
   solid) and a saddle count (4 or more sign changes of `t − t_c` around the 8-ring).
-  Both are reported, not judged.
+  Both are reported, not judged. (Phase 8 made the domain check Variant 2's support
+  gate; see "Pass criteria".)
 - Log the saddle count, the local-minimum count, and the roughness of `log χ` at each
   snapshot.
 - **Done in Phase 5:** `checks.saddles(values, where, among)` (ties dropped), and the
@@ -416,8 +426,8 @@ Steps (Variant 1 first, then Variant 2 on the same steps):
    `T → t` option of each variant (see "`T → t` priority" below).
 2. `uniformity_weight` 0 against > 0: is `_gradient_cv` still needed? (Variant 1
    only. Variant 2 `identity` needs it.)
-3. Add back the tool radius, then `min_gradient`, then `gradient_smoothness`, one at a
-   time. Re-tune after each one.
+3. Add back the tool radius (Variant 2 only), then `min_gradient`, then
+   `gradient_smoothness`, one at a time. Re-tune after each one.
 4. Variant 2 only: if the ramp init is not robust, try the alternative init (above).
 5. Compress from 800 to 600 iterations (start by scaling the change points by 0.75).
    Use the same pass criteria. If it fails, report the gap to the user.
