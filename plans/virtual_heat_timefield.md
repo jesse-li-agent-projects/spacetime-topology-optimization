@@ -159,6 +159,12 @@ relative change of `χ` at any value.
   boundary node; `b = wall · wall_scale`, with `wall_scale` twice the ramp's largest
   value, so the ramp init sits at `wall ≤ ½` and `b` can rise above it anywhere. The
   box bound keeps `b ≥ 0`. A plate node has priority at a shared corner.
+  - `wall` is filtered along the arc with the density filter's cone weights
+    (`wall_filter_rmin_m`, 4 mm), reflected with a sign flip about each plate corner, so
+    a ramp from the plate passes unchanged and `b` stays ≥ 0. Unfiltered, the data was
+    noisy node to node (about 100 peaks and dips on S and D): each node moves a whole
+    wall region of `t`, its gradient is about 5× the density's, and it changed sign
+    every step (user decision).
   - Phase 8 replaced the first design, unimodal data (`b = min(cumsum(a),
     reverse_cumsum(c))`), on the user's decision: on S, printing wants two peaks (one at
     a branch to the clamped wall, one on the top wall where two branches merge), and
