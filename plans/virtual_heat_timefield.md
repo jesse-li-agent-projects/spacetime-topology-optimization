@@ -407,7 +407,7 @@ from a snapshot, and log `sttopt.__file__`.
 | Load | volfrac | Base | Tcr | Why |
 |---|---|---|---|---|
 | C1 | 0.5 | edge | 0.8 | the known `stto` baseline |
-| S | 0.3 | bottom_edge | 0.6 | the support and the print base are in conflict |
+| S | 0.5 | bottom_edge | 0.6 | the support and the print base are in conflict (at 0.3 the thin top bar sits at the hotspot limit: +0.005 heat, +0.62 `stto`) |
 | D | 0.7 | edge | 0.8 | an asymmetric support set |
 
 Steps (Variant 1 first, then Variant 2 on the same steps):
