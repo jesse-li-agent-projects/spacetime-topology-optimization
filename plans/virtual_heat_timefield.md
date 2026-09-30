@@ -447,6 +447,13 @@ Steps (Variant 1 first, then Variant 2 on the same steps):
    only. Variant 2 `identity` needs it.)
 3. Add back the tool radius (Variant 2 only), then `min_gradient`, then
    `gradient_smoothness`, one at a time. Re-tune after each one.
+   - **Variant 1 keeps the hotspot only** (user, 2026-09-30). `gradient_smoothness`:
+     91–95% of its violations sat on the part boundary, where the stencil reads the
+     void `t`, which only follows the floor diffusivity; it pinned rows at `mma_c`,
+     broke C1 into islands, and cost S 17% compliance. `min_gradient`: the Poisson map
+     keeps `|grad t| ≥ 0.79 × median` on 99% of the part without it; the elements
+     below its floor were merge points (wanted) and part-boundary stencil artefacts,
+     and it drove the S conflict that split the 600-iteration runs.
 4. Variant 2 only: if the ramp init is not robust, try the alternative init (above).
 5. Compress from 800 to 600 iterations (start by scaling the change points by 0.75).
    Use the same pass criteria. If it fails, report the gap to the user.
