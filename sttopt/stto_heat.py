@@ -173,6 +173,15 @@ def build_problem(
     )
 
 
+def density(
+    problem: Problem, x: Float[Tensor, "nely nelx"], beta_d: float
+) -> Float[Tensor, "nely nelx"]:
+    """The density the physics reads: `x` filtered and Heaviside-projected at
+    sharpness `beta_d`."""
+    xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
+    return filters.heaviside_projection(xTilde, beta_d, problem.config.eta)
+
+
 def physical_fields(
     problem: Problem,
     x: Float[Tensor, "nely nelx"],
@@ -191,8 +200,7 @@ def physical_fields(
     :param previous: the last solution, the warm start
     :return: `(xPhys, solution)`, `solution.tPhys` the time field
     """
-    xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
-    xPhys = filters.heaviside_projection(xTilde, beta_d, problem.config.eta)
+    xPhys = density(problem, x, beta_d)
     solution = virtual_heat.heat_time_field(
         problem.config, problem.mesh, xPhys, mu, previous
     )
@@ -443,9 +451,10 @@ def check_design(
     loop: int,
 ) -> dict:
     """
-    Check a design, as raw design variables, on the binarized design: `tPhys` is solved
-    again through the binarized density, since that is what gets printed. The report
-    has the layout of `checks.check_design`'s, so `checks.summary` reads it.
+    Check a design, as raw design variables, on the binarized density with the run's own
+    `tPhys`, as `checks.check_design` does for `stto`. (Solving `tPhys` again through the
+    binarized density moved one run's hotspot row from +0.007 to +0.4.) The report has
+    the layout of `checks.check_design`'s, so `checks.summary` reads it.
 
     Start: the base is printed first, i.e. no solid element off the base is earlier than
     a solid base element. Support and the saddle count are as in `checks.check_design`.
@@ -460,8 +469,8 @@ def check_design(
     config = problem.config
     beta_d = run_config.weight_at(config.beta_d_schedule, loop)
     with torch.no_grad():
-        xPhys, _ = physical_fields(problem, x, mu, beta_d)
-        xBin, heat = physical_fields(problem, x, mu, math.inf)
+        xPhys, heat = physical_fields(problem, x, mu, beta_d)
+        xBin = density(problem, x, math.inf)
     tPhys = heat.tPhys
     xBin_np, tPhys_np = torch_util.to_numpy(xBin), torch_util.to_numpy(tPhys)
     solid = geometry.solid_mask(xBin_np).reshape(xBin_np.shape)
