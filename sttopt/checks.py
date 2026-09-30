@@ -3,9 +3,10 @@ produce rather than the continuous one MMA optimized (`plans/post_run_checks.md`
 
 Two conditions are hard, since a design that breaks them cannot be printed as
 sequenced: the print starts on the base, and every element off the part's boundary is
-printed onto material already there. Everything else -- each constraint's value, compliance, the count of
-saddles in the time field -- is reported as a margin, not judged. A failed hard check warns rather than failing the run: the
-design is saved either way.
+printed onto material already there. Everything else -- each constraint's value, on the
+binarized design and as optimized, compliance, the count of saddles in the time field --
+is reported as a margin, not judged. A failed hard check warns rather than failing the
+run: the design is saved either way.
 """
 
 import math
@@ -25,6 +26,10 @@ import sttopt.torch_util as torch_util
 # How far above `t = 0` a solid base element may start. The mean start-point constraint
 # lets runs sit at a few 1e-6.
 START_TOLERANCE = 1e-5
+
+# How far binarizing may raise the hotspot row before the check warns: the largest rise
+# measured in the Phase 8 runs was +0.0145 (plans/virtual_heat_timefield.md).
+BINARIZED_HOTSPOT_RISE = 0.02
 
 # How many offending elements a report lists by position.
 _MAX_LISTED = 20
@@ -214,34 +219,68 @@ def check_design(
     )
     # The physics has nothing to measure on a design without material.
     if solid.any():
-        report.update(_physics_report(problem, xBin, tPhys, loop))
+        report.update(
+            constraints=_constraint_rows(problem, xBin, tPhys, loop),
+            constraints_continuous=_constraint_rows(problem, xPhys, tPhys, loop),
+            compliance=_compliance(problem, xBin, loop),
+        )
+        warn_on_binarized_hotspot(report)
     return report
 
 
-def _physics_report(
+def warn_on_binarized_hotspot(report: dict) -> None:
+    """
+    Warn when binarizing raises the hotspot row by more than
+    `BINARIZED_HOTSPOT_RISE`. The row is judged on the continuous design.
+
+    :param report: a report with `constraints` and `constraints_continuous`
+    """
+    rise = max(report["constraints"]["hotspot"]) - max(
+        report["constraints_continuous"]["hotspot"]
+    )
+    if rise > BINARIZED_HOTSPOT_RISE:
+        warnings.warn(
+            f"binarizing raised the hotspot row by {rise:.4g} (warning above {BINARIZED_HOTSPOT_RISE})"
+        )
+
+
+def _constraint_rows(
     problem: stto.Problem,
-    xBin: Float[Tensor, "nely nelx"],
+    xPhys: Float[Tensor, "nely nelx"],
     tPhys: Float[Tensor, "nely nelx"],
     loop: int,
-) -> dict:
+) -> dict[str, list[float]]:
     """
-    Every constraint's values and the compliance, at iteration `loop`'s settings.
+    Every constraint's values, at iteration `loop`'s settings.
 
-    :param xBin: binarized densities
+    :param xPhys: densities, binarized or as optimized
     :param tPhys: physical time field
     :param loop: iteration whose schedules apply
-    :return: `constraints` (name to values) and `compliance`
+    :return: name to values
     """
     config = problem.config
-    K_est = problem.terms.estimated_conductivity(xBin, tPhys, loop)
+    K_est = problem.terms.estimated_conductivity(xPhys, tPhys, loop)
     g = stto.constraint_values(
         problem,
-        xBin,
+        xPhys,
         tPhys,
         K_est,
         loop,
         run_config.weight_at(config.beta_t_schedule, loop),
     )
+    return {name: torch_util.to_numpy(v).tolist() for name, v in g.items()}
+
+
+def _compliance(
+    problem: stto.Problem, xBin: Float[Tensor, "nely nelx"], loop: int
+) -> float:
+    """
+    The compliance, at iteration `loop`'s settings.
+
+    :param xBin: binarized densities
+    :param loop: iteration whose schedules apply
+    """
+    config = problem.config
     c, _ = compliance.whole_compliance(
         xBin,
         problem.KE,
@@ -253,10 +292,7 @@ def _physics_report(
         problem.F,
         problem.ndof,
     )
-    return dict(
-        constraints={name: torch_util.to_numpy(v).tolist() for name, v in g.items()},
-        compliance=float(c),
-    )
+    return float(c)
 
 
 def summary(report: dict) -> str:
@@ -284,10 +320,10 @@ def summary(report: dict) -> str:
             f"support over the domain: {'pass' if domain['passed'] else 'FAIL'} ({domain['unsupported']} unsupported element(s), {domain['saddles']} saddle(s))"
         )
     if "constraints" in report:
-        lines.append("binarized constraints, worst row (<= 0 satisfied):")
+        lines.append("constraints, worst row (<= 0 satisfied): as optimized, binarized")
         width = max(map(len, report["constraints"]))
         lines += [
-            f"  {name:<{width}} {max(values):+.4g}"
+            f"  {name:<{width}} {max(report['constraints_continuous'][name]):+.4g}  {max(values):+.4g}"
             for name, values in report["constraints"].items()
         ]
         lines.append(f"binarized compliance: {report['compliance']:.6g}")

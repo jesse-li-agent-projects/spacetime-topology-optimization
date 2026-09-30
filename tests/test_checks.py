@@ -58,6 +58,7 @@ def test_check_design_passes_a_printable_design(problem):
     assert report["passed"]
     assert report["volume_fraction"] == 1.0
     assert "hotspot" in report["constraints"]
+    assert report["constraints_continuous"].keys() == report["constraints"].keys()
     json.dumps(report, allow_nan=False)
 
 
@@ -80,6 +81,18 @@ def test_check_design_accepts_an_unsupported_boundary_element(problem):
     assert report["support"]["passed"]
     assert report["support"]["unsupported"] == 1
     assert report["support"]["interior_unsupported"] == 0
+
+
+@pytest.mark.parametrize("rise, warns", [(0.9, False), (1.1, True)])
+def test_warns_when_binarizing_raises_the_hotspot(rise, warns):
+    report = dict(
+        constraints={"hotspot": [-0.01 + rise * checks.BINARIZED_HOTSPOT_RISE]},
+        constraints_continuous={"hotspot": [-0.01]},
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        checks.warn_on_binarized_hotspot(report)
+    assert bool(caught) == warns
 
 
 def test_interior_treats_outside_the_domain_as_void():

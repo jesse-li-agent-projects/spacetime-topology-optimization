@@ -501,7 +501,7 @@ def check_design(problem: Problem, state: State) -> dict:
     design = (state.x, state.mu, state.a, state.c)
     beta_d = run_config.weight_at(config.beta_d_schedule, loop)
     with torch.no_grad():
-        xPhys, _ = physical_fields(problem, *design, beta_d)
+        xPhys, as_optimized = physical_fields(problem, *design, beta_d)
         xBin, laplace = physical_fields(problem, *design, math.inf)
     tPhys = laplace.tPhys
     xBin_np, tPhys_np = torch_util.to_numpy(xBin), torch_util.to_numpy(tPhys)
@@ -550,8 +550,12 @@ def check_design(problem: Problem, state: State) -> dict:
         grey_fraction=_grey_fraction(xPhys),
     )
     if solid.any():
-        K_est = problem.terms.estimated_conductivity(xBin, tPhys, loop)
-        g = constraint_values(problem, xBin, tPhys, K_est, loop)
+
+        def rows(density, t):
+            K_est = problem.terms.estimated_conductivity(density, t, loop)
+            g = constraint_values(problem, density, t, K_est, loop)
+            return {k: torch_util.to_numpy(v).tolist() for k, v in g.items()}
+
         c, _ = compliance.whole_compliance(
             xBin,
             problem.KE,
@@ -564,7 +568,9 @@ def check_design(problem: Problem, state: State) -> dict:
             problem.ndof,
         )
         report.update(
-            constraints={k: torch_util.to_numpy(v).tolist() for k, v in g.items()},
+            constraints=rows(xBin, tPhys),
+            constraints_continuous=rows(xPhys, as_optimized.tPhys),
             compliance=float(c),
         )
+        checks.warn_on_binarized_hotspot(report)
     return report

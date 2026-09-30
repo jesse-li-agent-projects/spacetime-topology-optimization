@@ -515,8 +515,12 @@ def check_design(
         grey_fraction=_grey_fraction(xPhys),
     )
     if solid.any():
-        K_est = problem.terms.estimated_conductivity(xBin, tPhys, loop)
-        g = constraint_values(problem, xBin, tPhys, K_est, loop)
+
+        def rows(density):
+            K_est = problem.terms.estimated_conductivity(density, tPhys, loop)
+            g = constraint_values(problem, density, tPhys, K_est, loop)
+            return {k: torch_util.to_numpy(v).tolist() for k, v in g.items()}
+
         c, _ = compliance.whole_compliance(
             xBin,
             problem.KE,
@@ -529,7 +533,9 @@ def check_design(
             problem.ndof,
         )
         report.update(
-            constraints={k: torch_util.to_numpy(v).tolist() for k, v in g.items()},
+            constraints=rows(xBin),
+            constraints_continuous=rows(xPhys),
             compliance=float(c),
         )
+        checks.warn_on_binarized_hotspot(report)
     return report
