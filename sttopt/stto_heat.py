@@ -464,8 +464,8 @@ def check_design(
     binarized density gives a misleading hotspot row (PR #189). The report has the layout
     of `checks.check_design`'s, so `checks.summary` reads it.
 
-    Start: the base is printed first, i.e. no solid element off the base is earlier than
-    a solid base element. Support and the saddle count are as in `checks.check_design`.
+    Start as in `virtual_heat.start_report`. Support and the saddle count are as in
+    `checks.check_design`.
     A failed hard check warns.
 
     :param problem: the problem the design was optimized for
@@ -484,25 +484,10 @@ def check_design(
     solid = geometry.solid_mask(xBin_np).reshape(xBin_np.shape)
     base = torch_util.to_numpy(problem.Nei)
 
-    on_base = np.zeros(solid.size, bool)
-    on_base[base] = True
-    on_base = on_base.reshape(solid.shape)
-    base_t = tPhys_np[solid & on_base]
-    off_t = tPhys_np[solid & ~on_base]
-    max_base_t = float(base_t.max()) if base_t.size else None
-    earliest_off_base_t = float(off_t.min()) if off_t.size else None
-    start = dict(
-        passed=max_base_t is not None
-        and (earliest_off_base_t is None or max_base_t <= earliest_off_base_t),
-        solid_base_elements=int(base_t.size),
-        max_base_t=max_base_t,
-        earliest_off_base_t=earliest_off_base_t,
-    )
+    start = virtual_heat.start_report(problem.mesh, heat, solid, base)
     support = checks.support_report(solid, tPhys_np, base)
     if not start["passed"]:
-        warnings.warn(
-            f"print start: a solid element off the base prints at t = {earliest_off_base_t}, before the latest solid base element at t = {max_base_t}"
-        )
+        virtual_heat.warn_start(start)
     if not support["passed"]:
         checks.warn_unsupported(support)
     report = dict(

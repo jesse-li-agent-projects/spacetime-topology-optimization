@@ -78,7 +78,7 @@ def test_check_design_reports_in_the_shared_layout(smoke_run):
         report = stto_heat.check_design(problem, state.x, state.mu, state.loop)
     assert {"start", "support", "saddles", "constraints", "compliance"} <= report.keys()
     assert report["start"]["passed"]
-    assert "earliest off the base" in checks.summary(report)
+    assert "earliest node off the plate" in checks.summary(report)
 
 
 def test_cli_writes_the_run_artefacts(tmp_path, monkeypatch):

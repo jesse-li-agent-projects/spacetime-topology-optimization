@@ -22,6 +22,7 @@ Lengths are in elements, and `l_c` is `timefield.unit_length`, the square root o
 design area.
 """
 
+import warnings
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -277,6 +278,55 @@ class TimeFieldSolution(NamedTuple):
     tPhys: Float[Tensor, "nely nelx"]
     primary: Float[Tensor, " ndof"]  # T (heat), or the solved t (Laplace)
     poisson: Float[Tensor, " ndof"] | None  # phi, for the `poisson` map
+    t: Float[Tensor, " ndof"]  # the nodal time field, before the normalization
+
+
+def start_report(
+    mesh: ScalarMesh,
+    solution: TimeFieldSolution,
+    solid: Bool[np.ndarray, "nely nelx"],
+    base: Int[np.ndarray, " k"],
+) -> dict:
+    """
+    The start check: the part touches the plate, and every node of a solid element,
+    except the plate's own, is later than the plate: `t > 0` (the plate has `t = 0`).
+
+    Checked on the nodes, where `t` is solved: the element means of the first layer
+    differ by the local gradient, so their order against the second layer is a
+    discretization effect. The maximum principle gives `t > 0` off the plate by
+    construction; the check still catches a violation, e.g. of the `poisson` map. The
+    element-mean ordering is reported, not judged.
+
+    :param solution: the time field, on the design being checked
+    :param solid: which elements are solid
+    :param base: flat indices of the elements on the plate
+    :return: the report's `start` entry
+    """
+    t = solution.t.detach().cpu().numpy()
+    tPhys = solution.tPhys.detach().cpu().numpy()
+    edof = mesh.edof.cpu().numpy()
+    on_base = np.zeros(solid.size, bool)
+    on_base[base] = True
+    solid = solid.flatten()
+    nodes = np.unique(edof[solid])
+    nodes = nodes[~mesh.plate.cpu().numpy()[nodes]]
+    earliest_node_t = float(t[nodes].min()) if nodes.size else None
+    base_t = tPhys.flatten()[solid & on_base]
+    off_t = tPhys.flatten()[solid & ~on_base]
+    return dict(
+        passed=bool(base_t.size) and (earliest_node_t is None or earliest_node_t > 0),
+        solid_base_elements=int(base_t.size),
+        earliest_node_t=earliest_node_t,
+        max_base_t=float(base_t.max()) if base_t.size else None,
+        earliest_off_base_t=float(off_t.min()) if off_t.size else None,
+    )
+
+
+def warn_start(start: dict) -> None:
+    """Warn that a `start_report` failed."""
+    warnings.warn(
+        f"print start: {start['solid_base_elements']} solid base element(s), and the earliest node of the part off the plate at t = {start['earliest_node_t']} (must be > 0)"
+    )
 
 
 def heat_time_field(
@@ -328,7 +378,7 @@ def heat_time_field(
     else:
         raise ValueError(f"time_map must be a HeatTimeMap member, got {time_map!r}")
     t_e = element_means(t, mesh.edof).reshape(shape)
-    return TimeFieldSolution(normalize(t_e, xPhys), T, phi)
+    return TimeFieldSolution(normalize(t_e, xPhys), T, phi, t)
 
 
 def _ramp(mesh: ScalarMesh) -> Float[Tensor, " n_arc"]:
@@ -427,4 +477,4 @@ def laplace_time_field(
     else:
         raise ValueError(f"time_map must be a LaplaceTimeMap member, got {time_map!r}")
     t_e = element_means(t, mesh.edof).reshape(shape)
-    return TimeFieldSolution(normalize(t_e, xPhys), u, phi)
+    return TimeFieldSolution(normalize(t_e, xPhys), u, phi, t)

@@ -303,11 +303,11 @@ def summary(report: dict) -> str:
     :return: the summary text
     """
     start, support = report["start"], report["support"]
-    # A virtual-heat report judges the start against the earliest element off the base
+    # A virtual-heat report judges the start on the nodes (`virtual_heat.start_report`)
     bound = (
         f"tolerance {start['tolerance']}"
         if "tolerance" in start
-        else f"earliest off the base at t = {start['earliest_off_base_t']}"
+        else f"earliest node off the plate at t = {start['earliest_node_t']} (> 0 passes); earliest element off the base at t = {start['earliest_off_base_t']}, reported"
     )
     lines = [
         f"start:   {'pass' if start['passed'] else 'FAIL'} ({start['solid_base_elements']} solid base element(s), latest at t = {start['max_base_t']}, {bound})",

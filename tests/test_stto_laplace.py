@@ -93,7 +93,7 @@ def test_check_design_reports_the_domain_as_well(smoke_run):
     assert {"start", "support", "saddles", "domain", "constraints"} <= report.keys()
     assert report["start"]["passed"]
     assert report["passed"] == report["support"]["passed"]
-    assert "earliest off the base" in checks.summary(report)
+    assert "earliest node off the plate" in checks.summary(report)
     assert "over the domain:" in checks.summary(report)
 
 

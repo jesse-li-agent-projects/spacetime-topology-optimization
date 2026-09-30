@@ -109,6 +109,34 @@ def test_ramp_init_reproduces_the_ramp(base):
     np.testing.assert_allclose(tPhys.numpy(), distance / distance.max(), atol=1e-12)
 
 
+def test_start_is_judged_on_the_nodes_not_the_element_means():
+    """A steep first layer at one corner makes a base element later than a second-layer
+    element elsewhere; the nodes off the plate are all later than it, so the start
+    passes. A node of the part at `t <= 0` fails it."""
+    nelx, nely = 30, 10
+    mesh = _mesh(nelx, nely, "edge")
+    config = virtual_heat_config(
+        LaplaceRunConfig, nelx=nelx, nely=nely, laplace_cg_rtol=1e-12
+    )
+    wall = vh.ramp_wall(mesh).clone()
+    # The bottom wall rises steeply from the plate corner, the top wall slowly
+    wall[:3] *= 4.0
+    wall[-3:] *= 0.25
+    solution = vh.laplace_time_field(
+        config, mesh, _full(nelx, nely, 0.5), _full(nelx, nely, 0.5), wall
+    )
+    solid = np.ones((nely, nelx), bool)
+    base = np.arange(nely) * nelx  # the column on the plate
+    report = vh.start_report(mesh, solution, solid, base)
+    assert report["max_base_t"] > report["earliest_off_base_t"]  # non-vacuous
+    assert report["passed"] and report["earliest_node_t"] > 0
+
+    t = solution.t.clone()
+    t[mesh.edof[5 * nelx + 10, 0]] = 0.0  # a node well inside the part
+    report = vh.start_report(mesh, solution._replace(t=t), solid, base)
+    assert not report["passed"]
+
+
 @pytest.mark.parametrize("rmin", [2.5, 4.0])
 def test_wall_filter_passes_a_ramp_from_the_plate_and_keeps_the_data_nonnegative(rmin):
     n = 50
