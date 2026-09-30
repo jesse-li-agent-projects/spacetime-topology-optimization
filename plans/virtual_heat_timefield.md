@@ -250,6 +250,15 @@ On the **dev set**, a schedule passes when:
 - the start and support checks pass, and
 - the compliance is ≤ 1.10 × the matched `stto` control.
 
+Start (the virtual-heat scripts, `virtual_heat.start_report`) = the part touches the
+plate, and every node of a solid element except the plate's own has `t > 0`. It is
+judged on the nodes, where `t` is solved and the plate has `t = 0` exactly. The first
+ordering of element means (no element off the base before a base element) failed by
+near-ties of 0.07–0.7 of a layer: a base element's mean is half the local rise of `t`
+over one element, so it differs with the local gradient (user decision). The
+element-mean ordering is reported. `stto` keeps its own start check, where `t` is per
+element and the base is pinned to 0.
+
 Support (all three scripts, `checks.support_report`) = no unsupported element in the
 part's interior (all 4 edge neighbours solid; outside the domain is void). An
 unsupported element on the boundary reads as a steep overhang; the user accepts it as
