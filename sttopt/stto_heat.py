@@ -6,7 +6,8 @@ The design variables are the density `x` and a diffusivity field `mu`, both on
 through the material, so it has no local minimum over the part by construction. The
 start-point, continuity and time-filter machinery of `stto` has no counterpart here;
 everything else (compliance, gravity stages, the hotspot and time-field constraints and
-regularizers, MMA) is the same, through `field_terms` and `mma`.
+regularizers, MMA) is the same, through `field_terms` and `mma`, except that the
+objective takes the log of the compliance terms.
 
 `State` carries the last heat and Poisson solutions as the next iteration's warm start,
 detached like `stto`'s `U`.
@@ -304,7 +305,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     f_val_t = c_t
     for cg_t in stage_cs:
         f_val_t = f_val_t + config.Theta * cg_t
-    objective = problem.terms.objective(f_val_t, xPhys, tPhys, loop)
+    # Log, so the time-field weights act relative to the compliance: in the raw sum they
+    # outweighed a small compliance and held the density grey
+    objective = problem.terms.objective(torch.log(f_val_t), xPhys, tPhys, loop)
     f_val = float(objective.value.detach())
     df_dx = _sensitivity_rows(objective.value[None], x, mu)[0]
 

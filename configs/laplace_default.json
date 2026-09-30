@@ -8,11 +8,11 @@
   "nStage": 8,
   "Theta": 0.1,
   "uniformity_metric": "gradient_cv",
-  "uniformity_weight": 100.0,
+  "uniformity_weight": 0.56,
   "roughness_weight": {
-    "initial": 0.2,
+    "initial": 0.0011,
     "decay_iterations": 550,
-    "final": 0.02
+    "final": 0.00011
   },
   "Tcr": {
     "points": [[0, 1.0], [150, 1.0], [250, 0.8]]

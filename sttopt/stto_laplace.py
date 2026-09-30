@@ -8,7 +8,8 @@ unimodal wall data on every other wall, so it has no interior extremum over the 
 by construction. The field does not see the part: the guarantee is over the domain,
 and `check_design` reports the part-level check as well. Compliance, the gravity
 stages, the hotspot and time-field terms (`field_terms`) and the MMA step (`mma`) are
-shared with the other space-time scripts.
+shared with the other space-time scripts; as in `stto_heat`, the objective takes the log
+of the compliance terms.
 
 `State` carries the last solutions as the next iteration's warm start, detached.
 """
@@ -323,7 +324,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     f_val_t = c_t
     for cg_t in stage_cs:
         f_val_t = f_val_t + config.Theta * cg_t
-    objective = problem.terms.objective(f_val_t, xPhys, tPhys, loop)
+    # Log, so the time-field weights act relative to the compliance: in the raw sum they
+    # outweighed a small compliance and held the density grey
+    objective = problem.terms.objective(torch.log(f_val_t), xPhys, tPhys, loop)
     f_val = float(objective.value.detach())
     df_dx = _sensitivity_rows(objective.value[None], leaves)[0]
 
