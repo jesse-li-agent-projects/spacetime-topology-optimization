@@ -41,10 +41,10 @@ configuration of `stto.py`:
   minimum. Because `χ` contains `ρ`, time goes *through the material*. The guarantee
   applies over the part.
 - **Variant 2, `stto_laplace.py`.** `∇·(χ∇t) = 0` with `χ = χ(μ)` (no `ρ`), `t = 0` on
-  the build plate, and optimizable positive Dirichlet data `b` on every other wall. The
-  maximum principle gives no interior extrema. The field does not see the part, so the
-  guarantee applies over the **domain only**. The user accepts this, with a post-run
-  check over the part (Phase 5).
+  the build plate, and optimizable nonnegative Dirichlet data `b` on every other wall.
+  The maximum principle gives no interior extrema. The field does not see the part, so
+  the guarantee applies over the **domain only**. The user accepts this, with a
+  post-run check over the part (Phase 5).
 
 Saddles are not ruled out in either variant, and cannot be bounded by boundary data in
 3D. The tool-radius constraint controls them. Phase 5 adds a saddle count as a
@@ -59,8 +59,8 @@ diagnostic.
   equation, with `χ/α` in place of Crane's `t`.
 - Alessandrini & Magnanini: in 2D, `∇·(χ∇u) = 0` with `u = 0` on one connected
   boundary arc and unimodal data on the complement has no interior critical points,
-  also for discontinuous `χ`. This is the reason for the unimodal wall data below. It
-  is a 2D result only.
+  also for discontinuous `χ`. This was the reason for the first, unimodal wall data
+  (replaced in Phase 8, below). It is a 2D result only.
 
 ## Background the decisions depend on
 
@@ -155,21 +155,22 @@ relative change of `χ` at any value.
 ### Variant 2
 
 - `χ = χ(μ)` over the whole domain. No `ρ`.
-- **Unimodal wall data.** Order the non-plate boundary nodes along the arc from one
-  plate end to the other: `k = 0 … n_arc−1`. Then
-  `b = minimum(cumsum(a), reverse_cumsum(c))`, with `a, c ∈ [0, 1]` and each increment
-  scaled by `2h/l_c`. This is the minimum of an increasing and a decreasing sequence,
-  so it is unimodal by construction. A ramp needs increments of `h/l_c` per node, so
-  the ramp init sits inside the bounds: `a = ½` where the ramp rises along the arc,
-  `c = ½` where it falls, and 0 on the far wall, where it is flat (`a = c = ½`
-  everywhere would put a tent on the far wall). The code derives `a`, `c` from the
-  target wall values. A plate node has priority at a shared corner.
-- Use `torch.minimum`, not a softmin. Change to a softmin only if MMA chatters at the
-  crossing node.
+- **Wall data, optimized directly.** One design variable `wall ∈ [0, 1]` per non-plate
+  boundary node; `b = wall · wall_scale`, with `wall_scale` twice the ramp's largest
+  value, so the ramp init sits at `wall ≤ ½` and `b` can rise above it anywhere. The
+  box bound keeps `b ≥ 0`. A plate node has priority at a shared corner.
+  - Phase 8 replaced the first design, unimodal data (`b = min(cumsum(a),
+    reverse_cumsum(c))`), on the user's decision: on S, printing wants two peaks (one at
+    a branch to the clamped wall, one on the top wall where two branches merge), and
+    the one peak went to the branch tip. Interior extrema stay impossible for any wall
+    data. What is lost: a dip in `b` is a local minimum on the wall (on the part, left
+    to the hotspot row: it has no earlier material nearby), and two peaks give an
+    interior saddle between them (the merge; the Alessandrini & Magnanini result needs
+    unimodal data).
 - The overall scale of `b` is a flat direction, because `t` is normalized. Accept this.
   Do not add a gauge constraint unless it causes trouble.
 - The inhomogeneous Dirichlet data enters by lifting: `rhs = −K_fd·g`. `FemSolve`
-  already returns `dL/dF`, so autograd carries the gradient to `a` and `c`.
+  already returns `dL/dF`, so autograd carries the gradient to `wall`.
 - `T → t` options: `identity` (default; see the priority in Phase 8), `poisson`.
   `poisson` uses `w = 1`, `φ = 0` on the
   plate, and natural BCs on the walls, so the walls then act only through the
@@ -185,7 +186,7 @@ to about 2.) This is not elegant, but no better option has been found.
 ### Initialization
 
 - Both variants: `x = volfrac`, `μ = ½` (uniform `χ = 1`).
-- Variant 2: `a` and `c` reproduce the `edge`/`bottom_edge` ramp exactly (uniform `χ`
+- Variant 2: `wall` reproduces the `edge`/`bottom_edge` ramp exactly (uniform `χ`
   with linear wall data gives a linear `t`).
 - Variant 1 at uniform `ρ` gives the 1D `cosh` profile, mapped by the chosen `T → t`.
 - **Alternative, not the default (Variant 2):** solve for `χ` so that the initial `t`
@@ -195,7 +196,7 @@ to about 2.) This is not elegant, but no better option has been found.
 
 ### Optimization
 
-- **Design vector:** `[x; μ]` (Variant 1, `n = 2·nel`), `[x; μ; a; c]` (Variant 2).
+- **Design vector:** `[x; μ]` (Variant 1, `n = 2·nel`), `[x; μ; wall]` (Variant 2).
 - **Objective:** the same terms as `stto`: compliance + `Theta`·gravity stages +
   `uniformity_weight`·`_gradient_cv` + roughness. `uniformity_weight = 0` is a valid
   setting. Phase 8 tests whether `neg_log`/`poisson` need it at all.
@@ -247,8 +248,8 @@ Support (all three scripts, `checks.support_report`) = no unsupported element in
 part's interior (all 4 edge neighbours solid; outside the domain is void). An
 unsupported element on the boundary reads as a steep overhang; the user accepts it as
 printable (a heuristic). Every unsupported element measured in Phase 8 was on the
-boundary, mostly ties within one layer. Variant 2 is judged on the domain-level check
-instead; its part-level counts are reported.
+boundary, mostly ties within one layer. The domain-level check of Variant 2 is
+reported, not judged.
 
 On the validation matrix, report these values. Do not gate on them.
 
