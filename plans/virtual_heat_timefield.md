@@ -460,8 +460,14 @@ The other options (`neg_log` for Variant 1, `poisson` for Variant 2) are *lower
 priority, not rejected*. Phase 4 still implements and tests them. Tune them only
 if the primary option fails, or if the user asks.
 
+**Robustness means one schedule across design problems.** Passing replicates of one
+problem is easy and tells little; what matters is that the same schedule passes on
+different load cases, volume fractions, bases and Tcr. Judge a schedule change on
+several cells, not on replicates of one (user, 2026-09-30).
+
 Judge a change against a matched control (the same schedule without the change).
-Replicate the marginal cells on CPU and GPU. Watch the multipliers: rows at `mma_c`
+Replicate the marginal cells on CPU and GPU only to tell chance from a systematic
+effect. Watch the multipliers: rows at `mma_c`
 mean a schedule conflict. Record the final schedule and its reasons in a
 `configs/*.md` note, as `configs/continuation.md` does for `stto`.
 
