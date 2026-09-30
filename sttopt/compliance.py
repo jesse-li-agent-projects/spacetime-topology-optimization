@@ -41,7 +41,9 @@ def time_mask(
     """
     num = math.tanh(beta * ti) + torch.tanh(beta * (tPhys - ti))
     den = math.tanh(beta * ti) + math.tanh(beta * (1 - ti))
-    return 1 - num / den
+    # On [0, 1] for t on [0, 1], but it can round to -2e-16 at t = 1, which a SIMP
+    # power with a non-integer penal turns into NaN
+    return torch.clamp(1 - num / den, min=0)
 
 
 def _element_strain_energy(
