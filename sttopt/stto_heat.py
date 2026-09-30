@@ -177,8 +177,14 @@ def build_problem(
 def density(
     problem: Problem, x: Float[Tensor, "nely nelx"], beta_d: float
 ) -> Float[Tensor, "nely nelx"]:
-    """The density the physics reads: `x` filtered and Heaviside-projected at
-    sharpness `beta_d`."""
+    """
+    The density the physics reads: `x` filtered and Heaviside-projected.
+
+    :param problem: the problem
+    :param x: raw density design variable
+    :param beta_d: projection sharpness
+    :return: the projected density
+    """
     xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
     return filters.heaviside_projection(xTilde, beta_d, problem.config.eta)
 
@@ -305,8 +311,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     f_val_t = c_t
     for cg_t in stage_cs:
         f_val_t = f_val_t + config.Theta * cg_t
-    # Log, so the time-field weights act relative to the compliance: in the raw sum they
-    # outweighed a small compliance and held the density grey
+    # Log, so the time-field weights act relative to the compliance (PR #189)
     objective = problem.terms.objective(torch.log(f_val_t), xPhys, tPhys, loop)
     f_val = float(objective.value.detach())
     df_dx = _sensitivity_rows(objective.value[None], x, mu)[0]
@@ -455,9 +460,9 @@ def check_design(
 ) -> dict:
     """
     Check a design, as raw design variables, on the binarized density with the run's own
-    `tPhys`, as `checks.check_design` does for `stto`. (Solving `tPhys` again through the
-    binarized density moved one run's hotspot row from +0.007 to +0.4.) The report has
-    the layout of `checks.check_design`'s, so `checks.summary` reads it.
+    `tPhys`, as `checks.check_design` does for `stto`. Solving `tPhys` again through the
+    binarized density gives a misleading hotspot row (PR #189). The report has the layout
+    of `checks.check_design`'s, so `checks.summary` reads it.
 
     Start: the base is printed first, i.e. no solid element off the base is earlier than
     a solid base element. Support and the saddle count are as in `checks.check_design`.

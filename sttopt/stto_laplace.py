@@ -324,8 +324,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     f_val_t = c_t
     for cg_t in stage_cs:
         f_val_t = f_val_t + config.Theta * cg_t
-    # Log, so the time-field weights act relative to the compliance: in the raw sum they
-    # outweighed a small compliance and held the density grey
+    # Log, so the time-field weights act relative to the compliance (PR #189)
     objective = problem.terms.objective(torch.log(f_val_t), xPhys, tPhys, loop)
     f_val = float(objective.value.detach())
     df_dx = _sensitivity_rows(objective.value[None], leaves)[0]
