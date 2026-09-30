@@ -8,8 +8,10 @@ without local minima, i.e. without material that prints before everything around
   subharmonic, so it has no interior maximum, and a decreasing map `T -> t` has no
   interior minimum over the part.
 - `laplace_time_field`: `div(chi grad t) = 0`, `t = 0` on the plate and optimized
-  unimodal data on the other walls, `chi = chi(mu)` over the whole domain. The maximum
-  principle leaves no interior extremum over the domain.
+  nonnegative data on the other walls, `chi = chi(mu)` over the whole domain. The
+  maximum principle leaves no interior extremum over the domain; a dip in the wall
+  data is a local minimum on the wall, and two peaks give an interior saddle between
+  them.
 
 Both solve on the nodes of the element grid and report element means, the values the
 rest of the code reads. The guarantee holds on the nodes; an element mean can still be
@@ -329,63 +331,28 @@ def heat_time_field(
     return TimeFieldSolution(normalize(t_e, xPhys), T, phi)
 
 
-def unimodal_wall_data(
-    a: Float[Tensor, " n_arc"], c: Float[Tensor, " n_arc"], step: float
-) -> Float[Tensor, " n_arc"]:
-    """Wall data with one peak and no dip along the arc, for any `a`, `c` in `[0, 1]`.
-
-    `a[k]` is how much the data may rise at arc node `k` walking forward from the
-    plate, `c[k]` the same walking backward from the far end of the plate, each as a
-    fraction of `step`. The data is the smaller of the two running sums: the minimum of
-    a rising and a falling sequence, so unimodal by construction.
-    """
-    rising = torch.cumsum(a * step, dim=-1)
-    falling = torch.flip(torch.cumsum(torch.flip(c * step, (-1,)), dim=-1), (-1,))
-    return torch.minimum(rising, falling)
-
-
-def wall_coefficients(
-    target: Float[Tensor, " n_arc"], step: float
-) -> tuple[Float[Tensor, " n_arc"], Float[Tensor, " n_arc"]]:
-    """`(a, c)` for which `unimodal_wall_data` reproduces a unimodal `target` that is 0
-    at the plate: `a` from its rises walking forward, `c` from its rises walking
-    backward.
-
-    :raises ValueError: if `target` is not unimodal, or rises faster than `step` per
-        node
-    """
-    zero = target.new_zeros(1)
-    d = torch.diff(torch.cat([zero, target, zero]))
-    a = torch.clamp(d[:-1], min=0) / step
-    c = torch.clamp(-d[1:], min=0) / step
-    if not torch.allclose(unimodal_wall_data(a, c, step), target):
-        raise ValueError("target wall data is not unimodal")
-    if a.max() > 1 or c.max() > 1:
-        raise ValueError(
-            f"target wall data rises by more than one step per node ({float(max(a.max(), c.max()))} steps)"
-        )
-    return a, c
-
-
-def wall_step(mesh: ScalarMesh) -> float:
-    """`2 h / l_c`, the largest rise of the wall data per arc node: twice the ramp's."""
-    return 2 / mesh.unit_length
-
-
-def ramp_wall_coefficients(
-    mesh: ScalarMesh,
-) -> tuple[Float[Tensor, " n_arc"], Float[Tensor, " n_arc"]]:
-    """`(a, c)` of the linear ramp away from the plate, `t = distance / l_c`: uniform
-    `chi` with this wall data gives a linear `t` in the whole domain."""
+def _ramp(mesh: ScalarMesh) -> Float[Tensor, " n_arc"]:
+    """The linear ramp away from the plate on the wall arc, `t = distance / l_c`."""
     xy = np.stack(np.divmod(np.arange(mesh.ndof), mesh.nelx + 1), axis=-1)
     plate = xy[mesh.plate.cpu().numpy()]
     arc = xy[mesh.arc.cpu().numpy()]
     # Distance to the nearest plate node: to the plate line, for a straight plate
     distance = np.sqrt(((arc[:, None] - plate[None]) ** 2).sum(-1)).min(axis=1)
-    target = torch.as_tensor(
+    return torch.as_tensor(
         distance / mesh.unit_length, device=mesh.arc.device, dtype=mesh.KE.dtype
     )
-    return wall_coefficients(target, wall_step(mesh))
+
+
+def wall_scale(mesh: ScalarMesh) -> float:
+    """The wall data at `wall = 1`: twice the ramp's largest value, so the ramp sits
+    at `wall <= 1/2` and the data can rise above it anywhere."""
+    return 2 * float(_ramp(mesh).max())
+
+
+def ramp_wall(mesh: ScalarMesh) -> Float[Tensor, " n_arc"]:
+    """The wall design of the linear ramp away from the plate: uniform `chi` with this
+    wall data gives a linear `t` in the whole domain."""
+    return _ramp(mesh) / wall_scale(mesh)
 
 
 def laplace_time_field(
@@ -393,8 +360,7 @@ def laplace_time_field(
     mesh: ScalarMesh,
     xPhys: Float[Tensor, "nely nelx"],
     mu: Float[Tensor, "nely nelx"],
-    a: Float[Tensor, " n_arc"],
-    c: Float[Tensor, " n_arc"],
+    wall: Float[Tensor, " n_arc"],
     previous: TimeFieldSolution | None = None,
 ) -> TimeFieldSolution:
     """Variant 2: the time field of `div(chi grad t) = 0` over the whole domain.
@@ -402,14 +368,14 @@ def laplace_time_field(
     :param xPhys: physical densities; they only set the normalization, since the field
         does not see the part
     :param mu: diffusivity design field
-    :param a: wall-data rises walking forward, `unimodal_wall_data`
-    :param c: wall-data rises walking backward
+    :param wall: wall design on `[0, 1]`; the wall data is `wall * wall_scale(mesh)`
     :param previous: the last iteration's solution, the warm start
     :return: `tPhys` and the nodal solutions
     """
     shape = xPhys.shape
     chi = diffusivity(mu.flatten(), config.chi_contrast)
-    b = unimodal_wall_data(a, c, wall_step(mesh))
+    b = wall * wall_scale(mesh)
+
     g = torch.zeros(mesh.ndof, device=chi.device, dtype=chi.dtype).index_put(
         (mesh.arc,), b
     )

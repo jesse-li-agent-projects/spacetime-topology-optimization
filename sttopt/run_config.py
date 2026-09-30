@@ -422,8 +422,8 @@ class HeatRunConfig(SpaceTimeConfig):
 class LaplaceRunConfig(SpaceTimeConfig):
     """
     Hyperparameters of a `stto_laplace` run, where the time field is harmonic,
-    `div(chi grad t) = 0`, with `t = 0` on the build plate, optimized unimodal data on
-    every other wall, and `chi` an optimized diffusivity over the whole domain. The
+    `div(chi grad t) = 0`, with `t = 0` on the build plate, optimized nonnegative data
+    on every other wall, and `chi` an optimized diffusivity over the whole domain. The
     field has no interior extremum over the domain.
 
     :param chi_contrast: as in `HeatRunConfig`.

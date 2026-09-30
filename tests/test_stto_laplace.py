@@ -29,7 +29,11 @@ def _config(nelx=30, nely=10, **overrides):
 
 @pytest.fixture(scope="module")
 def smoke_run():
-    return stto_laplace.run(_config(), device="cpu")
+    with warnings.catch_warnings():
+        # The wall group's gradient changes sign from step to step, so MMA tightens
+        # its asymptotes, and the subproblem's last barrier level hits its Newton cap
+        warnings.filterwarnings("ignore", "subsolv", RuntimeWarning)
+        return stto_laplace.run(_config(), device="cpu")
 
 
 def test_default_config_loads_with_a_plate_base():
@@ -59,19 +63,12 @@ def test_smoke_run_lowers_the_objective_or_the_infeasibility(smoke_run):
 
 def test_design_stays_on_the_unit_box(smoke_run):
     state = smoke_run.state
-    for v in (state.x, state.mu, state.a, state.c):
+    for v in (state.x, state.mu, state.wall):
         assert float(v.min()) >= 0 and float(v.max()) <= 1
 
 
-def test_wall_data_stays_unimodal(smoke_run):
-    for b in smoke_run.wall_traj:
-        signs = np.sign(np.diff(b.numpy()))
-        signs = signs[signs != 0]
-        assert np.count_nonzero(np.diff(signs)) <= 1
-
-
 def test_the_wall_data_is_optimized(smoke_run):
-    """`a` and `c` receive sensitivities and move, so they are live design groups."""
+    """`wall` receives sensitivities and moves, so it is a live design group."""
     first, last = smoke_run.wall_traj[0], smoke_run.wall_traj[-1]
     assert not torch.allclose(first, last)
 
@@ -89,11 +86,10 @@ def test_check_design_reports_the_domain_as_well(smoke_run):
         warnings.simplefilter("ignore", UserWarning)
         report = stto_laplace.check_design(problem, smoke_run.state)
     assert {"start", "support", "saddles", "domain", "constraints"} <= report.keys()
-    # The maximum principle leaves no local minimum over the domain
-    assert report["domain"]["unsupported"] == 0
-    assert report["start"]["passed"] and report["passed"]
+    assert report["start"]["passed"]
+    assert report["passed"] == report["support"]["passed"]
     assert "earliest off the base" in checks.summary(report)
-    assert "support over the domain: pass" in checks.summary(report)
+    assert "over the domain:" in checks.summary(report)
 
 
 def test_cli_writes_the_run_artefacts(tmp_path, monkeypatch):
@@ -113,9 +109,9 @@ def test_cli_writes_the_run_artefacts(tmp_path, monkeypatch):
         "domain_local_minima",
         "domain_saddles",
     } <= lines[0].keys()
-    assert {"log_chi_roughness", "wall_peak"} <= lines[-1].keys()
+    assert {"log_chi_roughness", "wall_peaks", "wall_dips"} <= lines[-1].keys()
     design = np.load(out / "final_design.npz")
-    assert {"x", "mu", "a", "c", "xPhys", "tPhys"} <= set(design.files)
+    assert {"x", "mu", "wall", "xPhys", "tPhys"} <= set(design.files)
     report = json.loads(checks.report_path(out / "final_design.npz").read_text())
     assert report["loop"] == 3
 
@@ -138,7 +134,7 @@ def test_a_step_stays_finite_when_void_is_later_than_the_part():
     )
     assert run_config.weight_at(config.penal, loop) % 1 != 0
     _, sol = stto_laplace.physical_fields(
-        problem, state.x, state.mu, state.a, state.c, state.beta_d
+        problem, state.x, state.mu, state.wall, state.beta_d
     )
     assert float(sol.tPhys.max()) > 1  # non-vacuous
     _, record = stto_laplace.step(problem, state)

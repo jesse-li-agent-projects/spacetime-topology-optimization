@@ -94,40 +94,34 @@ def test_one_minus_reproduces_wu_fig_2_6e(beta_wu):
 def test_ramp_init_reproduces_the_ramp(base):
     nelx, nely = 30, 10
     mesh = _mesh(nelx, nely, base)
-    a, c = vh.ramp_wall_coefficients(mesh)
-    assert (
-        a.min() >= 0
-        and a.max() <= 0.5 + 1e-12
-        and c.min() >= 0
-        and c.max() <= 0.5 + 1e-12
-    )
+    wall = vh.ramp_wall(mesh)
+    # Inside the box with room above it, so the data can rise above the ramp
+    assert wall.min() >= 0 and float(wall.max()) == pytest.approx(0.5)
     config = virtual_heat_config(
         LaplaceRunConfig, nelx=nelx, nely=nely, print_base=base, laplace_cg_rtol=1e-12
     )
     xPhys = _full(nelx, nely, 0.5)
     tPhys = vh.laplace_time_field(
-        config, mesh, xPhys, _full(nelx, nely, 0.5), a, c
+        config, mesh, xPhys, _full(nelx, nely, 0.5), wall
     ).tPhys
     rows, cols = np.mgrid[:nely, :nelx]
     distance = cols + 0.5 if base == "edge" else nely - rows - 0.5
     np.testing.assert_allclose(tPhys.numpy(), distance / distance.max(), atol=1e-12)
 
 
-def test_wall_data_is_unimodal_for_random_coefficients():
-    rng = np.random.default_rng(0)
-    for _ in range(200):
-        n = int(rng.integers(3, 60))
-        a, c = (torch.tensor(rng.uniform(0, 1, n)) for _ in range(2))
-        b = vh.unimodal_wall_data(a, c, 0.1).numpy()
-        signs = np.sign(np.diff(b))
-        signs = signs[signs != 0]
-        assert np.count_nonzero(np.diff(signs)) <= 1  # up, then down, at most once
-        assert b.min() >= 0
+def _unimodal(rng, n):
+    """Random wall data on `[0, 1]` with one peak: the smaller of a rising and a
+    falling running sum."""
+    rising = np.cumsum(rng.uniform(0, 1, n))
+    falling = np.cumsum(rng.uniform(0, 1, n)[::-1])[::-1]
+    b = np.minimum(rising, falling)
+    return torch.tensor(b / b.max())
 
 
-def _harmonic(seed, nelx=24, nely=16, contrast=1e3, smooth=False):
-    """A harmonic field with random unimodal wall data and a random `mu` spanning
-    `[0, 1]`: independent per element, or smoothed over about two elements."""
+def _harmonic(seed, nelx=24, nely=16, contrast=1e3, smooth=False, unimodal=True):
+    """A harmonic field with random wall data (one peak, or independent per node) and
+    a random `mu` spanning `[0, 1]`: independent per element, or smoothed over about
+    two elements."""
     rng = np.random.default_rng(seed)
     mesh = _mesh(nelx, nely)
     config = virtual_heat_config(
@@ -142,14 +136,16 @@ def _harmonic(seed, nelx=24, nely=16, contrast=1e3, smooth=False):
         mu = torch.tensor(0.5 + 0.5 * s / np.abs(s).max())
     else:
         mu = torch.tensor(rng.uniform(0, 1, (nely, nelx)))
-    a, c = (torch.tensor(rng.uniform(0, 1, len(mesh.arc))) for _ in range(2))
-    u = vh.laplace_time_field(config, mesh, _full(nelx, nely, 0.5), mu, a, c).primary
+    n_arc = len(mesh.arc)
+    wall = _unimodal(rng, n_arc) if unimodal else torch.tensor(rng.uniform(0, 1, n_arc))
+    u = vh.laplace_time_field(config, mesh, _full(nelx, nely, 0.5), mu, wall).primary
     return mesh, u.numpy()
 
 
 @pytest.mark.parametrize("seed", range(5))
 def test_harmonic_field_has_no_interior_extremum_on_the_nodes(seed):
-    mesh, u = _harmonic(seed)
+    """For any wall data, not only data with one peak."""
+    mesh, u = _harmonic(seed, unimodal=False)
     interior = np.zeros((mesh.nely + 1, mesh.nelx + 1), bool)
     interior[1:-1, 1:-1] = True
     ring = u[_node_rings(mesh.nelx, mesh.nely)]
@@ -173,6 +169,30 @@ def test_harmonic_field_with_unimodal_walls_has_no_interior_saddle(seed):
     assert saddle_count(u, mesh.nelx, mesh.nely) == 0
 
 
+def test_two_wall_peaks_give_an_interior_saddle():
+    """Where two branches of the print merge: the saddle between two peaks, which the
+    optimized wall data may now have."""
+    nelx, nely = 24, 16
+    mesh = _mesh(nelx, nely, "bottom_edge")
+    config = virtual_heat_config(
+        LaplaceRunConfig,
+        nelx=nelx,
+        nely=nely,
+        print_base="bottom_edge",
+        laplace_cg_rtol=1e-12,
+    )
+    # Along the arc: up the left wall, across the top, down the right wall
+    k = np.arange(len(mesh.arc))
+    peaks = np.exp(-(((k - 0.3 * len(k)) / 4) ** 2)) + np.exp(
+        -(((k - 0.7 * len(k)) / 4) ** 2)
+    )
+    wall = torch.tensor(0.2 + 0.8 * peaks)
+    u = vh.laplace_time_field(
+        config, mesh, _full(nelx, nely, 0.5), _full(nelx, nely, 0.5), wall
+    ).primary
+    assert saddle_count(u.numpy(), nelx, nely) >= 1
+
+
 @pytest.mark.xfail(
     strict=True,
     reason="the theorem is continuous; element-scale chi jumps of ~100x or more give discrete saddles (plans/virtual_heat_timefield.md, Phase 4)",
@@ -191,7 +211,7 @@ OPTIONS = [(HeatRunConfig, m) for m in HeatTimeMap] + [
 
 
 def _time_field(cls, time_map, nelx, nely, drain_beta, rtol=1e-13):
-    """`(mesh, f)`: `f(xPhys, mu, a, c) -> tPhys` for one variant and map, every solve
+    """`(mesh, f)`: `f(xPhys, mu, wall) -> tPhys` for one variant and map, every solve
     at `rtol`."""
     mesh = _mesh(nelx, nely)
     tight = dict(poisson_cg_rtol=rtol, time_map=time_map.value)
@@ -201,10 +221,10 @@ def _time_field(cls, time_map, nelx, nely, drain_beta, rtol=1e-13):
         tight |= dict(laplace_cg_rtol=rtol)
     config = virtual_heat_config(cls, nelx=nelx, nely=nely, **tight)
     if cls is HeatRunConfig:
-        return mesh, lambda x, mu, a, c: vh.heat_time_field(config, mesh, x, mu).tPhys
+        return mesh, lambda x, mu, wall: vh.heat_time_field(config, mesh, x, mu).tPhys
     return (
         mesh,
-        lambda x, mu, a, c: vh.laplace_time_field(config, mesh, x, mu, a, c).tPhys,
+        lambda x, mu, wall: vh.laplace_time_field(config, mesh, x, mu, wall).tPhys,
     )
 
 
@@ -218,12 +238,11 @@ def test_gradients_are_finite_in_deep_void(cls, time_map):
     x[:, :10] = 1.0  # a solid block at the plate, and void everywhere beyond it
     x.requires_grad_()
     mu = _full(nelx, nely, 0.5).requires_grad_()
-    a0, c0 = vh.ramp_wall_coefficients(mesh)
-    a, c = a0.clone().requires_grad_(), c0.clone().requires_grad_()
-    tPhys = f(x, mu, a, c)
+    wall = vh.ramp_wall(mesh).requires_grad_()
+    tPhys = f(x, mu, wall)
     assert torch.isfinite(tPhys).all()
     (tPhys * torch.rand_like(tPhys)).sum().backward()
-    for leaf in (x, mu, a, c):
+    for leaf in (x, mu, wall):
         assert leaf.grad is None or torch.isfinite(leaf.grad).all()
 
 
@@ -239,15 +258,14 @@ def test_gradient_matches_finite_differences(cls, time_map, monkeypatch):
     mesh, f = _time_field(cls, time_map, nelx, nely, drain_beta=9.0)
     x = torch.tensor(rng.uniform(0.3, 0.9, (nely, nelx))).requires_grad_()
     mu = torch.tensor(rng.uniform(0.2, 0.8, (nely, nelx))).requires_grad_()
-    a0, c0 = vh.ramp_wall_coefficients(mesh)
-    a = (a0 + torch.tensor(rng.uniform(0, 0.3, a0.shape))).requires_grad_()
-    c = (c0 + torch.tensor(rng.uniform(0, 0.3, c0.shape))).requires_grad_()
+    wall0 = vh.ramp_wall(mesh)
+    wall = (wall0 + torch.tensor(rng.uniform(0, 0.3, wall0.shape))).requires_grad_()
     w = torch.tensor(rng.uniform(-1, 1, (nely, nelx)))
 
     def L(*leaves):
         return (w * f(*leaves)).sum()
 
-    leaves = [x, mu, a, c]
+    leaves = [x, mu, wall]
     L(*leaves).backward()
     for i, leaf in enumerate(leaves):
         if leaf.grad is None:  # e.g. the heat map does not read the wall data

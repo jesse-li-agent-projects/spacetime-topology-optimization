@@ -2,11 +2,13 @@
 `plans/virtual_heat_timefield.md`).
 
 The design variables are the density `x`, a diffusivity field `mu` over the whole
-domain, and the wall data `a`, `c` (`virtual_heat.unimodal_wall_data`), all on `[0, 1]`.
-`tPhys` solves `div(chi(mu) grad t) = 0` with `t = 0` on the build plate and the
-unimodal wall data on every other wall, so it has no interior extremum over the domain
-by construction. The field does not see the part: the guarantee is over the domain,
-and `check_design` reports the part-level check as well. Compliance, the gravity
+domain, and the wall design `wall` (`virtual_heat.laplace_time_field`), all on
+`[0, 1]`. `tPhys` solves `div(chi(mu) grad t) = 0` with `t = 0` on the build plate and
+nonnegative wall data on every other wall, so it has no interior extremum over the
+domain by construction. The wall data may have several peaks, where branches of the
+print merge; a dip in it is a local minimum on the wall, left to the hotspot row where
+it is on the part. `check_design` judges support over the part, as `checks` does, and
+reports the domain-level check. Compliance, the gravity
 stages, the hotspot and time-field terms (`field_terms`) and the MMA step (`mma`) are
 shared with the other space-time scripts; as in `stto_heat`, the objective takes the log
 of the compliance terms.
@@ -64,7 +66,7 @@ class Problem:
     # The scalar mesh the time field is solved on, with the plate and the wall arc
     mesh: virtual_heat.ScalarMesh
     Nei: Int[Tensor, " k"]  # the elements on the build plate
-    n: int  # MMA design variables: 2*nelx*nely + 2*n_arc
+    n: int  # MMA design variables: 2*nelx*nely + n_arc
 
 
 @dataclass(frozen=True)
@@ -73,8 +75,7 @@ class State:
 
     x: Float[Tensor, "nely nelx"]  # raw density (unfiltered MMA output)
     mu: Float[Tensor, "nely nelx"]  # diffusivity design variable
-    a: Float[Tensor, " n_arc"]  # wall-data rises walking forward along the arc
-    c: Float[Tensor, " n_arc"]  # wall-data rises walking backward
+    wall: Float[Tensor, " n_arc"]  # wall design, along the arc
     mma: mma.History
     loop: int  # iterations already done, i.e. the index of the one `step` runs next
     beta_t: float  # gravity/stage-mask sigmoid sharpness
@@ -171,7 +172,7 @@ def build_problem(
         C=torch_util.csr_to_tensor(C, device, dtype),
         terms=field_terms.FieldTerms.build(config, Nei, device, dtype),
         mesh=mesh,
-        n=2 * nelx * nely + 2 * len(mesh.arc),
+        n=2 * nelx * nely + len(mesh.arc),
         **floats,
         **ints,
     )
@@ -181,8 +182,7 @@ def physical_fields(
     problem: Problem,
     x: Float[Tensor, "nely nelx"],
     mu: Float[Tensor, "nely nelx"],
-    a: Float[Tensor, " n_arc"],
-    c: Float[Tensor, " n_arc"],
+    wall: Float[Tensor, " n_arc"],
     beta_d: float,
     previous: virtual_heat.TimeFieldSolution | None = None,
 ) -> tuple[Float[Tensor, "nely nelx"], virtual_heat.TimeFieldSolution]:
@@ -193,8 +193,7 @@ def physical_fields(
 
     :param x: raw density, filtered and Heaviside-projected at sharpness `beta_d`
     :param mu: diffusivity design field
-    :param a: wall-data rises walking forward along the arc
-    :param c: wall-data rises walking backward
+    :param wall: wall design along the arc
     :param beta_d: projection sharpness
     :param previous: the last solution, the warm start
     :return: `(xPhys, solution)`, `solution.tPhys` the time field
@@ -202,7 +201,7 @@ def physical_fields(
     xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
     xPhys = filters.heaviside_projection(xTilde, beta_d, problem.config.eta)
     solution = virtual_heat.laplace_time_field(
-        problem.config, problem.mesh, xPhys, mu, a, c, previous
+        problem.config, problem.mesh, xPhys, mu, wall, previous
     )
     return xPhys, solution
 
@@ -220,13 +219,12 @@ def init_state(problem: Problem) -> State:
     kw = dict(device=problem.device, dtype=problem.dtype)
     x = torch.full(shape, config.volfrac, **kw)
     mu = torch.full(shape, 0.5, **kw)
-    a, c = virtual_heat.ramp_wall_coefficients(problem.mesh)
+    wall = virtual_heat.ramp_wall(problem.mesh)
     return State(
         x=x,
         mu=mu,
-        a=a,
-        c=c,
-        mma=mma.History.initial(_flatten(x, mu, a, c)),
+        wall=wall,
+        mma=mma.History.initial(_flatten(x, mu, wall)),
         loop=0,
         beta_t=run_config.weight_at(config.beta_t_schedule, 0),
         beta_d=run_config.weight_at(config.beta_d_schedule, 0),
@@ -236,7 +234,7 @@ def init_state(problem: Problem) -> State:
 
 
 def _flatten(*parts: Tensor) -> Float[Tensor, " n"]:
-    """The design groups in MMA's `[density; diffusivity; a; c]` layout.
+    """The design groups in MMA's `[density; diffusivity; wall]` layout.
 
     :return: the parts, each flattened, concatenated
     """
@@ -274,7 +272,7 @@ def _sensitivity_rows(
     """Sensitivities of `k` scalar outputs w.r.t. every design group.
 
     :param outputs: `k` scalars sharing one autograd graph
-    :param leaves: the design groups, in MMA's `[density; diffusivity; a; c]` order
+    :param leaves: the design groups, in MMA's `[density; diffusivity; wall]` order
     :return: `(k, n)` rows in that layout
     """
     return torch.cat(sensitivity.jacobian_rows(outputs, leaves), dim=-1)
@@ -283,7 +281,7 @@ def _sensitivity_rows(
 def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     """One optimization iteration: the objective and every constraint, their gradients
     by autograd (through the time-field solve's adjoint), and an MMA step on
-    `[x; mu; a; c]` with one scheduled move limit for every group.
+    `[x; mu; wall]` with one scheduled move limit for every group.
 
     :param problem: the problem being optimized
     :param state: the state after `state.loop` iterations
@@ -297,7 +295,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     Tcr = run_config.weight_at(config.Tcr, loop)
 
     leaves = tuple(
-        v.clone().requires_grad_(True) for v in (state.x, state.mu, state.a, state.c)
+        v.clone().requires_grad_(True) for v in (state.x, state.mu, state.wall)
     )
     xPhys, laplace = physical_fields(problem, *leaves, beta_d, state.laplace)
     tPhys = laplace.tPhys
@@ -344,9 +342,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             for g in timefield.gradient_percentiles(tPhys.detach(), xPhys.detach())
         )
         log_chi = torch.log(virtual_heat.diffusivity(state.mu, config.chi_contrast))
-        b = virtual_heat.unimodal_wall_data(
-            state.a, state.c, virtual_heat.wall_step(problem.mesh)
-        )
+        b = state.wall * virtual_heat.wall_scale(problem.mesh)
     diagnostics.update(
         stage_obj=config.Theta * sum(float(cg.detach()) for cg in stage_cs),
         grad_p10_per_m=grad_p10,
@@ -370,11 +366,12 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
             xPhys.detach(), tPhys.detach()
         ),
         log_chi_roughness=float(timefield.roughness(log_chi)),
-        # Where along the arc the wall data peaks, as a fraction of the arc
-        wall_peak=float(b.argmax()) / max(n_arc - 1, 1),
+        # Strict local maxima of the wall data along the arc: where branches merge
+        wall_peaks=int(((b[1:-1] > b[:-2]) & (b[1:-1] > b[2:])).sum()),
+        wall_dips=int(((b[1:-1] < b[:-2]) & (b[1:-1] < b[2:])).sum()),
     )
 
-    xval = _flatten(state.x, state.mu, state.a, state.c)
+    xval = _flatten(state.x, state.mu, state.wall)
     move_limit = torch.full_like(xval, run_config.weight_at(config.move, loop))
     xmma, lam, mma_history = mma.unit_box_step(
         state.mma,
@@ -389,12 +386,11 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         c=config.mma_c,
         raa0=config.raa0_total / problem.n,
     )
-    x_new, mu_new, a_new, c_new = torch.split(xmma, [nel, nel, n_arc, n_arc])
+    x_new, mu_new, wall_new = torch.split(xmma, [nel, nel, n_arc])
     new_state = State(
         x=x_new.reshape(nely, nelx),
         mu=mu_new.reshape(nely, nelx),
-        a=a_new,
-        c=c_new,
+        wall=wall_new,
         mma=mma_history,
         loop=loop + 1,
         # Read at the next index, so a scheduled change starts with the next step
@@ -408,7 +404,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     )
     step_size = (xmma - xval).abs()
     for name, part in zip(
-        ("dx", "dmu", "da", "dc"), torch.split(step_size, [nel, nel, n_arc, n_arc])
+        ("dx", "dmu", "dwall"), torch.split(step_size, [nel, nel, n_arc])
     ):
         diagnostics.update(
             {f"{name}_max": float(part.max()), f"{name}_mean": float(part.mean())}
@@ -453,7 +449,7 @@ def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
     :return: the run
     """
     xPhys_traj, tPhys_traj, x_traj, mu_traj, wall_traj, records = [], [], [], [], [], []
-    step_length = virtual_heat.wall_step(problem.mesh)
+    scale = virtual_heat.wall_scale(problem.mesh)
 
     def record_fields(state: State) -> None:
         with torch.no_grad():
@@ -461,8 +457,7 @@ def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
                 problem,
                 state.x,
                 state.mu,
-                state.a,
-                state.c,
+                state.wall,
                 state.beta_d,
                 state.laplace,
             )
@@ -470,7 +465,7 @@ def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
         tPhys_traj.append(laplace.tPhys)
         x_traj.append(state.x.clone())
         mu_traj.append(state.mu.clone())
-        wall_traj.append(virtual_heat.unimodal_wall_data(state.a, state.c, step_length))
+        wall_traj.append(state.wall * scale)
 
     record_fields(state)
     for _ in range(nloop):
@@ -489,16 +484,16 @@ def check_design(problem: Problem, state: State) -> dict:
     """
     Check a design on the binarized design, in `checks.check_design`'s report layout.
 
-    Start (the base is printed first) is judged over the part, and support over the
-    whole domain (`domain`), where the maximum principle applies. The support check and
-    saddles over the part are reported, not judged. A failed hard check warns.
+    Start (the base is printed first) and support are judged over the part. The local
+    minima and saddles over the whole domain are reported under `domain`, not judged.
+    A failed hard check warns.
 
     :param problem: the problem the design was optimized for
     :param state: the design, and the iteration whose schedules apply
     :return: a JSON-serializable report
     """
     config, loop = problem.config, state.loop
-    design = (state.x, state.mu, state.a, state.c)
+    design = (state.x, state.mu, state.wall)
     beta_d = run_config.weight_at(config.beta_d_schedule, loop)
     with torch.no_grad():
         xPhys, as_optimized = physical_fields(problem, *design, beta_d)
@@ -526,7 +521,6 @@ def check_design(problem: Problem, state: State) -> dict:
     everywhere = np.ones_like(solid)
     domain_orphans = checks.unsupported(everywhere, tPhys_np, base)
     domain = dict(
-        passed=not domain_orphans.any(),
         unsupported=int(domain_orphans.sum()),
         unsupported_at=np.argwhere(domain_orphans)[:20].tolist(),
         saddles=int(checks.saddles(tPhys_np, everywhere).sum()),
@@ -535,13 +529,11 @@ def check_design(problem: Problem, state: State) -> dict:
         warnings.warn(
             f"print start: a solid element off the base prints at t = {earliest_off_base_t}, before the latest solid base element at t = {max_base_t}"
         )
-    if not domain["passed"]:
-        warnings.warn(
-            f"print support over the domain: {domain['unsupported']} element(s) have no neighbor printed before them, e.g. at (row, col) {domain['unsupported_at'][:5]}"
-        )
+    if not support["passed"]:
+        checks.warn_unsupported(support)
     report = dict(
         loop=loop,
-        passed=start["passed"] and domain["passed"],
+        passed=start["passed"] and support["passed"],
         start=start,
         support=support,
         saddles=int(checks.saddles(tPhys_np, solid, solid).sum()),

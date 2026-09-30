@@ -311,13 +311,13 @@ def summary(report: dict) -> str:
     )
     lines = [
         f"start:   {'pass' if start['passed'] else 'FAIL'} ({start['solid_base_elements']} solid base element(s), latest at t = {start['max_base_t']}, {bound})",
-        f"support: {'pass' if support['passed'] else 'FAIL'} ({support['interior_unsupported']} interior unsupported element(s), {support['unsupported']} with the boundary){' (reported, not judged)' if 'domain' in report else ''}",
+        f"support: {'pass' if support['passed'] else 'FAIL'} ({support['interior_unsupported']} interior unsupported element(s), {support['unsupported']} with the boundary)",
         f"saddles in the time field over the part: {report['saddles']} (reported, not judged)",
     ]
     if "domain" in report:
         domain = report["domain"]
         lines.append(
-            f"support over the domain: {'pass' if domain['passed'] else 'FAIL'} ({domain['unsupported']} unsupported element(s), {domain['saddles']} saddle(s))"
+            f"over the domain: {domain['unsupported']} local minimum(s), {domain['saddles']} saddle(s) (reported, not judged)"
         )
     if "constraints" in report:
         lines.append("constraints, worst row (<= 0 satisfied): as optimized, binarized")

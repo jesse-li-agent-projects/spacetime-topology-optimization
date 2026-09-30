@@ -12,7 +12,7 @@ from pathlib import Path
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Space-time topology optimization with a harmonic time field and optimized unimodal wall data."
+        description="Space-time topology optimization with a harmonic time field and optimized wall data."
     )
     parser.add_argument(
         "--config",
@@ -99,8 +99,7 @@ def main(args: argparse.Namespace) -> None:
             path,
             x=torch_util.to_numpy(state.x),
             mu=torch_util.to_numpy(state.mu),
-            a=torch_util.to_numpy(state.a),
-            c=torch_util.to_numpy(state.c),
+            wall=torch_util.to_numpy(state.wall),
             xPhys=torch_util.to_numpy(xPhys),
             tPhys=torch_util.to_numpy(tPhys),
             loop=state.loop,
@@ -117,8 +116,7 @@ def main(args: argparse.Namespace) -> None:
                     problem,
                     state.x,
                     state.mu,
-                    state.a,
-                    state.c,
+                    state.wall,
                     state.beta_d,
                     state.laplace,
                 )
