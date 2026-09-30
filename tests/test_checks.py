@@ -68,7 +68,29 @@ def test_check_design_warns_on_a_pit(problem):
         report = checks.check_design(problem, x, t, problem.config.nloop)
     assert not report["passed"]
     assert report["start"]["passed"]
-    assert report["support"]["unsupported_at"] == [[5, 15]]
+    assert report["support"]["interior_unsupported_at"] == [[5, 15]]
+
+
+def test_check_design_accepts_an_unsupported_boundary_element(problem):
+    x, t = _printable_design(problem)
+    t[-1, 15] = 0.0  # a pit on the domain edge, so on the part's boundary
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        report = checks.check_design(problem, x, t, problem.config.nloop)
+    assert report["support"]["passed"]
+    assert report["support"]["unsupported"] == 1
+    assert report["support"]["interior_unsupported"] == 0
+
+
+def test_interior_treats_outside_the_domain_as_void():
+    solid = np.ones((4, 5), dtype=bool)
+    solid[1, 3] = False
+    expected = np.zeros((4, 5), dtype=bool)
+    expected[1:3, 1:4] = True
+    expected[1, 3] = expected[2, 3] = expected[1, 2] = (
+        False  # the hole and its edge neighbours
+    )
+    assert np.array_equal(checks.interior(solid), expected)
 
 
 def test_check_design_warns_on_a_late_start(problem):

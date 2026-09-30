@@ -498,20 +498,13 @@ def check_design(
         max_base_t=max_base_t,
         earliest_off_base_t=earliest_off_base_t,
     )
-    orphans = checks.unsupported(solid, tPhys_np, base)
-    support = dict(
-        passed=not orphans.any(),
-        unsupported=int(orphans.sum()),
-        unsupported_at=np.argwhere(orphans)[:20].tolist(),
-    )
+    support = checks.support_report(solid, tPhys_np, base)
     if not start["passed"]:
         warnings.warn(
             f"print start: a solid element off the base prints at t = {earliest_off_base_t}, before the latest solid base element at t = {max_base_t}"
         )
     if not support["passed"]:
-        warnings.warn(
-            f"print support: {support['unsupported']} solid element(s) have no solid neighbor printed before them, e.g. at (row, col) {support['unsupported_at'][:5]}"
-        )
+        checks.warn_unsupported(support)
     report = dict(
         loop=loop,
         passed=start["passed"] and support["passed"],

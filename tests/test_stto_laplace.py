@@ -91,8 +91,9 @@ def test_check_design_reports_the_domain_as_well(smoke_run):
     assert {"start", "support", "saddles", "domain", "constraints"} <= report.keys()
     # The maximum principle leaves no local minimum over the domain
     assert report["domain"]["unsupported"] == 0
-    assert report["start"]["passed"]
+    assert report["start"]["passed"] and report["passed"]
     assert "earliest off the base" in checks.summary(report)
+    assert "support over the domain: pass" in checks.summary(report)
 
 
 def test_cli_writes_the_run_artefacts(tmp_path, monkeypatch):

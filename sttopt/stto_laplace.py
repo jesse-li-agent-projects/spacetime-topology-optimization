@@ -458,7 +458,13 @@ def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
     def record_fields(state: State) -> None:
         with torch.no_grad():
             xPhys, laplace = physical_fields(
-                problem, state.x, state.mu, state.a, state.c, state.beta_d, state.laplace
+                problem,
+                state.x,
+                state.mu,
+                state.a,
+                state.c,
+                state.beta_d,
+                state.laplace,
             )
         xPhys_traj.append(xPhys)
         tPhys_traj.append(laplace.tPhys)
@@ -471,9 +477,7 @@ def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
         state, record = step(problem, state)
         record_fields(state)
         records.append(record)
-    return RunResult(
-        state, xPhys_traj, tPhys_traj, x_traj, mu_traj, wall_traj, records
-    )
+    return RunResult(state, xPhys_traj, tPhys_traj, x_traj, mu_traj, wall_traj, records)
 
 
 def _grey_fraction(xPhys: Float[Tensor, "nely nelx"]) -> float:
@@ -485,9 +489,9 @@ def check_design(problem: Problem, state: State) -> dict:
     """
     Check a design on the binarized design, in `checks.check_design`'s report layout.
 
-    Start (the base is printed first), support and saddles are over the part. The local
-    minima and saddles over the whole domain, where the maximum principle applies, are
-    reported under `domain`, not judged. A failed hard check warns.
+    Start (the base is printed first) is judged over the part, and support over the
+    whole domain (`domain`), where the maximum principle applies. The support check and
+    saddles over the part are reported, not judged. A failed hard check warns.
 
     :param problem: the problem the design was optimized for
     :param state: the design, and the iteration whose schedules apply
@@ -518,28 +522,26 @@ def check_design(problem: Problem, state: State) -> dict:
         max_base_t=max_base_t,
         earliest_off_base_t=earliest_off_base_t,
     )
-    orphans = checks.unsupported(solid, tPhys_np, base)
-    support = dict(
-        passed=not orphans.any(),
-        unsupported=int(orphans.sum()),
-        unsupported_at=np.argwhere(orphans)[:20].tolist(),
-    )
+    support = checks.support_report(solid, tPhys_np, base)
     everywhere = np.ones_like(solid)
+    domain_orphans = checks.unsupported(everywhere, tPhys_np, base)
     domain = dict(
-        unsupported=int(checks.unsupported(everywhere, tPhys_np, base).sum()),
+        passed=not domain_orphans.any(),
+        unsupported=int(domain_orphans.sum()),
+        unsupported_at=np.argwhere(domain_orphans)[:20].tolist(),
         saddles=int(checks.saddles(tPhys_np, everywhere).sum()),
     )
     if not start["passed"]:
         warnings.warn(
             f"print start: a solid element off the base prints at t = {earliest_off_base_t}, before the latest solid base element at t = {max_base_t}"
         )
-    if not support["passed"]:
+    if not domain["passed"]:
         warnings.warn(
-            f"print support: {support['unsupported']} solid element(s) have no solid neighbor printed before them, e.g. at (row, col) {support['unsupported_at'][:5]}"
+            f"print support over the domain: {domain['unsupported']} element(s) have no neighbor printed before them, e.g. at (row, col) {domain['unsupported_at'][:5]}"
         )
     report = dict(
         loop=loop,
-        passed=start["passed"] and support["passed"],
+        passed=start["passed"] and domain["passed"],
         start=start,
         support=support,
         saddles=int(checks.saddles(tPhys_np, solid, solid).sum()),

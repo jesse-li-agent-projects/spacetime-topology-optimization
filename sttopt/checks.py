@@ -2,8 +2,8 @@
 produce rather than the continuous one MMA optimized (`plans/post_run_checks.md`).
 
 Two conditions are hard, since a design that breaks them cannot be printed as
-sequenced: the print starts on the base, and every element is printed onto material
-already there. Everything else -- each constraint's value, compliance, the count of
+sequenced: the print starts on the base, and every element off the part's boundary is
+printed onto material already there. Everything else -- each constraint's value, compliance, the count of
 saddles in the time field -- is reported as a margin, not judged. A failed hard check warns rather than failing the run: the
 design is saved either way.
 """
@@ -66,6 +66,50 @@ def unsupported(
     supported[src[onto_earlier]] = True
     supported[base] = True
     return (s & ~supported).reshape(nely, nelx)
+
+
+def interior(solid: Bool[np.ndarray, "nely nelx"]) -> Bool[np.ndarray, "nely nelx"]:
+    """
+    Solid elements whose 4 edge neighbors are all solid; outside the domain is void.
+
+    :param solid: which elements are solid
+    :return: which solid elements are off the part's boundary
+    """
+    p = np.pad(solid, 1)
+    return solid & p[:-2, 1:-1] & p[2:, 1:-1] & p[1:-1, :-2] & p[1:-1, 2:]
+
+
+def support_report(
+    solid: Bool[np.ndarray, "nely nelx"],
+    tPhys: Float[np.ndarray, "nely nelx"],
+    base: Int[np.ndarray, " k"],
+) -> dict:
+    """
+    The support check: no `unsupported` element in the part's `interior`.
+
+    An unsupported element on the boundary reads as a steep overhang, which is accepted
+    as printable (a heuristic, PR #189); those are counted but not judged.
+
+    :param solid: which elements are solid
+    :param tPhys: each element's print time
+    :param base: flat indices of the base elements
+    :return: `passed`, both counts, and the interior offenders' positions
+    """
+    orphans = unsupported(solid, tPhys, base)
+    inside = orphans & interior(solid)
+    return dict(
+        passed=not inside.any(),
+        unsupported=int(orphans.sum()),
+        interior_unsupported=int(inside.sum()),
+        interior_unsupported_at=np.argwhere(inside)[:_MAX_LISTED].tolist(),
+    )
+
+
+def warn_unsupported(support: dict) -> None:
+    """Warn that a `support_report` failed."""
+    warnings.warn(
+        f"print support: {support['interior_unsupported']} interior solid element(s) have no solid neighbor printed before them, e.g. at (row, col) {support['interior_unsupported_at'][:5]}"
+    )
 
 
 #: A ring difference below this fraction of the field's range is a tie: no sign, so an
@@ -149,21 +193,14 @@ def check_design(
         max_base_t=max_base_t,
         tolerance=START_TOLERANCE,
     )
-    orphans = unsupported(solid, tPhys_np, base)
-    support = dict(
-        passed=not orphans.any(),
-        unsupported=int(orphans.sum()),
-        unsupported_at=np.argwhere(orphans)[:_MAX_LISTED].tolist(),
-    )
+    support = support_report(solid, tPhys_np, base)
 
     if not start["passed"]:
         warnings.warn(
             f"print start: {start['solid_base_elements']} solid base element(s), the latest starting at t = {max_base_t}, against a tolerance of {START_TOLERANCE}"
         )
     if not support["passed"]:
-        warnings.warn(
-            f"print support: {support['unsupported']} solid element(s) have no solid neighbor printed before them, e.g. at (row, col) {support['unsupported_at'][:5]}"
-        )
+        warn_unsupported(support)
 
     xPhys_np = torch_util.to_numpy(xPhys)
     report = dict(
@@ -226,7 +263,7 @@ def summary(report: dict) -> str:
     """
     `check_design`'s report as a few lines for the console.
 
-    :param report: a report from `check_design`, or from `stto_heat.check_design`
+    :param report: a report from `check_design`, or from a virtual-heat script's
     :return: the summary text
     """
     start, support = report["start"], report["support"]
@@ -238,9 +275,14 @@ def summary(report: dict) -> str:
     )
     lines = [
         f"start:   {'pass' if start['passed'] else 'FAIL'} ({start['solid_base_elements']} solid base element(s), latest at t = {start['max_base_t']}, {bound})",
-        f"support: {'pass' if support['passed'] else 'FAIL'} ({support['unsupported']} unsupported element(s))",
+        f"support: {'pass' if support['passed'] else 'FAIL'} ({support['interior_unsupported']} interior unsupported element(s), {support['unsupported']} with the boundary){' (reported, not judged)' if 'domain' in report else ''}",
         f"saddles in the time field over the part: {report['saddles']} (reported, not judged)",
     ]
+    if "domain" in report:
+        domain = report["domain"]
+        lines.append(
+            f"support over the domain: {'pass' if domain['passed'] else 'FAIL'} ({domain['unsupported']} unsupported element(s), {domain['saddles']} saddle(s))"
+        )
     if "constraints" in report:
         lines.append("binarized constraints, worst row (<= 0 satisfied):")
         width = max(map(len, report["constraints"]))
