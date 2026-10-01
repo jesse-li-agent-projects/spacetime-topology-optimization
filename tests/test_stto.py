@@ -902,6 +902,32 @@ def test_tool_radius_needs_an_interior_element():
         stto.build_problem(config)
 
 
+def test_front_offset_needs_the_part_mean_reference_at_build():
+    config = default_run_config(hotspot_front_offset_m=2 * ELEMENT_M)
+    with pytest.raises(ValueError, match="part_mean"):
+        stto.build_problem(config)
+
+
+def test_a_front_offset_run_reads_its_schedule_and_steps():
+    """The offset is read at each iteration's own value, and a run with it steps with
+    finite sensitivities."""
+    offset = dict(
+        hotspot_reference_gradient="part_mean",
+        hotspot_front_offset_m=run_config.PiecewiseSchedule(
+            points=[[0, 0.0], [1, 2 * ELEMENT_M]]
+        ),
+    )
+    problem = _problem(config_overrides=offset)
+    state = stto.init_state(problem)
+    xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, 1.0)
+    before = problem.terms.estimated_conductivity(xPhys, tPhys, 0)
+    after = problem.terms.estimated_conductivity(xPhys, tPhys, 1)
+    assert not torch.allclose(before, after)
+
+    _, record = stto.step(problem, state)
+    assert np.isfinite(record.dg).all()
+
+
 def test_scheduled_tmove_bounds_each_iterations_time_step():
     """A `tmove` schedule sets the trust region of the iteration it resolves at."""
     schedule = run_config.PiecewiseSchedule(points=[[0, 0.02], [1, 0.005]], mode="step")
