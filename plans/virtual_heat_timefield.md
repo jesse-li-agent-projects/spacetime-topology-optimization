@@ -478,6 +478,25 @@ effect. Watch the multipliers: rows at `mma_c`
 mean a schedule conflict. Record the final schedule and its reasons in a
 `configs/*.md` note, as `configs/continuation.md` does for `stto`.
 
+**Variant 1 schedule tuning (2026-10-01, in progress).** Hotspot only, no gravity
+stages (`Theta = 0`, `nStage = 0`; user decision, because stage solves failed CG at low
+volfrac and the stages weigh 1–39% of the objective). Cells: the dev set and the three
+hardest Phase 9 cells (volfrac 0.3: C1 edge/0.6, S bottom/0.6, D bottom/0.8). Ratio to
+the matched `stto` control; D at 0.3 on the compliance as optimized, since binarizing
+breaks its fully loaded traction edge for every method, `stto` included.
+- The 600-iteration step schedule passes 5/6 and fails C1 at 0.3 (2.4×): when β_d
+  steps 8 → 16 at iteration 150, the low-volfrac design loses its load path.
+- O1, the same with one log ramp of β_d (1 → 128 by 262) in place of eight steps,
+  passes 5/6 and fails C1 at 0.3 by less (1.25–1.42× over three samples).
+- A, one window (β_d 8 → 128 over 360, Tcr over [0, 180]), passes 5/6 and fails S at
+  0.5 (1.15×, both devices).
+- Seven other single-window variants failed two or more cells.
+- Mechanism: C1 at 0.3 needs a sharp projection and a formed layout before the hotspot
+  acts, and then a slow Tcr ramp, which the hotspot row can follow (A: row ≈ 0
+  throughout). S at 0.5 needs the hotspot later than A's, or it shapes a web of thin
+  members before compliance sets the layout. S at 0.3 fails when the design is
+  nearly binary before the hotspot acts (B, G).
+
 **Variant 2 status (paused 2026-09-30, to finish Variant 1 first).** Runs in
 `/tmp/claude-1001/phase8/work/output/w19_*`–`w21_*`; gates as above (hotspot, tool
 radius, `min_gradient` ≤ 0.01 as optimized; start on the nodes; interior support).
