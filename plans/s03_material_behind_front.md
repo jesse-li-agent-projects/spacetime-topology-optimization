@@ -64,6 +64,12 @@ see step 1.
   gradient stays small against the compliance gradient (tentative: ≤ 0.2× the norm, at
   checkpoints). `w25` used 100.
 - Implement δ and g_ref as explicit config options, default off, in `sttopt`.
+- The plain-TO baseline turns the hotspot off with Tcr 2 (severity ≤ 1, so the row stays
+  ≤ −0.5).
+- Overnight run (2026-10-01/02): the agent decides s, Tcr, the schedule and any further
+  option alone, records each decision and its evidence here, and keeps new behaviour
+  behind options that default to off. Code goes to PR #190, never merged by the agent.
+  The result: this plan, a dashboard under `plot/`, and one summary message.
 
 ## Steps
 
@@ -73,7 +79,11 @@ see step 1.
    geometry "should" be (the user expects a skewed hourglass); thin features in it may
    overheat, so its compliance is a reference, not a target.
 2. **κ = 0 offline check** of the C1 0.3 merge point: does the angular lobe, which credits
-   only one side where the direction is undefined, cause the +0.12?
+   only one side where the direction is undefined, cause the +0.12? **Yes** (2026-10-01).
+   Severity at (12, 56): κ = 0 gives 0.554 at s = 0 and 0.508 at s = 2 (δ helps a merge,
+   as it should); κ = 2.37 with the mean reference gives 0.673. Candidates for step 7: a
+   κ continuation, or a lobe scale `g0` relative to g_ref, so that the lobe turns
+   isotropic where `|grad t| ≪ g_ref`.
 3. **Code** (new PR): the δ option, the g_ref reference, tests (δ = 0 with the own
    reference reproduces today's `K_est`; a flat field scores ~1 with δ > 0; a linear field
    at g_ref scores K = 1). Raise an error for δ > 0 with the own-magnitude reference.
