@@ -108,7 +108,7 @@ def main(args: argparse.Namespace) -> None:
             state, record = stto_heat.step(problem, state)
             with torch.no_grad():
                 xPhys, heat = stto_heat.physical_fields(
-                    problem, state.x, state.mu, state.beta_d, state.heat
+                    problem, state.x, state.mu, state.beta_d, state.loop, state.heat
                 )
             diag = record.diagnostics
             print(

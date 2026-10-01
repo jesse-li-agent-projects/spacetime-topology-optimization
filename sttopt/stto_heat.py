@@ -194,6 +194,7 @@ def physical_fields(
     x: Float[Tensor, "nely nelx"],
     mu: Float[Tensor, "nely nelx"],
     beta_d: float,
+    loop: int,
     previous: virtual_heat.TimeFieldSolution | None = None,
 ) -> tuple[Float[Tensor, "nely nelx"], virtual_heat.TimeFieldSolution]:
     """The density and time fields the physics reads, from the design variables.
@@ -204,12 +205,20 @@ def physical_fields(
     :param x: raw density, filtered and Heaviside-projected at sharpness `beta_d`
     :param mu: diffusivity design field
     :param beta_d: projection sharpness
+    :param loop: iteration whose `penal` a penalized conduction takes
     :param previous: the last solution, the warm start
     :return: `(xPhys, solution)`, `solution.tPhys` the time field
     """
+    config = problem.config
     xPhys = density(problem, x, beta_d)
+    penal = run_config.weight_at(config.penal, loop)
     solution = virtual_heat.heat_time_field(
-        problem.config, problem.mesh, xPhys, mu, previous
+        config,
+        problem.mesh,
+        xPhys,
+        mu,
+        previous,
+        conduction_penal=penal if config.penalize_conduction else 1.0,
     )
     return xPhys, solution
 
@@ -286,7 +295,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
 
     x = state.x.clone().requires_grad_(True)
     mu = state.mu.clone().requires_grad_(True)
-    xPhys, heat = physical_fields(problem, x, mu, beta_d, state.heat)
+    xPhys, heat = physical_fields(problem, x, mu, beta_d, loop, state.heat)
     tPhys = heat.tPhys
 
     c_t, stage_cs, U_new = compliance.batched_whole_and_gravity_compliance(
@@ -432,7 +441,7 @@ def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
     def record_fields(state: State) -> None:
         with torch.no_grad():
             xPhys, heat = physical_fields(
-                problem, state.x, state.mu, state.beta_d, state.heat
+                problem, state.x, state.mu, state.beta_d, state.loop, state.heat
             )
         xPhys_traj.append(xPhys)
         tPhys_traj.append(heat.tPhys)
@@ -477,7 +486,7 @@ def check_design(
     config = problem.config
     beta_d = run_config.weight_at(config.beta_d_schedule, loop)
     with torch.no_grad():
-        xPhys, heat = physical_fields(problem, x, mu, beta_d)
+        xPhys, heat = physical_fields(problem, x, mu, beta_d, loop)
         xBin = density(problem, x, math.inf)
     tPhys = heat.tPhys
     xBin_np, tPhys_np = torch_util.to_numpy(xBin), torch_util.to_numpy(tPhys)

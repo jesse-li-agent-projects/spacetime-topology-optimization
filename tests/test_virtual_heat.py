@@ -291,6 +291,29 @@ def test_gradients_are_finite_in_deep_void(cls, time_map):
         assert leaf.grad is None or torch.isfinite(leaf.grad).all()
 
 
+def test_conduction_penal_stops_the_leak_through_grey_near_void():
+    """Near-void at a high diffusivity conducts like solid unless its density is
+    penalized; a binary design does not see the exponent."""
+    nelx, nely = 30, 10
+    mesh = _mesh(nelx, nely)
+    solid = torch.zeros((nely, nelx), dtype=F64)
+    solid[:, :10] = 1.0
+    grey = solid.clone()
+    grey[:, 10:] = 0.05
+    mu = torch.where(solid > 0, 0.5, 1.0).to(F64)  # chi(mu) ~ 32 in the near-void
+
+    config = virtual_heat_config(
+        HeatRunConfig, nelx=nelx, nely=nely, heat_cg_rtol=1e-13
+    )
+
+    def T(x, p):
+        return vh.heat_time_field(config, mesh, x, mu, conduction_penal=p).primary
+
+    torch.testing.assert_close(T(solid, 3.0), T(solid, 1.0))
+    far = mesh.ndof - 1  # the top right node, 20 elements into the near-void
+    assert float(T(grey, 3.0)[far]) < 1e-3 * float(T(grey, 1.0)[far])
+
+
 @pytest.mark.parametrize("cls,time_map", OPTIONS)
 def test_gradient_matches_finite_differences(cls, time_map, monkeypatch):
     """The scales that are treated as constants by design (the normalization, the

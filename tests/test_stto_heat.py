@@ -14,6 +14,7 @@ import sttopt.checks as checks
 import sttopt.run_config as run_config
 import sttopt.stto_heat as stto_heat
 import sttopt.stto_heat_cli as stto_heat_cli
+import sttopt.virtual_heat as virtual_heat
 from sttopt.run_config import HeatRunConfig
 
 CONFIG_PATH = Path(__file__).parent.parent / "configs" / "heat_default.json"
@@ -117,7 +118,8 @@ def test_cli_writes_the_run_artefacts(tmp_path, monkeypatch):
 @pytest.mark.filterwarnings("ignore:subsolv:RuntimeWarning")
 def test_a_step_stays_finite_when_void_is_later_than_the_part():
     """A solid block at the plate and void beyond it: `t` in the void exceeds 1, the
-    part's maximum. At a non-integer `penal`, the gravity stages must still be finite."""
+    part's maximum. At a non-integer `penal`, the gravity stages must still be finite.
+    """
     config = _config()
     problem = stto_heat.build_problem(config, device="cpu")
     state = stto_heat.init_state(problem)
@@ -132,8 +134,25 @@ def test_a_step_stays_finite_when_void_is_later_than_the_part():
         beta_t=run_config.weight_at(config.beta_t_schedule, loop),
     )
     assert run_config.weight_at(config.penal, loop) % 1 != 0
-    _, heat = stto_heat.physical_fields(problem, state.x, state.mu, state.beta_d)
+    _, heat = stto_heat.physical_fields(
+        problem, state.x, state.mu, state.beta_d, state.loop
+    )
     assert float(heat.tPhys.max()) > 1  # non-vacuous
     _, record = stto_heat.step(problem, state)
     assert np.isfinite(record.f) and np.isfinite(record.g).all()
     assert np.isfinite(record.dg).all()
+
+
+def test_penalized_conduction_takes_the_penal_of_the_iteration():
+    config = dataclasses.replace(_config(), penalize_conduction=True)
+    problem = stto_heat.build_problem(config, device="cpu")
+    state = stto_heat.init_state(problem)
+    loop = 200
+    penal = run_config.weight_at(config.penal, loop)
+    xPhys, heat = stto_heat.physical_fields(problem, state.x, state.mu, 1.0, loop)
+    expected = virtual_heat.heat_time_field(
+        config, problem.mesh, xPhys, state.mu, conduction_penal=penal
+    )
+    linear = virtual_heat.heat_time_field(config, problem.mesh, xPhys, state.mu)
+    torch.testing.assert_close(heat.primary, expected.primary)
+    assert not torch.allclose(heat.primary, linear.primary)

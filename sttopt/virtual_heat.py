@@ -36,8 +36,8 @@ import sttopt.run_config as run_config
 import sttopt.torch_fem as torch_fem
 import sttopt.torch_solve as torch_solve
 
-#: Floor on the density in `chi = density * chi(mu)`. The drain keeps the matrix SPD at
-#: zero density; the floor keeps its conditioning and the multigrid sane.
+#: Floor on the penalized density in `chi = density**p * chi(mu)`. The drain keeps the
+#: matrix SPD at zero density; the floor keeps its conditioning and the multigrid sane.
 DENSITY_FLOOR = 1e-6
 
 #: Floor on `T` in the `neg_log` map, relative to the smallest `T` on the part. Set from
@@ -335,17 +335,20 @@ def heat_time_field(
     xPhys: Float[Tensor, "nely nelx"],
     mu: Float[Tensor, "nely nelx"],
     previous: TimeFieldSolution | None = None,
+    conduction_penal: float = 1.0,
 ) -> TimeFieldSolution:
     """Variant 1: the time field from the drained heat equation through the material.
 
     :param xPhys: physical densities
     :param mu: diffusivity design field
+    :param conduction_penal: the exponent on the density in `chi`
     :param previous: the last iteration's solution, the warm start
     :return: `tPhys` and the nodal solutions
     """
     shape = xPhys.shape
     density = torch.clamp(xPhys.flatten(), min=DENSITY_FLOOR)
-    chi = density * diffusivity(mu.flatten(), config.chi_contrast)
+    penalized = torch.clamp(xPhys.flatten() ** conduction_penal, min=DENSITY_FLOOR)
+    chi = penalized * diffusivity(mu.flatten(), config.chi_contrast)
     alpha = config.drain_beta / mesh.unit_length**2
     T = mesh.solve(
         chi,

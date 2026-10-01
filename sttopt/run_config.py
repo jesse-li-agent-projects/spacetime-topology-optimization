@@ -393,9 +393,12 @@ class HeatRunConfig(SpaceTimeConfig):
     """
     Hyperparameters of a `stto_heat` run, where the time field comes from a virtual heat
     equation with a drain, `div(chi grad T) - alpha T = 0`, `T = 1` on the build plate
-    and `chi` the density times an optimized diffusivity. `T` has no interior maximum,
-    so the time field has no local minimum over the part.
+    and `chi` the penalized density times an optimized diffusivity. `T` has no interior
+    maximum, so the time field has no local minimum over the part.
 
+    :param penalize_conduction: whether `chi` takes the density to the stiffness `penal`
+        of the iteration, rather than linearly; it stops grey near-void with a high
+        diffusivity from conducting `T` past the part.
     :param drain_beta: the drain as `alpha * l_c**2`, `l_c` the square root of the
         design area; `sqrt(drain_beta)` is the decay rate of `T` per `l_c` at `chi = 1`.
     :param chi_contrast: the diffusivity range, `chi(mu) = chi_contrast**(mu - 1/2)` for
@@ -411,6 +414,7 @@ class HeatRunConfig(SpaceTimeConfig):
     time_map: str
     heat_cg_rtol: float
     poisson_cg_rtol: float
+    penalize_conduction: bool = False
 
     def __post_init__(self) -> None:
         super().__post_init__()
