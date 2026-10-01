@@ -111,9 +111,16 @@ relative change of `χ` at any value.
 - `χ(μ) = C^(μ − ½)`, `μ ∈ [0, 1]`, `C = 10³` (*tentative*). So `χ ∈ [0.032, 32]`
   and the initial `μ = ½` gives `χ = 1`. A smaller `χ_min` reduces the β margin (see
   above), so change `C` and β together.
-- Variant 1: `χ_e = ρ̃_e · χ(μ_e)`, with `ρ̃ = max(xPhys, 10⁻⁶)`. The lumped drain keeps
-  the matrix SPD even at `χ = 0`. The floor keeps the conditioning and the multigrid
-  sane.
+- Variant 1: `χ_e = max(xPhys_e^p, 10⁻⁶) · χ(μ_e)`, with `p` the stiffness `penal` of
+  the iteration under `penalize_conduction`, else 1 (*tentative*, user 2026-10-01). The
+  lumped drain keeps the matrix SPD even at `χ = 0`. The floor keeps the conditioning
+  and the multigrid sane. With `p = 1`, near-void at a saturated `μ` conducts like
+  solid (`ρ = 0.03` at `χ(μ) = 32`): on S 0.3 it carried `T` from the diagonal into the
+  middle of the top bar, and `φ` printed the bar from its middle.
+- A fixed `p = 3` fails: on the grey early design `T` falls below the solve error on
+  much of the part (to 1e-17 on 31% of it on S 0.3, it 100, at β = 9), `X` there is
+  solver noise, and the `poisson` gradient is wrong (wrong sign at `heat_cg_rtol`
+  10⁻⁸). S 0.3 and C1 0.3 ended at 31× and 131× the `stto` compliance.
 - `T` and `t` are solved on the **nodes**. The element value is the mean of the 4
   element nodes (as in Wu). The rest of the code reads element `tPhys`, unchanged.
 - The build plate is the nodes on the left edge (`edge`) or the bottom edge
@@ -150,7 +157,9 @@ relative change of `χ` at any value.
     elsewhere.
   - Sign: `T` is largest on the plate, so `−∇T` points away from it, and `φ`
     increases away from it.
-- The default β is chosen by the Phase 4 sweep, not in advance.
+- The default β is chosen by the Phase 4 sweep, not in advance. A penalized `χ` decays
+  faster through grey, so it needs a smaller β (4 under test): `poisson` reads only the
+  direction of `∇T` and does not need a near-geodesic `T`.
 
 ### Variant 2
 
@@ -496,6 +505,16 @@ breaks its fully loaded traction edge for every method, `stto` included.
   throughout). S at 0.5 needs the hotspot later than A's, or it shapes a web of thin
   members before compliance sets the layout. S at 0.3 fails when the design is
   nearly binary before the hotspot acts (B, G).
+- P, three stages (β_d log 1 → β_mid over 0–120; Tcr 1 → final over 120–300 at fixed
+  β_d and penal 2; β_d → 128 and penal 2 → 3 over 300–420; nloop 540). β_mid = 4 is the
+  user's base (best C1 0.3 topology). P4 passes C1 0.3 (1.075) and S 0.5 and fails S 0.3
+  (1.30, hotspot +0.44). Every failing run holds the hotspot multiplier at `mma_c` for
+  hundreds of iterations while the violation grows.
+- On S 0.3 (P4, it 250) the `poisson` time field had a basin in the middle of the top
+  bar: the leak through near-void that `penalize_conduction` is for. What is left at
+  `p = 3`, β = 9 on that checkpoint is two one-node minima on the bar's border, 0.09%
+  of the time range deep, at element-scale `μ` contrast. No `μ` filter for now (user,
+  2026-10-01).
 
 **Variant 2 status (paused 2026-09-30, to finish Variant 1 first).** Runs in
 `/tmp/claude-1001/phase8/work/output/w19_*`–`w21_*`; gates as above (hotspot, tool
