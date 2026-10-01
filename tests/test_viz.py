@@ -7,6 +7,7 @@ not pixel-level MATLAB fixture comparison (no fixture exists for these plots).
 import json
 
 import numpy as np
+import pytest
 from matplotlib.quiver import Quiver
 
 import sttopt.viz as viz
@@ -159,6 +160,44 @@ def test_main_regenerates_plots_from_a_seqopt_run_directory(tmp_path, monkeypatc
         "timefield_filled_contour.png",
     ]:
         assert (plot_dir / name).exists()
+
+
+@pytest.mark.parametrize(
+    "script, config_type, default_json",
+    [
+        ("stto_heat", "HeatRunConfig", "heat_default.json"),
+        ("stto_laplace", "LaplaceRunConfig", "laplace_default.json"),
+    ],
+)
+def test_loads_a_virtual_heat_run_with_its_own_problem(
+    tmp_path, script, config_type, default_json
+):
+    import dataclasses
+    import importlib
+    from pathlib import Path
+
+    import sttopt.run_config as run_config
+
+    module = importlib.import_module(f"sttopt.{script}")
+    configs = Path(__file__).parent.parent / "configs"
+    base = getattr(run_config, config_type).from_dict(
+        json.loads((configs / default_json).read_text())
+    )
+    # Large enough that some of the part lies beyond the conductivity stencil's reach
+    # of the base
+    nelx, nely, h = 30, 10, base.element_size_m
+    config = dataclasses.replace(base, nelx=nelx, width_m=nelx * h, height_m=nely * h)
+    (tmp_path / "config.json").write_text(json.dumps(config.to_dict()))
+    np.savez(
+        tmp_path / "final_design.npz",
+        xPhys=np.ones((nely, nelx)),
+        tPhys=np.tile(np.linspace(0.0, 1.0, nelx), (nely, 1)),
+    )
+    viz._stto_problem.cache_clear()
+
+    _, problem = viz._stto_problem(tmp_path)
+    assert isinstance(problem, module.Problem)
+    assert viz._load_stto_run(tmp_path).compliance > 0
 
 
 def test_print_direction_plot_draws_one_arrow_per_sampled_solid_element():

@@ -58,6 +58,7 @@ def test_check_design_passes_a_printable_design(problem):
     assert report["passed"]
     assert report["volume_fraction"] == 1.0
     assert "hotspot" in report["constraints"]
+    assert report["constraints_continuous"].keys() == report["constraints"].keys()
     json.dumps(report, allow_nan=False)
 
 
@@ -68,7 +69,41 @@ def test_check_design_warns_on_a_pit(problem):
         report = checks.check_design(problem, x, t, problem.config.nloop)
     assert not report["passed"]
     assert report["start"]["passed"]
-    assert report["support"]["unsupported_at"] == [[5, 15]]
+    assert report["support"]["interior_unsupported_at"] == [[5, 15]]
+
+
+def test_check_design_accepts_an_unsupported_boundary_element(problem):
+    x, t = _printable_design(problem)
+    t[-1, 15] = 0.0  # a pit on the domain edge, so on the part's boundary
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        report = checks.check_design(problem, x, t, problem.config.nloop)
+    assert report["support"]["passed"]
+    assert report["support"]["unsupported"] == 1
+    assert report["support"]["interior_unsupported"] == 0
+
+
+@pytest.mark.parametrize("rise, warns", [(0.9, False), (1.1, True)])
+def test_warns_when_binarizing_raises_the_hotspot(rise, warns):
+    report = dict(
+        constraints={"hotspot": [-0.01 + rise * checks.BINARIZED_HOTSPOT_RISE]},
+        constraints_continuous={"hotspot": [-0.01]},
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        checks.warn_on_binarized_hotspot(report)
+    assert bool(caught) == warns
+
+
+def test_interior_treats_outside_the_domain_as_void():
+    solid = np.ones((4, 5), dtype=bool)
+    solid[1, 3] = False
+    expected = np.zeros((4, 5), dtype=bool)
+    expected[1:3, 1:4] = True
+    expected[1, 3] = expected[2, 3] = expected[1, 2] = (
+        False  # the hole and its edge neighbours
+    )
+    assert np.array_equal(checks.interior(solid), expected)
 
 
 def test_check_design_warns_on_a_late_start(problem):
@@ -90,3 +125,33 @@ def test_check_design_reads_the_binarized_design(problem):
         below = checks.check_design(problem, torch.full_like(t, eta - 0.1), t, 0)
     assert below["volume_fraction"] == 0.0
     assert below["start"]["solid_base_elements"] == 0
+
+
+def _grid(n=7):
+    y, x = np.mgrid[:n, :n] - n // 2
+    return x.astype(float), y.astype(float)
+
+
+def test_saddles_finds_the_centre_of_a_saddle_and_nothing_else():
+    x, y = _grid()
+    found = checks.saddles(x**2 - y**2, np.ones((7, 7), bool))
+    assert found[3, 3] and found.sum() == 1
+
+
+def test_saddles_ignores_a_linear_field_and_an_extremum():
+    x, y = _grid()
+    everywhere = np.ones((7, 7), bool)
+    # A linear field puts exact ties in the ring, which are no sign change
+    assert not checks.saddles(2 * x + y, everywhere).any()
+    assert not checks.saddles(x - y, everywhere).any()
+    assert not checks.saddles(x**2 + y**2, everywhere).any()
+
+
+def test_saddles_reads_the_ring_only_among_the_given_cells():
+    """The saddle's rising arms are void: over the solid alone, the centre has only
+    falling neighbours, so no sign change."""
+    x, y = _grid()
+    values = x**2 - y**2
+    solid = np.abs(x) <= np.abs(y)  # keeps the falling arms (along y) only
+    assert checks.saddles(values, solid)[3, 3]
+    assert not checks.saddles(values, solid, solid)[3, 3]

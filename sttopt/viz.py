@@ -611,18 +611,30 @@ def _print_direction(tPhys_t) -> tuple[np.ndarray, np.ndarray]:
 
 @lru_cache(maxsize=1)
 def _stto_problem(run_dir: Path) -> tuple:
-    """The `(config, Problem)` a run directory's `config.json` builds.
+    """The `(config, Problem)` a run directory's `config.json` builds, for `stto` or a
+    virtual-heat script (`stto_heat`, `stto_laplace`), told apart by their own fields.
 
     Cached because it depends on the run, not the design: an animation over a run's
     checkpoints would otherwise rebuild the conductivity stencil once per frame.
     """
     import json
 
-    import sttopt.stto as stto
-    from sttopt.run_config import RunConfig
+    import sttopt.run_config as run_config
 
-    config = RunConfig.from_dict(json.loads((run_dir / "config.json").read_text()))
-    return config, stto.build_problem(config)
+    raw = json.loads((run_dir / "config.json").read_text())
+    if "drain_beta" in raw:
+        import sttopt.stto_heat as script
+
+        config = run_config.HeatRunConfig.from_dict(raw)
+    elif "laplace_cg_rtol" in raw:
+        import sttopt.stto_laplace as script
+
+        config = run_config.LaplaceRunConfig.from_dict(raw)
+    else:
+        import sttopt.stto as script
+
+        config = run_config.RunConfig.from_dict(raw)
+    return config, script.build_problem(config)
 
 
 def _load_stto_run(

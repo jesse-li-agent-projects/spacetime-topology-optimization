@@ -94,3 +94,25 @@ def test_edge_load_shares_tend_to_a_point_load():
 def test_edge_load_shares_reject_a_span_longer_than_the_edge():
     with pytest.raises(ValueError, match="does not fit"):
         fem.edge_load_shares(4, 3.5)
+
+
+def test_scalar_dof_map_is_the_corner_nodes_of_the_vector_one():
+    vector = fem.element_dof_map(3, 2)
+    np.testing.assert_array_equal(fem.element_dof_map(3, 2, 1), vector[:, 0::2] // 2)
+
+
+def test_diffusion_KE_is_exact_on_linear_fields():
+    """The energy of `u = a x + b y` over a unit square is `a**2 + b**2`, and constants
+    have none."""
+    KE = fem.diffusion_KE()
+    # Corner positions in element_dof_map's local order (x right, y up)
+    xy = np.array([[0, 0], [1, 0], [1, 1], [0, 1]])
+    for a, b in [(1.0, 0.0), (0.0, 1.0), (0.3, -2.0)]:
+        u = xy @ [a, b]
+        assert u @ KE @ u == pytest.approx(a**2 + b**2)
+    np.testing.assert_allclose(KE.sum(axis=1), 0.0, atol=1e-15)
+
+
+def test_diffusion_KE_has_no_positive_off_diagonal():
+    KE = fem.diffusion_KE()
+    assert (KE - np.diag(np.diag(KE))).max() <= 0

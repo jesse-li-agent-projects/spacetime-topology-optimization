@@ -41,10 +41,10 @@ configuration of `stto.py`:
   minimum. Because `χ` contains `ρ`, time goes *through the material*. The guarantee
   applies over the part.
 - **Variant 2, `stto_laplace.py`.** `∇·(χ∇t) = 0` with `χ = χ(μ)` (no `ρ`), `t = 0` on
-  the build plate, and optimizable positive Dirichlet data `b` on every other wall. The
-  maximum principle gives no interior extrema. The field does not see the part, so the
-  guarantee applies over the **domain only**. The user accepts this, with a post-run
-  check over the part (Phase 5).
+  the build plate, and optimizable nonnegative Dirichlet data `b` on every other wall.
+  The maximum principle gives no interior extrema. The field does not see the part, so
+  the guarantee applies over the **domain only**. The user accepts this, with a
+  post-run check over the part (Phase 5).
 
 Saddles are not ruled out in either variant, and cannot be bounded by boundary data in
 3D. The tool-radius constraint controls them. Phase 5 adds a saddle count as a
@@ -59,8 +59,8 @@ diagnostic.
   equation, with `χ/α` in place of Crane's `t`.
 - Alessandrini & Magnanini: in 2D, `∇·(χ∇u) = 0` with `u = 0` on one connected
   boundary arc and unimodal data on the complement has no interior critical points,
-  also for discontinuous `χ`. This is the reason for the unimodal wall data below. It
-  is a 2D result only.
+  also for discontinuous `χ`. This was the reason for the first, unimodal wall data
+  (replaced in Phase 8, below). It is a 2D result only.
 
 ## Background the decisions depend on
 
@@ -111,9 +111,16 @@ relative change of `χ` at any value.
 - `χ(μ) = C^(μ − ½)`, `μ ∈ [0, 1]`, `C = 10³` (*tentative*). So `χ ∈ [0.032, 32]`
   and the initial `μ = ½` gives `χ = 1`. A smaller `χ_min` reduces the β margin (see
   above), so change `C` and β together.
-- Variant 1: `χ_e = ρ̃_e · χ(μ_e)`, with `ρ̃ = max(xPhys, 10⁻⁶)`. The lumped drain keeps
-  the matrix SPD even at `χ = 0`. The floor keeps the conditioning and the multigrid
-  sane.
+- Variant 1: `χ_e = max(xPhys_e^p, 10⁻⁶) · χ(μ_e)`, with `p` the stiffness `penal` of
+  the iteration under `penalize_conduction`, else 1 (*tentative*, user 2026-10-01). The
+  lumped drain keeps the matrix SPD even at `χ = 0`. The floor keeps the conditioning
+  and the multigrid sane. With `p = 1`, near-void at a saturated `μ` conducts like
+  solid (`ρ = 0.03` at `χ(μ) = 32`): on S 0.3 it carried `T` from the diagonal into the
+  middle of the top bar, and `φ` printed the bar from its middle.
+- A fixed `p = 3` fails: on the grey early design `T` falls below the solve error on
+  much of the part (to 1e-17 on 31% of it on S 0.3, it 100, at β = 9), `X` there is
+  solver noise, and the `poisson` gradient is wrong (wrong sign at `heat_cg_rtol`
+  10⁻⁸). S 0.3 and C1 0.3 ended at 31× and 131× the `stto` compliance.
 - `T` and `t` are solved on the **nodes**. The element value is the mean of the 4
   element nodes (as in Wu). The rest of the code reads element `tPhys`, unchanged.
 - The build plate is the nodes on the left edge (`edge`) or the bottom edge
@@ -134,35 +141,51 @@ relative change of `χ` at any value.
   Then `k·l_c = √β` at `χ = 1`. The config field is `drain_beta`.
 - `T → t` is a config option: `one_minus`, `neg_log`, `poisson` (default; see the
   priority in Phase 8).
-- `neg_log`: `t = −log(T + T_eps)`, with `T_eps = 10⁻³ · min{T_e : ρ_e ≥ ½·max(ρ)}`
-  (detached; the same set as the normalization). A floor set from the actual minimum
-  on the part cannot clip part values at any β or geometry. A fixed floor such as
-  10⁻⁶ can.
+- `neg_log`: `t = −log(max(T, 0) + T_eps)`, with
+  `T_eps = 10⁻³ · min{T_e : ρ_e ≥ ½·max(ρ)}` (detached; the same set as the
+  normalization). A floor set from the actual minimum on the part cannot clip part
+  values at any β or geometry. A fixed floor such as 10⁻⁶ can. The clamp is for the
+  void: there `T` falls below the solve error and was measured negative (to −4e-8 on
+  the street grid at β = 25), which gave NaN. `t` in deep void is noise either way.
 - `poisson`:
-  - `X = ∇T / √(|∇T|² + ε²)` at the 2×2 Gauss points (not only at the cell centre,
-    which cannot see an hourglass mode). ε follows the `timefield.NORMAL_EPS`
-    convention: 10⁻² of the weighted mean gradient.
+  - `X = −∇T / |∇T|` at the 2×2 Gauss points (not only at the cell centre, which
+    cannot see an hourglass mode), with a guard against 0/0 only. **Not** the
+    `NORMAL_EPS` floor relative to the mean gradient: `T` falls exponentially, so that
+    floor shortens `X` far from the plate. Measured on a flat front (exact answer
+    linear): max error 0.14–0.58 over √β = 3–10 with the floor, 0 without.
   - Solve `∇·(w∇φ) = ∇·(wX)` with `w = ρ̃`, `φ = 0` on the plate, natural BCs
     elsewhere.
-  - Sign: `X` points away from the plate, so `φ` increases away from it.
-- The default β is chosen by the Phase 4 sweep, not in advance.
+  - Sign: `T` is largest on the plate, so `−∇T` points away from it, and `φ`
+    increases away from it.
+- The default β is chosen by the Phase 4 sweep, not in advance. A penalized `χ` decays
+  faster through grey, so it needs a smaller β (4 under test): `poisson` reads only the
+  direction of `∇T` and does not need a near-geodesic `T`.
 
 ### Variant 2
 
 - `χ = χ(μ)` over the whole domain. No `ρ`.
-- **Unimodal wall data.** Order the non-plate boundary nodes along the arc from one
-  plate end to the other: `k = 0 … n_arc−1`. Then
-  `b = minimum(cumsum(a), reverse_cumsum(c))`, with `a, c ∈ [0, 1]` and each increment
-  scaled by `2h/l_c`. This is the minimum of an increasing and a decreasing sequence,
-  so it is unimodal by construction. A ramp needs increments of `h/l_c` per node, so
-  the ramp init sits at `a = ½`, inside the bounds. A plate node has priority at a
-  shared corner.
-- Use `torch.minimum`, not a softmin. Change to a softmin only if MMA chatters at the
-  crossing node.
+- **Wall data, optimized directly.** One design variable `wall ∈ [0, 1]` per non-plate
+  boundary node; `b = wall · wall_scale`, with `wall_scale` twice the ramp's largest
+  value, so the ramp init sits at `wall ≤ ½` and `b` can rise above it anywhere. The
+  box bound keeps `b ≥ 0`. A plate node has priority at a shared corner.
+  - `wall` is filtered along the arc with the density filter's cone weights
+    (`wall_filter_rmin_m`, 4 mm), reflected with a sign flip about each plate corner, so
+    a ramp from the plate passes unchanged and `b` stays ≥ 0. Unfiltered, the data was
+    noisy node to node (about 100 peaks and dips on S and D): each node moves a whole
+    wall region of `t`, its gradient is about 5× the density's, and it changed sign
+    every step (user decision).
+  - Phase 8 replaced the first design, unimodal data (`b = min(cumsum(a),
+    reverse_cumsum(c))`), on the user's decision: on S, printing wants two peaks (one at
+    a branch to the clamped wall, one on the top wall where two branches merge), and
+    the one peak went to the branch tip. Interior extrema stay impossible for any wall
+    data. What is lost: a dip in `b` is a local minimum on the wall (on the part, left
+    to the hotspot row: it has no earlier material nearby), and two peaks give an
+    interior saddle between them (the merge; the Alessandrini & Magnanini result needs
+    unimodal data).
 - The overall scale of `b` is a flat direction, because `t` is normalized. Accept this.
   Do not add a gauge constraint unless it causes trouble.
 - The inhomogeneous Dirichlet data enters by lifting: `rhs = −K_fd·g`. `FemSolve`
-  already returns `dL/dF`, so autograd carries the gradient to `a` and `c`.
+  already returns `dL/dF`, so autograd carries the gradient to `wall`.
 - `T → t` options: `identity` (default; see the priority in Phase 8), `poisson`.
   `poisson` uses `w = 1`, `φ = 0` on the
   plate, and natural BCs on the walls, so the walls then act only through the
@@ -178,7 +201,7 @@ to about 2.) This is not elegant, but no better option has been found.
 ### Initialization
 
 - Both variants: `x = volfrac`, `μ = ½` (uniform `χ = 1`).
-- Variant 2: `a` and `c` reproduce the `edge`/`bottom_edge` ramp exactly (uniform `χ`
+- Variant 2: `wall` reproduces the `edge`/`bottom_edge` ramp exactly (uniform `χ`
   with linear wall data gives a linear `t`).
 - Variant 1 at uniform `ρ` gives the 1D `cosh` profile, mapped by the chosen `T → t`.
 - **Alternative, not the default (Variant 2):** solve for `χ` so that the initial `t`
@@ -188,7 +211,7 @@ to about 2.) This is not elegant, but no better option has been found.
 
 ### Optimization
 
-- **Design vector:** `[x; μ]` (Variant 1, `n = 2·nel`), `[x; μ; a; c]` (Variant 2).
+- **Design vector:** `[x; μ]` (Variant 1, `n = 2·nel`), `[x; μ; wall]` (Variant 2).
 - **Objective:** the same terms as `stto`: compliance + `Theta`·gravity stages +
   `uniformity_weight`·`_gradient_cv` + roughness. `uniformity_weight = 0` is a valid
   setting. Phase 8 tests whether `neg_log`/`poisson` need it at all.
@@ -225,13 +248,7 @@ it refers to this case.
 
 ### Pass criteria
 
-On the **dev set**, a schedule passes when:
-- the hotspot row is ≤ 0 on the binarized design (`checks.py` report),
-- the tool-radius row is ≤ 0 on the binarized design,
-- the start and support checks pass (support = no local minimum over the part), and
-- the compliance is ≤ 1.10 × the matched `stto` control.
-
-On the validation matrix, report these values. Do not gate on them.
+Continued in `plans/virtual_heat_tuning.md`.
 
 ## Phases
 
@@ -301,6 +318,15 @@ Each phase is one or more PRs. Keep the commits small (see `CLAUDE.local.md`). P
   - **The M-matrix property** of the assembled matrix for random log-uniform `χ` and
     for a `χ` contrast of 10⁶. **The discrete max principle** on nodes *and* on element
     means. If the element means violate it, report to the user; do not relax the test.
+    - **Measured:** the principle holds on the nodes but **not** on the element means.
+      With random log-uniform `χ` and random wall data, 12/40 Laplace fields at 10³
+      contrast and 26/40 at 10⁶ had a strict element-mean extremum (margins up to 8% of
+      the range). With ramp wall data: 0/40 at 10³, 5/40 at 10⁶. Drain fields: 0/40
+      maxima at both contrasts. An element mean is not a positive-weight average of its
+      neighbours' means. The user chose to record this as a strict xfail and go on. So
+      the guarantee is on the nodal field; `tPhys` and `checks.unsupported` can still
+      see a local minimum where `χ` has element-scale contrast. Phase 5 measures it on
+      real designs; the density filter on `μ` is the fix if it matters.
   - Multigrid-CG against a direct sparse solve, including the 10⁶ contrast.
   - FD checks of the adjoint w.r.t. `χ`, the Dirichlet values, and the rhs.
   - 1D analytic profiles: `cosh` (drain + Neumann) and linear (Laplace).
@@ -324,11 +350,23 @@ Each phase is one or more PRs. Keep the commits small (see `CLAUDE.local.md`). P
     tolerance. The default β must keep the minimum `T` on the part ≥ 100× the
     measured absolute solve error on the worst geometry. Take the largest β that
     meets that margin. Report the table.
+    - **Result: β = 25 (√β = 5)** at CG rtol 10⁻⁸. min `T` on the part / absolute
+      CG error, worst geometry (street grid): 7.0e4, 8.3e3, **1.0e3**, 13, 0.025 at
+      √β = 3, 4, 5, 7, 10. The worm fails at √β = 7 too (72). Recovery at β = 25, max
+      / mean: `neg_log` ≤ 0.156 / 0.049, `poisson` ≤ 0.089 / 0.023 (annulus, street
+      grid); test tolerances 1.6–1.7× those. `X` from CG agrees with a direct solve
+      to 1.6e-3 on the part, `−log T` to 3.5e-4.
   - Wu's β uses a different `l_c` (the longest diffusion path). Convert Wu's values
     to this `l_c` before you compare with Fig. 2.6.
   - Variant 2: the ramp init reproduces the ramp exactly; `b` is unimodal for random
     `a`, `c`; no interior extrema over the domain for random `χ`; and a count of
     interior saddles (the 2D theorem says zero). Report counts that are not zero.
+    - **Measured** (24×16, 20 fields each, 8-ring sign changes, ties dropped): no
+      saddle with uniform `χ`, with i.i.d. per-element `χ` up to 30× contrast, or
+      with a smooth `χ` (σ = 1–2 elements) at the full 10³. With i.i.d. `χ`: 0.95
+      per field at 100×, 3.85 at 300×, 9.5 at 10³. The theorem is continuous;
+      element-scale jumps of ~100× give discrete saddles, as for the element means
+      (Phase 3). Recorded as a strict xfail; the smooth case is a strict test.
   - Finite gradients everywhere, deep void included, for every option.
   - FD checks of the whole map w.r.t. `x`, `μ`, `a`, `c`.
   - Normalization: the threshold set on a uniform field, on a binary field, and on a
@@ -342,9 +380,18 @@ Each phase is one or more PRs. Keep the commits small (see `CLAUDE.local.md`). P
   it.
 - Add a domain-level check for Variant 2 (the same test with every element counted as
   solid) and a saddle count (4 or more sign changes of `t − t_c` around the 8-ring).
-  Both are reported, not judged.
+  Both are reported, not judged. (Phase 8 made the domain check Variant 2's support
+  gate; see "Pass criteria".)
 - Log the saddle count, the local-minimum count, and the roughness of `log χ` at each
   snapshot.
+- **Done in Phase 5:** `checks.saddles(values, where, among)` (ties dropped), and the
+  saddle count over the part in `check_design`'s report. `plans/post_run_checks.md`'s
+  start/support checks and report already exist in `checks.py`.
+- **For Phases 6/7:** `check_design` is `stto`-specific, so each new script needs its
+  own (on the binarized design, `tPhys` recomputed from it). The domain-level check is
+  `checks.unsupported` with every element solid. The `log χ` roughness is
+  `timefield.roughness(log χ)`, the RMS 5-point residual, which reads element-scale
+  modes. The per-snapshot logging goes into the new CLIs.
 
 ### Phase 6: `stto_heat.py`, `stto_heat_cli.py`, a config
 
@@ -360,66 +407,9 @@ infeasibility).
 
 As Phase 6, with the extra design groups `a`/`c`.
 
-### Phase 8: tuning
+### Phases 8 and 9: tuning and validation
 
-Use the `long-running-runs` skill. For compute: one GPU job, plus CPU runs at **3
-runs × 4 threads** (measured: 2 × 8 contends badly). Launch with `PYTHONSAFEPATH=1`
-from a snapshot, and log `sttopt.__file__`.
-
-**Dev set** (each cell is also in the validation matrix):
-
-| Load | volfrac | Base | Tcr | Why |
-|---|---|---|---|---|
-| C1 | 0.5 | edge | 0.8 | the known `stto` baseline |
-| S | 0.3 | bottom_edge | 0.6 | the support and the print base are in conflict |
-| D | 0.7 | edge | 0.8 | an asymmetric support set |
-
-Steps (Variant 1 first, then Variant 2 on the same steps):
-1. **Hotspot only** (tool radius, `min_gradient`, `gradient_smoothness` off). Get
-   *any* schedule to pass on C1. Then pass on all 3 cells. Tune only the primary
-   `T → t` option of each variant (see "`T → t` priority" below).
-2. `uniformity_weight` 0 against > 0: is `_gradient_cv` still needed? (Variant 1
-   only. Variant 2 `identity` needs it.)
-3. Add back the tool radius, then `min_gradient`, then `gradient_smoothness`, one at a
-   time. Re-tune after each one.
-4. Variant 2 only: if the ramp init is not robust, try the alternative init (above).
-5. Compress from 800 to 600 iterations (start by scaling the change points by 0.75).
-   Use the same pass criteria. If it fails, report the gap to the user.
-
-**`T → t` priority.** The user chose these on a hunch, to start tuning early:
-- Variant 1: `poisson`.
-- Variant 2: `identity`, with `_gradient_cv` (`uniformity_weight > 0`) for uniform
-  layers.
-
-The other options (`neg_log` for Variant 1, `poisson` for Variant 2) are *lower
-priority, not rejected*. Phase 4 still implements and tests them. Tune them only
-if the primary option fails, or if the user asks.
-
-Judge a change against a matched control (the same schedule without the change).
-Replicate the marginal cells on CPU and GPU. Watch the multipliers: rows at `mma_c`
-mean a schedule conflict. Record the final schedule and its reasons in a
-`configs/*.md` note, as `configs/continuation.md` does for `stto`.
-
-### Phase 9: validation matrix
-
-A Graeco-Latin 4×4 square: rows = load case, columns = volfrac (0.3, 0.5, 0.7, and
-0.5 again as the reference level). Each cell is (base, Tcr), from `row XOR column`:
-0 = (edge, 0.6), 1 = (edge, 0.8), 2 = (bottom_edge, 0.6), 3 = (bottom_edge, 0.8).
-Each pair of factors is balanced. Interactions are aliased, so this is a robustness
-test, not an interaction study.
-
-| | 0.3 | 0.5 | 0.7 | 0.5 |
-|---|---|---|---|---|
-| **C1** | edge, 0.6 | edge, 0.8 | bottom, 0.6 | bottom, 0.8 |
-| **C2** | edge, 0.8 | edge, 0.6 | bottom, 0.8 | bottom, 0.6 |
-| **S** | bottom, 0.6 | bottom, 0.8 | edge, 0.6 | edge, 0.8 |
-| **D** | bottom, 0.8 | bottom, 0.6 | edge, 0.8 | edge, 0.6 |
-
-16 cells × {Variant 1, Variant 2, `stto` control} = 48 runs, about 5 hours at the
-capacity above. The `stto` controls use `stto`'s validated schedule, not a
-600-iteration version. Add CPU/GPU replicates on the marginal cells. Report a table
-per variant: pass criteria, compliance ratio to the control, `central_difference_cv`,
-local-minimum and saddle counts.
+Continued in `plans/virtual_heat_tuning.md`.
 
 ## Out of scope
 

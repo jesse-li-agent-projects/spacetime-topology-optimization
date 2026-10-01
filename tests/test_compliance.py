@@ -14,6 +14,7 @@ import torch
 import sttopt.compliance as compliance
 import sttopt.fem as fem
 import sttopt.gravity as gravity
+import sttopt.torch_fem as torch_fem
 import sttopt.torch_util as torch_util
 import tests.reference.compliance as compliance_ref
 import tests.reference.fem as fem_ref
@@ -592,6 +593,15 @@ def test_time_mask_derivative_matches_fd():
         - compliance.time_mask(tPhys - h, ti, beta_t)
     ) / (2 * h)
     np.testing.assert_allclose(analytic, fd, rtol=1e-6, atol=1e-8)
+
+
+def test_time_mask_is_not_negative_at_the_end_of_the_build():
+    """The mask rounds to -2e-16 at t = 1 for this sharpness (a linear beta_t ramp's
+    value at one iteration), which a non-integer SIMP penal turns into NaN."""
+    mask = compliance.time_mask(tt(np.array([1.0])), 0.875, 14.888888888888889)
+    assert float(mask) >= 0
+    density = torch_fem.simp_density(0.5 * mask, 1e-9, 1.0, 2.06)
+    assert torch.isfinite(density).all()
 
 
 # --- Phase 3.4 (plans/torch_port_part2.md): autograd sensitivities against hand-derived --
