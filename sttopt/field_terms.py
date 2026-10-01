@@ -98,7 +98,7 @@ class FieldTerms:
             and reference == conductivity.ReferenceGradient.OWN
         ):
             raise ValueError(
-                "hotspot_front_offset_m needs hotspot_reference_gradient 'part_mean': under 'own' the reference fill flattens with the field it judges, so a region printed all at once still scores as shielded"
+                "hotspot_front_offset_m needs hotspot_reference_gradient 'part_mean' (see conductivity.ReferenceGradient)"
             )
         e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
         hotspot_base = conductivity.infinite_base(normalization, base)

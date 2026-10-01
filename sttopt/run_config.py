@@ -243,8 +243,7 @@ class SpaceTimeConfig(_ConfigMixin):
         mean (`part_mean`).
     :param hotspot_front_offset_m: how far behind the print front a neighbor must lie to
         count as cooled material, possibly scheduled; `0` counts every earlier neighbor,
-        as before it existed. Needs `part_mean`. Keep it well inside `rmin_cond_m`, or a
-        layered fill has nothing left to count.
+        as before it existed. Requires `part_mean`; keep it below `rmin_cond_m`.
     :param rmin_m: density-filter radius.
     :param tool_radius_m: print tool radius, possibly scheduled. Bounds the concave
         curvature of the time field's iso-lines (`timefield.iso_curvature`) to

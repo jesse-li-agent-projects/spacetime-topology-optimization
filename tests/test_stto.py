@@ -903,6 +903,7 @@ def test_tool_radius_needs_an_interior_element():
 
 
 def test_front_offset_needs_the_part_mean_reference_at_build():
+    """An offset under OWN is refused when the problem is built (PR #190)."""
     config = default_run_config(hotspot_front_offset_m=2 * ELEMENT_M)
     with pytest.raises(ValueError, match="part_mean"):
         stto.build_problem(config)

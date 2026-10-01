@@ -78,13 +78,10 @@ class ReferenceGradient(StrEnum):
     """Names for the layer thickness of the ideal fill that HALF_STENCIL's reference is
     taken on, selectable per run.
 
-    OWN takes each element's own `|grad t|` (`directed_denominator`, or the constant
-    `half_stencil_weight` without an angular weight). PART_MEAN takes the
-    density-weighted mean `|grad t|` over the part, along the element's own direction.
-
-    Only PART_MEAN can carry a front offset. Under OWN the reference flattens along with
-    the field it judges, so a flat region -- printed all at once, nothing behind it --
-    still scores as well shielded as a layered one (plans/s03_material_behind_front.md).
+    OWN uses each element's own `|grad t|`; PART_MEAN uses the density-weighted mean
+    over the part, along the element's own direction. Only PART_MEAN can carry a front
+    offset: under OWN the reference flattens with the field it judges, so a region
+    printed all at once still scores as shielded (PR #190).
     """
 
     OWN = "own"
@@ -268,7 +265,7 @@ def angular_stencil(
     :param dtype: floating dtype of the run's real-valued fields
     :param kappa: the run's lobe concentration setting; a constant `0` builds nothing,
         while a schedule is taken at its word that it will open the lobe at some point
-    :param reference: the run's `ReferenceGradient`; PART_MEAN reads the offset table at
+    :param reference: the run's `ReferenceGradient`; PART_MEAN needs the stencil at
         any `kappa`
     """
     radial = isinstance(kappa, float | int) and kappa == 0
@@ -364,12 +361,11 @@ def directed_denominator(
     layers: tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]] | None = None,
     delay: float = 0.0,
 ) -> Float[Tensor, " nel"]:
-    """`Normalization.HALF_STENCIL`'s divisor once the stencil carries an angular
-    weight or the reference is not the element's own layering: the stencil sum an ideal
+    """`Normalization.HALF_STENCIL`'s per-element divisor: the stencil sum an ideal
     uniform layered fill would supply at each element.
 
     The same sum the numerator computes, evaluated on a reference of full density whose
-    time field is exactly linear with the element's own gradient. `K_est = 1` therefore
+    time field is exactly linear with gradient `layers`. `K_est = 1` therefore
     still means "as well shielded as an ideal uniform layered fill", which is what the
     constant `half_stencil_weight` meant before the angular factor broke the `d -> -d`
     symmetry that made it a constant.
@@ -388,11 +384,9 @@ def directed_denominator(
     :param rouf: print-order sigmoid sharpness, as in `_pairwise_sigmoid`
     :param unit: `timefield.unit_length`, to read the per-unit-length gradient as a print
         time difference across an offset measured in elements
-    :param layers: the reference fill's own gradient, in the units of `grad`; `None` for
-        `grad` itself (`ReferenceGradient.OWN`). The lobe always reads `grad`, as the
-        numerator's does.
-    :param delay: how much earlier than an element a neighbor must be printed to count,
-        in `t`, as in `_pairwise_sigmoid`
+    :param layers: the reference fill's gradient, in the units of `grad`; `None` for
+        `grad` itself. The lobe always reads `grad`, as the numerator's does.
+    :param delay: the front offset as a lead in `t`; see `estimated_conductivity`
     """
     gx, gy = grad[0].flatten(), grad[1].flatten()
     g = torch.stack((gx, gy), dim=-1)
@@ -416,21 +410,16 @@ def _part_mean_fill(
     front_offset: float,
     unit: float,
 ) -> tuple[tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]], float]:
-    """`ReferenceGradient.PART_MEAN`'s fill gradient and the front offset as a lead in
-    `t`, both held out of the gradient.
+    """`ReferenceGradient.PART_MEAN`'s fill gradient, along each element's own direction
+    at the density-weighted mean `|grad t|`, and the front offset as a lead in `t`.
 
-    The fill runs along each element's own direction at the density-weighted mean
-    `|grad t|` over the part. A mean rather than a median: by the coarea formula it is
-    the part's total level-set length over its area, which no rearrangement of the
-    field can shrink, where a field of flat terraces has a near-zero median. Where the
-    field is exactly flat it has no direction, and any fixed one serves: the lobe is
-    isotropic there and the radial stencil sums nearly alike in every direction.
+    A mean, not a median: a field of flat terraces has a near-zero median (PR #190).
 
     :param grad: `(dt/dx, dt/dy)` per element, per unit length
     :param x: the density, flattened
     :param front_offset: in elements
     :param unit: `timefield.unit_length`
-    :return: `(layers, delay)`, as `directed_denominator` takes them
+    :return: `(layers, delay)`: the fill gradient and the lead in `t`
     """
     with torch.no_grad():
         gx, gy = grad[0].flatten(), grad[1].flatten()
@@ -704,7 +693,7 @@ def estimated_conductivity(
     :param g0: the lobe's gradient scale
     :param reference: the `ReferenceGradient` the HALF_STENCIL reference fill is layered at
     :param front_offset: the distance behind the front, in elements, from which on a
-        neighbor counts; read as a lead in `t` at the PART_MEAN gradient
+        neighbor counts
     :raises ValueError: if no element carrying density is left with a finite `K_est`,
         the whole part being within stencil reach of the print base; if `kappa > 0` or a
         PART_MEAN reference comes without the constant divisor the directional reference
@@ -715,7 +704,7 @@ def estimated_conductivity(
     part_mean = ReferenceGradient(reference) == ReferenceGradient.PART_MEAN
     if front_offset != 0 and not part_mean:
         raise ValueError(
-            "a front offset needs ReferenceGradient.PART_MEAN: under OWN the reference fill flattens with the field it judges, so a region printed all at once still scores as shielded"
+            "a front offset needs ReferenceGradient.PART_MEAN (see ReferenceGradient)"
         )
     delay = 0.0
     if kappa != 0 or part_mean:
@@ -734,8 +723,8 @@ def estimated_conductivity(
             grad, stencil, kappa, g0, rouf, unit, layers, delay
         )
         if part_mean:
-            # Held out of the gradient, as the fill's magnitude is: its direction is
-            # undefined where `|grad t|` vanishes, and so is the derivative (PR #190).
+            # Detached: the fill direction has no derivative where |grad t|
+            # vanishes (PR #190)
             denom = denom.detach()
     K_est = _conductivity_core(x, t, e1, e2, w, q, rouf, denom, base, delay).K_est
     if base is not None and not bool((torch.isfinite(K_est) & (x > 0)).any()):

@@ -21,6 +21,7 @@ RMIN_COND = 3
 BETA, ETA = 1.0, 0.5
 P, Q, R, ROUF = 25, 3, 0.05, 100
 TCR = 0.8
+PART_MEAN = conductivity.ReferenceGradient.PART_MEAN
 
 
 def _K_est(xPhys, tPhys, e1, e2, w, q, rouf):
@@ -1881,119 +1882,11 @@ def test_angular_stencil_is_not_built_for_a_purely_radial_run():
     assert conductivity.angular_stencil(*args, 0.0, part_mean) is not None
 
 
-PART_MEAN = conductivity.ReferenceGradient.PART_MEAN
-
-
-@pytest.mark.parametrize("kappa", [0.0, 2.3666])
-@pytest.mark.parametrize("front_offset", [0.0, 2.0])
-def test_part_mean_reference_scores_a_uniform_fill_as_shielded(kappa, front_offset):
-    """On a fully solid, uniformly layered part the mean gradient is the element's own,
-    so the reference fill is the field itself, front offset and all."""
-    nelx, nely, rmin_cond = 25, 25, 4.0
+def _front_K(xPhys, tPhys, rmin_cond, kappa, **reference):
+    """`K_est` on a fresh stencil for the front-offset tests, HALF_STENCIL normalized."""
+    nely, nelx = xPhys.shape
     e1, e2, w, stencil = _stencil(nelx, nely, rmin_cond)
-    xPhys = torch.ones(nely, nelx, dtype=torch.float64)
-    denom = conductivity.half_stencil_weight(rmin_cond)
-    interior = (nely // 2) * nelx + nelx // 2
-
-    for angle in np.linspace(-np.pi, np.pi, 9):
-        tPhys = _linear_timefield(nelx, nely, angle, 1.0)
-        K_est = conductivity.estimated_conductivity(
-            xPhys,
-            tPhys,
-            e1,
-            e2,
-            w,
-            Q,
-            ROUF,
-            denom,
-            None,
-            stencil,
-            kappa,
-            0.35,
-            PART_MEAN,
-            front_offset,
-        )
-        assert float(K_est[interior]) == pytest.approx(1.0, abs=1e-12)
-
-
-def test_front_offset_finds_a_flat_basin_that_the_own_reference_misses():
-    """A region printed all at once has nothing behind it. Without an offset its
-    neighbors count half each, as in a layered fill, so it scores fully shielded
-    (plans/s03_material_behind_front.md); one element of offset leaves it ~6%."""
-    nelx, nely, rmin_cond = 25, 25, 4.0
-    e1, e2, w, stencil = _stencil(nelx, nely, rmin_cond)
-    xPhys = torch.ones(nely, nelx, dtype=torch.float64)
-    denom = conductivity.half_stencil_weight(rmin_cond)
-    rows, cols = np.meshgrid(np.arange(nely), np.arange(nelx), indexing="ij")
-    mid = nely // 2
-    t = _linear_timefield(nelx, nely, np.pi / 2, 1.0).numpy()
-    basin = (rows - mid) ** 2 + (cols - nelx // 2) ** 2 <= rmin_cond**2
-    tPhys = tt(np.where(basin, t[mid, 0], t))
-    centre = mid * nelx + nelx // 2
-
-    def K(*reference):
-        K_est = conductivity.estimated_conductivity(
-            xPhys,
-            tPhys,
-            e1,
-            e2,
-            w,
-            Q,
-            ROUF,
-            denom,
-            None,
-            stencil,
-            2.3666,
-            0.35,
-            *reference,
-        )
-        return float(K_est[centre])
-
-    assert K() == pytest.approx(1.0, abs=1e-12)
-    assert K(PART_MEAN, 0.0) == pytest.approx(1.0, abs=1e-12)
-    assert K(PART_MEAN, 1.0) < 0.1  # measured 0.059
-
-
-def test_front_offset_needs_the_part_mean_reference():
-    """Under OWN the reference fill flattens with the field, so an offset there would
-    still let a flat region pass; the combination is refused."""
-    nelx, nely = 9, 7
-    e1, e2, w, stencil = _stencil(nelx, nely, RMIN_COND)
-    xPhys = torch.ones(nely, nelx, dtype=torch.float64)
-    tPhys = _linear_timefield(nelx, nely, 0.3, 1.0)
-    denom = conductivity.half_stencil_weight(RMIN_COND)
-    with pytest.raises(ValueError, match="PART_MEAN"):
-        conductivity.estimated_conductivity(
-            xPhys,
-            tPhys,
-            e1,
-            e2,
-            w,
-            Q,
-            ROUF,
-            denom,
-            None,
-            stencil,
-            0.0,
-            0.35,
-            conductivity.ReferenceGradient.OWN,
-            1.0,
-        )
-
-
-def test_part_mean_sensitivity_is_finite_on_a_flat_field():
-    """The fill's direction is undefined where the field is flat; holding the reference
-    out of the gradient keeps the sensitivity finite there."""
-    nelx, nely, rmin_cond = 13, 11, 3.0
-    e1, e2, w, stencil = _stencil(nelx, nely, rmin_cond)
-    rng = np.random.default_rng(7)
-    xPhys = tt(rng.uniform(0.3, 1.0, size=(nely, nelx)))
-    t = _linear_timefield(nelx, nely, 0.4, 1.0).numpy()
-    t[4:7, 5:8] = t[5, 6]
-    tPhys = tt(t).requires_grad_(True)
-    denom = conductivity.half_stencil_weight(rmin_cond)
-
-    K_est = conductivity.estimated_conductivity(
+    return conductivity.estimated_conductivity(
         xPhys,
         tPhys,
         e1,
@@ -2001,14 +1894,74 @@ def test_part_mean_sensitivity_is_finite_on_a_flat_field():
         w,
         Q,
         ROUF,
-        denom,
-        None,
-        stencil,
-        2.3666,
-        0.35,
-        PART_MEAN,
-        1.5,
+        conductivity.half_stencil_weight(rmin_cond),
+        stencil=stencil,
+        kappa=kappa,
+        g0=0.35,
+        **reference,
     )
+
+
+@pytest.mark.parametrize("kappa", [0.0, 2.3666])
+@pytest.mark.parametrize("front_offset", [0.0, 2.0])
+def test_part_mean_reference_scores_a_uniform_fill_as_shielded(kappa, front_offset):
+    """On a fully solid, uniformly layered part the mean gradient is the element's own,
+    so the reference fill equals the field, whatever the front offset."""
+    n = 25
+    xPhys = torch.ones(n, n, dtype=torch.float64)
+    for angle in np.linspace(-np.pi, np.pi, 9):
+        K_est = _front_K(
+            xPhys,
+            _linear_timefield(n, n, angle, 1.0),
+            4.0,
+            kappa,
+            reference=PART_MEAN,
+            front_offset=front_offset,
+        )
+        assert float(K_est[(n // 2) * n + n // 2]) == pytest.approx(1.0, abs=1e-12)
+
+
+def test_front_offset_finds_a_flat_basin_that_the_own_reference_misses():
+    """A region printed all at once has nothing behind it. Without an offset its
+    neighbors count half each, as in a layered fill, so it scores fully shielded
+    (PR #190)."""
+    n, rmin_cond = 25, 4.0
+    rows, cols = np.meshgrid(np.arange(n), np.arange(n), indexing="ij")
+    mid = n // 2
+    t = _linear_timefield(n, n, np.pi / 2, 1.0).numpy()
+    basin = (rows - mid) ** 2 + (cols - mid) ** 2 <= rmin_cond**2
+    tPhys = tt(np.where(basin, t[mid, 0], t))
+    xPhys = torch.ones(n, n, dtype=torch.float64)
+
+    def K(**reference):
+        return float(
+            _front_K(xPhys, tPhys, rmin_cond, 2.3666, **reference)[mid * n + mid]
+        )
+
+    assert K() == pytest.approx(1.0, abs=1e-12)
+    assert K(reference=PART_MEAN) == pytest.approx(1.0, abs=1e-12)
+    assert K(reference=PART_MEAN, front_offset=1.0) < 0.1  # measured 0.059
+
+
+def test_front_offset_needs_the_part_mean_reference():
+    """An offset under OWN is refused (PR #190)."""
+    xPhys = torch.ones(7, 9, dtype=torch.float64)
+    with pytest.raises(ValueError, match="PART_MEAN"):
+        _front_K(
+            xPhys, _linear_timefield(9, 7, 0.3, 1.0), RMIN_COND, 0.0, front_offset=1.0
+        )
+
+
+def test_part_mean_sensitivity_is_finite_on_a_flat_field():
+    """The fill's direction is undefined where the field is flat; holding the reference
+    out of the gradient keeps the sensitivity finite there."""
+    rng = np.random.default_rng(7)
+    xPhys = tt(rng.uniform(0.3, 1.0, size=(11, 13)))
+    t = _linear_timefield(13, 11, 0.4, 1.0).numpy()
+    t[4:7, 5:8] = t[5, 6]
+    tPhys = tt(t).requires_grad_(True)
+
+    K_est = _front_K(xPhys, tPhys, 3.0, 2.3666, reference=PART_MEAN, front_offset=1.5)
     (grad,) = torch.autograd.grad(K_est.sum(), tPhys)
     assert torch.isfinite(grad).all()
     assert float(grad.abs().max()) > 0
