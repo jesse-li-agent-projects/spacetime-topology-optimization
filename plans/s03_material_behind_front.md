@@ -77,7 +77,11 @@ see step 1.
    every time-field term off (hotspot, uniformity, roughness, `min_gradient`, gravity).
    If `stto` has no explicit way to turn the hotspot off, ask. This shows roughly what the
    geometry "should" be (the user expects a skewed hourglass); thin features in it may
-   overheat, so its compliance is a reference, not a target.
+   overheat, so its compliance is a reference, not a target. **Done** (`s03_base_plainTO`,
+   `plot/s03/baseline_vs_w25.png`): the skewed hourglass (bottom and top bars, two
+   diagonals meeting at a node right of centre, short members to the right corners),
+   compliance 109.6 binarized. `w25` has the same topology with a thicker top bar
+   (110.3). The baseline's `t` is its initial layering, since nothing acts on it.
 2. **κ = 0 offline check** of the C1 0.3 merge point: does the angular lobe, which credits
    only one side where the direction is undefined, cause the +0.12? **Yes** (2026-10-01).
    Severity at (12, 56): κ = 0 gives 0.554 at s = 0 and 0.508 at s = 2 (δ helps a merge,
@@ -88,6 +92,10 @@ see step 1.
    reference reproduces today's `K_est`; a flat field scores ~1 with δ > 0; a linear field
    at g_ref scores K = 1). Raise an error for δ > 0 with the own-magnitude reference.
 4. **Uniformity weight** by the gradient-ratio rule, measured on `w25`-like checkpoints.
+   **Done:** on `w25` (weight 100) the uniformity gradient is 0.07–0.23× the compliance
+   gradient in `x`, but 1.0–1.6× the hotspot term (λ·∇g) in `t` once the hotspot acts
+   (it 200 on). `t` is where it competes, so the weight is **20** (≈ 0.2× the hotspot
+   term). Before the hotspot acts it is the only term on `t` at any weight.
 5. **Tcr.** How Tcr maps from the old measure to the δ one is not known. Too high, the
    row is not active; too low, the problem becomes infeasible. Start high (e.g. 0.9) and
    lower it step by step. Expected order of effects: first the time-field gradients align
@@ -101,6 +109,25 @@ see step 1.
    angular weight; κ = 0 is radial). The user's earlier idea: start mostly radial, while
    the topology and so the print directions are still undefined, and sharpen κ later.
    Same rules as Phase 8: one schedule across cells, judged against matched controls.
+
+## Results (overnight 2026-10-01/02)
+
+Runs in `/tmp/claude-1001/s03/work/output/`; code snapshot `snap_0409284`; all S 0.3,
+`w25` config with uniformity 20 and no floor. "Interior unsup." = the support check.
+
+| Run | δ | Tcr | Compliance (× plain TO) | Interior unsup. | Hotspot row | Top bar |
+|---|---|---|---|---|---|---|
+| `b1_ctrl_T06` | 0, own ref | 1 → 0.6 over 150–400 | 109.6 (1.00) | **17** | −0.001 | several basins, no merge |
+| `b1_s2_T07` | 2 el. | 1 → 0.7 over 150–400 | 109.7 (1.00) | 0 | +0.001 | basins at 250–350, gone by 450; one merge at col ~48 |
+| `b1_s2_T06` | 2 el. | 1 → 0.6 over 150–400 | 111.3 (1.02) | 0 | **+0.12** | basins until it 600, cleared only in the last 200 |
+| `b1_s2_scan` | 2 el. | 1 → 0.5 over 150–700 | 109.7 (1.00) | 0 | −0.0005 | basins at 250–450, gone by 650; one merge at col ~55 |
+
+- δ is what removes the basins: the matched control (no δ) ends with 17 interior
+  unsupported elements, every δ run with 0.
+- The speed of the Tcr ramp matters more than its final value: the slow scan meets 0.5,
+  the faster ramp to 0.6 by 400 ends 0.12 over it. Basins form while the hotspot
+  multiplier sits at `mma_c` and the severity lags Tcr; they clear once it catches up.
+- The scan schedule (Tcr 1 → 0.5 over 150–700) is the base for the next batches.
 
 ## Judging a run
 
