@@ -487,7 +487,7 @@ effect. Watch the multipliers: rows at `mma_c`
 mean a schedule conflict. Record the final schedule and its reasons in a
 `configs/*.md` note, as `configs/continuation.md` does for `stto`.
 
-**Variant 1 schedule tuning (2026-10-01, in progress).** Hotspot only, no gravity
+**Variant 1 schedule tuning (2026-10-01, set aside; see the last item).** Hotspot only, no gravity
 stages (`Theta = 0`, `nStage = 0`; user decision, because stage solves failed CG at low
 volfrac and the stages weigh 1–39% of the objective). Cells: the dev set and the three
 hardest Phase 9 cells (volfrac 0.3: C1 edge/0.6, S bottom/0.6, D bottom/0.8). Ratio to
@@ -515,6 +515,18 @@ breaks its fully loaded traction edge for every method, `stto` included.
   `p = 3`, β = 9 on that checkpoint is two one-node minima on the bar's border, 0.09%
   of the time range deep, at element-scale `μ` contrast. No `μ` filter for now (user,
   2026-10-01).
+- **Set aside (user, 2026-10-01).** Variant 1 has difficulty defining the time at the
+  top of the part accurately until the topology is sketched out. P4 on S 0.3, three
+  conduction choices (compliance × `stto`):
+
+  | `χ` density exponent | `drain_beta` | Run | Result |
+  |---|---|---|---|
+  | 1 | 25 | `w31_heat_S_P4` | 1.30, hotspot +0.44: near-void leaks heat, so the top bar prints from its middle |
+  | 3 | 9 | `w32_heat_S_P4pc` | 31.6: on the grey early design `T` falls below the solve error on 31% of the part, so the time map's gradient is noise |
+  | `penal` (2 → 3) | 4 | `w33_heat_S_P4pp` | 12.7, hotspot +0.61: gradient correct, but the volume falls from iteration 80; the uniformity term's gradient is 1.8× the compliance gradient (one checkpoint, not proved by a run) |
+
+  Without penalization the grey design's time field is wrong at the top; with it, the
+  time field is too sensitive to the grey design to steer by.
 
 **Variant 2 status (paused 2026-09-30, to finish Variant 1 first).** Runs in
 `/tmp/claude-1001/phase8/work/output/w19_*`–`w21_*`; gates as above (hotspot, tool
