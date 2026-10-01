@@ -121,13 +121,37 @@ Runs in `/tmp/claude-1001/s03/work/output/`; code snapshot `snap_0409284`; all S
 | `b1_s2_T07` | 2 el. | 1 → 0.7 over 150–400 | 109.7 (1.00) | 0 | +0.001 | basins at 250–350, gone by 450; one merge at col ~48 |
 | `b1_s2_T06` | 2 el. | 1 → 0.6 over 150–400 | 111.3 (1.02) | 0 | **+0.12** | basins until it 600, cleared only in the last 200 |
 | `b1_s2_scan` | 2 el. | 1 → 0.5 over 150–700 | 109.7 (1.00) | 0 | −0.0005 | basins at 250–450, gone by 650; one merge at col ~55 |
+| `b2_ctrl_scan` | 0, own ref | scan | 109.6 (1.00) | **22** (39 saddles) | +0.013 | many basins, max at the far right |
+| `b2_s1_scan` | 1 el. | scan | 110.0 (1.00) | 0 (2 saddles) | −0.0004 | basins until 450, gone by 550; one merge at col 68 |
+| `b2_s4_scan` | 4 el. | scan | 111.9 (1.02) | 3 (13 saddles) | **+0.91** | severity stuck at 0.955 from it 200 (underside of the top bar mid-span); design distorted |
 
-- δ is what removes the basins: the matched control (no δ) ends with 17 interior
-  unsupported elements, every δ run with 0.
+- δ is what removes the basins: both matched controls (no δ) end with 17–22 interior
+  unsupported elements, the δ runs at s = 1 and 2 with 0. The slow ramp alone does not.
+- s = 4 elements (a third of the 12-element stencil radius) leaves too little of the
+  stencil behind the front to credit; s = 1 and 2 both work. **Chosen: s = 2** (2 mm),
+  the clearer separation in the offline test.
 - The speed of the Tcr ramp matters more than its final value: the slow scan meets 0.5,
   the faster ramp to 0.6 by 400 ends 0.12 over it. Basins form while the hotspot
   multiplier sits at `mma_c` and the severity lags Tcr; they clear once it catches up.
 - The scan schedule (Tcr 1 → 0.5 over 150–700) is the base for the next batches.
+
+**Other cells**, s = 2 against a matched control (same scan schedule, no δ):
+
+| Cell | δ: compliance / interior unsup. / saddles / row | control: same | `w25` stto |
+|---|---|---|---|
+| C1 0.3 | 267.4 / 1 / 5 / +0.38 | 266.6 / 3 / 8 / +0.46 | 283.8 / 0 / 0 (at its own Tcr 0.6) |
+| C1 0.5 | 175.2 / 0 / 10 / 0.000 | 174.9 / 2 / 24 / +0.044 | 174.1 / 0 / 0 |
+| D 0.7 | 2.13 / 0 / 0 / 0.000 | (queued) | 2.22 / 0 / 0 |
+
+- C1 0.3 cannot reach Tcr 0.5 under either measure: the severity levels off at 0.70
+  (δ) and 0.73 (control) from iteration ~500, with the multiplier at `mma_c`. Same
+  topology in both; δ does no damage. A slow ramp to 0.75 is queued to see the design
+  under a constraint it can meet.
+- C1 0.5: same topology; δ meets 0.5 where the control misses. Below Tcr ~0.6 both
+  runs bend the time contours on the left and add a thin member at the bottom right
+  late (it 650–800): a low-Tcr effect, not a δ one.
+- D 0.7: δ gives a simpler design than `w25` (one lower hole, no web of thin members,
+  no isolated hole at the top right) at 4% less compliance.
 
 ## Judging a run
 
