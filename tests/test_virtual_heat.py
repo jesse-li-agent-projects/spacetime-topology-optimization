@@ -240,7 +240,7 @@ def test_two_wall_peaks_give_an_interior_saddle():
 
 @pytest.mark.xfail(
     strict=True,
-    reason="the theorem is continuous; element-scale chi jumps of ~100x or more give discrete saddles (plans/virtual_heat_timefield.md, Phase 4)",
+    reason="the theorem is continuous; element-scale chi jumps of ~100x or more give discrete saddles (plans/archive/virtual_heat_timefield.md, Phase 4)",
 )
 @pytest.mark.parametrize("seed", range(3))
 def test_harmonic_field_with_element_scale_chi_has_no_interior_saddle(seed):

@@ -237,7 +237,7 @@ def test_laplace_field_has_no_interior_extremum_on_the_nodes(contrast):
 
 @pytest.mark.xfail(
     strict=True,
-    reason="an element mean is not a positive-weight average of its neighbours' means, so element-scale chi contrast can make one a strict extremum (plans/virtual_heat_timefield.md, Phase 3)",
+    reason="an element mean is not a positive-weight average of its neighbours' means, so element-scale chi contrast can make one a strict extremum (plans/archive/virtual_heat_timefield.md, Phase 3)",
 )
 @pytest.mark.parametrize("contrast", [1e3, 1e6])
 def test_laplace_field_has_no_interior_extremum_on_the_element_means(contrast):

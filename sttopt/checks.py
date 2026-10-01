@@ -28,7 +28,7 @@ import sttopt.torch_util as torch_util
 START_TOLERANCE = 1e-5
 
 # How far binarizing may raise the hotspot row before the check warns: the largest rise
-# measured in the Phase 8 runs was +0.0145 (plans/virtual_heat_timefield.md).
+# measured in the Phase 8 runs was +0.0145 (plans/virtual_heat_tuning.md).
 BINARIZED_HOTSPOT_RISE = 0.02
 
 # How many offending elements a report lists by position.

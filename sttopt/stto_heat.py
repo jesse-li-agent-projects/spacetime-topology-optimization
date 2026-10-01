@@ -1,5 +1,5 @@
 """Space-time topology optimization with the time field from a virtual heat equation
-(Variant 1 of `plans/virtual_heat_timefield.md`, after Wu2025 §2.3).
+(Variant 1 of `plans/archive/virtual_heat_timefield.md`, after Wu2025 §2.3).
 
 The design variables are the density `x` and a diffusivity field `mu`, both on
 `[0, 1]`. `tPhys` is not a design variable: `virtual_heat.heat_time_field` solves for it

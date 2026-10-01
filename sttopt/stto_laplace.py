@@ -1,5 +1,5 @@
 """Space-time topology optimization with a harmonic time field (Variant 2 of
-`plans/virtual_heat_timefield.md`).
+`plans/archive/virtual_heat_timefield.md`).
 
 The design variables are the density `x`, a diffusivity field `mu` over the whole
 domain, and the wall design `wall` (`virtual_heat.laplace_time_field`), all on

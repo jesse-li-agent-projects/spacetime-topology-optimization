@@ -15,7 +15,7 @@ without local minima, i.e. without material that prints before everything around
 
 Both solve on the nodes of the element grid and report element means, the values the
 rest of the code reads. The guarantee holds on the nodes; an element mean can still be
-a strict extremum where `chi` has element-scale contrast (`plans/virtual_heat_timefield.md`,
+a strict extremum where `chi` has element-scale contrast (`plans/archive/virtual_heat_timefield.md`,
 Phase 3).
 
 Lengths are in elements, and `l_c` is `timefield.unit_length`, the square root of the
@@ -225,7 +225,7 @@ class ScalarMesh:
 
         At the Gauss points, since the element centre cannot see an hourglass mode.
         No floor relative to the mean gradient, since `T` falls exponentially (see
-        `plans/virtual_heat_timefield.md`, Variant 1).
+        `plans/archive/virtual_heat_timefield.md`, Variant 1).
         """
         grad = self.gauss_gradients(s)
         norm2 = (grad**2).sum(dim=-1)
