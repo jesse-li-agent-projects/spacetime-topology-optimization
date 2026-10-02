@@ -48,9 +48,8 @@ class FieldTerms:
     # Constant `K_est` divisor for `config.hotspot_normalization`, or None where the
     # divisor is per-element -- `conductivity.constant_denominator`.
     hotspot_denom: float | None
-    # Fixed geometry the angular stencil weight reads, or None where
-    # `config.hotspot_kappa` leaves the stencil purely radial -- see
-    # `conductivity.angular_stencil`.
+    # Fixed geometry the angular stencil weight and the directional reference read, or
+    # None where neither is used -- see `conductivity.angular_stencil`.
     hotspot_stencil: conductivity.AngularStencil | None
     # Print base elements the hotspot measure treats as infinitely dense, or None where
     # the normalization needs no print base -- `conductivity.infinite_base`.
@@ -93,6 +92,14 @@ class FieldTerms:
                 )
         rmin_cond = units.in_elements(config.rmin_cond_m, config.element_size_m)
         normalization = conductivity.Normalization(config.hotspot_normalization)
+        reference = conductivity.ReferenceGradient(config.hotspot_reference_gradient)
+        if (
+            not run_config.identically_zero(config.hotspot_front_offset_m)
+            and reference == conductivity.ReferenceGradient.OWN
+        ):
+            raise ValueError(
+                "hotspot_front_offset_m needs hotspot_reference_gradient 'part_mean' (see conductivity.ReferenceGradient)"
+            )
         e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
         hotspot_base = conductivity.infinite_base(normalization, base)
         ints = torch_util.to_tensors({"e1": e1, "e2": e2}, device, torch.int64)
@@ -109,7 +116,13 @@ class FieldTerms:
             w=torch_util.to_tensor(w, device, dtype),
             hotspot_denom=conductivity.constant_denominator(normalization, rmin_cond),
             hotspot_stencil=conductivity.angular_stencil(
-                ints["e1"], ints["e2"], nelx, rmin_cond, dtype, config.hotspot_kappa
+                ints["e1"],
+                ints["e2"],
+                nelx,
+                rmin_cond,
+                dtype,
+                config.hotspot_kappa,
+                reference,
             ),
             hotspot_base=(
                 None
@@ -168,6 +181,8 @@ class FieldTerms:
             at(config.hotspot_kappa),
             config.hotspot_g0_per_m
             * timefield.unit_length_m(tPhys, config.element_size_m),
+            conductivity.ReferenceGradient(config.hotspot_reference_gradient),
+            units.in_elements(at(config.hotspot_front_offset_m), config.element_size_m),
         )
 
     def constraints(
