@@ -118,6 +118,7 @@ Runs in `/tmp/claude-1001/s03/work/output/`; code snapshot `snap_0409284`; all S
 | Run | δ | Tcr | Compliance (× plain TO) | Interior unsup. | Hotspot row | Top bar |
 |---|---|---|---|---|---|---|
 | `b1_ctrl_T06` | 0, own ref | 1 → 0.6 over 150–400 | 109.6 (1.00) | **17** | −0.001 | several basins, no merge |
+| `b1_s2_T08` | 2 el. | 1 → 0.8 over 150–400 | 109.6 (1.00) | 0 | −0.002 | basins until 450, gone by 600; merge at col ~48 |
 | `b1_s2_T07` | 2 el. | 1 → 0.7 over 150–400 | 109.7 (1.00) | 0 | +0.001 | basins at 250–350, gone by 450; one merge at col ~48 |
 | `b1_s2_T06` | 2 el. | 1 → 0.6 over 150–400 | 111.3 (1.02) | 0 | **+0.12** | basins until it 600, cleared only in the last 200 |
 | `b1_s2_scan` | 2 el. | 1 → 0.5 over 150–700 | 109.7 (1.00) | 0 | −0.0005 | basins at 250–450, gone by 650; one merge at col ~55 |
@@ -142,13 +143,20 @@ Runs in `/tmp/claude-1001/s03/work/output/`; code snapshot `snap_0409284`; all S
 | C1 0.3 | 267.4 / 1 / 5 / +0.38 | 266.6 / 3 / 8 / +0.46 | 283.8 / 0 / 0 (at its own Tcr 0.6) |
 | C1 0.5 | 175.2 / 0 / 10 / 0.000 | 174.9 / 2 / 24 / +0.044 | 174.1 / 0 / 0 |
 | D 0.7 | 2.13 / 0 / 0 / 0.000 | 2.13 / 0 / 0 / 0.000 | 2.22 / 0 / 0 |
-| S 0.5 | 74.8 / 0 / 2 / 0.000 | (queued) | 75.1 / **5** / 6 |
-| D 0.3 (as optimized) | **12.06** / 2 / 5 / **+0.90** | (queued) | 8.31 / 4 / 3 |
+| S 0.5 | 74.8 / 0 / 2 / 0.000 | 74.6 / **13** / 22 / −0.002 | 75.1 / **5** / 6 |
+| D 0.3 (as optimized) | **12.06** / 2 / 5 / **+0.90** | 8.41 / **6** / 8 / 0.000 | 8.31 / 4 / 3 |
 
 - C1 0.3 cannot reach Tcr 0.5 under either measure: the severity levels off at 0.70
   (δ) and 0.73 (control) from iteration ~500, with the multiplier at `mma_c`. Same
-  topology in both; δ does no damage. A slow ramp to 0.75 is queued to see the design
-  under a constraint it can meet.
+  topology in both; δ does no damage. With the same slow ramp to **0.75** instead
+  (`b3_s2_slow075_C1_03`) it passes everything: 266.9 (0.94× `w25`), 0 interior
+  unsupported, 0 saddles; its thin right-hand members stay whole, where `w25`'s break
+  into separate blobs. A κ continuation (0 until 250, then to 2.37 by 450) changes
+  nothing on this cell (267.6, same 0.70 floor).
+- The same κ continuation on S 0.3 (`b3_s2_scan_k0to2_S`): 109.7, 0 interior
+  unsupported, 2 saddles, merge at col 82. Its basins are smaller and clear earlier
+  (5–10 interior unsupported at 350–450, none from 550) than at constant κ (8–14,
+  none only from 650). A small gain; not yet tested on the other cells.
 - C1 0.5: same topology; δ meets 0.5 where the control misses. Below Tcr ~0.6 both
   runs bend the time contours on the left and add a thin member at the bottom right
   late (it 650–800): a low-Tcr effect, not a δ one.
@@ -162,7 +170,13 @@ Runs in `/tmp/claude-1001/s03/work/output/`; code snapshot `snap_0409284`; all S
   solid bump at the same place). The stubs print before the bar above them, so nothing
   is behind them, and `x**0.05` gives a grey element almost full severity; the
   projection keeps them grey (grey fraction 0.029 from it 400) and they are never
-  removed. A protrusion that is not optimized away.
+  removed. A protrusion that is not optimized away. The cause underneath: the long
+  top bar (a cantilever from the right-hand junction to the left wall) gets nearly one
+  late time (0.93–1) before the hotspot acts, i.e. it prints all at once, which δ
+  rightly scores hot. Printing it supported needs a long right-to-left path along
+  the bar, a large shift of the time range that local steps do not find; the drips
+  are what the optimizer does instead. The control has the same flat bar, which its
+  measure does not mind (6 interior unsupported). δ = 1 on this cell is running.
 
 ## Judging a run
 
