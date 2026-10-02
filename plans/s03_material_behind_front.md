@@ -141,7 +141,9 @@ Runs in `/tmp/claude-1001/s03/work/output/`; code snapshot `snap_0409284`; all S
 |---|---|---|---|
 | C1 0.3 | 267.4 / 1 / 5 / +0.38 | 266.6 / 3 / 8 / +0.46 | 283.8 / 0 / 0 (at its own Tcr 0.6) |
 | C1 0.5 | 175.2 / 0 / 10 / 0.000 | 174.9 / 2 / 24 / +0.044 | 174.1 / 0 / 0 |
-| D 0.7 | 2.13 / 0 / 0 / 0.000 | (queued) | 2.22 / 0 / 0 |
+| D 0.7 | 2.13 / 0 / 0 / 0.000 | 2.13 / 0 / 0 / 0.000 | 2.22 / 0 / 0 |
+| S 0.5 | 74.8 / 0 / 2 / 0.000 | (queued) | 75.1 / **5** / 6 |
+| D 0.3 (as optimized) | **12.06** / 2 / 5 / **+0.90** | (queued) | 8.31 / 4 / 3 |
 
 - C1 0.3 cannot reach Tcr 0.5 under either measure: the severity levels off at 0.70
   (δ) and 0.73 (control) from iteration ~500, with the multiplier at `mma_c`. Same
@@ -150,8 +152,17 @@ Runs in `/tmp/claude-1001/s03/work/output/`; code snapshot `snap_0409284`; all S
 - C1 0.5: same topology; δ meets 0.5 where the control misses. Below Tcr ~0.6 both
   runs bend the time contours on the left and add a thin member at the bottom right
   late (it 650–800): a low-Tcr effect, not a δ one.
-- D 0.7: δ gives a simpler design than `w25` (one lower hole, no web of thin members,
-  no isolated hole at the top right) at 4% less compliance.
+- D 0.7: δ and its control end identical, and both simpler than `w25` (one lower hole,
+  no web of thin members, no isolated hole at the top right) at 4% less compliance.
+  The difference from `w25` is the schedule (slow ramp, uniformity 20), not δ.
+- S 0.5: δ passes where `w25` fails support; `w25` also has a small isolated hole in
+  its top bar, which the δ run does not.
+- D 0.3 fails with δ: from it 200 (when the hotspot acts) the severity is stuck at
+  0.95–0.97 on grey stubs hanging under the long top bar at cols ~20–25 (`w25` grows a
+  solid bump at the same place). The stubs print before the bar above them, so nothing
+  is behind them, and `x**0.05` gives a grey element almost full severity; the
+  projection keeps them grey (grey fraction 0.029 from it 400) and they are never
+  removed. A protrusion that is not optimized away.
 
 ## Judging a run
 
