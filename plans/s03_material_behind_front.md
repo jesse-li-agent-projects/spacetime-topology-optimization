@@ -201,6 +201,33 @@ Runs in `/tmp/claude-1001/s03/work/output/`; code snapshot `snap_0409284`; all S
 (compliance / interior unsup. / saddles / row.) All pass; S 0.3's row is closer to the
 0.01 gate, and C1 0.5 has more saddles. The basins on S 0.3 clear by 500 of 600.
 
+## State after the overnight run (2026-10-02)
+
+Recommended settings (all judged against matched controls; none made a default yet):
+`hotspot_reference_gradient` `part_mean`, `hotspot_front_offset_m` 0.002 (2 elements at
+1 mm), `uniformity_weight` 20, no `min_gradient` floor, constant κ 2.37, Tcr 1 until 150
+then linear to the target by 700 (800 iterations; the ×0.75 compression to 600 also
+passed on S 0.3, S 0.5 and C1 0.5).
+
+Passing designs now exist for S 0.3 (no method had one before), S 0.5, C1 0.5, D 0.7 and
+C1 0.3 (at Tcr 0.75). S 0.3's compliance equals the plain-TO baseline (109.7 vs 109.6):
+the hotspot reshapes only the time field, which merges the top bar once.
+
+S 0.3 at Tcr 0.5 is marginal: the CPU replicate of the scan (`b5_s2_scan_cpu_rep`) has
+the same design and merge (109.7, 0 interior unsupported, 2 saddles) but ends 0.028
+over its row (true max 0.521), outside the 0.01 gate; its basins also clear later. The
+runs to Tcr 0.7 and 0.8 pass with margin.
+
+Open:
+- D 0.3: δ shows that its long top cantilever prints all at once, and no offset lets
+  the optimizer re-time it (s = 2 stuck, s = 1 a flat-time blob). Candidates: the time
+  field ordered along the part before the hotspot acts (initialization, or an earlier
+  and softer hotspot); not tried.
+- The target Tcr is cell-dependent (C1 0.3 levels off at 0.70); a fixed final value
+  across cells needs a rule, e.g. a floor read off a scan.
+- Whether to make δ a default, and what Phase 9 of `virtual_heat_tuning.md` becomes now
+  that `stto` with δ passes the cells the virtual-heat variants were meant to fix.
+
 ## Judging a run
 
 Metrics are symptoms; look at the checkpoints (every 50 iterations: density, time field,
