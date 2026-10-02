@@ -206,12 +206,11 @@ class AngularStencil(NamedTuple):
     """The fixed stencil geometry the angular weight reads, built once per run by
     `angular_stencil`.
 
-    `pair_dir` lines up with `neighbor_weights`' COO pair arrays. The `offset_*` fields
-    are the untruncated stencil instead, which is deliberately a different list -- see
-    `directed_denominator`.
+    The `offset_*` fields are the untruncated stencil, which is deliberately a different
+    list from `neighbor_weights`' COO pairs -- see `directed_denominator`.
     """
 
-    pair_dir: Float[Tensor, "npairs 2"]
+    nelx: int
     offset: Float[Tensor, "noffsets 2"]
     offset_dir: Float[Tensor, "noffsets 2"]
     offset_w: Float[Tensor, " noffsets"]
@@ -228,46 +227,54 @@ def _unit_rows(v: Float[Tensor, "n 2"]) -> Float[Tensor, "n 2"]:
 
 
 def angular_stencil(
-    e1: Int[Tensor, " npairs"],
-    e2: Int[Tensor, " npairs"],
     nelx: int,
     rmin_cond: float,
     dtype: torch.dtype,
     kappa: "run_config.Scheduled",
+    device: torch.device | str | None = None,
 ) -> AngularStencil | None:
     """Build the angular weight's fixed geometry for one mesh, or `None` for a run whose
     lobe never opens.
 
-    The pair directions are derived from the pair list itself rather than rebuilt from
-    `_stencil_offsets`, so they cannot fall out of step with the pairs they weight. They
-    are also one more `npairs`-sized pair of arrays, which a purely radial run has no
-    use for -- hence the `None`.
-
-    :param e1: first index of each COO pair, as `neighbor_weights` returns it
-    :param e2: second index of each COO pair
     :param nelx: element count in x, to read an element number back as a grid position
     :param rmin_cond: conductivity-neighborhood radius, in elements
     :param dtype: floating dtype of the run's real-valued fields
     :param kappa: the run's lobe concentration setting; a constant `0` builds nothing,
         while a schedule is taken at its word that it will open the lobe at some point
+    :param device: device the stencil's tensors live on
     """
     if isinstance(kappa, float | int) and kappa == 0:
         return None
+    offset_np, offset_w_np = _offset_table(rmin_cond)
+    offset = torch.as_tensor(offset_np, dtype=dtype, device=device)
+    return AngularStencil(
+        nelx=nelx,
+        offset=offset,
+        offset_dir=_unit_rows(offset),
+        offset_w=torch.as_tensor(offset_w_np, dtype=dtype, device=device),
+    )
+
+
+def _pair_directions(
+    e1: Int[Tensor, " npairs"],
+    e2: Int[Tensor, " npairs"],
+    nelx: int,
+    dtype: torch.dtype,
+) -> Float[Tensor, "npairs 2"]:
+    """The unit direction from `e1` to `e2` of each COO pair, zero for a self-pair.
+
+    Derived from the pair list itself rather than from `_stencil_offsets`, so it cannot
+    fall out of step with the pairs it weights; and recomputed per use rather than
+    stored, being as large as the pair list.
+    """
 
     def row(e: Int[Tensor, " npairs"]) -> Int[Tensor, " npairs"]:
         return torch.div(e, nelx, rounding_mode="floor")
 
-    pair_d = torch.stack(
+    d = torch.stack(
         ((e2 % nelx - e1 % nelx).to(dtype), (row(e2) - row(e1)).to(dtype)), dim=-1
     )
-    offset_np, offset_w_np = _offset_table(rmin_cond)
-    offset = torch.as_tensor(offset_np, dtype=dtype, device=e1.device)
-    return AngularStencil(
-        pair_dir=_unit_rows(pair_d),
-        offset=offset,
-        offset_dir=_unit_rows(offset),
-        offset_w=torch.as_tensor(offset_w_np, dtype=dtype, device=e1.device),
-    )
+    return _unit_rows(d)
 
 
 def _lobe(
@@ -315,6 +322,7 @@ def _gradient_magnitude(
 def angular_pair_weights(
     grad: tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]],
     e1: Int[Tensor, " npairs"],
+    e2: Int[Tensor, " npairs"],
     stencil: AngularStencil,
     kappa: float,
     g0: float,
@@ -324,13 +332,15 @@ def angular_pair_weights(
 
     :param grad: `(dt/dx, dt/dy)` per element, per unit length
     :param e1: first index of each COO pair, whose gradient each pair is weighted by
+    :param e2: second index of each COO pair
     :param stencil: the run's `AngularStencil`
     :param kappa: lobe concentration for this iteration
     :param g0: the lobe's gradient scale
     """
     gx, gy = grad[0].flatten(), grad[1].flatten()
-    g_dot_dir = gx[e1] * stencil.pair_dir[:, 0] + gy[e1] * stencil.pair_dir[:, 1]
-    return _lobe(g_dot_dir, _gradient_magnitude(grad)[e1], stencil.pair_dir, kappa, g0)
+    dirs = _pair_directions(e1, e2, stencil.nelx, gx.dtype)
+    g_dot_dir = gx[e1] * dirs[:, 0] + gy[e1] * dirs[:, 1]
+    return _lobe(g_dot_dir, _gradient_magnitude(grad)[e1], dirs, kappa, g0)
 
 
 def directed_denominator(
@@ -638,7 +648,7 @@ def estimated_conductivity(
                 "an angular weight (kappa > 0) needs an AngularStencil and the HALF_STENCIL normalization, whose constant divisor it generalizes to a per-element directional reference; Normalization.NEIGHBORHOOD derives its own divisor and has no angular variant"
             )
         grad = timefield.central_difference_gradient_vector(tPhys)
-        w = w * angular_pair_weights(grad, e1, stencil, kappa, g0)
+        w = w * angular_pair_weights(grad, e1, e2, stencil, kappa, g0)
         denom = directed_denominator(
             grad, stencil, kappa, g0, rouf, timefield.unit_length(tPhys)
         )

@@ -214,9 +214,8 @@ def build_problem(
     n = nelx * nely
 
     xPhys_t = torch_util.to_tensor(xPhys, device, dtype)
-    int_fields = torch_util.to_tensors(
-        {"e1": e1, "e2": e2, "Nei": Nei}, device, torch.int64
-    )
+    int_fields = torch_util.to_tensors({"e1": e1, "e2": e2}, device, torch.int32)
+    int_fields["Nei"] = torch_util.to_tensor(Nei, device, torch.int64)
     return Problem(
         config=config,
         device=device,
@@ -231,12 +230,7 @@ def build_problem(
         w=torch_util.to_tensor(w, device, dtype),
         hotspot_denom=hotspot_denom,
         hotspot_stencil=conductivity.angular_stencil(
-            int_fields["e1"],
-            int_fields["e2"],
-            nelx,
-            rmin_cond,
-            dtype,
-            config.hotspot_kappa,
+            nelx, rmin_cond, dtype, config.hotspot_kappa, device
         ),
         hotspot_base=None if hotspot_base is None else int_fields["Nei"],
         hotspot=conductivity.make_aggregation(

@@ -1685,23 +1685,24 @@ def _stencil(nelx, nely, rmin_cond):
         e1_t,
         e2_t,
         tt(w),
-        conductivity.angular_stencil(e1_t, e2_t, nelx, rmin_cond, torch.float64, 1.0),
+        conductivity.angular_stencil(nelx, rmin_cond, torch.float64, 1.0),
     )
 
 
-def test_angular_stencil_directions_match_the_pairs_they_weight():
+def test_pair_directions_match_the_pairs_they_weight():
     """The directions are derived from the pair list, so they must describe exactly the
     offsets in it, with the self-pair left directionless."""
     nelx, nely, rmin_cond = 9, 7, 3.0
-    e1, e2, _, stencil = _stencil(nelx, nely, rmin_cond)
+    e1, e2, _, _ = _stencil(nelx, nely, rmin_cond)
+    pair_dir = conductivity._pair_directions(e1, e2, nelx, torch.float64)
 
     dx = (e2 % nelx - e1 % nelx).to(torch.float64)
     dy = (e2 // nelx - e1 // nelx).to(torch.float64)
     length = torch.sqrt(dx**2 + dy**2)
     moved = length > 0
-    assert_close(stencil.pair_dir[moved, 0], dx[moved] / length[moved])
-    assert_close(stencil.pair_dir[moved, 1], dy[moved] / length[moved])
-    assert torch.all(stencil.pair_dir[~moved] == 0)
+    assert_close(pair_dir[moved, 0], dx[moved] / length[moved])
+    assert_close(pair_dir[moved, 1], dy[moved] / length[moved])
+    assert torch.all(pair_dir[~moved] == 0)
     assert bool((~moved).any()), "the stencil should contain self-pairs"
 
 
@@ -1869,10 +1870,9 @@ def test_angular_weight_sensitivity_flows_through_the_reference():
 
 
 def test_angular_stencil_is_not_built_for_a_purely_radial_run():
-    """A constant `kappa = 0` never opens the lobe, so the run should not carry the
-    `npairs`-sized direction arrays it would never read."""
-    e1, e2, _ = conductivity.neighbor_weights(9, 7, 3.0)
-    args = (tti(e1), tti(e2), 9, 3.0, torch.float64)
+    """A constant `kappa = 0` never opens the lobe, so the run should not carry a
+    stencil it would never read."""
+    args = (9, 3.0, torch.float64)
     assert conductivity.angular_stencil(*args, 0.0) is None
     assert conductivity.angular_stencil(*args, 2.0) is not None
     schedule = run_config.schedule_from_dict({"points": [[0, 0.0], [10, 2.0]]})
@@ -1896,9 +1896,7 @@ def _square_severity(tPhys, base, kappa):
     xPhys = torch.ones(_SQ_N, _SQ_N, dtype=torch.float64)
     # The `kappa` argument only decides whether the stencil is built at all; the value
     # that shapes the lobe is the one passed to `estimated_conductivity` below.
-    stencil = conductivity.angular_stencil(
-        e1_t, e2_t, _SQ_N, _SQ_RMIN, torch.float64, 1.0
-    )
+    stencil = conductivity.angular_stencil(_SQ_N, _SQ_RMIN, torch.float64, 1.0)
     K_est = conductivity.estimated_conductivity(
         xPhys,
         tt(tPhys),
@@ -1981,3 +1979,4 @@ def test_diagonal_printing_exposes_the_trailing_edges_not_the_leading_ones(kappa
     # opposite directions and one has to be reversed to line them up.
     assert_close(bottom, left[::-1])
     assert_close(top, right[::-1])
+
