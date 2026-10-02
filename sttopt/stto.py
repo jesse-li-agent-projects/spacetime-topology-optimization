@@ -24,7 +24,9 @@ multigrid-CG, not a NumPy round trip. `fem.py`'s NumPy `assemble_stiffness`/`sol
 stay only as `tests/reference/`'s independent oracle; nothing in `sttopt/` calls them.
 """
 
+import dataclasses
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -295,6 +297,36 @@ def init_state(problem: Problem) -> State:
         beta_d=beta_d,
         U=None,
     )
+
+
+def save_checkpoint(problem: Problem, state: State, path: Path, **extra) -> None:
+    """Write what resuming a run at `state` needs: the state and the calibrations
+    `step` refreshes in place. Written to a temporary file first, so a run stopped
+    mid-write leaves the previous checkpoint whole.
+
+    :param extra: further values to keep with it, e.g. the elapsed time
+    """
+    checkpoint = dict(
+        state=dataclasses.asdict(state),
+        calibrations=problem.terms.calibrations(),
+        extra=extra,
+    )
+    partial = path.with_name(path.name + ".partial")
+    torch.save(checkpoint, partial)
+    partial.replace(path)
+
+
+def load_checkpoint(problem: Problem, path: Path) -> tuple[State, dict]:
+    """Read a `save_checkpoint` file onto `problem`'s device, and restore its
+    calibrations into `problem`.
+
+    :return: the state, and the `extra` values saved with it
+    """
+    checkpoint = torch.load(path, map_location=problem.device, weights_only=True)
+    saved = checkpoint["state"]
+    state = State(**(saved | {"mma": mma.History(**saved["mma"])}))
+    problem.terms.restore_calibrations(checkpoint["calibrations"])
+    return state, checkpoint["extra"]
 
 
 def _flatten_pair(density_part: Tensor, time_part: Tensor) -> Float[Tensor, " n"]:
