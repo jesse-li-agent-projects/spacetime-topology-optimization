@@ -159,3 +159,51 @@ def test_cli_logs_scheduled_continuation(tmp_path, monkeypatch):
     np.testing.assert_allclose([e["Tcr"] for e in log], [5.0, 2.9, 0.8])
     np.testing.assert_allclose([e["beta_d"] for e in log], [1.0, 2.0, 4.0])
     assert all(e["beta_t"] == 20.0 for e in log)
+
+
+def test_resume_reproduces_an_uninterrupted_run(tmp_path, monkeypatch):
+    """A run stopped after a checkpoint and resumed must end where an uninterrupted
+    run ends, with one log entry per iteration."""
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "resume_config.json"
+    config_path.write_text(
+        json.dumps(dataclasses.replace(_FIXTURE_CONFIG, nloop=5).to_dict())
+    )
+
+    def run(tag, *extra):
+        argv = ["--tag", tag, "--snapshot-every", "2", *extra]
+        stto_cli.main(stto_cli.parse_args(argv))
+
+    run("whole", "--config", str(config_path))
+
+    real_step = stto.step
+    calls = []
+
+    def stopping_step(problem, state):
+        # Iteration 3 runs after the checkpoint at iteration 2, and must be run again.
+        if len(calls) == 4:
+            raise KeyboardInterrupt
+        calls.append(state.loop)
+        return real_step(problem, state)
+
+    monkeypatch.setattr(stto, "step", stopping_step)
+    with pytest.raises(KeyboardInterrupt):
+        run("resumed", "--config", str(config_path))
+    monkeypatch.setattr(stto, "step", real_step)
+    run("resumed", "--resume")
+
+    whole, resumed = (
+        np.load(tmp_path / "output" / tag / "final_design.npz")
+        for tag in ("whole", "resumed")
+    )
+    for key in whole.files:
+        np.testing.assert_array_equal(resumed[key], whole[key], err_msg=key)
+
+    def log(tag):
+        lines = (tmp_path / "output" / tag / "iterations.jsonl").read_text()
+        return [
+            {k: v for k, v in json.loads(line).items() if k != "elapsed"}
+            for line in lines.splitlines()
+        ]
+
+    assert log("resumed") == log("whole")
