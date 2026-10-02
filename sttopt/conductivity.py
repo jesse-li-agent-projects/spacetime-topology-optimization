@@ -32,6 +32,7 @@ where `_conductivity_core` uses `x_j**q` with `q = 3` -- a SIMP-style penalizati
 intermediate density the paper does not have.
 """
 
+from collections.abc import Callable
 from enum import StrEnum
 from functools import cache
 from itertools import product
@@ -41,6 +42,7 @@ import numpy as np
 import torch
 from jaxtyping import Float, Int
 from torch import Tensor
+from torch.utils.checkpoint import checkpoint
 
 from sttopt import run_config, smooth_max, timefield
 
@@ -89,6 +91,34 @@ class Aggregation(StrEnum):
 
     P_MEAN = "p_mean"
     LOGSUMEXP = "logsumexp"
+
+
+# Above this many (element, neighbor) entries, a stencil sum is evaluated in chunks of
+# this size under `checkpoint`: autograd otherwise keeps ~14 float64 values per entry,
+# which at a fine mesh's tens of millions of pairs exceeds the GPU.
+CHECKPOINT_ENTRIES = 2**24
+
+
+def _chunked_sum(
+    fn: Callable[[slice], Float[Tensor, "..."]], n: int, width: int
+) -> Float[Tensor, "..."]:
+    """`fn(slice(0, n))` for an `fn` that sums its slice's contributions, evaluated chunk
+    by chunk under `checkpoint` once the slice is too large for its graph to be kept.
+
+    Checkpointing recomputes each chunk in the backward pass, so a stencil small enough
+    to keep whole skips it.
+
+    :param fn: the contributions of a slice of items, summed
+    :param n: item count
+    :param width: entries per item, i.e. the elements each item's terms span
+    """
+    if n * width <= CHECKPOINT_ENTRIES:
+        return fn(slice(0, n))
+    chunk = max(1, CHECKPOINT_ENTRIES // width)
+    return sum(
+        checkpoint(fn, slice(i, min(i + chunk, n)), use_reentrant=False)
+        for i in range(0, n, chunk)
+    )
 
 
 def _stencil_offsets(rmin_cond: float) -> list[tuple[int, int, float]]:
@@ -378,17 +408,17 @@ def directed_denominator(
     """
     gx, gy = grad[0].flatten(), grad[1].flatten()
     g = torch.stack((gx, gy), dim=-1)
-    # t_neighbor - t_self under the reference field, hence the sign: the sigmoid masks
-    # in what was deposited *before* this element.
-    mask = torch.sigmoid(-rouf * (g @ stencil.offset.T) / unit)
-    w_ang = _lobe(
-        g @ stencil.offset_dir.T,
-        _gradient_magnitude(grad)[:, None],
-        stencil.offset_dir,
-        kappa,
-        g0,
-    )
-    return (stencil.offset_w * w_ang * mask).sum(dim=-1)
+    gmag = _gradient_magnitude(grad)[:, None]
+
+    def offset_sum(sl: slice) -> Float[Tensor, " nel"]:
+        # t_neighbor - t_self under the reference field, hence the sign: the sigmoid
+        # masks in what was deposited *before* this element.
+        mask = torch.sigmoid(-rouf * (g @ stencil.offset[sl].T) / unit)
+        dirs = stencil.offset_dir[sl]
+        w_ang = _lobe(g @ dirs.T, gmag, dirs, kappa, g0)
+        return (stencil.offset_w[sl] * w_ang * mask).sum(dim=-1)
+
+    return _chunked_sum(offset_sum, stencil.offset.shape[0], g.shape[0])
 
 
 def _pairwise_sigmoid(
@@ -417,8 +447,6 @@ def _pairwise_sigmoid(
 class _ConductivityCore(NamedTuple):
     K_est: Float[Tensor, " nel"]
     denom: Float[Tensor, " nel"] | Float[Tensor, ""]
-    FT_ab: Float[Tensor, " npairs"]
-    xb_q: Float[Tensor, " npairs"]
 
 
 def _conductivity_core(
@@ -431,40 +459,56 @@ def _conductivity_core(
     rouf: float,
     denom: float | Float[Tensor, " nel"] | None = None,
     base: Int[Tensor, " k"] | None = None,
+    angular: (
+        Callable[[Int[Tensor, " n"], Int[Tensor, " n"]], Float[Tensor, " n"]] | None
+    ) = None,
 ) -> _ConductivityCore:
-    """`K_est` and the divisor it was formed with, plus the `a->b` pair terms
-    (`FT_ab`/`xb_q`) shared by `estimated_conductivity` and
-    `tests/reference/conductivity.py`'s `_conductivity_terms` -- computed once here
-    rather than redone by each.
+    """`K_est` and the divisor it was formed with, shared by `estimated_conductivity`
+    and `tests/reference/conductivity.py`'s `_conductivity_terms`.
 
     :param denom: a constant divisor for every element (`constant_denominator`), a
         per-element one (`directed_denominator`), or `None` for the per-element
         already-printed neighbor weight.
     :param base: print base elements, taken to be infinitely dense (`infinite_base`),
         or `None` to leave them ordinary design material.
+    :param angular: an extra weight per pair `(e1, e2)`, multiplying `w`
     """
     nel = x.shape[0]
-    FT_ab = _pairwise_sigmoid(t, e1, e2, rouf)
-    xb_q = x[e2] ** q
-    num = torch.zeros(nel, dtype=x.dtype, device=x.device)
-    num.index_add_(0, e1, xb_q * w * FT_ab)
+    on_base = None
+    if base is not None:
+        on_base = torch.zeros(nel, dtype=x.dtype, device=x.device)
+        on_base[base] = 1.0
+
+    def scatter(a: Int[Tensor, " n"], v: Float[Tensor, " n"]) -> Float[Tensor, " nel"]:
+        return torch.zeros(nel, dtype=x.dtype, device=x.device).index_add(0, a, v)
+
+    def pair_sums(sl: slice) -> Float[Tensor, "k nel"]:
+        """Per element: the numerator, then the divisor if it is derived, then the
+        weight landing on the base if there is one."""
+        a, b = e1[sl], e2[sl]
+        wFT = w[sl] * _pairwise_sigmoid(t, a, b, rouf)
+        if angular is not None:
+            wFT = wFT * angular(a, b)
+        sums = [scatter(a, x[b] ** q * wFT)]
+        if denom is None:
+            sums.append(scatter(a, wFT))
+        if on_base is not None:
+            sums.append(scatter(a, wFT.detach() * on_base[b]))
+        return torch.stack(sums)
+
+    sums = _chunked_sum(pair_sums, e1.shape[0], 1)
     if denom is None:
-        divisor = torch.zeros(nel, dtype=x.dtype, device=x.device)
-        divisor.index_add_(0, e1, w * FT_ab)
+        divisor = sums[1]
     else:
         divisor = torch.as_tensor(denom, dtype=x.dtype, device=x.device)
-    K_est = num / divisor
-    if base is not None:
+    K_est = sums[0] / divisor
+    if on_base is not None:
         # An infinitely dense neighbor sends the sum above to infinity, so `K_est`
         # diverges wherever any stencil weight lands on the base at all. Selected
         # rather than evaluated as `inf * w`, whose backward is `nan` -- the same
         # safe-input-then-reselect pattern as `_safe_pmean`.
-        on_base = torch.zeros(nel, dtype=x.dtype, device=x.device)
-        on_base[base] = 1.0
-        base_weight = torch.zeros(nel, dtype=x.dtype, device=x.device)
-        base_weight.index_add_(0, e1, w * FT_ab.detach() * on_base[e2])
-        K_est = torch.where(base_weight > 0, torch.inf, K_est)
-    return _ConductivityCore(K_est, divisor, FT_ab, xb_q)
+        K_est = torch.where(sums[-1] > 0, torch.inf, K_est)
+    return _ConductivityCore(K_est, divisor)
 
 
 def _safe_pmean(u: Float[Tensor, ""], p: float) -> Float[Tensor, ""]:
@@ -648,11 +692,16 @@ def estimated_conductivity(
                 "an angular weight (kappa > 0) needs an AngularStencil and the HALF_STENCIL normalization, whose constant divisor it generalizes to a per-element directional reference; Normalization.NEIGHBORHOOD derives its own divisor and has no angular variant"
             )
         grad = timefield.central_difference_gradient_vector(tPhys)
-        w = w * angular_pair_weights(grad, e1, e2, stencil, kappa, g0)
+
+        def angular(a: Int[Tensor, " n"], b: Int[Tensor, " n"]) -> Float[Tensor, " n"]:
+            return angular_pair_weights(grad, a, b, stencil, kappa, g0)
+
         denom = directed_denominator(
             grad, stencil, kappa, g0, rouf, timefield.unit_length(tPhys)
         )
-    K_est = _conductivity_core(x, t, e1, e2, w, q, rouf, denom, base).K_est
+    else:
+        angular = None
+    K_est = _conductivity_core(x, t, e1, e2, w, q, rouf, denom, base, angular).K_est
     if base is not None and not bool((torch.isfinite(K_est) & (x > 0)).any()):
         raise ValueError(
             "every element carrying density has infinite K_est, being within the conductivity stencil's reach of the print base, so the hotspot measure has nothing left to aggregate over; shrink rmin_cond_m or use a normalization that needs no print base (infinite_base)"

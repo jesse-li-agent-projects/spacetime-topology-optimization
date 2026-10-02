@@ -1980,3 +1980,40 @@ def test_diagonal_printing_exposes_the_trailing_edges_not_the_leading_ones(kappa
     assert_close(bottom, left[::-1])
     assert_close(top, right[::-1])
 
+
+@pytest.mark.parametrize("angular", [False, True])
+def test_checkpointed_chunks_match_the_whole_stencil_sum(monkeypatch, angular):
+    """Chunking is a memory layout, not a different sum: `K_est` and its gradient must
+    match the unchunked path, including over a repeated backward through one graph."""
+    nelx, nely = 13, 9
+    rng = np.random.default_rng(5)
+    x0 = tt(rng.uniform(0.2, 1.0, size=(nely, nelx)))
+    t0 = tt(np.linspace(0, 1, nely)[:, None] + rng.uniform(0, 0.1, size=(nely, nelx)))
+    e1, e2, w, stencil = _stencil(nelx, nely, RMIN_COND)
+    if angular:
+        # The angular path needs a constant divisor; give it a base as well.
+        args = (conductivity.half_stencil_weight(RMIN_COND), tti([0, 1]), stencil)
+        args += (2.0, 0.35)
+    else:
+        args = ()
+    weights = tt(rng.uniform(size=nelx * nely))
+
+    def value_and_grads():
+        xPhys, tPhys = x0.clone().requires_grad_(), t0.clone().requires_grad_()
+        K = conductivity.estimated_conductivity(
+            xPhys, tPhys, e1.int(), e2.int(), w, Q, ROUF, *args
+        )
+        out = (torch.where(torch.isfinite(K), K, 0) * weights).sum()
+        first = torch.autograd.grad(out, (xPhys, tPhys), retain_graph=True)
+        assert all(
+            torch.equal(a, b)
+            for a, b in zip(first, torch.autograd.grad(out, (xPhys, tPhys)))
+        )
+        return K.detach(), first
+
+    K_whole, grads_whole = value_and_grads()
+    monkeypatch.setattr(conductivity, "CHECKPOINT_ENTRIES", 100)
+    K_chunked, grads_chunked = value_and_grads()
+    assert_close(K_chunked, K_whole)
+    for chunked, whole in zip(grads_chunked, grads_whole):
+        assert_close(chunked, whole)
