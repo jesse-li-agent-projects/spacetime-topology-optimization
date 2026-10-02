@@ -156,7 +156,9 @@ Runs in `/tmp/claude-1001/s03/work/output/`; code snapshot `snap_0409284`; all S
 - The same κ continuation on S 0.3 (`b3_s2_scan_k0to2_S`): 109.7, 0 interior
   unsupported, 2 saddles, merge at col 82. Its basins are smaller and clear earlier
   (5–10 interior unsupported at 350–450, none from 550) than at constant κ (8–14,
-  none only from 650). A small gain; not yet tested on the other cells.
+  none only from 650). A small gain on this cell only: on S 0.5 it gives 74.6 / 0 / 4
+  saddles against 74.8 / 0 / 2 at constant κ, and on C1 0.3 nothing. **Kept: constant
+  κ** (one setting fewer).
 - C1 0.5: same topology; δ meets 0.5 where the control misses. Below Tcr ~0.6 both
   runs bend the time contours on the left and add a thin member at the bottom right
   late (it 650–800): a low-Tcr effect, not a δ one.
@@ -176,7 +178,28 @@ Runs in `/tmp/claude-1001/s03/work/output/`; code snapshot `snap_0409284`; all S
   rightly scores hot. Printing it supported needs a long right-to-left path along
   the bar, a large shift of the time range that local steps do not find; the drips
   are what the optimizer does instead. The control has the same flat bar, which its
-  measure does not mind (6 interior unsupported). δ = 1 on this cell is running.
+  measure does not mind (6 interior unsupported). δ = 1 fails differently
+  (`b7_s1_scan_D_03`): the severity follows Tcr to ~0.64 and then lags (+0.11); the
+  left end of the top bar grows into a thick blob with a flat time plateau inside it
+  (it 450–800); 16.7 as optimized (2× the control), 7 interior unsupported, 66
+  saddles. No offset in this family suits D 0.3: it needs the cantilever's time
+  ordered before the hotspot acts (a schedule or initialization question, open).
+- What the offset setting controls is the credit a neighbor printed at the same time
+  still gets, `sigmoid(-rouf * δ_t)` with `δ_t = s * g_ref / unit`: on S 0.3 about
+  0.35 at s = 1, 0.22 at s = 2 and 0.07 at s = 4. That depends on `rouf` and on the
+  mesh (`g_ref / unit` is the time per element), so a retuned `rouf` or mesh needs `s`
+  rechecked against this quantity, not against its value in elements.
+
+**Compressed to 600 iterations** (every change point and decay length × 0.75, δ 2):
+
+| Cell | 800 it | 600 it |
+|---|---|---|
+| S 0.3 | 109.7 / 0 / 3 / −0.0005 | 109.9 / 0 / 2 / +0.007 |
+| S 0.5 | 74.8 / 0 / 2 / 0.000 | 74.9 / 0 / 3 / 0.000 |
+| C1 0.5 | 175.2 / 0 / 10 / 0.000 | 176.1 / 0 / 15 / 0.000 |
+
+(compliance / interior unsup. / saddles / row.) All pass; S 0.3's row is closer to the
+0.01 gate, and C1 0.5 has more saddles. The basins on S 0.3 clear by 500 of 600.
 
 ## Judging a run
 
