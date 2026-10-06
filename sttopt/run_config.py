@@ -22,7 +22,8 @@ a config file and this module. That holds for a newly added field too, even thou
 means run records written before the field existed no longer load -- add the field to
 every config file instead. The one exception is a field whose default is the only
 behaviour older records could have had (`SpaceTimeConfig.load_case`,
-`support_length_m`, `hotspot_credit`, `hotspot_tie_credit`, `hotspot_cooling_time`).
+`support_length_m`, `hotspot_credit`, `hotspot_tie_credit`, `hotspot_cooling_time`,
+`hotspot_cooling_sharpness`).
 """
 
 import bisect
@@ -254,6 +255,10 @@ class SpaceTimeConfig(_ConfigMixin):
         time, in (0, 1); `0.5` is the source's. A region printed all at once scores
         `K_est ~ 2x` this, so it fails the hotspot where `1 - 2x` exceeds `Tcr`.
     :param hotspot_cooling_time: `cooling`'s cooling time, in `t`, possibly scheduled.
+    :param hotspot_cooling_sharpness: `cooling`'s onset sharpness `k`, possibly
+        scheduled. A tie gets `1 - 2**(-1/k)`, and a later neighbor is pulled earlier
+        only within about `cooling_time / k`, so a schedule from 1 up is a continuation
+        like `rouf`'s (`conductivity._cooling_credit`).
     :param rmin_m: density-filter radius.
     :param tool_radius_m: print tool radius, possibly scheduled. Bounds the concave
         curvature of the time field's iso-lines (`timefield.iso_curvature`) to
@@ -311,6 +316,7 @@ class SpaceTimeConfig(_ConfigMixin):
     hotspot_credit: str = "sigmoid"
     hotspot_tie_credit: float = 0.5
     hotspot_cooling_time: Scheduled = 0.0
+    hotspot_cooling_sharpness: Scheduled = 8.0
     print_base: str
     rmin_m: float
     tool_radius_m: Scheduled

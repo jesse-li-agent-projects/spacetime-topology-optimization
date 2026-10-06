@@ -916,6 +916,14 @@ def test_tool_radius_needs_an_interior_element():
             ),
             "cooling_time",
         ),
+        (
+            dict(
+                hotspot_credit="cooling",
+                hotspot_cooling_time=0.01,
+                hotspot_cooling_sharpness=0.0,
+            ),
+            "cooling_sharpness",
+        ),
     ],
 )
 def test_a_print_order_credit_out_of_its_range_is_refused_at_build(overrides, match):

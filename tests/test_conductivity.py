@@ -2021,7 +2021,7 @@ def test_checkpointed_chunks_match_the_whole_stencil_sum(monkeypatch, angular):
 
 # --- print-order credit --------------------------------------------------------------
 
-_COOLING_TIE = 1 - 2 ** (-1 / conductivity.COOLING_SOFTNESS)
+_COOLING_TIE = 1 - 2 ** (-1 / 8)
 
 
 def _credit_K(tPhys, rmin_cond, **credit):
@@ -2049,6 +2049,7 @@ def _credit_K(tPhys, rmin_cond, **credit):
         (dict(tie_credit=0.5), 0.5),
         (dict(tie_credit=0.2), 0.2),
         (dict(credit="cooling", cooling_time=0.01), _COOLING_TIE),
+        (dict(credit="cooling", cooling_time=0.01, cooling_sharpness=1.0), 0.5),
     ],
 )
 def test_a_flat_region_scores_twice_its_tie_credit(credit, tie):
@@ -2124,3 +2125,17 @@ def test_cooling_credit_sensitivity_is_finite():
     (grad,) = torch.autograd.grad(K_est.sum(), tPhys)
     assert torch.isfinite(grad).all()
     assert float(grad.abs().max()) > 0
+
+
+def test_a_soft_cooling_onset_pulls_a_later_neighbor_earlier():
+    """A sharp onset gives a neighbor printed later no gradient toward being earlier,
+    which a time-field basin needs; `k = 1` gives it one, as the source sigmoid does."""
+    t = torch.tensor([0.0, 0.01], dtype=torch.float64, requires_grad=True)
+    a, b = torch.tensor([0]), torch.tensor([1])
+
+    def pull(sharpness):
+        credit = conductivity._cooling_credit(t, a, b, 0.01, sharpness)
+        (grad,) = torch.autograd.grad(credit.sum(), t)
+        return float(-grad[1])
+
+    assert pull(1.0) > 100 * pull(8.0) > 0
