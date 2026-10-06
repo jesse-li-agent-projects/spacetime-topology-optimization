@@ -93,7 +93,7 @@ def _conductivity_terms(
     S1 = torch.zeros(nel, dtype=x.dtype, device=x.device)
     S1.index_add_(0, e1, w * DFT_ab)
     S2 = torch.zeros(nel, dtype=x.dtype, device=x.device)
-    S2.index_add_(0, e1, core.xb_q * w * DFT_ab)
+    S2.index_add_(0, e1, x[e2] ** q * w * DFT_ab)
 
     return _ConductivityTerms(core.K_est, core.denom, FT_ba, DFT_ba, S1, S2)
 

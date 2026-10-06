@@ -8,7 +8,7 @@ own leading rows and its own compliance, and reads everything else here, so two 
 cannot score the same design differently.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import NamedTuple
 
 import numpy as np
@@ -102,7 +102,8 @@ class FieldTerms:
             )
         e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
         hotspot_base = conductivity.infinite_base(normalization, base)
-        ints = torch_util.to_tensors({"e1": e1, "e2": e2}, device, torch.int64)
+        # int32 halves the largest arrays a run keeps: the pair list.
+        ints = torch_util.to_tensors({"e1": e1, "e2": e2}, device, torch.int32)
 
         def calibrated(
             setting: run_config.Scheduled, beta: run_config.Scheduled
@@ -116,13 +117,7 @@ class FieldTerms:
             w=torch_util.to_tensor(w, device, dtype),
             hotspot_denom=conductivity.constant_denominator(normalization, rmin_cond),
             hotspot_stencil=conductivity.angular_stencil(
-                ints["e1"],
-                ints["e2"],
-                nelx,
-                rmin_cond,
-                dtype,
-                config.hotspot_kappa,
-                reference,
+                rmin_cond, dtype, config.hotspot_kappa, device, reference
             ),
             hotspot_base=(
                 None
@@ -144,6 +139,28 @@ class FieldTerms:
             ),
             **ints,
         )
+
+    def calibrations(self) -> dict[str, float]:
+        """
+        Each smooth maximum's calibration, by field name: the only state the terms
+        carry from one iteration to the next.
+
+        :return: calibration value per field name
+        """
+        return {
+            f.name: term.calibration
+            for f in fields(self)
+            if hasattr(term := getattr(self, f.name), "calibration")
+        }
+
+    def restore_calibrations(self, calibrations: dict[str, float]) -> None:
+        """
+        Set the calibrations `calibrations()` returned, to resume a run.
+
+        :param calibrations: calibration value per field name
+        """
+        for name, value in calibrations.items():
+            getattr(self, name).calibration = value
 
     def estimated_conductivity(
         self,
