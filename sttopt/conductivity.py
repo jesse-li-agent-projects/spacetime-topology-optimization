@@ -691,7 +691,8 @@ def estimated_conductivity(
     :param kappa: angular lobe concentration for this iteration; `0` leaves the stencil
         purely radial, which is this function's behavior with no angular weight at all
     :param g0: the lobe's gradient scale
-    :param reference: the `ReferenceGradient` the HALF_STENCIL reference fill is layered at
+    :param reference: the `ReferenceGradient` the HALF_STENCIL reference fill is
+        layered at
     :param front_offset: the distance behind the front, in elements, from which on a
         neighbor counts
     :raises ValueError: if no element carrying density is left with a finite `K_est`,
