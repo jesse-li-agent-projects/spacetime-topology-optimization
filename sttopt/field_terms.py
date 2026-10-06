@@ -95,7 +95,8 @@ class FieldTerms:
         normalization = conductivity.Normalization(config.hotspot_normalization)
         e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
         hotspot_base = conductivity.infinite_base(normalization, base)
-        ints = torch_util.to_tensors({"e1": e1, "e2": e2}, device, torch.int64)
+        # int32 halves the largest arrays a run keeps: the pair list.
+        ints = torch_util.to_tensors({"e1": e1, "e2": e2}, device, torch.int32)
 
         def calibrated(
             setting: run_config.Scheduled, beta: run_config.Scheduled
@@ -109,7 +110,7 @@ class FieldTerms:
             w=torch_util.to_tensor(w, device, dtype),
             hotspot_denom=conductivity.constant_denominator(normalization, rmin_cond),
             hotspot_stencil=conductivity.angular_stencil(
-                ints["e1"], ints["e2"], nelx, rmin_cond, dtype, config.hotspot_kappa
+                rmin_cond, dtype, config.hotspot_kappa, device
             ),
             hotspot_base=(
                 None
