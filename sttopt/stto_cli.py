@@ -50,7 +50,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--snapshot-every",
         type=int,
         default=50,
-        help="save x/t/xPhys/tPhys every this many iterations (default: 50)",
+        help="save x/t/xPhys/tPhys, and a checkpoint for --resume, every this many "
+        "iterations (default: 50)",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="continue the run in output/<tag> from its last checkpoint, with that "
+        "run's own config.json; iterations after the checkpoint are run again",
     )
     parser.add_argument(
         "--device",
@@ -90,30 +97,51 @@ def main(args: argparse.Namespace) -> None:
     import sttopt.stto as stto
     import sttopt.torch_util as torch_util
 
+    output_dir = Path("output") / args.tag
+    checkpoint_path = output_dir / "checkpoint.pt"
+    log_path = output_dir / "iterations.jsonl"
+    if args.resume:
+        if args.config is not None or args.tag_force:
+            raise SystemExit(
+                "[error] --resume continues a run with its own config.json, so it takes neither --config nor --tag-force."
+            )
+        if not checkpoint_path.exists():
+            raise SystemExit(f"[error] {checkpoint_path} does not exist.")
+        args.config = output_dir / "config.json"
     config = resolve_config(args)
 
     assert config.nloop > 0, "Number of iterations must be positive"
 
-    # Fail fast on an unwritable/clobbered output dir, before spending nloop
-    # iterations of compute.
-    output_dir = Path("output") / args.tag
-    if output_dir.exists():
-        if args.tag_force:
-            shutil.rmtree(output_dir)
-        else:
-            raise SystemExit(
-                f"[error] {output_dir} already exists. Use --tag-force to overwrite, "
-                f"or pick a different --tag."
-            )
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "config.json").write_text(json.dumps(config.to_dict(), indent=2))
+    if not args.resume:
+        # Fail fast on an unwritable/clobbered output dir, before spending nloop
+        # iterations of compute.
+        if output_dir.exists():
+            if args.tag_force:
+                shutil.rmtree(output_dir)
+            else:
+                raise SystemExit(
+                    f"[error] {output_dir} already exists. Use --tag-force to overwrite, --resume to continue it, or pick a different --tag."
+                )
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "config.json").write_text(json.dumps(config.to_dict(), indent=2))
 
     problem = stto.build_problem(config, device=args.device)
-    state = stto.init_state(problem)
+    if args.resume:
+        state, extra = stto.load_checkpoint(problem, checkpoint_path)
+        if state.loop >= config.nloop:
+            raise SystemExit(f"[error] {checkpoint_path} is past the last iteration.")
+        elapsed_before = extra["elapsed"]
+        # The log runs past the checkpoint by the iterations about to be run again.
+        entries = log_path.read_text().splitlines()[: state.loop]
+        log_path.write_text("".join(line + "\n" for line in entries))
+    else:
+        state = stto.init_state(problem)
+        elapsed_before = 0.0
+        log_path.write_text("")
 
-    start = time.perf_counter()
-    with (output_dir / "iterations.jsonl").open("w") as log:
-        for it in range(config.nloop):
+    start = time.perf_counter() - elapsed_before
+    with log_path.open("a") as log:
+        for it in range(state.loop, config.nloop):
             state, record = stto.step(problem, state)
             xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, state.beta_d)
             diag = record.diagnostics
@@ -151,6 +179,12 @@ def main(args: argparse.Namespace) -> None:
                     loop=state.loop,
                     width_m=config.width_m,
                     height_m=config.height_m,
+                )
+                stto.save_checkpoint(
+                    problem,
+                    state,
+                    checkpoint_path,
+                    elapsed=time.perf_counter() - start,
                 )
 
     np.savez(

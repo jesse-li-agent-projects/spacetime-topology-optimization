@@ -8,7 +8,7 @@ own leading rows and its own compliance, and reads everything else here, so two 
 cannot score the same design differently.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import NamedTuple
 
 import numpy as np
@@ -131,6 +131,28 @@ class FieldTerms:
             ),
             **ints,
         )
+
+    def calibrations(self) -> dict[str, float]:
+        """
+        Each smooth maximum's calibration, by field name: the only state the terms
+        carry from one iteration to the next.
+
+        :return: calibration value per field name
+        """
+        return {
+            f.name: term.calibration
+            for f in fields(self)
+            if hasattr(term := getattr(self, f.name), "calibration")
+        }
+
+    def restore_calibrations(self, calibrations: dict[str, float]) -> None:
+        """
+        Set the calibrations `calibrations()` returned, to resume a run.
+
+        :param calibrations: calibration value per field name
+        """
+        for name, value in calibrations.items():
+            getattr(self, name).calibration = value
 
     def estimated_conductivity(
         self,
