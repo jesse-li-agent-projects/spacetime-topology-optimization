@@ -34,7 +34,7 @@ intermediate density the paper does not have.
 
 from collections.abc import Callable
 from enum import StrEnum
-from functools import cache
+from functools import cache, partial
 from itertools import product
 from typing import NamedTuple
 
@@ -375,20 +375,21 @@ def angular_pair_weights(
     grad: tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]],
     e1: Int[Tensor, " npairs"],
     e2: Int[Tensor, " npairs"],
-    stencil: AngularStencil,
     kappa: float,
     g0: float,
-) -> Float[Tensor, " npairs"]:
+) -> Float[Tensor, " npairs"] | float:
     """`_lobe` for every COO pair, against the print direction of the pair's own first
-    element.
+    element. At `kappa = 0` the lobe is `1` for every pair, returned without evaluating
+    it.
 
     :param grad: `(dt/dx, dt/dy)` per element, per unit length
     :param e1: first index of each COO pair, whose gradient each pair is weighted by
     :param e2: second index of each COO pair
-    :param stencil: the run's `AngularStencil`
     :param kappa: lobe concentration for this iteration
     :param g0: the lobe's gradient scale
     """
+    if kappa == 0:
+        return 1.0
     gx, gy = grad[0].flatten(), grad[1].flatten()
     dirs = _pair_directions(e1, e2, grad[0].shape[1], gx.dtype)
     g_dot_dir = gx[e1] * dirs[:, 0] + gy[e1] * dirs[:, 1]
@@ -448,23 +449,29 @@ def directed_denominator(
     return _chunked_sum(offset_sum, stencil.offset.shape[0], g.shape[0])
 
 
-def _part_mean_fill(
+def _reference_fill(
+    reference: ReferenceGradient,
     grad: tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]],
     x: Float[Tensor, " nel"],
     front_offset: float,
     unit: float,
-) -> tuple[tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]], float]:
-    """`ReferenceGradient.PART_MEAN`'s fill gradient, along each element's own direction
-    at the density-weighted mean `|grad t|`, and the front offset as a lead in `t`.
+) -> tuple[tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]] | None, float]:
+    """The fill gradient `directed_denominator` layers its reference at, and the front
+    offset as a lead in `t`: `(None, 0)` for OWN, which reads `grad` itself.
 
-    A mean, not a median: a field of flat terraces has a near-zero median (PR #190).
+    PART_MEAN's fill runs along each element's own direction at the density-weighted
+    mean `|grad t|`. A mean, not a median: a field of flat terraces has a near-zero
+    median (PR #190).
 
+    :param reference: the run's `ReferenceGradient`
     :param grad: `(dt/dx, dt/dy)` per element, per unit length
     :param x: the density, flattened
     :param front_offset: in elements
     :param unit: `timefield.unit_length`
     :return: `(layers, delay)`: the fill gradient and the lead in `t`
     """
+    if reference == ReferenceGradient.OWN:
+        return None, 0.0
     with torch.no_grad():
         gx, gy = grad[0].flatten(), grad[1].flatten()
         gmag = torch.sqrt(gx**2 + gy**2)
@@ -768,8 +775,7 @@ def estimated_conductivity(
         raise ValueError(
             "a front offset needs ReferenceGradient.PART_MEAN (see ReferenceGradient)"
         )
-    delay = 0.0
-    angular = _isotropic
+    delay, angular = 0.0, _isotropic
     if kappa != 0 or part_mean:
         if stencil is None or denom is None:
             raise ValueError(
@@ -777,16 +783,8 @@ def estimated_conductivity(
             )
         grad = timefield.central_difference_gradient_vector(tPhys)
         unit = timefield.unit_length(tPhys)
-        layers = None
-        if part_mean:
-            layers, delay = _part_mean_fill(grad, x, front_offset, unit)
-        if kappa != 0:
-
-            def angular(
-                a: Int[Tensor, " n"], b: Int[Tensor, " n"]
-            ) -> Float[Tensor, " n"]:
-                return angular_pair_weights(grad, a, b, stencil, kappa, g0)
-
+        layers, delay = _reference_fill(reference, grad, x, front_offset, unit)
+        angular = partial(angular_pair_weights, grad, kappa=kappa, g0=g0)
         denom = directed_denominator(
             grad, stencil, kappa, g0, rouf, unit, layers, delay
         )
