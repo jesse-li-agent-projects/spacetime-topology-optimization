@@ -32,6 +32,7 @@ where `_conductivity_core` uses `x_j**q` with `q = 3` -- a SIMP-style penalizati
 intermediate density the paper does not have.
 """
 
+import math
 from collections.abc import Callable
 from enum import StrEnum
 from functools import cache, partial
@@ -76,18 +77,19 @@ class Normalization(StrEnum):
     HALF_STENCIL = "half_stencil"
 
 
-class ReferenceGradient(StrEnum):
-    """Names for the layer thickness of the ideal fill that HALF_STENCIL's reference is
-    taken on, selectable per run.
+class PrintOrderCredit(StrEnum):
+    """Names for how much a neighbor printed before an element counts toward its
+    `K_est`, selectable per run; built by `print_order_credit`.
 
-    OWN uses each element's own `|grad t|`; PART_MEAN uses the density-weighted mean
-    over the part, along the element's own direction. Only PART_MEAN can carry a front
-    offset: under OWN the reference flattens with the field it judges, so a region
-    printed all at once still scores as shielded (PR #190).
+    SIGMOID is the source's soft mask, shifted so that a neighbor printed at the same
+    time gets a set tie credit; the source's `0.5` lets a region printed all at once
+    score like a layered one. COOLING gives a later neighbor nothing and an earlier one
+    full credit once it has had a cooling time to cool. Either credit changes only the
+    numerator: the HALF_STENCIL reference stays the delay-free layered fill.
     """
 
-    OWN = "own"
-    PART_MEAN = "part_mean"
+    SIGMOID = "sigmoid"
+    COOLING = "cooling"
 
 
 class Aggregation(StrEnum):
@@ -276,21 +278,17 @@ def angular_stencil(
     dtype: torch.dtype,
     kappa: "run_config.Scheduled",
     device: torch.device | str | None = None,
-    reference: ReferenceGradient = ReferenceGradient.OWN,
 ) -> AngularStencil | None:
     """Build the angular weight's fixed geometry, or `None` for a run whose lobe never
-    opens and whose reference needs no direction.
+    opens.
 
     :param rmin_cond: conductivity-neighborhood radius, in elements
     :param dtype: floating dtype of the run's real-valued fields
     :param kappa: the run's lobe concentration setting; a constant `0` builds nothing,
         while a schedule is taken at its word that it will open the lobe at some point
     :param device: device the stencil's tensors live on
-    :param reference: the run's `ReferenceGradient`; PART_MEAN needs the stencil at
-        any `kappa`
     """
-    radial = isinstance(kappa, float | int) and kappa == 0
-    if radial and reference == ReferenceGradient.OWN:
+    if isinstance(kappa, float | int) and kappa == 0:
         return None
     offset_np, offset_w_np = _offset_table(rmin_cond)
     offset = torch.as_tensor(offset_np, dtype=dtype, device=device)
@@ -403,14 +401,13 @@ def directed_denominator(
     g0: float,
     rouf: float,
     unit: float,
-    layers: tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]] | None = None,
-    delay: float = 0.0,
 ) -> Float[Tensor, " nel"]:
-    """`Normalization.HALF_STENCIL`'s per-element divisor: the stencil sum an ideal
-    uniform layered fill would supply at each element.
+    """`Normalization.HALF_STENCIL`'s divisor once the stencil carries an angular
+    weight: the stencil sum an ideal uniform layered fill would supply at each element's
+    own print direction and layer thickness.
 
     The same sum the numerator computes, evaluated on a reference of full density whose
-    time field is exactly linear with gradient `layers`. `K_est = 1` therefore
+    time field is exactly linear with the element's own gradient. `K_est = 1` therefore
     still means "as well shielded as an ideal uniform layered fill", which is what the
     constant `half_stencil_weight` meant before the angular factor broke the `d -> -d`
     symmetry that made it a constant.
@@ -429,19 +426,15 @@ def directed_denominator(
     :param rouf: print-order sigmoid sharpness, as in `_pairwise_sigmoid`
     :param unit: `timefield.unit_length`, to read the per-unit-length gradient as a print
         time difference across an offset measured in elements
-    :param layers: the reference fill's gradient, in the units of `grad`; `None` for
-        `grad` itself. The lobe always reads `grad`, as the numerator's does.
-    :param delay: the front offset as a lead in `t`; see `estimated_conductivity`
     """
     gx, gy = grad[0].flatten(), grad[1].flatten()
     g = torch.stack((gx, gy), dim=-1)
-    fill = g if layers is None else torch.stack([c.flatten() for c in layers], dim=-1)
     gmag = _gradient_magnitude(grad)[:, None]
 
     def offset_sum(sl: slice) -> Float[Tensor, " nel"]:
         # t_neighbor - t_self under the reference field, hence the sign: the sigmoid
         # masks in what was deposited *before* this element.
-        mask = torch.sigmoid(-rouf * ((fill @ stencil.offset[sl].T) / unit + delay))
+        mask = torch.sigmoid(-rouf * (g @ stencil.offset[sl].T) / unit)
         dirs = stencil.offset_dir[sl]
         w_ang = _lobe(g @ dirs.T, gmag, dirs, kappa, g0)
         return (stencil.offset_w[sl] * w_ang * mask).sum(dim=-1)
@@ -449,50 +442,17 @@ def directed_denominator(
     return _chunked_sum(offset_sum, stencil.offset.shape[0], g.shape[0])
 
 
-def _reference_fill(
-    reference: ReferenceGradient,
-    grad: tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]],
-    x: Float[Tensor, " nel"],
-    front_offset: float,
-    unit: float,
-) -> tuple[tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]] | None, float]:
-    """The fill gradient `directed_denominator` layers its reference at, and the front
-    offset as a lead in `t`: `(None, 0)` for OWN, which reads `grad` itself.
-
-    PART_MEAN's fill runs along each element's own direction at the density-weighted
-    mean `|grad t|`. A mean, not a median: a field of flat terraces has a near-zero
-    median (PR #190).
-
-    :param reference: the run's `ReferenceGradient`
-    :param grad: `(dt/dx, dt/dy)` per element, per unit length
-    :param x: the density, flattened
-    :param front_offset: in elements
-    :param unit: `timefield.unit_length`
-    :return: `(layers, delay)`: the fill gradient and the lead in `t`
-    """
-    if reference == ReferenceGradient.OWN:
-        return None, 0.0
-    with torch.no_grad():
-        g = torch.stack((grad[0].flatten(), grad[1].flatten()), dim=-1)
-        g_ref = (x * g.norm(dim=-1)).sum() / x.sum()
-        u = _unit_rows(g)
-        # A flat element's lobe is isotropic, so any direction serves; it needs one,
-        # or a front offset would leave its reference no weight at all.
-        u[(u == 0).all(dim=-1), 1] = 1.0
-        fill = (g_ref * u).T.reshape(2, *grad[0].shape)
-        return (fill[0], fill[1]), float(front_offset * g_ref / unit)
-
-
 def _pairwise_sigmoid(
     t: Float[Tensor, " nel"],
     a: Int[Tensor, " npairs"],
     b: Int[Tensor, " npairs"],
     rouf: float,
-    delay: float = 0.0,
+    tie_credit: float = 0.5,
 ) -> Float[Tensor, " npairs"]:
     """
     `FT_el{a}[b]`: the neighbor-sigmoid weight of a COO pair array, a smooth mask on
-    whether `b` was printed at least `delay` before `a`.
+    whether `b` was printed before `a`, shifted so that a neighbor printed at the same
+    time gets `tie_credit`.
 
     `1/(1+exp(z))` is exactly `sigmoid(-z)`; `torch.sigmoid` evaluates it through its
     own overflow-safe form rather than the MATLAB source's literal expression, which
@@ -502,10 +462,58 @@ def _pairwise_sigmoid(
     :param a: first index of each COO pair
     :param b: second index of each COO pair
     :param rouf: sigmoid sharpness
-    :param delay: the lead, in `t`, that a neighbor needs to count as printed
+    :param tie_credit: the weight at `t_a = t_b`; `0.5` is the source's sigmoid
     :return: `FT`, one value per pair
     """
-    return torch.sigmoid(rouf * (t[a] - t[b] - delay))
+    return torch.sigmoid(rouf * (t[a] - t[b]) + math.log(tie_credit / (1 - tie_credit)))
+
+
+# Softness of the cooling credit's onset at `dt = 0`, relative to the cooling time; it
+# sets the credit of a tie, `1 - 2**(-1/COOLING_SOFTNESS)`, about 0.08.
+COOLING_SOFTNESS = 8.0
+
+
+def _cooling_credit(
+    t: Float[Tensor, " nel"],
+    a: Int[Tensor, " npairs"],
+    b: Int[Tensor, " npairs"],
+    cooling_time: float,
+) -> Float[Tensor, " npairs"]:
+    """
+    `PrintOrderCredit.COOLING`'s weight of a COO pair array: `1 - exp(-dt / tau)` for
+    `b` printed `dt` before `a`, and none for `b` printed after, with the onset at
+    `dt = 0` smoothed by a softplus.
+
+    :param t: per-element time field, `tPhys.flatten()`
+    :param a: first index of each COO pair
+    :param b: second index of each COO pair
+    :param cooling_time: `tau`, in `t`
+    :return: one value per pair
+    """
+    k = COOLING_SOFTNESS
+    s = torch.nn.functional.softplus(k * (t[a] - t[b]) / cooling_time) / k
+    return -torch.expm1(-s)
+
+
+def print_order_credit(
+    credit: "PrintOrderCredit",
+    t: Float[Tensor, " nel"],
+    rouf: float,
+    tie_credit: float,
+    cooling_time: float,
+) -> Callable[[Int[Tensor, " n"], Int[Tensor, " n"]], Float[Tensor, " n"]]:
+    """The weight per COO pair `(a, b)` for `b` having been printed before `a`, as
+    `credit` selects.
+
+    :param credit: the run's `PrintOrderCredit`
+    :param t: per-element time field, `tPhys.flatten()`
+    :param rouf: SIGMOID's sharpness
+    :param tie_credit: SIGMOID's weight at equal times
+    :param cooling_time: COOLING's `tau`, in `t`
+    """
+    if credit == PrintOrderCredit.SIGMOID:
+        return partial(_pairwise_sigmoid, t, rouf=rouf, tie_credit=tie_credit)
+    return partial(_cooling_credit, t, cooling_time=cooling_time)
 
 
 def _isotropic(a: Int[Tensor, " n"], b: Int[Tensor, " n"]) -> float:
@@ -531,7 +539,9 @@ def _conductivity_core(
     angular: Callable[
         [Int[Tensor, " n"], Int[Tensor, " n"]], Float[Tensor, " n"] | float
     ] = _isotropic,
-    delay: float = 0.0,
+    credit: (
+        Callable[[Int[Tensor, " n"], Int[Tensor, " n"]], Float[Tensor, " n"]] | None
+    ) = None,
 ) -> _ConductivityCore:
     """`K_est` and the divisor it was formed with, shared by `estimated_conductivity`
     and `tests/reference/conductivity.py`'s `_conductivity_terms`.
@@ -542,8 +552,11 @@ def _conductivity_core(
     :param base: print base elements, taken to be infinitely dense (`infinite_base`),
         or `None` to leave them ordinary design material.
     :param angular: an extra weight per pair `(e1, e2)`, multiplying `w`
-    :param delay: as in `_pairwise_sigmoid`
+    :param credit: the print-order weight per pair `(e1, e2)` (`print_order_credit`), or
+        `None` for `_pairwise_sigmoid` at `rouf`
     """
+    if credit is None:
+        credit = partial(_pairwise_sigmoid, t, rouf=rouf)
     nel = x.shape[0]
     on_base = None
     if base is not None:
@@ -557,7 +570,7 @@ def _conductivity_core(
         """Per element: the numerator, then the divisor if it is derived, then the
         weight landing on the base if there is one."""
         a, b = e1[sl], e2[sl]
-        wFT = w[sl] * _pairwise_sigmoid(t, a, b, rouf, delay) * angular(a, b)
+        wFT = w[sl] * credit(a, b) * angular(a, b)
         sums = [scatter(a, x[b] ** q * wFT)]
         if denom is None:
             sums.append(scatter(a, wFT))
@@ -734,8 +747,9 @@ def estimated_conductivity(
     stencil: AngularStencil | None = None,
     kappa: float = 0.0,
     g0: float = 1.0,
-    reference: ReferenceGradient = ReferenceGradient.OWN,
-    front_offset: float = 0.0,
+    credit: PrintOrderCredit = PrintOrderCredit.SIGMOID,
+    tie_credit: float = 0.5,
+    cooling_time: float = 0.0,
 ) -> Float[Tensor, " nely*nelx"]:
     """Local estimated conductivity: how strongly each element's neighborhood has
     already solidified (cooler, earlier `tPhys`) around it, used as an overheating
@@ -745,53 +759,41 @@ def estimated_conductivity(
     With `kappa > 0` the stencil additionally carries `_lobe`'s angular weight, favoring
     neighbors that lie behind the local print direction, and `denom` is replaced by
     `directed_denominator`'s per-element reference -- the two go together, since the
-    angular factor is what stops a constant divisor from being the right one. A
-    PART_MEAN `reference` replaces it the same way, at any `kappa`.
+    angular factor is what stops a constant divisor from being the right one.
 
-    `front_offset` credits a neighbor only once the front has moved that far past it,
-    i.e. material that has had time to cool: a region printed all at once then has
-    nothing behind it, however its neighbors are ordered within it.
-
-    :param stencil: the run's `AngularStencil`; required for `kappa > 0` or a PART_MEAN
-        `reference`
+    :param stencil: the run's `AngularStencil`; required for `kappa > 0`
     :param kappa: angular lobe concentration for this iteration; `0` leaves the stencil
         purely radial, which is this function's behavior with no angular weight at all
     :param g0: the lobe's gradient scale
-    :param reference: the `ReferenceGradient` the HALF_STENCIL reference fill is
-        layered at
-    :param front_offset: the distance behind the front, in elements, from which on a
-        neighbor counts
+    :param credit: the run's `PrintOrderCredit`
+    :param tie_credit: SIGMOID's weight for a neighbor printed at the same time
+    :param cooling_time: COOLING's cooling time, in `t`
     :raises ValueError: if no element carrying density is left with a finite `K_est`,
-        the whole part being within stencil reach of the print base; if `kappa > 0` or a
-        PART_MEAN reference comes without the constant divisor the directional reference
-        generalizes; or if a front offset comes without a PART_MEAN reference
+        the whole part being within stencil reach of the print base; if `kappa > 0`
+        without the constant divisor the directional reference generalizes; or if a
+        credit other than the source's sigmoid comes with a divisor derived from it
     """
     x = xPhys.flatten()
     t = tPhys.flatten()
-    part_mean = ReferenceGradient(reference) == ReferenceGradient.PART_MEAN
-    if front_offset != 0 and not part_mean:
+    credit = PrintOrderCredit(credit)
+    if denom is None and (credit != PrintOrderCredit.SIGMOID or tie_credit != 0.5):
         raise ValueError(
-            "a front offset needs ReferenceGradient.PART_MEAN (see ReferenceGradient)"
+            "a tie credit other than 0.5 or a COOLING credit needs a constant reference divisor (HALF_STENCIL): Normalization.NEIGHBORHOOD divides by the credited weight itself, so a region printed all at once still scores K_est = 1"
         )
-    delay, angular = 0.0, _isotropic
-    if kappa != 0 or part_mean:
+    pair_credit = print_order_credit(credit, t, rouf, tie_credit, cooling_time)
+    angular = _isotropic
+    if kappa != 0:
         if stencil is None or denom is None:
             raise ValueError(
-                "an angular weight (kappa > 0) or a PART_MEAN reference needs an AngularStencil and the HALF_STENCIL normalization, whose constant divisor it generalizes to a per-element directional reference; Normalization.NEIGHBORHOOD derives its own divisor and has no directional variant"
+                "an angular weight (kappa > 0) needs an AngularStencil and the HALF_STENCIL normalization, whose constant divisor it generalizes to a per-element directional reference; Normalization.NEIGHBORHOOD derives its own divisor and has no angular variant"
             )
         grad = timefield.central_difference_gradient_vector(tPhys)
-        unit = timefield.unit_length(tPhys)
-        layers, delay = _reference_fill(reference, grad, x, front_offset, unit)
         angular = partial(angular_pair_weights, grad, kappa=kappa, g0=g0)
         denom = directed_denominator(
-            grad, stencil, kappa, g0, rouf, unit, layers, delay
+            grad, stencil, kappa, g0, rouf, timefield.unit_length(tPhys)
         )
-        if part_mean:
-            # Detached: the fill direction has no derivative where |grad t|
-            # vanishes (PR #190)
-            denom = denom.detach()
     K_est = _conductivity_core(
-        x, t, e1, e2, w, q, rouf, denom, base, angular, delay
+        x, t, e1, e2, w, q, rouf, denom, base, angular, pair_credit
     ).K_est
     if base is not None and not bool((torch.isfinite(K_est) & (x > 0)).any()):
         raise ValueError(

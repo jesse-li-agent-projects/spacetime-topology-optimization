@@ -10,6 +10,10 @@ This directory contains plans for agents.
     - Deferred: ways to give `stto` a minimum feature size, against the thin necks the
       hotspot constraint adds. Options and their costs only; the user wants other
       avenues tried first.
+- print_order_credit.md
+    - Replaces #190's front offset: the hotspot numerator gives a neighbor printed at
+      the same time less credit (a tie credit under a `rouf` continuation, or a cooling
+      curve), over `master`'s delay-free reference. Overnight tuning and validation.
 - s03_material_behind_front.md
     - Why `stto` prints a flat time basin on the S 0.3 top bar that the hotspot misses
       (soft print-order sigmoid), and a hotspot that only credits material at least δ

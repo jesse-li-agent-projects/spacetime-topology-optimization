@@ -48,8 +48,9 @@ class FieldTerms:
     # Constant `K_est` divisor for `config.hotspot_normalization`, or None where the
     # divisor is per-element -- `conductivity.constant_denominator`.
     hotspot_denom: float | None
-    # Fixed geometry the angular stencil weight and the directional reference read, or
-    # None where neither is used -- see `conductivity.angular_stencil`.
+    # Fixed geometry the angular stencil weight reads, or None where
+    # `config.hotspot_kappa` leaves the stencil purely radial -- see
+    # `conductivity.angular_stencil`.
     hotspot_stencil: conductivity.AngularStencil | None
     # Print base elements the hotspot measure treats as infinitely dense, or None where
     # the normalization needs no print base -- `conductivity.infinite_base`.
@@ -90,16 +91,21 @@ class FieldTerms:
                 raise ValueError(
                     f"tool_radius_m needs an interior element to measure curvature at, but iso_curvature measures none on a nelx={nelx}, nely={nely} mesh"
                 )
-        rmin_cond = units.in_elements(config.rmin_cond_m, config.element_size_m)
-        normalization = conductivity.Normalization(config.hotspot_normalization)
-        reference = conductivity.ReferenceGradient(config.hotspot_reference_gradient)
+        if not 0 < config.hotspot_tie_credit < 1:
+            raise ValueError(
+                f"hotspot_tie_credit is a sigmoid value, so it must lie in (0, 1), got {config.hotspot_tie_credit}"
+            )
+        credit = conductivity.PrintOrderCredit(config.hotspot_credit)
+        cooling_time = config.hotspot_cooling_time
         if (
-            not run_config.identically_zero(config.hotspot_front_offset_m)
-            and reference == conductivity.ReferenceGradient.OWN
+            credit == conductivity.PrintOrderCredit.COOLING
+            and run_config.lowest_value(cooling_time) <= 0
         ):
             raise ValueError(
-                "hotspot_front_offset_m needs hotspot_reference_gradient 'part_mean' (see conductivity.ReferenceGradient)"
+                f"hotspot_credit 'cooling' divides by hotspot_cooling_time, which must stay positive, got {cooling_time}"
             )
+        rmin_cond = units.in_elements(config.rmin_cond_m, config.element_size_m)
+        normalization = conductivity.Normalization(config.hotspot_normalization)
         e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
         hotspot_base = conductivity.infinite_base(normalization, base)
         # int32 halves the largest arrays a run keeps: the pair list.
@@ -117,7 +123,7 @@ class FieldTerms:
             w=torch_util.to_tensor(w, device, dtype),
             hotspot_denom=conductivity.constant_denominator(normalization, rmin_cond),
             hotspot_stencil=conductivity.angular_stencil(
-                rmin_cond, dtype, config.hotspot_kappa, device, reference
+                rmin_cond, dtype, config.hotspot_kappa, device
             ),
             hotspot_base=(
                 None
@@ -198,8 +204,9 @@ class FieldTerms:
             at(config.hotspot_kappa),
             config.hotspot_g0_per_m
             * timefield.unit_length_m(tPhys, config.element_size_m),
-            conductivity.ReferenceGradient(config.hotspot_reference_gradient),
-            units.in_elements(at(config.hotspot_front_offset_m), config.element_size_m),
+            conductivity.PrintOrderCredit(config.hotspot_credit),
+            config.hotspot_tie_credit,
+            at(config.hotspot_cooling_time),
         )
 
     def constraints(
