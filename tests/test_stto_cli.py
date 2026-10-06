@@ -196,8 +196,12 @@ def test_resume_reproduces_an_uninterrupted_run(tmp_path, monkeypatch):
         np.load(tmp_path / "output" / tag / "final_design.npz")
         for tag in ("whole", "resumed")
     )
+    # Two runs of one config already differ in the last bits from iteration 0 on, and
+    # the difference grows with the iterations; measured up to ~40 eps relative.
+    eps = np.finfo(float).eps
+    tol = dict(rtol=128 * eps, atol=8 * eps)
     for key in whole.files:
-        np.testing.assert_array_equal(resumed[key], whole[key], err_msg=key)
+        np.testing.assert_allclose(resumed[key], whole[key], err_msg=key, **tol)
 
     def log(tag):
         lines = (tmp_path / "output" / tag / "iterations.jsonl").read_text()
@@ -206,4 +210,8 @@ def test_resume_reproduces_an_uninterrupted_run(tmp_path, monkeypatch):
             for line in lines.splitlines()
         ]
 
-    assert log("resumed") == log("whole")
+    resumed_log, whole_log = log("resumed"), log("whole")
+    assert [e.keys() for e in resumed_log] == [e.keys() for e in whole_log]
+    for r, w in zip(resumed_log, whole_log):
+        for key in w:
+            np.testing.assert_allclose(r[key], w[key], err_msg=key, **tol)
