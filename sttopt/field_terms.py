@@ -133,8 +133,12 @@ class FieldTerms:
         )
 
     def calibrations(self) -> dict[str, float]:
-        """Each smooth maximum's calibration, by field name: the only state the terms
-        carry from one iteration to the next."""
+        """
+        Each smooth maximum's calibration, by field name: the only state the terms
+        carry from one iteration to the next.
+
+        :return: calibration value per field name
+        """
         return {
             f.name: term.calibration
             for f in fields(self)
@@ -142,7 +146,11 @@ class FieldTerms:
         }
 
     def restore_calibrations(self, calibrations: dict[str, float]) -> None:
-        """Set the calibrations `calibrations()` returned, to resume a run."""
+        """
+        Set the calibrations `calibrations()` returned, to resume a run.
+
+        :param calibrations: calibration value per field name
+        """
         for name, value in calibrations.items():
             getattr(self, name).calibration = value
 

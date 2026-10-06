@@ -300,10 +300,14 @@ def init_state(problem: Problem) -> State:
 
 
 def save_checkpoint(problem: Problem, state: State, path: Path, **extra) -> None:
-    """Write what resuming a run at `state` needs: the state and the calibrations
+    """
+    Write what resuming a run at `state` needs: the state and the calibrations
     `step` refreshes in place. Written to a temporary file first, so a run stopped
     mid-write leaves the previous checkpoint whole.
 
+    :param problem: the problem whose calibrations are saved
+    :param state: the state to resume from
+    :param path: checkpoint file to write
     :param extra: further values to keep with it, e.g. the elapsed time
     """
     checkpoint = dict(
@@ -317,9 +321,12 @@ def save_checkpoint(problem: Problem, state: State, path: Path, **extra) -> None
 
 
 def load_checkpoint(problem: Problem, path: Path) -> tuple[State, dict]:
-    """Read a `save_checkpoint` file onto `problem`'s device, and restore its
+    """
+    Read a `save_checkpoint` file onto `problem`'s device, and restore its
     calibrations into `problem`.
 
+    :param problem: the problem to restore calibrations into
+    :param path: checkpoint file to read
     :return: the state, and the `extra` values saved with it
     """
     checkpoint = torch.load(path, map_location=problem.device, weights_only=True)
