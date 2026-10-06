@@ -110,7 +110,7 @@ class FieldTerms:
             w=torch_util.to_tensor(w, device, dtype),
             hotspot_denom=conductivity.constant_denominator(normalization, rmin_cond),
             hotspot_stencil=conductivity.angular_stencil(
-                nelx, rmin_cond, dtype, config.hotspot_kappa, device
+                rmin_cond, dtype, config.hotspot_kappa, device
             ),
             hotspot_base=(
                 None

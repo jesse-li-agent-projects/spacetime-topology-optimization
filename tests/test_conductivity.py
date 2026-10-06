@@ -1685,7 +1685,7 @@ def _stencil(nelx, nely, rmin_cond):
         e1_t,
         e2_t,
         tt(w),
-        conductivity.angular_stencil(nelx, rmin_cond, torch.float64, 1.0),
+        conductivity.angular_stencil(rmin_cond, torch.float64, 1.0),
     )
 
 
@@ -1872,7 +1872,7 @@ def test_angular_weight_sensitivity_flows_through_the_reference():
 def test_angular_stencil_is_not_built_for_a_purely_radial_run():
     """A constant `kappa = 0` never opens the lobe, so the run should not carry a
     stencil it would never read."""
-    args = (9, 3.0, torch.float64)
+    args = (3.0, torch.float64)
     assert conductivity.angular_stencil(*args, 0.0) is None
     assert conductivity.angular_stencil(*args, 2.0) is not None
     schedule = run_config.schedule_from_dict({"points": [[0, 0.0], [10, 2.0]]})
@@ -1896,7 +1896,7 @@ def _square_severity(tPhys, base, kappa):
     xPhys = torch.ones(_SQ_N, _SQ_N, dtype=torch.float64)
     # The `kappa` argument only decides whether the stencil is built at all; the value
     # that shapes the lobe is the one passed to `estimated_conductivity` below.
-    stencil = conductivity.angular_stencil(_SQ_N, _SQ_RMIN, torch.float64, 1.0)
+    stencil = conductivity.angular_stencil(_SQ_RMIN, torch.float64, 1.0)
     K_est = conductivity.estimated_conductivity(
         xPhys,
         tt(tPhys),

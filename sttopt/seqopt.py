@@ -230,7 +230,7 @@ def build_problem(
         w=torch_util.to_tensor(w, device, dtype),
         hotspot_denom=hotspot_denom,
         hotspot_stencil=conductivity.angular_stencil(
-            nelx, rmin_cond, dtype, config.hotspot_kappa, device
+            rmin_cond, dtype, config.hotspot_kappa, device
         ),
         hotspot_base=None if hotspot_base is None else int_fields["Nei"],
         hotspot=conductivity.make_aggregation(

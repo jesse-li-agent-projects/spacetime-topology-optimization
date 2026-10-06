@@ -242,7 +242,6 @@ class AngularStencil(NamedTuple):
     list from `neighbor_weights`' COO pairs -- see `directed_denominator`.
     """
 
-    nelx: int
     offset: Float[Tensor, "noffsets 2"]
     offset_dir: Float[Tensor, "noffsets 2"]
     offset_w: Float[Tensor, " noffsets"]
@@ -259,16 +258,14 @@ def _unit_rows(v: Float[Tensor, "n 2"]) -> Float[Tensor, "n 2"]:
 
 
 def angular_stencil(
-    nelx: int,
     rmin_cond: float,
     dtype: torch.dtype,
     kappa: "run_config.Scheduled",
     device: torch.device | str | None = None,
 ) -> AngularStencil | None:
-    """Build the angular weight's fixed geometry for one mesh, or `None` for a run whose
-    lobe never opens.
+    """Build the angular weight's fixed geometry, or `None` for a run whose lobe never
+    opens.
 
-    :param nelx: element count in x, to read an element number back as a grid position
     :param rmin_cond: conductivity-neighborhood radius, in elements
     :param dtype: floating dtype of the run's real-valued fields
     :param kappa: the run's lobe concentration setting; a constant `0` builds nothing,
@@ -280,7 +277,6 @@ def angular_stencil(
     offset_np, offset_w_np = _offset_table(rmin_cond)
     offset = torch.as_tensor(offset_np, dtype=dtype, device=device)
     return AngularStencil(
-        nelx=nelx,
         offset=offset,
         offset_dir=_unit_rows(offset),
         offset_w=torch.as_tensor(offset_w_np, dtype=dtype, device=device),
@@ -376,7 +372,7 @@ def angular_pair_weights(
     :param g0: the lobe's gradient scale
     """
     gx, gy = grad[0].flatten(), grad[1].flatten()
-    dirs = _pair_directions(e1, e2, stencil.nelx, gx.dtype)
+    dirs = _pair_directions(e1, e2, grad[0].shape[1], gx.dtype)
     g_dot_dir = gx[e1] * dirs[:, 0] + gy[e1] * dirs[:, 1]
     return _lobe(g_dot_dir, _gradient_magnitude(grad)[e1], dirs, kappa, g0)
 
