@@ -902,23 +902,37 @@ def test_tool_radius_needs_an_interior_element():
         stto.build_problem(config)
 
 
-def test_front_offset_needs_the_part_mean_reference_at_build():
-    """An offset under OWN is refused when the problem is built (PR #190)."""
-    config = default_run_config(hotspot_front_offset_m=2 * ELEMENT_M)
-    with pytest.raises(ValueError, match="part_mean"):
-        stto.build_problem(config)
+@pytest.mark.parametrize(
+    "overrides, match",
+    [
+        (dict(hotspot_tie_credit=1.0), "hotspot_tie_credit"),
+        (dict(hotspot_credit="cooling", hotspot_cooling_time=0.0), "cooling_time"),
+        (
+            dict(
+                hotspot_credit="cooling",
+                hotspot_cooling_time=run_config.PiecewiseSchedule(
+                    points=[[0, 0.01], [10, 0.0]]
+                ),
+            ),
+            "cooling_time",
+        ),
+    ],
+)
+def test_a_print_order_credit_out_of_its_range_is_refused_at_build(overrides, match):
+    with pytest.raises(ValueError, match=match):
+        stto.build_problem(default_run_config(**overrides))
 
 
-def test_a_front_offset_run_reads_its_schedule_and_steps():
-    """The offset is read at each iteration's own value, and a run with it steps with
-    finite sensitivities."""
-    offset = dict(
-        hotspot_reference_gradient="part_mean",
-        hotspot_front_offset_m=run_config.PiecewiseSchedule(
-            points=[[0, 0.0], [1, 2 * ELEMENT_M]]
+def test_a_cooling_credit_run_reads_its_schedule_and_steps():
+    """The cooling time is read at each iteration's own value, and a run with it steps
+    with finite sensitivities."""
+    cooling = dict(
+        hotspot_credit="cooling",
+        hotspot_cooling_time=run_config.PiecewiseSchedule(
+            points=[[0, 0.05], [1, 0.005]]
         ),
     )
-    problem = _problem(config_overrides=offset)
+    problem = _problem(config_overrides=cooling)
     state = stto.init_state(problem)
     xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, 1.0)
     before = problem.terms.estimated_conductivity(xPhys, tPhys, 0)

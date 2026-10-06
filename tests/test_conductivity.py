@@ -21,7 +21,6 @@ RMIN_COND = 3
 BETA, ETA = 1.0, 0.5
 P, Q, R, ROUF = 25, 3, 0.05, 100
 TCR = 0.8
-PART_MEAN = conductivity.ReferenceGradient.PART_MEAN
 
 
 def _K_est(xPhys, tPhys, e1, e2, w, q, rouf):
@@ -1878,93 +1877,6 @@ def test_angular_stencil_is_not_built_for_a_purely_radial_run():
     assert conductivity.angular_stencil(*args, 2.0) is not None
     schedule = run_config.schedule_from_dict({"points": [[0, 0.0], [10, 2.0]]})
     assert conductivity.angular_stencil(*args, schedule) is not None
-    part_mean = conductivity.ReferenceGradient.PART_MEAN
-    assert conductivity.angular_stencil(*args, 0.0, reference=part_mean) is not None
-
-
-def _front_K(xPhys, tPhys, rmin_cond, kappa, **reference):
-    """`K_est` on a fresh stencil for the front-offset tests, HALF_STENCIL normalized."""
-    nely, nelx = xPhys.shape
-    e1, e2, w, stencil = _stencil(nelx, nely, rmin_cond)
-    return conductivity.estimated_conductivity(
-        xPhys,
-        tPhys,
-        e1,
-        e2,
-        w,
-        Q,
-        ROUF,
-        conductivity.half_stencil_weight(rmin_cond),
-        stencil=stencil,
-        kappa=kappa,
-        g0=0.35,
-        **reference,
-    )
-
-
-@pytest.mark.parametrize("kappa", [0.0, 2.3666])
-@pytest.mark.parametrize("front_offset", [0.0, 2.0])
-def test_part_mean_reference_scores_a_uniform_fill_as_shielded(kappa, front_offset):
-    """On a fully solid, uniformly layered part the mean gradient is the element's own,
-    so the reference fill equals the field, whatever the front offset."""
-    n = 25
-    xPhys = torch.ones(n, n, dtype=torch.float64)
-    for angle in np.linspace(-np.pi, np.pi, 9):
-        K_est = _front_K(
-            xPhys,
-            _linear_timefield(n, n, angle, 1.0),
-            4.0,
-            kappa,
-            reference=PART_MEAN,
-            front_offset=front_offset,
-        )
-        assert float(K_est[(n // 2) * n + n // 2]) == pytest.approx(1.0, abs=1e-12)
-
-
-def test_front_offset_finds_a_flat_basin_that_the_own_reference_misses():
-    """A region printed all at once has nothing behind it. Without an offset its
-    neighbors count half each, as in a layered fill, so it scores fully shielded
-    (PR #190)."""
-    n, rmin_cond = 25, 4.0
-    rows, cols = np.meshgrid(np.arange(n), np.arange(n), indexing="ij")
-    mid = n // 2
-    t = _linear_timefield(n, n, np.pi / 2, 1.0).numpy()
-    basin = (rows - mid) ** 2 + (cols - mid) ** 2 <= rmin_cond**2
-    tPhys = tt(np.where(basin, t[mid, 0], t))
-    xPhys = torch.ones(n, n, dtype=torch.float64)
-
-    def K(**reference):
-        return float(
-            _front_K(xPhys, tPhys, rmin_cond, 2.3666, **reference)[mid * n + mid]
-        )
-
-    assert K() == pytest.approx(1.0, abs=1e-12)
-    assert K(reference=PART_MEAN) == pytest.approx(1.0, abs=1e-12)
-    assert K(reference=PART_MEAN, front_offset=1.0) < 0.1  # measured 0.059
-
-
-def test_front_offset_needs_the_part_mean_reference():
-    """An offset under OWN is refused (PR #190)."""
-    xPhys = torch.ones(7, 9, dtype=torch.float64)
-    with pytest.raises(ValueError, match="PART_MEAN"):
-        _front_K(
-            xPhys, _linear_timefield(9, 7, 0.3, 1.0), RMIN_COND, 0.0, front_offset=1.0
-        )
-
-
-def test_part_mean_sensitivity_is_finite_on_a_flat_field():
-    """The fill's direction is undefined where the field is flat; holding the reference
-    out of the gradient keeps the sensitivity finite there."""
-    rng = np.random.default_rng(7)
-    xPhys = tt(rng.uniform(0.3, 1.0, size=(11, 13)))
-    t = _linear_timefield(13, 11, 0.4, 1.0).numpy()
-    t[4:7, 5:8] = t[5, 6]
-    tPhys = tt(t).requires_grad_(True)
-
-    K_est = _front_K(xPhys, tPhys, 3.0, 2.3666, reference=PART_MEAN, front_offset=1.5)
-    (grad,) = torch.autograd.grad(K_est.sum(), tPhys)
-    assert torch.isfinite(grad).all()
-    assert float(grad.abs().max()) > 0
 
 
 # --- physical behaviour on a filled square under a uniform print direction ----------
@@ -2105,3 +2017,110 @@ def test_checkpointed_chunks_match_the_whole_stencil_sum(monkeypatch, angular):
     assert_close(K_chunked, K_whole)
     for chunked, whole in zip(grads_chunked, grads_whole):
         assert_close(chunked, whole)
+
+
+# --- print-order credit --------------------------------------------------------------
+
+_COOLING_TIE = 1 - 2 ** (-1 / conductivity.COOLING_SOFTNESS)
+
+
+def _credit_K(tPhys, rmin_cond, **credit):
+    """Interior `K_est` of a fully solid square, HALF_STENCIL normalized, at `credit`."""
+    nely, nelx = tPhys.shape
+    e1, e2, w, stencil = _stencil(nelx, nely, rmin_cond)
+    K_est = conductivity.estimated_conductivity(
+        torch.ones(nely, nelx, dtype=torch.float64),
+        tPhys,
+        e1,
+        e2,
+        w,
+        Q,
+        credit.pop("rouf", ROUF),
+        conductivity.half_stencil_weight(rmin_cond),
+        stencil=stencil,
+        **credit,
+    )
+    return float(K_est[(nely // 2) * nelx + nelx // 2])
+
+
+@pytest.mark.parametrize(
+    "credit, tie",
+    [
+        (dict(tie_credit=0.5), 0.5),
+        (dict(tie_credit=0.2), 0.2),
+        (dict(credit="cooling", cooling_time=0.01), _COOLING_TIE),
+    ],
+)
+def test_a_flat_region_scores_twice_its_tie_credit(credit, tie):
+    """Every neighbor of an element printed all at once is a tie, and the reference is
+    half the stencil, so `K_est` is twice the credit of a tie."""
+    tPhys = torch.full((17, 17), 0.4, dtype=torch.float64)
+    assert _credit_K(tPhys, 4.0, **credit) == pytest.approx(2 * tie, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    "sharp, tie",
+    [
+        (dict(tie_credit=0.2, rouf=1e9), 0.2),
+        (dict(credit="cooling", cooling_time=1e-9), _COOLING_TIE),
+    ],
+)
+def test_a_sharp_credit_scores_a_layered_part_as_shielded_bar_its_self_pair(sharp, tie):
+    """With the sigmoid sharpened or the cooling time shortened, a layered part keeps
+    every neighbor behind its front, and only the self-pair, a tie at any sharpness,
+    falls short of the reference's half credit."""
+    rmin_cond, n = 4.0, 17
+    e1, e2, w = conductivity.neighbor_weights(n, n, rmin_cond)
+    w_self = float(w[(e1 == e2) & (e1 == (n // 2) * n + n // 2)][0])
+    total = 2 * conductivity.half_stencil_weight(rmin_cond)
+    tPhys = _linear_timefield(n, n, 0.3, 1.0)
+    expected = 1 - (1 - 2 * tie) * w_self / total
+    assert _credit_K(tPhys, rmin_cond, **sharp) == pytest.approx(expected, abs=1e-9)
+
+
+def test_a_tie_credit_of_one_half_is_the_source_sigmoid():
+    tPhys = _linear_timefield(13, 11, 0.4, 1.0)
+    assert _credit_K(tPhys, 3.0) == _credit_K(tPhys, 3.0, tie_credit=0.5)
+
+
+@pytest.mark.parametrize(
+    "credit", [dict(tie_credit=0.2), dict(credit="cooling", cooling_time=0.01)]
+)
+def test_a_changed_credit_needs_a_constant_reference(credit):
+    """`NEIGHBORHOOD` divides by the credited weight itself, so a flat region would
+    still score 1; the combination is refused."""
+    nelx, nely = 9, 7
+    e1, e2, w, _ = _stencil(nelx, nely, RMIN_COND)
+    xPhys = torch.ones(nely, nelx, dtype=torch.float64)
+    with pytest.raises(ValueError, match="constant reference divisor"):
+        conductivity.estimated_conductivity(
+            xPhys, _linear_timefield(nelx, nely, 0.3, 1.0), e1, e2, w, Q, ROUF, **credit
+        )
+
+
+def test_cooling_credit_sensitivity_is_finite():
+    rng = np.random.default_rng(3)
+    nely, nelx = 11, 13
+    e1, e2, w, stencil = _stencil(nelx, nely, 3.0)
+    xPhys = tt(rng.uniform(0.3, 1.0, size=(nely, nelx)))
+    t = _linear_timefield(nelx, nely, 0.4, 1.0).numpy()
+    t[4:7, 5:8] = t[5, 6]
+    tPhys = tt(t).requires_grad_(True)
+    K_est = conductivity.estimated_conductivity(
+        xPhys,
+        tPhys,
+        e1,
+        e2,
+        w,
+        Q,
+        ROUF,
+        conductivity.half_stencil_weight(3.0),
+        stencil=stencil,
+        kappa=2.3666,
+        g0=0.35,
+        credit="cooling",
+        cooling_time=0.005,
+    )
+    (grad,) = torch.autograd.grad(K_est.sum(), tPhys)
+    assert torch.isfinite(grad).all()
+    assert float(grad.abs().max()) > 0

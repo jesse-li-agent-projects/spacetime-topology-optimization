@@ -10,6 +10,10 @@ This directory contains plans for agents.
     - A check on a saved `stto` design, binarized, that reports the margin of each
       condition it must meet: print start and support as hard checks, the constraint
       values and compliance as a report.
+- print_order_credit.md
+    - Replaces #190's front offset: the hotspot numerator gives a neighbor printed at
+      the same time less credit (a tie credit under a `rouf` continuation, or a cooling
+      curve), over `master`'s delay-free reference. Overnight tuning and validation.
 - s03_material_behind_front.md
     - Why `stto` prints a flat time basin on the S 0.3 top bar that the hotspot misses
       (soft print-order sigmoid), and a hotspot that only credits material at least δ

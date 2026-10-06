@@ -22,7 +22,7 @@ a config file and this module. That holds for a newly added field too, even thou
 means run records written before the field existed no longer load -- add the field to
 every config file instead. The one exception is a field whose default is the only
 behaviour older records could have had (`SpaceTimeConfig.load_case`,
-`support_length_m`, `hotspot_reference_gradient`, `hotspot_front_offset_m`).
+`support_length_m`, `hotspot_credit`, `hotspot_tie_credit`, `hotspot_cooling_time`).
 """
 
 import bisect
@@ -183,6 +183,16 @@ def identically_zero(setting: Scheduled) -> bool:
     return float(setting) == 0
 
 
+def lowest_value(setting: Scheduled) -> float:
+    """The smallest value a possibly-scheduled scalar takes at any iteration: every
+    schedule stays between the values that define it."""
+    if isinstance(setting, CosineSchedule):
+        return min(setting.initial, setting.final)
+    if isinstance(setting, PiecewiseSchedule):
+        return min(p[1] for p in setting.points)
+    return float(setting)
+
+
 def final_value(setting: Scheduled) -> float:
     """The value a possibly-scheduled scalar settles on, for tooling that reads a
     finished run rather than one iteration of it."""
@@ -237,13 +247,13 @@ class SpaceTimeConfig(_ConfigMixin):
         knob: a converged field's gradient distribution is tight, so a `g0` near the
         median attenuates `kappa` by a near-constant factor across the whole part, which
         is a second `hotspot_kappa` rather than a floor (measured in `plans/archive/angular_weight.md`, Phase 3 results).
-    :param hotspot_reference_gradient: a `conductivity.ReferenceGradient` member value:
-        the layer thickness of the ideal fill `K_est = 1` stands for, each element's own
-        (`own`, the default and the only behaviour before it existed) or the part's
-        mean (`part_mean`).
-    :param hotspot_front_offset_m: how far behind the print front a neighbor must lie to
-        count as cooled material, possibly scheduled; `0` counts every earlier neighbor,
-        as before it existed. Requires `part_mean`; keep it below `rmin_cond_m`.
+    :param hotspot_credit: a `conductivity.PrintOrderCredit` member value: how much a
+        neighbor printed before an element counts toward its `K_est`. `sigmoid`, the
+        default and the only behaviour before it existed, or `cooling`.
+    :param hotspot_tie_credit: `sigmoid`'s credit for a neighbor printed at the same
+        time, in (0, 1); `0.5` is the source's. A region printed all at once scores
+        `K_est ~ 2x` this, so it fails the hotspot where `1 - 2x` exceeds `Tcr`.
+    :param hotspot_cooling_time: `cooling`'s cooling time, in `t`, possibly scheduled.
     :param rmin_m: density-filter radius.
     :param tool_radius_m: print tool radius, possibly scheduled. Bounds the concave
         curvature of the time field's iso-lines (`timefield.iso_curvature`) to
@@ -298,8 +308,9 @@ class SpaceTimeConfig(_ConfigMixin):
     hotspot_beta: Scheduled
     hotspot_kappa: Scheduled
     hotspot_g0_per_m: float
-    hotspot_reference_gradient: str = "own"
-    hotspot_front_offset_m: Scheduled = 0.0
+    hotspot_credit: str = "sigmoid"
+    hotspot_tie_credit: float = 0.5
+    hotspot_cooling_time: Scheduled = 0.0
     print_base: str
     rmin_m: float
     tool_radius_m: Scheduled
