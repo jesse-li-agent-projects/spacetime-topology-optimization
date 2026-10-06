@@ -468,29 +468,31 @@ def _pairwise_sigmoid(
     return torch.sigmoid(rouf * (t[a] - t[b]) + math.log(tie_credit / (1 - tie_credit)))
 
 
-# Softness of the cooling credit's onset at `dt = 0`, relative to the cooling time; it
-# sets the credit of a tie, `1 - 2**(-1/COOLING_SOFTNESS)`, about 0.08.
-COOLING_SOFTNESS = 8.0
-
-
 def _cooling_credit(
     t: Float[Tensor, " nel"],
     a: Int[Tensor, " npairs"],
     b: Int[Tensor, " npairs"],
     cooling_time: float,
+    sharpness: float,
 ) -> Float[Tensor, " npairs"]:
     """
     `PrintOrderCredit.COOLING`'s weight of a COO pair array: `1 - exp(-dt / tau)` for
     `b` printed `dt` before `a`, and none for `b` printed after, with the onset at
-    `dt = 0` smoothed by a softplus.
+    `dt = 0` smoothed by a softplus of sharpness `k`.
+
+    `k` trades the two things a sharp onset costs and buys: a tie gets
+    `1 - 2**(-1/k)`, and a neighbor printed later than `a` gets a gradient toward
+    being earlier only within about `tau / k` of it. At `k = 1` a tie gets 0.5 and
+    that reach is `tau`, as the source sigmoid's is `1 / rouf`.
 
     :param t: per-element time field, `tPhys.flatten()`
     :param a: first index of each COO pair
     :param b: second index of each COO pair
     :param cooling_time: `tau`, in `t`
+    :param sharpness: `k`
     :return: one value per pair
     """
-    k = COOLING_SOFTNESS
+    k = sharpness
     s = torch.nn.functional.softplus(k * (t[a] - t[b]) / cooling_time) / k
     return -torch.expm1(-s)
 
@@ -501,6 +503,7 @@ def print_order_credit(
     rouf: float,
     tie_credit: float,
     cooling_time: float,
+    cooling_sharpness: float,
 ) -> Callable[[Int[Tensor, " n"], Int[Tensor, " n"]], Float[Tensor, " n"]]:
     """The weight per COO pair `(a, b)` for `b` having been printed before `a`, as
     `credit` selects.
@@ -510,10 +513,13 @@ def print_order_credit(
     :param rouf: SIGMOID's sharpness
     :param tie_credit: SIGMOID's weight at equal times
     :param cooling_time: COOLING's `tau`, in `t`
+    :param cooling_sharpness: COOLING's onset sharpness, as in `_cooling_credit`
     """
     if credit == PrintOrderCredit.SIGMOID:
         return partial(_pairwise_sigmoid, t, rouf=rouf, tie_credit=tie_credit)
-    return partial(_cooling_credit, t, cooling_time=cooling_time)
+    return partial(
+        _cooling_credit, t, cooling_time=cooling_time, sharpness=cooling_sharpness
+    )
 
 
 def _isotropic(a: Int[Tensor, " n"], b: Int[Tensor, " n"]) -> float:
@@ -750,6 +756,7 @@ def estimated_conductivity(
     credit: PrintOrderCredit = PrintOrderCredit.SIGMOID,
     tie_credit: float = 0.5,
     cooling_time: float = 0.0,
+    cooling_sharpness: float = 8.0,
 ) -> Float[Tensor, " nely*nelx"]:
     """Local estimated conductivity: how strongly each element's neighborhood has
     already solidified (cooler, earlier `tPhys`) around it, used as an overheating
@@ -768,6 +775,7 @@ def estimated_conductivity(
     :param credit: the run's `PrintOrderCredit`
     :param tie_credit: SIGMOID's weight for a neighbor printed at the same time
     :param cooling_time: COOLING's cooling time, in `t`
+    :param cooling_sharpness: COOLING's onset sharpness, as in `_cooling_credit`
     :raises ValueError: if no element carrying density is left with a finite `K_est`,
         the whole part being within stencil reach of the print base; if `kappa > 0`
         without the constant divisor the directional reference generalizes; or if a
@@ -780,7 +788,9 @@ def estimated_conductivity(
         raise ValueError(
             "a tie credit other than 0.5 or a COOLING credit needs a constant reference divisor (HALF_STENCIL): Normalization.NEIGHBORHOOD divides by the credited weight itself, so a region printed all at once still scores K_est = 1"
         )
-    pair_credit = print_order_credit(credit, t, rouf, tie_credit, cooling_time)
+    pair_credit = print_order_credit(
+        credit, t, rouf, tie_credit, cooling_time, cooling_sharpness
+    )
     angular = _isotropic
     if kappa != 0:
         if stencil is None or denom is None:

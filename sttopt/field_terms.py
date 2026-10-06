@@ -104,6 +104,14 @@ class FieldTerms:
             raise ValueError(
                 f"hotspot_credit 'cooling' divides by hotspot_cooling_time, which must stay positive, got {cooling_time}"
             )
+        sharpness = config.hotspot_cooling_sharpness
+        if (
+            credit == conductivity.PrintOrderCredit.COOLING
+            and run_config.lowest_value(sharpness) <= 0
+        ):
+            raise ValueError(
+                f"hotspot_credit 'cooling' divides by hotspot_cooling_sharpness, which must stay positive, got {sharpness}"
+            )
         rmin_cond = units.in_elements(config.rmin_cond_m, config.element_size_m)
         normalization = conductivity.Normalization(config.hotspot_normalization)
         e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
@@ -207,6 +215,7 @@ class FieldTerms:
             conductivity.PrintOrderCredit(config.hotspot_credit),
             config.hotspot_tie_credit,
             at(config.hotspot_cooling_time),
+            at(config.hotspot_cooling_sharpness),
         )
 
     def constraints(
