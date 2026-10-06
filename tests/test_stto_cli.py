@@ -203,10 +203,14 @@ def test_resume_reproduces_an_uninterrupted_run(tmp_path, monkeypatch):
     for key in whole.files:
         np.testing.assert_allclose(resumed[key], whole[key], err_msg=key, **tol)
 
+    # The hottest element's position is an argmax, which those bits can move between
+    # near-tied elements; `true_max` checks its value.
+    skipped = {"elapsed", "hot_row", "hot_col"}
+
     def log(tag):
         lines = (tmp_path / "output" / tag / "iterations.jsonl").read_text()
         return [
-            {k: v for k, v in json.loads(line).items() if k != "elapsed"}
+            {k: v for k, v in json.loads(line).items() if k not in skipped}
             for line in lines.splitlines()
         ]
 
