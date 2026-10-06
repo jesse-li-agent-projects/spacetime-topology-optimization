@@ -102,7 +102,8 @@ CHECKPOINT_ENTRIES = 2**24
 def _chunked_sum(
     fn: Callable[[slice], Float[Tensor, "..."]], n: int, width: int
 ) -> Float[Tensor, "..."]:
-    """`fn(slice(0, n))` for an `fn` that sums its slice's contributions, evaluated chunk
+    """
+    `fn(slice(0, n))` for an `fn` that sums its slice's contributions, evaluated chunk
     by chunk under `checkpoint` once the slice is too large for its graph to be kept.
 
     Checkpointing recomputes each chunk in the backward pass, so a stencil small enough
@@ -111,6 +112,7 @@ def _chunked_sum(
     :param fn: the contributions of a slice of items, summed
     :param n: item count
     :param width: entries per item, i.e. the elements each item's terms span
+    :return: the sum over all `n` items
     """
     if n * width <= CHECKPOINT_ENTRIES:
         return fn(slice(0, n))
@@ -291,11 +293,17 @@ def _pair_directions(
     nelx: int,
     dtype: torch.dtype,
 ) -> Float[Tensor, "npairs 2"]:
-    """The unit direction from `e1` to `e2` of each COO pair, zero for a self-pair.
+    """
+    The unit direction from `e1` to `e2` of each COO pair, zero for a self-pair.
 
     Derived from the pair list itself rather than from `_stencil_offsets`, so it cannot
     fall out of step with the pairs it weights; and recomputed per use rather than
     stored, being as large as the pair list.
+
+    :param e1: first index of each COO pair
+    :param e2: second index of each COO pair
+    :param nelx: element count in x, to read an element number back as a grid position
+    :param dtype: floating dtype of the returned directions
     """
 
     def row(e: Int[Tensor, " npairs"]) -> Int[Tensor, " npairs"]:
