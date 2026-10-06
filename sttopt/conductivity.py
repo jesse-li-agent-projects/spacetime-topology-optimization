@@ -473,16 +473,14 @@ def _reference_fill(
     if reference == ReferenceGradient.OWN:
         return None, 0.0
     with torch.no_grad():
-        gx, gy = grad[0].flatten(), grad[1].flatten()
-        gmag = torch.sqrt(gx**2 + gy**2)
-        g_ref = (x * gmag).sum() / x.sum()
-        flat = gmag == 0
-        safe = torch.where(flat, torch.ones_like(gmag), gmag)
-        ux = torch.where(flat, torch.zeros_like(gx), gx / safe)
-        uy = torch.where(flat, torch.ones_like(gy), gy / safe)
-        shape = grad[0].shape
-        layers = ((g_ref * ux).reshape(shape), (g_ref * uy).reshape(shape))
-        return layers, float(front_offset * g_ref / unit)
+        g = torch.stack((grad[0].flatten(), grad[1].flatten()), dim=-1)
+        g_ref = (x * g.norm(dim=-1)).sum() / x.sum()
+        u = _unit_rows(g)
+        # A flat element's lobe is isotropic, so any direction serves; it needs one,
+        # or a front offset would leave its reference no weight at all.
+        u[(u == 0).all(dim=-1), 1] = 1.0
+        fill = (g_ref * u).T.reshape(2, *grad[0].shape)
+        return (fill[0], fill[1]), float(front_offset * g_ref / unit)
 
 
 def _pairwise_sigmoid(
