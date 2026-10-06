@@ -448,6 +448,11 @@ def _pairwise_sigmoid(
     return torch.sigmoid(rouf * (t[a] - t[b]))
 
 
+def _isotropic(a: Int[Tensor, " n"], b: Int[Tensor, " n"]) -> float:
+    """The angular weight of a purely radial stencil: `1` for every pair."""
+    return 1.0
+
+
 class _ConductivityCore(NamedTuple):
     K_est: Float[Tensor, " nel"]
     denom: Float[Tensor, " nel"] | Float[Tensor, ""]
@@ -463,9 +468,9 @@ def _conductivity_core(
     rouf: float,
     denom: float | Float[Tensor, " nel"] | None = None,
     base: Int[Tensor, " k"] | None = None,
-    angular: (
-        Callable[[Int[Tensor, " n"], Int[Tensor, " n"]], Float[Tensor, " n"]] | None
-    ) = None,
+    angular: Callable[
+        [Int[Tensor, " n"], Int[Tensor, " n"]], Float[Tensor, " n"] | float
+    ] = _isotropic,
 ) -> _ConductivityCore:
     """`K_est` and the divisor it was formed with, shared by `estimated_conductivity`
     and `tests/reference/conductivity.py`'s `_conductivity_terms`.
@@ -490,9 +495,7 @@ def _conductivity_core(
         """Per element: the numerator, then the divisor if it is derived, then the
         weight landing on the base if there is one."""
         a, b = e1[sl], e2[sl]
-        wFT = w[sl] * _pairwise_sigmoid(t, a, b, rouf)
-        if angular is not None:
-            wFT = wFT * angular(a, b)
+        wFT = w[sl] * _pairwise_sigmoid(t, a, b, rouf) * angular(a, b)
         sums = [scatter(a, x[b] ** q * wFT)]
         if denom is None:
             sums.append(scatter(a, wFT))
@@ -704,7 +707,7 @@ def estimated_conductivity(
             grad, stencil, kappa, g0, rouf, timefield.unit_length(tPhys)
         )
     else:
-        angular = None
+        angular = _isotropic
     K_est = _conductivity_core(x, t, e1, e2, w, q, rouf, denom, base, angular).K_est
     if base is not None and not bool((torch.isfinite(K_est) & (x > 0)).any()):
         raise ValueError(
