@@ -204,7 +204,7 @@ class FieldTerms:
             self.e1,
             self.e2,
             self.w,
-            config.q,
+            at(config.q),
             at(config.rouf),
             self.hotspot_denom,
             self.hotspot_base,

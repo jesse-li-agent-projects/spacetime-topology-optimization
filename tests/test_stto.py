@@ -951,6 +951,21 @@ def test_a_cooling_credit_run_reads_its_schedule_and_steps():
     assert np.isfinite(record.dg).all()
 
 
+def test_a_scheduled_q_gives_each_iterations_conductivity():
+    """At each iteration, a `q` schedule estimates the conductivity as the constant `q`
+    it resolves to there."""
+    schedule = run_config.PiecewiseSchedule(points=[[0, 2.0], [1, 3.0]])
+    problem = _problem(config_overrides=dict(q=schedule))
+    state = stto.init_state(problem)
+    xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, 1.0)
+    for loop, q in ((0, 2.0), (1, 3.0)):
+        fixed = _problem(config_overrides=dict(q=q))
+        torch.testing.assert_close(
+            problem.terms.estimated_conductivity(xPhys, tPhys, loop),
+            fixed.terms.estimated_conductivity(xPhys, tPhys, loop),
+        )
+
+
 def test_scheduled_tmove_bounds_each_iterations_time_step():
     """A `tmove` schedule sets the trust region of the iteration it resolves at."""
     schedule = run_config.PiecewiseSchedule(points=[[0, 0.02], [1, 0.005]], mode="step")
