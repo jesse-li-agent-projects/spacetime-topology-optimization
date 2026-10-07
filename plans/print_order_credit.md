@@ -208,3 +208,83 @@ Reference for "Tcr changes the topology": `output/tcr_sweep/` (2026-09-26, commi
 `opposite_corner`, Tcr 5 -> {1.0, 0.8, 0.6, 0.4} over 150-250. Topology overlap (IoU)
 with the Tcr 1.0 design: 0.976, 0.949, 0.873; compliance +0.07%, +0.6%, +5.0%. Plots in
 `plot/tcr_sweep/`.
+
+## Results: schedule experiment (2026-10-07, runs 12:45-13:48)
+
+Credit in all runs: cooling, τ 0.01, k 1 -> 8. Compliance is binarized, as a ratio to the
+cell's plain-TO run; a failed run shows its hotspot row.
+
+| Cell, Tcr | Overnight ref | (a) flat `tmove` | (b) P | (c) P, penal held |
+|---|---|---|---|---|
+| S 0.3, 0.6 | pass, 1.000 | pass, 1.000 | pass, 1.005 | pass, 1.006 |
+| C1 0.3, 0.6 | FAIL, +0.243 | FAIL, +0.244 | pass, 1.087 | pass, 1.089 |
+| C1 0.3, 0.75 | - | pass, 1.001 | pass, 1.028 | pass, 1.012 |
+
+Fraction of iterations with the largest time step at `tmove`, and the iteration from
+which the hotspot row stays <= 0.01:
+
+| Run (C1 0.3, Tcr 0.6) | 120-350 | 350-500 | 500-700 | 700-800 | Row <= 0.01 from |
+|---|---|---|---|---|---|
+| Overnight ref | 0.05 | 0.68 | 1.00 | 0.77 | never |
+| (a) | 0.11 | 0.63 | 1.00 | 1.00 | never |
+| (b) | 0.54 | 0.60 | 0.12 | 0.04 | 442 |
+| (c) | 0.57 | 0.61 | 0.14 | 0.03 | 447 |
+
+- **P is the first schedule to pass C1 0.3 at Tcr 0.6.** The thin member at the loaded
+  tip (1-2 elements in (a)) is 3-4 elements thick in (c), with material taken from the
+  flanges near the support (+8.7-8.9% compliance).
+- **A larger time step alone does not help once the topology is fixed:** in (a) the step
+  is at `tmove` in every iteration from 500 on, and the row never clears.
+- **Holding penal at 2 makes no clear difference** ((b) vs (c)). What matters is ramping
+  Tcr under the β_d hold.
+- **No pressure before ~150.** The max severity sits at 0.94-0.96 while the design is
+  grey, so with Tcr 1 until 120 the hotspot multiplier is ~0 (2e-6) until Tcr falls below
+  that, at ~150. At the end of the Tcr ramp (350) the row is still +0.07 (lag); it clears
+  by ~445.
+- **Flat `tmove` leaves the end unsettled on S 0.3:** the row crosses 0.01 until ~790 in
+  (a)-(c) (the taper reference: 565), and the final margins are small (-0.004, -0.000,
+  +0.001).
+- Warnings: 3-8 MMA subsolver "iteration cap" per run (existing behaviour); print-support
+  warnings on C1 0.6 (b), (c) are the 2 and 1 unsupported elements in the table.
+
+Dashboard: `plot/sched/dashboard.html` (frames every 5 iterations; serve `plot/` on
+localhost, see `agent_docs/dashboards.md`). Runs: `output/sched_*`; driver, configs, logs
+in `output/sched/`.
+
+User's notes (2026-10-07):
+- Visually, (b) is the most promising, but needs further tuning.
+- **Necking** must be avoided: a member narrows in the middle where the hotspot
+  constraint discourages material. Visible, weakly, in (b)'s C1 0.3 Tcr 0.6 design: the
+  diagonal about 1/3 from the right, bottom half (from ~(row 28, col 115) to ~(55, 135)),
+  which sits at the severity limit along its length. It is an intermediate state: with
+  more material or a looser Tcr it would not neck; with a tighter Tcr the member would
+  eventually break (no material can keep it from overheating). Either way, the aim is
+  that such a member does not form in the first place. These runs show it weakly because
+  volfrac 0.3 leaves little material to give.
+- By iteration ~80 some members have started to coalesce, so the hotspot should already
+  apply pressure by then.
+- Hunch: let the hotspot conductivity exponent `q` follow `penal` (the SIMP exponent)
+  instead of a fixed 3.
+- Replace C1 0.3 Tcr 0.75 with C1 0.5 Tcr 0.4. (Overnight, the cooling credit passed C1
+  0.5 at Tcr 0.6 at 1.005 × plain TO, so Tcr 0.6 does not change its topology.)
+
+## Next: tuning P (proposal, 2026-10-07, not yet agreed)
+
+1. **Code: make `q` schedulable** (`Scheduled`, like `penal`), so "q follows penal" is a
+   config choice (give `q` the penal schedule), not a special flag. `field_terms`
+   evaluates it at the iteration; `seqopt` keeps a fixed value.
+2. **A necking check**, to tune against instead of by eye: on the binarized design,
+   the local thickness (twice the distance transform, sampled on the skeleton) along
+   each member; flag a member whose thickness drops below a fraction of its own median
+   between two joints. Report it per run and in the dashboard.
+3. **Factors** (2 x 2, all from (b)):
+   - `q`: 3 vs. the penal schedule. With `q` = 2 while grey, grey material counts more
+     (0.3^2 = 0.09 vs 0.3^3 = 0.027 of a solid neighbor), so the hotspot reads a grey
+     design less pessimistically and can act early without spurious pressure.
+   - Tcr ramp start: 120 (as (b)) vs. ~50, starting at ~0.95 (the grey-phase severity
+     level, so that it binds at once) and reaching the target by 350, so the hotspot
+     acts by ~80.
+4. **Fixed in all runs:** the `tmove` taper back after binarization (0.02 -> 0.002 over
+   450-550), against the unsettled end on S 0.3.
+5. **Cells:** S 0.3 Tcr 0.6, C1 0.3 Tcr 0.6, C1 0.5 Tcr 0.4. 12 runs (~3 h); plain-TO
+   references exist (`poc_*_plainTO`).
