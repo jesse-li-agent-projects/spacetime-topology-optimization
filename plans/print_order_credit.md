@@ -60,6 +60,13 @@ schedule is `S03_stto_delta`'s (800 iterations, uniformity 20, no gradient floor
 | C1 0.3 | edge | 0.6 |
 | C1 0.5 | edge | 0.8 |
 
+**D cells dropped from future cell sets (user, 2026-10-07).** The D (`edge_traction`)
+topologies are not interesting: plain TO gives a few straight, mostly horizontal bars
+from the supports to the loaded edge (D 0.3), or two thick bars with a slot (D 0.7), and
+already prints them in simple layers. On D 0.7 every variant ends within 0.3% of plain
+TO. They test little that S and C1 do not. D 0.3's failures in this sweep came from a
+notch in the loaded edge, not from the print order. The runs below still include D.
+
 **Dev set:** S 0.3 and D 0.3.
 1. Stage 1, at Tcr 0.75: cooling τ in {0.0025, 0.005, 0.01}; `rouf` continuation 100 ->
    {1e3, 1e4} (log, iterations 300-700) x tie credit p in {0.5, 0.25}. 14 runs.
