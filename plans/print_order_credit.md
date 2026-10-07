@@ -85,3 +85,75 @@ Report saddle and local-minimum counts without gating. The user judges the shape
 **Output:** runs in `output/poc_<stage>_<cell>_<setting>/`; a dashboard under
 `plot/print_order_credit/` in the format of `plot/s03/dashboard_CELLS.html`; results and
 decisions recorded here.
+
+## Overnight log (2026-10-07)
+
+- **01:50, agent decision: cooling onset sharpness.** At the fixed onset `k = 8`, the
+  stage-1 cooling runs stalled: from iteration 200 the max severity stayed at 0.98
+  (S 0.3, the top-bar basin, row 6) and 0.95 (D 0.3) while Tcr ramped to 0.75, with the
+  hotspot multiplier at `mma_c`. The `rouf` continuation runs tracked Tcr down. Cause: a
+  neighbor printed `dt` later gets a pull toward being earlier of about
+  `exp(-k dt / tau)`-small; at `dt = -0.01` it is ~600x the source sigmoid's at rouf
+  100. The design is not the problem: the δ-study S 0.3 design scores 0.556 under the
+  same credit. Fix (commit `0bed51a`, default unchanged): `hotspot_cooling_sharpness`,
+  schedulable. Added stage-1 settings `coolk0.01` and `coolk0.02`: k 1 -> 8 (log,
+  iterations 300-700), the cooling analog of the `rouf` continuation. The driver was
+  restarted on snapshot `0bed51a`; interrupted runs resumed from their checkpoints.
+- **Compliance gate.** D 0.3 plain TO is 4.56. The stage-1 D 0.3 runs measure 1.03-1.29x
+  it, so the 1.15x gate binds there but does not fail every run (the δ study's 8.3-12
+  were a different schedule).
+- **01:46-02:48, operations.** Stopping the first driver's shell left its Python process
+  alive; it kept starting runs, so two drivers ran 8 jobs at once for an hour. Fixed by
+  killing it; its finished runs (snapshot `72b5842`, identical code for their configs)
+  are kept, its interrupted ones resumed. Run times in that window are inflated.
+- **04:05, stage 1 and a selection fix.** `coolk0.01` passes every gate on S 0.3 (row
+  -0.000, 0 unsupported, compliance 109.55 = plain TO, 1 saddle, 0 minima); no setting
+  passes D 0.3. The driver first picked `rc1000p0.25`, because with nothing passing on
+  both cells my sort key fell through to compliance. `rc1000p0.5` is closer to passing
+  (row <= 0 on both cells; fails only the unsupported gate, 8 and 11; 20-22 saddles
+  against 60-137), and the plan ranks gates first, so the key now counts gates passed
+  before compliance. Restarted before any `rc1000p0.25` stage-2 run began. Stage 2:
+  `coolk0.01` and `rc1000p0.5`.
+- **D 0.3 broken binarization.** `coolk0.01`, `coolk0.02` and `rc10000p0.25` reach an
+  as-optimized compliance of 4.67-4.71 (1.02x plain TO) but 161 300 binarized: elements
+  (41-42, 119) on the traction edge sit at density 0.27-0.45, so binarized they leave
+  part of the load on void. The gate catches a real defect (a notch in the loaded edge).
+- **07:10, stage 2.** Passing Tcr per dev cell (all gates):
+
+  | Setting | S 0.3 passes at | D 0.3 passes at | Chosen |
+  |---|---|---|---|
+  | `coolk0.01` | 0.6, 0.75 | 0.6, 0.7 | Tcr 0.6 |
+  | `rc1000p0.5` | 0.9 | 0.7, 0.9 | Tcr 0.9 |
+
+  Pass/fail is not monotone in Tcr: a stricter Tcr sometimes ends cleaner. With one run
+  per point, a single pass is weak evidence; failures are mostly the unsupported gate
+  (6-34 elements) with a matching rise in saddles and minima.
+
+## Results (2026-10-07, all runs finished 08:32)
+
+Full set, each credit at its stage-2 Tcr; the `master` control at the cell's Tcr. Pass =
+all four gates. Compliance is binarized, as a ratio to the cell's plain-TO run.
+
+| Cell | `master` control | `coolk0.01`, Tcr 0.6 | `rc1000p0.5`, Tcr 0.9 |
+|---|---|---|---|
+| S 0.3 | FAIL: 16 unsupported, 25 saddles | pass (1.000, 3 saddles) | pass (1.000, 2 unsupported, 8 minima) |
+| S 0.5 | FAIL: 6 unsupported | pass (1.001, 1 saddle) | pass (1.000, 4 minima) |
+| D 0.3 | FAIL: binarized load edge broken | pass (1.026, 2 saddles) | pass (1.003, 5 minima) |
+| D 0.7 | pass (1.002) | pass (1.003) | pass (1.001) |
+| C1 0.3 | FAIL: row +0.22 | FAIL: row +0.24 | pass (1.000) |
+| C1 0.5 | pass (1.000) | pass (1.005, 4 saddles) | pass (1.000) |
+
+- The cooling continuation passes 5 of 6 cells at the strictest Tcr of the night (0.6),
+  with clean time fields (0 unsupported, 0-1 minima everywhere). On S 0.3 it prints the
+  top bar from both ends to a merge near column 75, and the struts along their length;
+  max severity 0.597.
+- The `rouf` continuation passes 6 of 6, but at Tcr 0.9, a loose limit; on C1 0.3 its
+  design equals plain TO. Its time fields keep a few minima (4-8 on S and D).
+- C1 0.3 levels off above Tcr 0.6 under both `master` and cooling, as in the δ study.
+- Caveats: one run per point, and stage 2 showed pass/fail is not monotone in Tcr, so a
+  single cell's verdict is weak evidence. The cooling setting was added overnight (see
+  the log above) and chosen on the same dev set.
+
+Dashboards: `plot/print_order_credit/dashboard_full.html`, `dashboard_stage1.html`,
+`dashboard_stage2.html`. Runs: `output/poc_*`; driver, configs, logs and
+`decisions.json` in `output/poc/`.
