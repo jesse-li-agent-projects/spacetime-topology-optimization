@@ -164,3 +164,47 @@ all four gates. Compliance is binarized, as a ratio to the cell's plain-TO run.
 Dashboards: `plot/print_order_credit/dashboard_full.html`, `dashboard_stage1.html`,
 `dashboard_stage2.html`. Runs: `output/poc_*`; driver, configs, logs and
 `decisions.json` in `output/poc/`.
+
+## Next: a schedule experiment (agreed with the user, 2026-10-07)
+
+Evidence from the overnight runs:
+- **The time-field step limit binds.** On S 0.3 (`coolk0.01`, Tcr 0.6) the largest time step
+  sits at `tmove` from iteration 200 to 800. `tmove` tapers 0.01 -> 0.001 over 450-550,
+  while Tcr still tightens until 700 (the δ study moved the Tcr ramp end from 250 to 700
+  but kept the taper). The top bar's minima (27 at 450) clear only by 650, at 0.001 per
+  iteration. The density `move` is a flat 0.01 in these runs. A density taper was never
+  shown to help: on 2026-09-30 the "flat move fixes D" result was confounded by the
+  uniformity term, and the taper came back only as the default.
+- **Tcr acts after the topology is fixed.** On C1 0.3, β_d is 8 at iteration 150 and 64
+  at 300, while Tcr is still ~0.9 at 300. The severity levels off at 0.73-0.75 at a thin
+  member near the loaded tip, as in the δ study (~0.70). Plain TO on C1 0.3 gives
+  members too thin to print without overheating, so the hotspot must act while they
+  can still thicken (user: by about iteration 150).
+- **The time field must keep up.** If Tcr binds before the time field is aligned with
+  the forming members, the result is too conservative; larger time steps help.
+- Candidate P (2026-10-01, virtual-heat runs only): sketch, then hold β_d (and penal)
+  while Tcr ramps, then binarize; P4 held β_d at 4 over 120-300 (user: "beta 4 feels like
+  it has the best shot", on C1 0.3).
+
+Design:
+- Cells: S 0.3 (Tcr 0.6) and C1 0.3 (Tcr 0.6 and 0.75, the δ-study floor). Credit fixed:
+  cooling, τ 0.01, sharpness k 1 -> 8 (place the k ramp after the β_d hold, with the
+  binarization).
+- (a) the δ-study schedule with a flat `tmove` (0.01).
+- (b) P for `stto`: β_d 1 -> 4 by 120, held to 350, -> 128 by 450; Tcr 1 until 120, ->
+  target by 350; flat `tmove` 0.02; penal as before (2 -> 3 over 150-350).
+- (c) as (b), with penal held at 2 until 350, -> 3 by 450.
+- References: the overnight `poc_S03_coolk0.01_T0.6`, `poc_C103_coolk0.01_T0.6`, and the
+  plain-TO runs. 9 runs, about 2-3 h on GPU + 3 CPU slots.
+- **Measure whether the time field responds to Tcr**: per iteration, the largest and
+  mean time step against `tmove` (fraction of steps at the limit), |Δt| on solid
+  elements between snapshots, the hotspot multiplier, and the lag between Tcr and the
+  max severity. Save snapshots every 5 iterations.
+- Dashboard: as `dashboard_full.html`, plus charts for `tmove` with the largest time
+  step, |Δt| on solid elements, and the hotspot multiplier.
+
+Reference for "Tcr changes the topology": `output/tcr_sweep/` (2026-09-26, commit
+`9610316`): the 180x60 cantilever (then "MBB", now C1) at volfrac 0.5, print base
+`opposite_corner`, Tcr 5 -> {1.0, 0.8, 0.6, 0.4} over 150-250. Topology overlap (IoU)
+with the Tcr 1.0 design: 0.976, 0.949, 0.873; compliance +0.07%, +0.6%, +5.0%. Plots in
+`plot/tcr_sweep/`.
