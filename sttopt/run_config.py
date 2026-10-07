@@ -332,7 +332,7 @@ class SpaceTimeConfig(_ConfigMixin):
     penal: Scheduled
     eta: float
     p: float  # p-mean exponent for hotspot severity aggregation (p_mean only)
-    q: float  # hotspot conductivity SIMP exponent
+    q: Scheduled  # hotspot conductivity SIMP exponent
     r: float  # density exponent for hotspot and curvature severity
     rouf: Scheduled
     a0: float
