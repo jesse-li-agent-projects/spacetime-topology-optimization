@@ -268,15 +268,27 @@ User's notes (2026-10-07):
 - Replace C1 0.3 Tcr 0.75 with C1 0.5 Tcr 0.4. (Overnight, the cooling credit passed C1
   0.5 at Tcr 0.6 at 1.005 × plain TO, so Tcr 0.6 does not change its topology.)
 
-## Next: tuning P (proposal, 2026-10-07, not yet agreed)
+## Next: tuning P (agreed with the user, 2026-10-07)
 
 1. **Code: make `q` schedulable** (`Scheduled`, like `penal`), so "q follows penal" is a
    config choice (give `q` the penal schedule), not a special flag. `field_terms`
    evaluates it at the iteration; `seqopt` keeps a fixed value.
-2. **A necking check**, to tune against instead of by eye: on the binarized design,
-   the local thickness (twice the distance transform, sampled on the skeleton) along
-   each member; flag a member whose thickness drops below a fraction of its own median
-   between two joints. Report it per run and in the dashboard.
+2. **A necking check**, to tune against instead of by eye. Prototype:
+   `agent_docs/dashboard_examples/necking.tmp.py`; maps of the designs so far in
+   `plot/necking/` (incl. `output/manav/` C1 at 180x60, which has several necks).
+   - Skeleton of the binarized design (scikit-image); local thickness 2 * (distance to
+     void) - 1, averaged over 2 elements along the skeleton (pixel staircases on
+     diagonal members otherwise read as necks).
+   - A skeleton point is a neck if, along the skeleton within 2.5 x the design's median
+     member thickness, at least two separate sides are thicker; severity = 1 -
+     thickness / (thinner of the two thickest sides). Points within 1.5 joint radii of a
+     joint do not count as a side (fillets). Each solid element takes the value of its
+     nearest skeleton point.
+   - Flag a design whose max severity is >= 0.7 (user, from the overview: the designs
+     with several visible necks score 0.71-0.84; S 0.3 designs 0.27). Report the max per
+     run and the map in the dashboard.
+   - Known limits: a member uniformly thinner than the members it joins is also marked;
+     residual staircase noise reaches 0.1-0.3.
 3. **Factors** (2 x 2, all from (b)):
    - `q`: 3 vs. the penal schedule. With `q` = 2 while grey, grey material counts more
      (0.3^2 = 0.09 vs 0.3^3 = 0.027 of a solid neighbor), so the hotspot reads a grey
@@ -284,7 +296,14 @@ User's notes (2026-10-07):
    - Tcr ramp start: 120 (as (b)) vs. ~50, starting at ~0.95 (the grey-phase severity
      level, so that it binds at once) and reaching the target by 350, so the hotspot
      acts by ~80.
-4. **Fixed in all runs:** the `tmove` taper back after binarization (0.02 -> 0.002 over
-   450-550), against the unsettled end on S 0.3.
-5. **Cells:** S 0.3 Tcr 0.6, C1 0.3 Tcr 0.6, C1 0.5 Tcr 0.4. 12 runs (~3 h); plain-TO
-   references exist (`poc_*_plainTO`).
+4. **The `tmove` taper, as a branch of every run.** The user keeps it off by default
+   unless a run is unstable; S 0.3 (a)-(c) with flat `tmove` are (row swings to +0.13 to
+   +0.17 after iteration 560, vs +0.014 with the taper), C1 0.3 (b) is not. The 2 x 2
+   factors act early and the taper late, so each run is split: one trunk to iteration
+   500, then two branches resumed from its checkpoint (copy the run dir, set `nloop`
+   800, and in one branch `tmove` 0.02 -> 0.002 over 500-600, log; `--resume` reads the
+   run's own `config.json`, and no schedule depends on `nloop`). Same history up to
+   500, so the branches differ only in the taper.
+5. **Cells:** S 0.3 Tcr 0.6, C1 0.3 Tcr 0.6, C1 0.5 Tcr 0.4. 12 trunks + 24 branches,
+   ~1.4x the iterations of 12 full runs (~4 h); plain-TO references exist
+   (`poc_*_plainTO`).
