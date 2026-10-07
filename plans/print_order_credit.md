@@ -301,9 +301,10 @@ User's notes (2026-10-07):
    +0.17 after iteration 560, vs +0.014 with the taper), C1 0.3 (b) is not. The 2 x 2
    factors act early and the taper late, so each run is split: one trunk to iteration
    500, then two branches resumed from its checkpoint (copy the run dir, set `nloop`
-   800, and in one branch `tmove` 0.02 -> 0.002 over 500-600, log; `--resume` reads the
-   run's own `config.json`, and no schedule depends on `nloop`). Same history up to
-   500, so the branches differ only in the taper.
-5. **Cells:** S 0.3 Tcr 0.6, C1 0.3 Tcr 0.6, C1 0.5 Tcr 0.4. 12 trunks + 24 branches,
-   ~1.4x the iterations of 12 full runs (~4 h); plain-TO references exist
-   (`poc_*_plainTO`).
+   600, and in one branch `tmove` 0.02 -> 0.002 over 500-550, log, then held; `--resume`
+   reads the run's own `config.json`, and no schedule depends on `nloop`). Same history
+   up to 500, so the branches differ only in the taper.
+5. **Cells:** S 0.3 Tcr 0.6, C1 0.3 Tcr 0.6, C1 0.5 Tcr 0.4. Runs end at 600 (user,
+   tentatively: P binarizes by 450). 12 trunks + 24 branches, ~1.2x the iterations of
+   12 full runs (~1.5 h); plain-TO references exist (`poc_*_plainTO`).
+6. **Code (PR #197, stacked on #196):** `q` is `Scheduled`.
