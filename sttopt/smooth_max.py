@@ -60,5 +60,6 @@ class CalibratedLogSumExp:
 
 
 def blend(old: float, measured: float, rate: float) -> float:
-    """A calibration moved `rate` of the way to a new measurement."""
-    return old + rate * (measured - old)
+    """A calibration moved `rate` of the way to a new measurement; at `rate` 1 the
+    measurement exactly, as before damping existed, not `old + (measured - old)`."""
+    return measured if rate == 1 else old + rate * (measured - old)
