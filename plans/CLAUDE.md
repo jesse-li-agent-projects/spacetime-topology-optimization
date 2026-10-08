@@ -6,6 +6,10 @@ This directory contains plans for agents.
       KEEP this entry even once every plan below is finished/archived and this
       list is otherwise empty -- it's the format documentation, not a stale
       leftover.
+- length_scale_options.md
+    - Deferred: ways to give `stto` a minimum feature size, against the thin necks the
+      hotspot constraint adds. Options and their costs only; the user wants other
+      avenues tried first.
 - post_run_checks.md
     - A check on a saved `stto` design, binarized, that reports the margin of each
       condition it must meet: print start and support as hard checks, the constraint
