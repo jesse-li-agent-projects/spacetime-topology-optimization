@@ -367,7 +367,12 @@ def test_step_objective_terms_read_the_time_field(term, overrides):
     must add a time-field sensitivity, or its path to `t` is cut."""
     nelx, nely = 10, 8
     nel = nelx * nely
-    off = {"Theta": 0.0, "uniformity_weight": 0.0, "roughness_weight": 0.0}
+    off = {
+        "Theta": 0.0,
+        "uniformity_weight": 0.0,
+        "roughness_weight": 0.0,
+        "hotspot_weight": 0.0,
+    }
 
     def reads(settings):
         Theta = settings.pop("Theta")
@@ -480,10 +485,13 @@ def test_the_first_step_calibrates_the_hotspot_constraint_against_the_seed():
     uncalibrated = problem.terms.hotspot.calibration
     state = stto.init_state(problem)
     xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, BETA_D)
-    K_est = problem.terms.estimated_conductivity(xPhys, tPhys)
+    K_est = problem.terms.estimated_conductivity(xPhys, tPhys, 0)  # the first step's q
     finite = torch.isfinite(K_est)
     true_max = float(
-        ((1 - K_est[finite]) * xPhys.flatten()[finite] ** problem.config.r).max()
+        (
+            (1 - K_est[finite])
+            * xPhys.flatten()[finite] ** run_config.weight_at(problem.config.r, 0)
+        ).max()
     )
 
     _, record = stto.step(problem, state)
@@ -764,7 +772,7 @@ def _gradient_records(**overrides):
     _, record = stto.step(base, state)
     _, with_record = stto.step(with_rows, state)
     fields = stto.physical_fields(base, state.x, state.t, state.beta_d)
-    return record, with_record, fields, base.config.r
+    return record, with_record, fields, run_config.weight_at(base.config.r, state.loop)
 
 
 def _slope_and_frobenius(tPhys):
@@ -828,14 +836,15 @@ def test_gradient_floor_holds_its_median_out_of_the_gradient():
         for _ in range(2)
     )
 
+    r = run_config.weight_at(problem.config.r, STATE_LOOP)
     (value,) = constraints.min_gradient(
-        xPhys, tPhys, problem.terms.min_gradient, 0.5, problem.config.r, STATE_LOOP
+        xPhys, tPhys, problem.terms.min_gradient, 0.5, r, STATE_LOOP
     )
     got = torch.autograd.grad(value, (xPhys, tPhys))
 
     grad, _ = timefield.central_derivatives(tPhys)
     slope = torch.linalg.vector_norm(grad, dim=-1)
-    severity = xPhys[1:-1, 1:-1].flatten() ** problem.config.r * (
+    severity = xPhys[1:-1, 1:-1].flatten() ** r * (
         1.0 - slope / slope.detach().median()
     )
     beta = problem.config.min_gradient_beta
@@ -970,11 +979,12 @@ def test_a_scheduled_r_gives_each_iterations_hotspot_row():
     """At each iteration, an `r` schedule weights the hotspot severity as the constant
     `r` it resolves to there."""
     schedule = run_config.PiecewiseSchedule(points=[[0, 0.5], [1, 0.05]])
-    problem = _problem(config_overrides=dict(r=schedule))
+    undamped = dict(calibration_rate=1.0)  # each evaluation measures afresh
+    problem = _problem(config_overrides=dict(r=schedule, **undamped))
     state = stto.init_state(problem)
     xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, 1.0)
     for loop, r in ((0, 0.5), (1, 0.05)):
-        fixed = _problem(config_overrides=dict(r=r))
+        fixed = _problem(config_overrides=dict(r=r, **undamped))
         K_est = problem.terms.estimated_conductivity(xPhys, tPhys, loop)
         torch.testing.assert_close(
             problem.terms.constraints(xPhys, tPhys, K_est, loop)["hotspot"],

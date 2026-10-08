@@ -74,14 +74,15 @@ def test_checks_cli_reproduces_the_runs_own_check(tmp_path, monkeypatch):
 
     rerun = json.loads(report.read_text())
     # The physics differs in the last bits between two runs on the GPU.
-    physics = ("constraints", "compliance")
+    physics = ("constraints", "constraints_continuous", "compliance")
     assert {k: v for k, v in rerun.items() if k not in physics} == {
         k: v for k, v in written.items() if k not in physics
     }
     assert rerun["compliance"] == pytest.approx(written["compliance"], rel=1e-12)
-    assert rerun["constraints"].keys() == written["constraints"].keys()
-    for name, values in written["constraints"].items():
-        np.testing.assert_allclose(rerun["constraints"][name], values, rtol=1e-12)
+    for rows in ("constraints", "constraints_continuous"):
+        assert rerun[rows].keys() == written[rows].keys()
+        for name, values in written[rows].items():
+            np.testing.assert_allclose(rerun[rows][name], values, rtol=1e-12)
 
 
 def _reference_run(config):
