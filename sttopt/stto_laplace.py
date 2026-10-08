@@ -347,7 +347,11 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     g_hotspot_t = g_parts["hotspot"][0]
     g_all = torch.cat(list(g_parts.values()))
     # Per part, not on `g_all`, as in `stto.step` (PR #173)
-    dg_dx = torch.cat([_sensitivity_rows(g, leaves) for g in g_parts.values()], dim=0)
+    g_rows = {name: _sensitivity_rows(g, leaves) for name, g in g_parts.items()}
+    dg_dx = torch.cat(list(g_rows.values()), dim=0)
+    hotspot_weight = problem.terms.add_time_only_hotspot(
+        df_dx, g_rows["hotspot"][0], nel, loop
+    )
 
     diagnostics = problem.terms.hotspot_diagnostics(g_hotspot_t, K_est_t, xPhys)
     with torch.no_grad():
@@ -367,6 +371,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         calibration=problem.terms.hotspot.calibration,
         penal=penal,
         uniformity_weight=objective.uniformity_weight,
+        hotspot_weight=hotspot_weight,
         Tcr=Tcr,
         rouf=run_config.weight_at(config.rouf, loop),
         hotspot_beta=run_config.weight_at(config.hotspot_beta, loop),

@@ -975,3 +975,37 @@ def test_scheduled_tmove_bounds_each_iterations_time_step():
 
     assert first.diagnostics["dt_max"] > 0.005  # non-vacuous: the wide limit is used
     assert second.diagnostics["dt_max"] <= 0.005 + 1e-12
+
+
+def test_hotspot_weight_adds_the_hotspot_gradient_to_the_time_variables_alone():
+    """The objective's sensitivity gains `hotspot_weight` times the hotspot severity's,
+    on the time half only: the constraint row `H / Tcr - 1` rescaled by `Tcr`. Without
+    stage compliance, so that the term is not lost against its much larger time
+    gradient."""
+    weight = 3.0
+    rng = np.random.default_rng(2)
+    base = _problem(Theta=0.0)
+    x_raw, t_raw, _ = _draw_well_conditioned_state(base, rng)
+    state = _state_from_raw(base, x_raw, t_raw)
+    xPhys, tPhys = stto.physical_fields(base, state.x, state.t, state.beta_d)
+    K_est = base.terms.estimated_conductivity(xPhys, tPhys, state.loop)
+    parts = stto.constraint_values(base, xPhys, tPhys, K_est, state.loop, state.beta_t)
+    names = list(parts)
+    row = sum(len(parts[name]) for name in names[: names.index("hotspot")])
+
+    def record(hotspot_weight):
+        problem = _problem(
+            Theta=0.0, config_overrides=dict(hotspot_weight=hotspot_weight)
+        )
+        _, rec = stto.step(problem, _state_from_raw(problem, x_raw, t_raw))
+        return rec
+
+    off, on = record(0.0), record(weight)
+    nel = base.config.nelx * base.config.nely
+    hotspot_t = off.dg[row, nel:]
+    assert np.abs(hotspot_t).max() > 0  # non-vacuous: the hotspot reads t
+    np.testing.assert_allclose(on.df[:nel], off.df[:nel], rtol=1e-9)
+    np.testing.assert_allclose(
+        on.df[nel:], off.df[nel:] + weight * TCR * hotspot_t, rtol=1e-9
+    )
+    assert on.diagnostics["hotspot_weight"] == weight

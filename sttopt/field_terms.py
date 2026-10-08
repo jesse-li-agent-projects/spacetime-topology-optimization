@@ -305,6 +305,30 @@ class FieldTerms:
             roughness_weight=roughness_weight,
         )
 
+    def add_time_only_hotspot(
+        self,
+        df: Float[Tensor, " n"],
+        hotspot_row: Float[Tensor, " n"],
+        nel: int,
+        loop: int,
+    ) -> float:
+        """Add the hotspot severity at `config.hotspot_weight` to the objective
+        gradient `df`, in place, on the time-field design variables alone: those after
+        the `nel` density variables. A time-only pressure, it has no value of its own
+        to differentiate, so it reads the hotspot constraint's gradient instead.
+
+        :param df: the objective's sensitivity row
+        :param hotspot_row: the hotspot constraint's sensitivity row, same layout
+        :param nel: number of density variables, which lead both rows
+        :param loop: iteration whose schedules apply
+        :return: the weight, for logging
+        """
+        weight = run_config.weight_at(self.config.hotspot_weight, loop)
+        # The constraint is `H / Tcr - 1`
+        Tcr = run_config.weight_at(self.config.Tcr, loop)
+        df[nel:] += weight * Tcr * hotspot_row[nel:]
+        return weight
+
     def hotspot_diagnostics(
         self,
         g_hotspot: Float[Tensor, ""],

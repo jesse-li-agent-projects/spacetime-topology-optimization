@@ -23,7 +23,7 @@ means run records written before the field existed no longer load -- add the fie
 every config file instead. The one exception is a field whose default is the only
 behaviour older records could have had (`SpaceTimeConfig.load_case`,
 `support_length_m`, `hotspot_credit`, `hotspot_tie_credit`, `hotspot_cooling_time`,
-`hotspot_cooling_sharpness`).
+`hotspot_cooling_sharpness`, `hotspot_weight`).
 """
 
 import bisect
@@ -230,6 +230,10 @@ class SpaceTimeConfig(_ConfigMixin):
     :param roughness_weight: weight on `timefield.relative_roughness`, a number or a
         `CosineSchedule`, as in `SeqRunConfig` -- whose docstring explains why the
         uniformity term needs it.
+    :param hotspot_weight: weight of the hotspot severity as an objective term on the
+        time-field design variables alone, possibly scheduled; 0, the default, disables
+        it. Unlike the hotspot constraint, it acts before `Tcr` binds, so the time field
+        can address a hotspot before the density field has to.
     :param Tcr: bound on the hotspot severity, possibly scheduled. The severity never
         exceeds 1, so a ramp from above 1 is inactive until it crosses 1: start it there,
         or its active part is a step.
@@ -313,6 +317,7 @@ class SpaceTimeConfig(_ConfigMixin):
     hotspot_beta: Scheduled
     hotspot_kappa: Scheduled
     hotspot_g0_per_m: float
+    hotspot_weight: Scheduled = 0.0
     hotspot_credit: str = "sigmoid"
     hotspot_tie_credit: float = 0.5
     hotspot_cooling_time: Scheduled = 0.0
