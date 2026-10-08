@@ -22,7 +22,7 @@ a config file and this module. That holds for a newly added field too, even thou
 means run records written before the field existed no longer load -- add the field to
 every config file instead. The one exception is a field whose default is the only
 behaviour older records could have had (`SpaceTimeConfig.load_case`,
-`support_length_m`).
+`support_length_m`, `hotspot_reference_gradient`, `hotspot_front_offset_m`).
 """
 
 import bisect
@@ -237,6 +237,13 @@ class SpaceTimeConfig(_ConfigMixin):
         knob: a converged field's gradient distribution is tight, so a `g0` near the
         median attenuates `kappa` by a near-constant factor across the whole part, which
         is a second `hotspot_kappa` rather than a floor (measured in `plans/archive/angular_weight.md`, Phase 3 results).
+    :param hotspot_reference_gradient: a `conductivity.ReferenceGradient` member value:
+        the layer thickness of the ideal fill `K_est = 1` stands for, each element's own
+        (`own`, the default and the only behaviour before it existed) or the part's
+        mean (`part_mean`).
+    :param hotspot_front_offset_m: how far behind the print front a neighbor must lie to
+        count as cooled material, possibly scheduled; `0` counts every earlier neighbor,
+        as before it existed. Requires `part_mean`; keep it below `rmin_cond_m`.
     :param rmin_m: density-filter radius.
     :param tool_radius_m: print tool radius, possibly scheduled. Bounds the concave
         curvature of the time field's iso-lines (`timefield.iso_curvature`) to
@@ -291,6 +298,8 @@ class SpaceTimeConfig(_ConfigMixin):
     hotspot_beta: Scheduled
     hotspot_kappa: Scheduled
     hotspot_g0_per_m: float
+    hotspot_reference_gradient: str = "own"
+    hotspot_front_offset_m: Scheduled = 0.0
     print_base: str
     rmin_m: float
     tool_radius_m: Scheduled
