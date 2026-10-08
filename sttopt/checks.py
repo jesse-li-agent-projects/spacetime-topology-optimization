@@ -1,5 +1,5 @@
 """Checks on a finished `stto` design, read off the binarized design a print would
-produce rather than the continuous one MMA optimized (`plans/post_run_checks.md`).
+produce rather than the continuous one MMA optimized (`plans/archive/post_run_checks.md`).
 
 Two conditions are hard, since a design that breaks them cannot be printed as
 sequenced: the print starts on the base, and every element off the part's boundary is
