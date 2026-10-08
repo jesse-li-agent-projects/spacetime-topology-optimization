@@ -309,6 +309,30 @@ User's notes (2026-10-07):
    12 full runs (~1.5 h); plain-TO references exist (`poc_*_plainTO`).
 6. **Code (PR #197, stacked on #196):** `q` is `Scheduled`.
 
+## Results: tuning P and its follow-ups (2026-10-07 to 10-08)
+
+Settled schedule: (b) plus `hotspot_weight` 50, now `configs/default.json`; the phases
+and the evidence behind each setting are in `configs/continuation.md`. In order:
+- **Tuning P** (q x Tcr start x taper): any early `tmove` >= 0.03 fixes S 0.3; C1 0.5
+  compliance spread 1.11-1.24 over small schedule changes, set over 120-350, not at
+  binarization. q variants mattered less than hoped; q follows penal.
+- **r sweep** (`beta_d` -> 32): `r` >= 0.25 removes the C1 0.5 grey-phase blow-up (final
+  1.04-1.06) but hides hot elements in grey (binarized row up to +0.86). penal -> 5
+  cleared grey bars in 1 of 4 runs. The bars were held by MMA's asymptotes collapsing
+  under a hotspot 2-cycle fed by the per-iteration calibration refresh (#202 damps it;
+  #203 logs the collapse).
+- **(b)**: `r` 0.5 -> 0.05 over 350-450, `beta_d` -> 32, penal and q -> 5 by 550,
+  `calibration_rate` 0.1. Passes all 3 cells incl. the binarized row; C1 0.5 1.041,
+  15 members. Start 0.25 also passes (C1 0.3 1.091, C1 0.5 1.054).
+- **Time-only hotspot weight** on (b), 1x = 25: all of 0-100 pass. The time field acts
+  before `Tcr` binds (row active ~180 vs ~60); C1 0.5 gains saddles. 50 chosen as the
+  middle of the passing range.
+- A C1 0.5 diagonal that stays thin is thin in plain TO too; it is not the uniformity
+  term (restarted without it, the member drops and the time field breaks down).
+
+Open: the validation matrix, replicates of the marginal cells, the default `Tcr` 0.8
+with this schedule, and the cleanup below.
+
 ## Cleanup after tuning (user, 2026-10-08)
 
 Once the schedule is settled, simplify the continuation where stages can merge.
