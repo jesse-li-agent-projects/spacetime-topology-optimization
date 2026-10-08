@@ -436,6 +436,25 @@ def constraint_values(
     return g | problem.terms.constraints(xPhys, tPhys, K_est, loop)
 
 
+def _floor_shares(
+    history: mma.History,
+    move_limit: Float[Tensor, " n"],
+    xPhys: Float[Tensor, "nely nelx"],
+    nel: int,
+) -> dict[str, float]:
+    """`mma.floor_share` of the density variables (all, and those of grey elements) and
+    of the time variables: where MMA's trust region has collapsed."""
+    density = torch.zeros_like(move_limit, dtype=torch.bool)
+    density[:nel] = True
+    grey = density.clone()
+    grey[:nel] = (xPhys.flatten() > 0.05) & (xPhys.flatten() < 0.95)
+    return dict(
+        asy_floor_x=mma.floor_share(history, move_limit, density),
+        asy_floor_x_grey=mma.floor_share(history, move_limit, grey),
+        asy_floor_t=mma.floor_share(history, move_limit, ~density),
+    )
+
+
 def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     """Run one optimization iteration: build the objective + every constraint's value
     in the reference's exact order, differentiate the whole graph by autograd
@@ -572,6 +591,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     # dg_dx are the last gradient-carrying values, detached here on their way in.
     # xval never required grad -- it's built from state.x/state.t, the detached
     # fields, not the x/t leaves above.
+    mma_stats = {"subsolv_cap_hits": 0}
     xmma, lam, mma_history = mma.unit_box_step(
         state.mma,
         loop,
@@ -584,6 +604,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         a0=config.a0,
         c=config.mma_c,
         raa0=config.raa0_total / problem.n,
+        stats=mma_stats,
     )
 
     new_state = State(
@@ -604,6 +625,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         dx_mean=float(step_size[:nel].mean()),
         dt_max=float(step_size[nel:].max()),
         dt_mean=float(step_size[nel:].mean()),
+        **mma_stats,
+        **_floor_shares(mma_history, move_limit, xPhys.detach(), nel),
     )
     record = IterationRecord(
         obj=obj_final_only,

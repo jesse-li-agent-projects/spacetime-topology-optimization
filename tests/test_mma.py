@@ -398,3 +398,51 @@ def test_subsolv_does_not_depend_on_line_search_chunks(monkeypatch, chunks):
     monkeypatch.setattr(mma, "_line_search", forced_line_search(chunks))
     for got, want in zip(mma.subsolv(*args), expected):
         assert torch.equal(got, want)
+
+
+def test_subsolv_counts_each_barrier_level_that_hits_its_iteration_cap():
+    """A barrier target below float precision cannot be met, so every level from the
+    first to the target stops at the cap; a reachable one stops at none."""
+    torch.manual_seed(0)
+    n, m = 6, 1
+    f64 = dict(dtype=torch.float64)
+    x = torch.full((n,), 0.5, **f64)
+    args = (
+        x - 0.1,
+        x + 0.1,
+        x - 0.05,
+        x + 0.05,
+        torch.rand(n, **f64),
+        torch.rand(n, **f64),
+    )
+    args += (
+        torch.rand(m, n, **f64),
+        torch.rand(m, n, **f64),
+        1.0,
+        torch.zeros(m, **f64),
+    )
+    args += (
+        torch.ones(m, **f64),
+        torch.full((m,), 1000.0, **f64),
+        torch.zeros(m, **f64),
+    )
+    reachable, unreachable = {}, {}
+    mma.subsolv(m, n, 1e-7, *args, reachable)
+    with pytest.warns(RuntimeWarning, match="iteration cap"):
+        mma.subsolv(m, n, 1e-30, *args, unreachable)
+    assert reachable.get("subsolv_cap_hits", 0) == 0
+    assert unreachable["subsolv_cap_hits"] > 0
+
+
+def test_floor_share_counts_variables_whose_asymptotes_are_at_their_floor():
+    move = torch.full((4,), 0.01, dtype=torch.float64)
+    floor = mma.trust_region_params(move, torch.ones_like(move))["asyclamp_min"]
+    x = torch.full((4,), 0.5, dtype=torch.float64)
+    half = floor * torch.tensor([1.0, 1.0, 2.0, 50.0], dtype=torch.float64)  # two at it
+    history = mma.History(xold1=x, xold2=x, low=x - half, upp=x + half)
+    every = torch.ones(4, dtype=torch.bool)
+    assert mma.floor_share(history, move, every) == 0.5
+    assert (
+        mma.floor_share(history, move, torch.tensor([True, False, False, False])) == 1.0
+    )
+    assert mma.floor_share(history, move, torch.zeros(4, dtype=torch.bool)) == 0.0

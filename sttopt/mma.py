@@ -15,7 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import torch
-from jaxtyping import Float
+from jaxtyping import Bool, Float
 from torch import Tensor
 
 
@@ -88,11 +88,13 @@ def unit_box_step(
     a0: float,
     c: float,
     raa0: float,
+    stats: dict | None = None,
 ) -> tuple[Float[Tensor, " n"], Float[Tensor, " m"], History]:
     """One MMA iteration on design variables that each lie on `[0, 1]`, with a trust
     region of half-width `move_limit` (`trust_region_params`) and every constraint
     relaxed at the same cost `c`.
 
+    :param stats: if given, collects counts from the subproblem solve (`subsolv`)
     :return: `(xmma, lam, history)`, the new point, the constraint multipliers, and the
         history for the next call
     """
@@ -120,9 +122,29 @@ def unit_box_step(
         torch.full_like(zeros, c),
         zeros.clone(),
         raa0=raa0,
+        stats=stats,
         **trust_region_params(move_limit, xmax - xmin),
     )
     return xmma, lam, History(xold1=xval, xold2=history.xold1, low=low, upp=upp)
+
+
+def floor_share(
+    history: History,
+    move_limit: Float[Tensor, " n"],
+    mask: Bool[Tensor, " n"],
+) -> float:
+    """Share of the variables in `mask` whose asymptotes sit at their floor
+    (`trust_region_params`' `asyclamp_min`): MMA has shrunk their trust region as far as
+    it goes, typically after a run of reversals, so they can barely move however large
+    their gradient. 0 for an empty mask.
+
+    :param history: the history `unit_box_step` returned, whose asymptotes it used
+    :param move_limit: the trust-region half-width that step used, per variable
+    :param mask: which variables to count
+    """
+    floor = trust_region_params(move_limit, torch.ones_like(move_limit))["asyclamp_min"]
+    at_floor = (history.upp - history.low) / 2 <= floor * (1 + 1e-6)
+    return float(at_floor[mask].double().mean()) if bool(mask.any()) else 0.0
 
 
 def mmasub(
@@ -152,6 +174,7 @@ def mmasub(
     albefa: float = 0.1,
     asyincr: float = 1.2,
     asydecr: float = 0.7,
+    stats: dict | None = None,
 ):
     """One MMA iteration: update the moving asymptotes and solve the resulting subproblem.
 
@@ -185,6 +208,7 @@ def mmasub(
         forming the subproblem bounds, to keep the subproblem away from its poles
     :param asyincr: factor to relax the asymptotes by when a variable moves monotonically
     :param asydecr: factor to tighten them by when a variable oscillates
+    :param stats: if given, `subsolv` adds to its `"subsolv_cap_hits"` (see there)
     :return: `(xmma, ymma, zmma, lam, xsi, eta, mu, zet, s, low, upp)` -- the subproblem's
         primal optimum, its Lagrange multipliers/slacks, and the asymptotes to pass into
         the next call.
@@ -258,7 +282,7 @@ def mmasub(
     b = P @ uxinv + Q @ xlinv - fval
 
     xmma, ymma, zmma, lam, xsi, eta, mu, zet, s = subsolv(
-        m, n, epsimin, low, upp, alfa, beta, p0, q0, P, Q, a0, a, b, c, d
+        m, n, epsimin, low, upp, alfa, beta, p0, q0, P, Q, a0, a, b, c, d, stats
     )
     return xmma, ymma, zmma, lam, xsi, eta, mu, zet, s, low, upp
 
@@ -336,6 +360,7 @@ def subsolv(
     b: Float[Tensor, " m"],
     c: Float[Tensor, " m"],
     d: Float[Tensor, " m"],
+    stats: dict | None = None,
 ):
     """Solve the MMA subproblem built by `mmasub` via a primal-dual interior-point Newton method.
 
@@ -349,6 +374,10 @@ def subsolv(
     `(xmma, ymma, zmma, lamma, xsimma, etamma, mumma, zetmma, smma)`: the primal
     optimum, its slack `s`, and the Lagrange multipliers for the constraint types
     documented in `mmasub`.
+
+    A barrier level whose Newton loop stops at its iteration cap warns, and counts
+    toward `stats["subsolv_cap_hits"]` if `stats` is given: the warning shows once per
+    run, the count shows how often.
     """
     device, dtype = low.device, low.dtype
 
@@ -515,6 +544,8 @@ def subsolv(
             )
 
         if ittt > 198:
+            if stats is not None:
+                stats["subsolv_cap_hits"] = stats.get("subsolv_cap_hits", 0) + 1
             warnings.warn(
                 f"subsolv: inner Newton loop hit the iteration cap (ittt={ittt}) "
                 f"at epsi={epsi} without reaching the 0.9*epsi residual target",

@@ -982,6 +982,17 @@ def test_a_scheduled_r_gives_each_iterations_hotspot_row():
         )
 
 
+def test_a_step_reports_mma_trust_region_and_subproblem_diagnostics():
+    """Shares of variables at the asymptote floor lie in [0, 1], and the subproblem's
+    cap-hit count is a whole number."""
+    problem = _problem()
+    _, record = stto.step(problem, stto.init_state(problem))
+    d = record.diagnostics
+    for key in ("asy_floor_x", "asy_floor_x_grey", "asy_floor_t"):
+        assert 0.0 <= d[key] <= 1.0
+    assert isinstance(d["subsolv_cap_hits"], int) and d["subsolv_cap_hits"] >= 0
+
+
 def test_scheduled_tmove_bounds_each_iterations_time_step():
     """A `tmove` schedule sets the trust region of the iteration it resolves at."""
     schedule = run_config.PiecewiseSchedule(points=[[0, 0.02], [1, 0.005]], mode="step")
