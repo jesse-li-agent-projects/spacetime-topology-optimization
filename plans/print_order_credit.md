@@ -308,3 +308,11 @@ User's notes (2026-10-07):
    tentatively: P binarizes by 450). 12 trunks + 24 branches, ~1.2x the iterations of
    12 full runs (~1.5 h); plain-TO references exist (`poc_*_plainTO`).
 6. **Code (PR #197, stacked on #196):** `q` is `Scheduled`.
+
+## Cleanup after tuning (user, 2026-10-08)
+
+Once the schedule is settled, simplify the continuation where stages can merge.
+- `Tcr`: 1 -> 0.95 by 50, then to the target by 350. At target 0.6 the two slopes are
+  nearly equal (0.0010 vs 0.0012 per iteration), so one ramp 1 -> target over 0-350 may
+  do; at target 0.4 they differ (0.0010 vs 0.0018). The 0.95 point only exists to make
+  the hotspot bind by ~50; test the single ramp against that.
