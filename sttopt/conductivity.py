@@ -661,7 +661,11 @@ class PMean:
     the aggregate then says nothing about the maximum, so the last one is kept.
     """
 
-    def __init__(self, p: float, r: float):
+    def __init__(self, p: float, r: "run_config.Scheduled"):
+        """
+        :param p: the p-mean exponent
+        :param r: the density exponent of the severity, possibly scheduled
+        """
         self.p = p
         self.r = r
         self.calibration = 1.0
@@ -669,8 +673,8 @@ class PMean:
     def __call__(
         self, K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"], loop: int
     ) -> Float[Tensor, ""]:
-        """The calibrated aggregate, differentiable in `K_est` and `xPhys`. Nothing here
-        is scheduled, so `loop` is unused.
+        """The calibrated aggregate at iteration `loop`'s `r`, differentiable in `K_est`
+        and `xPhys`.
 
         Written in a NaN-safe form: `(T * x**r) ** p` differentiates to `inf` at
         `x == 0` (density does reach exact zero once the Heaviside projection
@@ -678,13 +682,14 @@ class PMean:
         whose gradient is finite while `r*p > 1`.
         """
         x = xPhys.flatten()
+        r = run_config.weight_at(self.r, loop)
         # An infinitely shielded element contributes nothing, which `(-inf)**p` is not
         # a way to say.
         T = torch.where(torch.isinf(K_est), torch.zeros_like(K_est), 1 - K_est)
-        numer = _safe_pmean(torch.mean(T**self.p * x ** (self.r * self.p)), self.p)
+        numer = _safe_pmean(torch.mean(T**self.p * x ** (r * self.p)), self.p)
         numer_value = float(numer.detach())
         if numer_value != 0:
-            self.calibration = _max_severity(K_est, xPhys, self.r) / numer_value
+            self.calibration = _max_severity(K_est, xPhys, r) / numer_value
         return self.calibration * numer
 
 
@@ -701,10 +706,11 @@ class LogSumExp(smooth_max.CalibratedLogSumExp):
     makes negligible.
     """
 
-    def __init__(self, beta: "run_config.Scheduled", r: float):
+    def __init__(self, beta: "run_config.Scheduled", r: "run_config.Scheduled"):
         """
         :param beta: sharpness, possibly scheduled
-        :param r: the density exponent of the severity the calibration targets
+        :param r: the density exponent of the severity the calibration targets,
+            possibly scheduled
         """
         super().__init__(beta)
         self.r = r
@@ -712,10 +718,10 @@ class LogSumExp(smooth_max.CalibratedLogSumExp):
     def __call__(
         self, K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"], loop: int
     ) -> Float[Tensor, ""]:
-        """The calibrated aggregate at iteration `loop`'s sharpness, differentiable in
-        `K_est` and `xPhys`."""
+        """The calibrated aggregate at iteration `loop`'s sharpness and `r`,
+        differentiable in `K_est` and `xPhys`."""
         shielded = torch.isinf(K_est)
-        x_r = smooth_max.density_power(xPhys.flatten(), self.r)
+        x_r = smooth_max.density_power(xPhys.flatten(), run_config.weight_at(self.r, loop))
         # `1 - inf` would poison the `-inf` reselect below through `inf * 0`.
         T = torch.where(shielded, torch.zeros_like(K_est), 1 - K_est)
         sev = torch.where(shielded, -torch.inf, T * x_r)
@@ -723,7 +729,10 @@ class LogSumExp(smooth_max.CalibratedLogSumExp):
 
 
 def make_aggregation(
-    aggregation: Aggregation, p: float, r: float, beta: "run_config.Scheduled"
+    aggregation: Aggregation,
+    p: float,
+    r: "run_config.Scheduled",
+    beta: "run_config.Scheduled",
 ) -> PMean | LogSumExp:
     """A fresh, uncalibrated aggregation for a run's settings.
 

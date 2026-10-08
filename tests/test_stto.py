@@ -966,6 +966,22 @@ def test_a_scheduled_q_gives_each_iterations_conductivity():
         )
 
 
+def test_a_scheduled_r_gives_each_iterations_hotspot_row():
+    """At each iteration, an `r` schedule weights the hotspot severity as the constant
+    `r` it resolves to there."""
+    schedule = run_config.PiecewiseSchedule(points=[[0, 0.5], [1, 0.05]])
+    problem = _problem(config_overrides=dict(r=schedule))
+    state = stto.init_state(problem)
+    xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, 1.0)
+    for loop, r in ((0, 0.5), (1, 0.05)):
+        fixed = _problem(config_overrides=dict(r=r))
+        K_est = problem.terms.estimated_conductivity(xPhys, tPhys, loop)
+        torch.testing.assert_close(
+            problem.terms.constraints(xPhys, tPhys, K_est, loop)["hotspot"],
+            fixed.terms.constraints(xPhys, tPhys, K_est, loop)["hotspot"],
+        )
+
+
 def test_scheduled_tmove_bounds_each_iterations_time_step():
     """A `tmove` schedule sets the trust region of the iteration it resolves at."""
     schedule = run_config.PiecewiseSchedule(points=[[0, 0.02], [1, 0.005]], mode="step")
