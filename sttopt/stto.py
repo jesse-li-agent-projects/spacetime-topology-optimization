@@ -532,7 +532,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     hotspot_weight = problem.terms.add_time_only_hotspot(
         df_dx, g_rows["hotspot"][0], nel, loop
     )
-    diagnostics = problem.terms.hotspot_diagnostics(g_hotspot_t, K_est_t, xPhys)
+    diagnostics = problem.terms.hotspot_diagnostics(g_hotspot_t, K_est_t, xPhys, loop)
     with torch.no_grad():
         unit_m = timefield.unit_length_m(tPhys, config.element_size_m)
         grad_p10, grad_p50, grad_p90 = (
@@ -557,7 +557,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         beta_t=beta_t,
         tool_radius_m=tool_radius_m,
         admissible_tool_radius_m=problem.terms.admissible_tool_radius_m(
-            xPhys.detach(), tPhys.detach()
+            xPhys.detach(), tPhys.detach(), loop
         ),
         min_gradient_fraction=run_config.weight_at(config.min_gradient_fraction, loop),
         gradient_smoothness_m=run_config.weight_at(config.gradient_smoothness_m, loop),

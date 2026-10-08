@@ -240,6 +240,7 @@ class FieldTerms:
         config = self.config
         h = config.element_size_m
         Tcr = run_config.weight_at(config.Tcr, loop)
+        r = run_config.weight_at(config.r, loop)
         g = {"hotspot": (self.hotspot(K_est, xPhys, loop) / Tcr - 1)[None]}
         if self.curvature is not None:
             g["tool_radius"] = constraints.tool_radius(
@@ -247,7 +248,7 @@ class FieldTerms:
                 tPhys,
                 self.curvature,
                 units.in_elements(run_config.weight_at(config.tool_radius_m, loop), h),
-                config.r,
+                r,
                 loop,
             )
         if self.min_gradient is not None:
@@ -256,7 +257,7 @@ class FieldTerms:
                 tPhys,
                 self.min_gradient,
                 run_config.weight_at(config.min_gradient_fraction, loop),
-                config.r,
+                r,
                 loop,
             )
         if self.gradient_smoothness is not None:
@@ -267,7 +268,7 @@ class FieldTerms:
                 units.in_elements(
                     run_config.weight_at(config.gradient_smoothness_m, loop), h
                 ),
-                config.r,
+                r,
                 loop,
             )
         return g
@@ -334,6 +335,7 @@ class FieldTerms:
         g_hotspot: Float[Tensor, ""],
         K_est: Float[Tensor, " nel"],
         xPhys: Float[Tensor, "nely nelx"],
+        loop: int,
     ) -> dict:
         """
         The true maximum severity and where it sits, and how many elements share the
@@ -342,13 +344,16 @@ class FieldTerms:
         mean over the part rather than on its maximum.
 
         :param g_hotspot: the hotspot constraint's value, connected to `K_est`
+        :param loop: iteration whose schedules apply
         :return: `true_max`, `hot_row`, `hot_col`, `n_eff`
         """
         (grad,) = torch.autograd.grad(g_hotspot, K_est, retain_graph=True)
         with torch.no_grad():
             a = torch.nan_to_num(grad.abs(), posinf=0.0)
             n_eff = float(a.sum() ** 2 / (a**2).sum()) if bool((a > 0).any()) else 0.0
-            severity = conductivity.severity(K_est, xPhys, self.config.r)
+            severity = conductivity.severity(
+                K_est, xPhys, run_config.weight_at(self.config.r, loop)
+            )
             imax = int(severity.argmax())
         nelx = xPhys.shape[1]
         return dict(
@@ -362,12 +367,15 @@ class FieldTerms:
         self,
         xPhys: Float[Tensor, "nely nelx"],
         tPhys: Float[Tensor, "nely nelx"],
+        loop: int,
     ) -> float:
         """The largest tool radius that no iso-line's concave curvature (density-
-        weighted, per element, as in `constraints.tool_radius`) forbids; `inf` where
-        nothing is concave."""
+        weighted, per element at iteration `loop`'s `r`, as in
+        `constraints.tool_radius`) forbids; `inf` where nothing is concave."""
         kappa = timefield.iso_curvature(tPhys, xPhys).flatten()
-        density_r = smooth_max.density_power(xPhys[1:-1, 1:-1].flatten(), self.config.r)
+        density_r = smooth_max.density_power(
+            xPhys[1:-1, 1:-1].flatten(), run_config.weight_at(self.config.r, loop)
+        )
         concave = -kappa / timefield.unit_length(tPhys) * density_r
         worst = float(concave.max()) if concave.numel() else 0.0
         return self.config.element_size_m / worst if worst > 0 else float("inf")
