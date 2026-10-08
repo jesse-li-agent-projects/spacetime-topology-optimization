@@ -478,6 +478,9 @@ class LaplaceRunConfig(SpaceTimeConfig):
     :param wall_filter_rmin_m: radius of the density-style filter on the wall design
         along the wall arc; without it the wall data is noisy node to node, since each
         node moves a whole wall region of `t`. 0 leaves it unfiltered.
+    :param field_move: MMA trust-region half-width on the time-field variables (`mu`
+        and the wall design), possibly scheduled, as `RunConfig.tmove` is for `t`.
+        `None` uses `move`.
     """
 
     chi_contrast: float
@@ -485,6 +488,7 @@ class LaplaceRunConfig(SpaceTimeConfig):
     laplace_cg_rtol: float
     poisson_cg_rtol: float
     wall_filter_rmin_m: float = 0.0
+    field_move: Scheduled | None = None
 
     def __post_init__(self) -> None:
         super().__post_init__()

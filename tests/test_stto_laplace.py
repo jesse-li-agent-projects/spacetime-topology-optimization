@@ -145,3 +145,19 @@ def test_a_step_stays_finite_when_void_is_later_than_the_part():
     _, record = stto_laplace.step(problem, state)
     assert np.isfinite(record.f) and np.isfinite(record.g).all()
     assert np.isfinite(record.dg).all()
+
+
+@pytest.mark.filterwarnings("ignore:subsolv:RuntimeWarning")
+def test_field_move_bounds_the_time_field_variables_apart_from_the_density():
+    move, field_move = 0.01, 0.002
+    problem = stto_laplace.build_problem(
+        _config(move=move, field_move=field_move), device="cpu"
+    )
+    state = stto_laplace.init_state(problem)
+    for _ in range(3):
+        state, record = stto_laplace.step(problem, state)
+    diag = record.diagnostics
+    assert diag["dx_max"] <= move + 1e-12
+    assert max(diag["dmu_max"], diag["dwall_max"]) <= field_move + 1e-12
+    assert diag["dx_max"] > field_move  # non-vacuous
+    assert diag["dtphys_max"] > 0
