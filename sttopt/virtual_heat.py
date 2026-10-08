@@ -438,18 +438,25 @@ def laplace_time_field(
     mu: Float[Tensor, "nely nelx"],
     wall: Float[Tensor, " n_arc"],
     previous: TimeFieldSolution | None = None,
+    density_exponent: float = 0.0,
 ) -> TimeFieldSolution:
     """Variant 2: the time field of `div(chi grad t) = 0` over the whole domain.
 
-    :param xPhys: physical densities; they only set the normalization, since the field
-        does not see the part
+    :param xPhys: physical densities; they set the normalization, and `chi` through
+        `density_exponent`
     :param mu: diffusivity design field
     :param wall: wall design on `[0, 1]`; the wall data is `wall * wall_scale(mesh)`
     :param previous: the last iteration's solution, the warm start
+    :param density_exponent: `e` in `chi = max(xPhys**e, config.chi_density_floor) *
+        chi(mu)`; 0 leaves `chi` independent of the density
     :return: `tPhys` and the nodal solutions
     """
     shape = xPhys.shape
     chi = diffusivity(mu.flatten(), config.chi_contrast)
+    if density_exponent != 0:
+        chi = chi * torch.clamp(
+            xPhys.flatten() ** density_exponent, min=config.chi_density_floor
+        )
     b = wall * wall_scale(mesh)
 
     g = torch.zeros(mesh.ndof, device=chi.device, dtype=chi.dtype).index_put(
