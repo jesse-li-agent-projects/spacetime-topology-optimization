@@ -192,6 +192,7 @@ def physical_fields(
     mu: Float[Tensor, "nely nelx"],
     wall: Float[Tensor, " n_arc"],
     beta_d: float,
+    loop: int,
     previous: virtual_heat.TimeFieldSolution | None = None,
 ) -> tuple[Float[Tensor, "nely nelx"], virtual_heat.TimeFieldSolution]:
     """The density and time fields the physics reads, from the design variables.
@@ -203,13 +204,21 @@ def physical_fields(
     :param mu: diffusivity design field
     :param wall: wall design along the arc, filtered along it
     :param beta_d: projection sharpness
+    :param loop: iteration whose `chi_density_exponent` applies
     :param previous: the last solution, the warm start
     :return: `(xPhys, solution)`, `solution.tPhys` the time field
     """
+    config = problem.config
     xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
-    xPhys = filters.heaviside_projection(xTilde, beta_d, problem.config.eta)
+    xPhys = filters.heaviside_projection(xTilde, beta_d, config.eta)
     solution = virtual_heat.laplace_time_field(
-        problem.config, problem.mesh, xPhys, mu, problem.wall_filter @ wall, previous
+        config,
+        problem.mesh,
+        xPhys,
+        mu,
+        problem.wall_filter @ wall,
+        previous,
+        density_exponent=run_config.weight_at(config.chi_density_exponent, loop),
     )
     return xPhys, solution
 
@@ -353,7 +362,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     leaves = tuple(
         v.clone().requires_grad_(True) for v in (state.x, state.mu, state.wall)
     )
-    xPhys, laplace = physical_fields(problem, *leaves, beta_d, state.laplace)
+    xPhys, laplace = physical_fields(problem, *leaves, beta_d, loop, state.laplace)
     tPhys = laplace.tPhys
 
     c_t, stage_cs, U_new = compliance.batched_whole_and_gravity_compliance(
@@ -528,6 +537,7 @@ def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
                 state.mu,
                 state.wall,
                 state.beta_d,
+                state.loop,
                 state.laplace,
             )
         xPhys_traj.append(xPhys)
@@ -565,8 +575,8 @@ def check_design(problem: Problem, state: State) -> dict:
     design = (state.x, state.mu, state.wall)
     beta_d = run_config.weight_at(config.beta_d_schedule, loop)
     with torch.no_grad():
-        xPhys, as_optimized = physical_fields(problem, *design, beta_d)
-        xBin, laplace = physical_fields(problem, *design, math.inf)
+        xPhys, as_optimized = physical_fields(problem, *design, beta_d, loop)
+        xBin, laplace = physical_fields(problem, *design, math.inf, loop)
     tPhys = laplace.tPhys
     xBin_np, tPhys_np = torch_util.to_numpy(xBin), torch_util.to_numpy(tPhys)
     solid = geometry.solid_mask(xBin_np).reshape(xBin_np.shape)

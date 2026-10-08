@@ -118,6 +118,7 @@ def main(args: argparse.Namespace) -> None:
                     state.mu,
                     state.wall,
                     state.beta_d,
+                    state.loop,
                     state.laplace,
                 )
             diag = record.diagnostics
