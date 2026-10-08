@@ -62,6 +62,24 @@ def test_check_design_passes_a_printable_design(problem):
     json.dumps(report, allow_nan=False)
 
 
+def test_check_design_reports_the_true_hotspot_under_a_damped_calibration(problem):
+    """A damped calibration carries a stale offset between iterations; the check still
+    measures each row afresh, as an undamped problem does."""
+    damped = stto.build_problem(
+        default_run_config(
+            nelx=30, nely=10, time_filter_rmin_m=0.0, calibration_rate=0.1
+        ),
+        device="cpu",
+    )
+    damped.terms.restore_calibrations({"hotspot": 123.0})  # stale, as on a resume
+    x, t = _printable_design(problem)
+    loop = problem.config.nloop
+    expected = checks.check_design(problem, x, t, loop)
+    report = checks.check_design(damped, x, t, loop)
+    for rows in ("constraints", "constraints_continuous"):
+        assert report[rows]["hotspot"] == pytest.approx(expected[rows]["hotspot"])
+
+
 def test_check_design_warns_on_a_pit(problem):
     x, t = _printable_design(problem)
     t[5, 15] = 0.0

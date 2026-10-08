@@ -124,7 +124,7 @@ class FieldTerms:
         ) -> smooth_max.CalibratedLogSumExp | None:
             if run_config.identically_zero(setting):
                 return None
-            return smooth_max.CalibratedLogSumExp(beta)
+            return smooth_max.CalibratedLogSumExp(beta, config.calibration_rate)
 
         return cls(
             config=config,
@@ -143,6 +143,7 @@ class FieldTerms:
                 config.p,
                 config.r,
                 config.hotspot_beta,
+                config.calibration_rate,
             ),
             curvature=calibrated(config.tool_radius_m, config.curvature_beta),
             min_gradient=calibrated(
@@ -167,6 +168,12 @@ class FieldTerms:
             if hasattr(term := getattr(self, f.name), "calibration")
         }
 
+    def reset_calibrations(self) -> None:
+        """Forget every smooth maximum's calibration, so the next evaluation measures
+        each afresh and its value is the true maximum whatever `calibration_rate` is."""
+        for name in self.calibrations():
+            getattr(self, name).reset()
+
     def restore_calibrations(self, calibrations: dict[str, float]) -> None:
         """
         Set the calibrations `calibrations()` returned, to resume a run.
@@ -174,7 +181,9 @@ class FieldTerms:
         :param calibrations: calibration value per field name
         """
         for name, value in calibrations.items():
-            getattr(self, name).calibration = value
+            term = getattr(self, name)
+            term.calibration = value
+            term.fresh = False  # continue the run's average, not a new measurement
 
     def estimated_conductivity(
         self,

@@ -23,7 +23,7 @@ means run records written before the field existed no longer load -- add the fie
 every config file instead. The one exception is a field whose default is the only
 behaviour older records could have had (`SpaceTimeConfig.load_case`,
 `support_length_m`, `hotspot_credit`, `hotspot_tie_credit`, `hotspot_cooling_time`,
-`hotspot_cooling_sharpness`, `hotspot_weight`).
+`hotspot_cooling_sharpness`, `hotspot_weight`, `calibration_rate`).
 """
 
 import bisect
@@ -230,6 +230,11 @@ class SpaceTimeConfig(_ConfigMixin):
     :param roughness_weight: weight on `timefield.relative_roughness`, a number or a
         `CosineSchedule`, as in `SeqRunConfig` -- whose docstring explains why the
         uniformity term needs it.
+    :param calibration_rate: weight of each new measurement in every calibrated smooth
+        maximum's calibration (the hotspot and the time-field constraints), in (0, 1].
+        1, the default, re-measures it every iteration, so each row's value is its true
+        maximum; lower values average it over iterations, so the rows MMA sees do not
+        jump with each measurement.
     :param hotspot_weight: weight of the hotspot severity as an objective term on the
         time-field design variables alone, possibly scheduled; 0, the default, disables
         it. Unlike the hotspot constraint, it acts before `Tcr` binds, so the time field
@@ -318,6 +323,7 @@ class SpaceTimeConfig(_ConfigMixin):
     hotspot_kappa: Scheduled
     hotspot_g0_per_m: float
     hotspot_weight: Scheduled = 0.0
+    calibration_rate: float = 1.0
     hotspot_credit: str = "sigmoid"
     hotspot_tie_credit: float = 0.5
     hotspot_cooling_time: Scheduled = 0.0
@@ -354,6 +360,10 @@ class SpaceTimeConfig(_ConfigMixin):
         super().__post_init__()
         self.nely  # raises now, at load, on a height that is not whole elements
         load_cases.LoadCase(self.load_case)  # likewise on an unknown case
+        if not 0 < self.calibration_rate <= 1:
+            raise ValueError(
+                f"calibration_rate must be in (0, 1], got {self.calibration_rate}"
+            )
 
     @property
     def element_size_m(self) -> float:

@@ -656,19 +656,27 @@ class PMean:
     is `x**(r*p)`, so `p` cannot be changed without also changing how hard void is
     suppressed, and `r*p <= 1` silently makes the gradient diverge at `x == 0`.
 
-    Every call measures the calibration afresh and holds it out of the gradient, as
-    `smooth_max.CalibratedLogSumExp` does, except where every element contributes zero:
-    the aggregate then says nothing about the maximum, so the last one is kept.
+    Every call measures the calibration afresh, holds it out of the gradient and moves
+    it `rate` of the way there, as `smooth_max.CalibratedLogSumExp` does, except where
+    every element contributes zero: the aggregate then says nothing about the maximum,
+    so the last one is kept.
     """
 
-    def __init__(self, p: float, r: "run_config.Scheduled"):
+    def __init__(self, p: float, r: "run_config.Scheduled", rate: float = 1.0):
         """
         :param p: the p-mean exponent
         :param r: the density exponent of the severity, possibly scheduled
+        :param rate: weight of each new measurement in the calibration, in (0, 1]
         """
         self.p = p
         self.r = r
+        self.rate = rate
         self.calibration = 1.0
+        self.fresh = True  # the next measurement is taken whole
+
+    def reset(self) -> None:
+        """Forget the calibration, so the next call takes its measurement whole."""
+        self.fresh = True
 
     def __call__(
         self, K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"], loop: int
@@ -689,7 +697,10 @@ class PMean:
         numer = _safe_pmean(torch.mean(T**self.p * x ** (r * self.p)), self.p)
         numer_value = float(numer.detach())
         if numer_value != 0:
-            self.calibration = _max_severity(K_est, xPhys, r) / numer_value
+            measured = _max_severity(K_est, xPhys, r) / numer_value
+            rate = 1.0 if self.fresh else self.rate
+            self.calibration = smooth_max.blend(self.calibration, measured, rate)
+            self.fresh = False
         return self.calibration * numer
 
 
@@ -706,13 +717,19 @@ class LogSumExp(smooth_max.CalibratedLogSumExp):
     makes negligible.
     """
 
-    def __init__(self, beta: "run_config.Scheduled", r: "run_config.Scheduled"):
+    def __init__(
+        self,
+        beta: "run_config.Scheduled",
+        r: "run_config.Scheduled",
+        rate: float = 1.0,
+    ):
         """
         :param beta: sharpness, possibly scheduled
         :param r: the density exponent of the severity the calibration targets,
             possibly scheduled
+        :param rate: weight of each new measurement in the calibration, in (0, 1]
         """
-        super().__init__(beta)
+        super().__init__(beta, rate)
         self.r = r
 
     def __call__(
@@ -733,16 +750,18 @@ def make_aggregation(
     p: float,
     r: "run_config.Scheduled",
     beta: "run_config.Scheduled",
+    rate: float = 1.0,
 ) -> PMean | LogSumExp:
     """A fresh, uncalibrated aggregation for a run's settings.
 
     :param beta: `LogSumExp` sharpness, possibly scheduled; unused by `PMean`, which
         takes `p` instead.
+    :param rate: weight of each new measurement in the calibration, in (0, 1]
     """
     if aggregation == Aggregation.P_MEAN:
-        return PMean(p, r)
+        return PMean(p, r, rate)
     elif aggregation == Aggregation.LOGSUMEXP:
-        return LogSumExp(beta, r)
+        return LogSumExp(beta, r, rate)
     else:
         raise ValueError(
             f"aggregation must be an Aggregation member, got {aggregation!r}"

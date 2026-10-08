@@ -11,6 +11,7 @@ import torch
 import sttopt.conductivity as conductivity
 import sttopt.filters as filters
 import sttopt.run_config as run_config
+import sttopt.smooth_max as smooth_max
 import sttopt.timefield as timefield
 import sttopt.torch_util as torch_util
 import tests.reference.conductivity as conductivity_ref
@@ -2139,3 +2140,20 @@ def test_a_soft_cooling_onset_pulls_a_later_neighbor_earlier():
         return float(-grad[1])
 
     assert pull(1.0) > 100 * pull(8.0) > 0
+
+
+def test_a_damped_calibration_moves_part_of_the_way_to_each_measurement():
+    """The first measurement is taken whole, later ones move the calibration `rate` of
+    the way, and `reset` takes the next one whole again."""
+    lse = smooth_max.CalibratedLogSumExp(1.0, rate=0.25)
+    one, three = torch.tensor([0.0, -1.0]), torch.tensor([0.0, -1.0, -1.0, -1.0])
+    offset = lambda sev: float(torch.logsumexp(sev, dim=0))  # the max is 0
+    lse.aggregate(one, 0)
+    assert lse.calibration == pytest.approx(offset(one))
+    value = lse.aggregate(three, 0)
+    expected = offset(one) + 0.25 * (offset(three) - offset(one))
+    assert lse.calibration == pytest.approx(expected)
+    assert float(value) == pytest.approx(offset(three) - expected)
+    lse.reset()
+    lse.aggregate(three, 0)
+    assert lse.calibration == pytest.approx(offset(three))
