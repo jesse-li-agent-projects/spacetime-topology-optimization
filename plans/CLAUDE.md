@@ -10,10 +10,6 @@ This directory contains plans for agents.
     - Deferred: ways to give `stto` a minimum feature size, against the thin necks the
       hotspot constraint adds. Options and their costs only; the user wants other
       avenues tried first.
-- post_run_checks.md
-    - A check on a saved `stto` design, binarized, that reports the margin of each
-      condition it must meet: print start and support as hard checks, the constraint
-      values and compliance as a report.
 - virtual_heat_tuning.md
     - Schedule tuning and the validation matrix for `stto_heat.py` and
       `stto_laplace.py`, whose time field solves a virtual heat equation (design in
