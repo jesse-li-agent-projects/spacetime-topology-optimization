@@ -9,7 +9,7 @@ means the same structure at any resolution. Nodes are named geometrically throug
 from enum import StrEnum
 
 import numpy as np
-from jaxtyping import Float, Int
+from jaxtyping import Bool, Float, Int
 
 import sttopt.fem as fem
 import sttopt.units as units
@@ -23,11 +23,20 @@ class LoadCase(StrEnum):
     the top and down-left at the bottom.
     EDGE_TRACTION: three clamped patches (two on the left edge, one on the bottom), a
     unit +x traction over the whole right edge.
+    L_BRACKET_CORNER, L_BRACKET_MIDDLE: an L, the domain without its top-right quarter,
+    clamped along the right edge of its bottom half. A unit +x load down the left edge
+    from the top-left corner (CORNER), or down the arm's right edge from its top
+    (MIDDLE).
     """
 
     CANTILEVER = "cantilever"
     CORNER_LOADS = "corner_loads"
     EDGE_TRACTION = "edge_traction"
+    L_BRACKET_CORNER = "l_bracket_corner"
+    L_BRACKET_MIDDLE = "l_bracket_middle"
+
+
+_L_BRACKETS = (LoadCase.L_BRACKET_CORNER, LoadCase.L_BRACKET_MIDDLE)
 
 
 def _patch_nodes(
@@ -100,6 +109,32 @@ def load_case(
             _patch_nodes(nodes[-1, :], 0.30 * nelx, support_length),
         ]
         fixed = _clamp(np.concatenate(patches))
+    elif case in _L_BRACKETS:
+        _check_halves(nelx, nely)
+        col = 0 if case == LoadCase.L_BRACKET_CORNER else nelx // 2
+        F[2 * nodes[: nely // 2 + 1, col]] = fem.edge_load_shares(
+            nely // 2 + 1, load_length
+        )
+        fixed = _clamp(nodes[nely // 2 :, -1])
     else:
         raise ValueError(f"case must be a LoadCase member, got {case!r}")
     return F, np.setdiff1d(np.arange(ndof), fixed)
+
+
+def _check_halves(nelx: int, nely: int) -> None:
+    """An L's three squares are whole elements only on an even mesh."""
+    if nelx % 2 or nely % 2:
+        raise ValueError(
+            f"an L bracket needs even nelx and nely to split into quarters, got {nelx} x {nely}"
+        )
+
+
+def active_mask(case: LoadCase, nelx: int, nely: int) -> Bool[np.ndarray, "nely nelx"]:
+    """The design domain of `case`: True where an element may hold material. Elements
+    outside it are void whatever the design variables say.
+    """
+    active = np.ones((nely, nelx), dtype=bool)
+    if case in _L_BRACKETS:
+        _check_halves(nelx, nely)
+        active[: nely // 2, nelx // 2 :] = False  # row 0 is the top
+    return active

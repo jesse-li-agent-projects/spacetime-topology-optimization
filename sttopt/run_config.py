@@ -407,10 +407,16 @@ class RunConfig(SpaceTimeConfig):
 _PLATE_BASES = ("edge", "bottom_edge")
 
 
-def _check_plate_base(print_base: str) -> None:
-    if print_base.lower() not in _PLATE_BASES:
+def _check_virtual_heat(config: SpaceTimeConfig) -> None:
+    """What a virtual-heat time field supports: a plate base, on the whole mesh."""
+    if config.print_base.lower() not in _PLATE_BASES:
         raise ValueError(
-            f"print_base must be one of {_PLATE_BASES} for a virtual-heat time field, got {print_base!r}"
+            f"print_base must be one of {_PLATE_BASES} for a virtual-heat time field, got {config.print_base!r}"
+        )
+    case = load_cases.LoadCase(config.load_case)
+    if not load_cases.active_mask(case, config.nelx, config.nely).all():
+        raise ValueError(
+            f"a virtual-heat time field needs the whole mesh as its domain; {case} leaves part of it out"
         )
 
 
@@ -459,7 +465,7 @@ class HeatRunConfig(SpaceTimeConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        _check_plate_base(self.print_base)
+        _check_virtual_heat(self)
         HeatTimeMap(self.time_map)
 
 
@@ -488,7 +494,7 @@ class LaplaceRunConfig(SpaceTimeConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        _check_plate_base(self.print_base)
+        _check_virtual_heat(self)
         LaplaceTimeMap(self.time_map)
 
 
