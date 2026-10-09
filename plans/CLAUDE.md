@@ -6,6 +6,9 @@ This directory contains plans for agents.
       KEEP this entry even once every plan below is finished/archived and this
       list is otherwise empty -- it's the format documentation, not a stale
       leftover.
+- domain_mask.md
+    - A design domain short of the mesh for `stto` (void outside, set by the load
+      case), and the L-bracket load cases for the validation sweep.
 - length_scale_options.md
     - Deferred: ways to give `stto` a minimum feature size, against the thin necks the
       hotspot constraint adds. Options and their costs only; the user wants other
