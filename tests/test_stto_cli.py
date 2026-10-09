@@ -74,14 +74,15 @@ def test_checks_cli_reproduces_the_runs_own_check(tmp_path, monkeypatch):
 
     rerun = json.loads(report.read_text())
     # The physics differs in the last bits between two runs on the GPU.
-    physics = ("constraints", "compliance")
+    physics = ("constraints", "constraints_continuous", "compliance")
     assert {k: v for k, v in rerun.items() if k not in physics} == {
         k: v for k, v in written.items() if k not in physics
     }
     assert rerun["compliance"] == pytest.approx(written["compliance"], rel=1e-12)
-    assert rerun["constraints"].keys() == written["constraints"].keys()
-    for name, values in written["constraints"].items():
-        np.testing.assert_allclose(rerun["constraints"][name], values, rtol=1e-12)
+    for rows in ("constraints", "constraints_continuous"):
+        assert rerun[rows].keys() == written[rows].keys()
+        for name, values in written[rows].items():
+            np.testing.assert_allclose(rerun[rows][name], values, rtol=1e-12)
 
 
 def _reference_run(config):
@@ -196,14 +197,26 @@ def test_resume_reproduces_an_uninterrupted_run(tmp_path, monkeypatch):
         np.load(tmp_path / "output" / tag / "final_design.npz")
         for tag in ("whole", "resumed")
     )
+    # Two runs of one config already differ in the last bits from iteration 0 on, and
+    # the difference grows with the iterations; measured up to ~40 eps relative.
+    eps = np.finfo(float).eps
+    tol = dict(rtol=128 * eps, atol=8 * eps)
     for key in whole.files:
-        np.testing.assert_array_equal(resumed[key], whole[key], err_msg=key)
+        np.testing.assert_allclose(resumed[key], whole[key], err_msg=key, **tol)
+
+    # The hottest element's position is an argmax, which those bits can move between
+    # near-tied elements; `true_max` checks its value.
+    skipped = {"elapsed", "hot_row", "hot_col"}
 
     def log(tag):
         lines = (tmp_path / "output" / tag / "iterations.jsonl").read_text()
         return [
-            {k: v for k, v in json.loads(line).items() if k != "elapsed"}
+            {k: v for k, v in json.loads(line).items() if k not in skipped}
             for line in lines.splitlines()
         ]
 
-    assert log("resumed") == log("whole")
+    resumed_log, whole_log = log("resumed"), log("whole")
+    assert [e.keys() for e in resumed_log] == [e.keys() for e in whole_log]
+    for r, w in zip(resumed_log, whole_log):
+        for key in w:
+            np.testing.assert_allclose(r[key], w[key], err_msg=key, **tol)

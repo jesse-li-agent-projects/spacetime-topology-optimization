@@ -21,7 +21,7 @@ import sttopt.stto as stto
 from conftest import (
     ELEMENT_M,
     assert_close,
-    default_run_config,
+    fixture_run_config,
     load_fixture_npz,
     with_matlab_print_base,
 )
@@ -36,7 +36,7 @@ NLOOP = 3
 RMIN, LRMIN, RMIN_COND = 2, 2, 3
 BETA_INIT = 1.0
 
-CONFIG = default_run_config(
+CONFIG = fixture_run_config(
     nelx=NELX,
     nely=NELY,
     nStage=NSTAGE,

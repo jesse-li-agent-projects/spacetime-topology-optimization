@@ -11,6 +11,7 @@ import torch
 import sttopt.conductivity as conductivity
 import sttopt.filters as filters
 import sttopt.run_config as run_config
+import sttopt.smooth_max as smooth_max
 import sttopt.timefield as timefield
 import sttopt.torch_util as torch_util
 import tests.reference.conductivity as conductivity_ref
@@ -2017,3 +2018,142 @@ def test_checkpointed_chunks_match_the_whole_stencil_sum(monkeypatch, angular):
     assert_close(K_chunked, K_whole)
     for chunked, whole in zip(grads_chunked, grads_whole):
         assert_close(chunked, whole)
+
+
+# --- print-order credit --------------------------------------------------------------
+
+_COOLING_TIE = 1 - 2 ** (-1 / 8)
+
+
+def _credit_K(tPhys, rmin_cond, **credit):
+    """Interior `K_est` of a fully solid square, HALF_STENCIL normalized, at `credit`."""
+    nely, nelx = tPhys.shape
+    e1, e2, w, stencil = _stencil(nelx, nely, rmin_cond)
+    K_est = conductivity.estimated_conductivity(
+        torch.ones(nely, nelx, dtype=torch.float64),
+        tPhys,
+        e1,
+        e2,
+        w,
+        Q,
+        credit.pop("rouf", ROUF),
+        conductivity.half_stencil_weight(rmin_cond),
+        stencil=stencil,
+        **credit,
+    )
+    return float(K_est[(nely // 2) * nelx + nelx // 2])
+
+
+@pytest.mark.parametrize(
+    "credit, tie",
+    [
+        (dict(tie_credit=0.5), 0.5),
+        (dict(tie_credit=0.2), 0.2),
+        (dict(credit="cooling", cooling_time=0.01), _COOLING_TIE),
+        (dict(credit="cooling", cooling_time=0.01, cooling_sharpness=1.0), 0.5),
+    ],
+)
+def test_a_flat_region_scores_twice_its_tie_credit(credit, tie):
+    """Every neighbor of an element printed all at once is a tie, and the reference is
+    half the stencil, so `K_est` is twice the credit of a tie."""
+    tPhys = torch.full((17, 17), 0.4, dtype=torch.float64)
+    assert _credit_K(tPhys, 4.0, **credit) == pytest.approx(2 * tie, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    "sharp, tie",
+    [
+        (dict(tie_credit=0.2, rouf=1e9), 0.2),
+        (dict(credit="cooling", cooling_time=1e-9), _COOLING_TIE),
+    ],
+)
+def test_a_sharp_credit_scores_a_layered_part_as_shielded_bar_its_self_pair(sharp, tie):
+    """With the sigmoid sharpened or the cooling time shortened, a layered part keeps
+    every neighbor behind its front, and only the self-pair, a tie at any sharpness,
+    falls short of the reference's half credit."""
+    rmin_cond, n = 4.0, 17
+    e1, e2, w = conductivity.neighbor_weights(n, n, rmin_cond)
+    w_self = float(w[(e1 == e2) & (e1 == (n // 2) * n + n // 2)][0])
+    total = 2 * conductivity.half_stencil_weight(rmin_cond)
+    tPhys = _linear_timefield(n, n, 0.3, 1.0)
+    expected = 1 - (1 - 2 * tie) * w_self / total
+    assert _credit_K(tPhys, rmin_cond, **sharp) == pytest.approx(expected, abs=1e-9)
+
+
+def test_a_tie_credit_of_one_half_is_the_source_sigmoid():
+    tPhys = _linear_timefield(13, 11, 0.4, 1.0)
+    assert _credit_K(tPhys, 3.0) == _credit_K(tPhys, 3.0, tie_credit=0.5)
+
+
+@pytest.mark.parametrize(
+    "credit", [dict(tie_credit=0.2), dict(credit="cooling", cooling_time=0.01)]
+)
+def test_a_changed_credit_needs_a_constant_reference(credit):
+    """`NEIGHBORHOOD` divides by the credited weight itself, so a flat region would
+    still score 1; the combination is refused."""
+    nelx, nely = 9, 7
+    e1, e2, w, _ = _stencil(nelx, nely, RMIN_COND)
+    xPhys = torch.ones(nely, nelx, dtype=torch.float64)
+    with pytest.raises(ValueError, match="constant reference divisor"):
+        conductivity.estimated_conductivity(
+            xPhys, _linear_timefield(nelx, nely, 0.3, 1.0), e1, e2, w, Q, ROUF, **credit
+        )
+
+
+def test_cooling_credit_sensitivity_is_finite():
+    rng = np.random.default_rng(3)
+    nely, nelx = 11, 13
+    e1, e2, w, stencil = _stencil(nelx, nely, 3.0)
+    xPhys = tt(rng.uniform(0.3, 1.0, size=(nely, nelx)))
+    t = _linear_timefield(nelx, nely, 0.4, 1.0).numpy()
+    t[4:7, 5:8] = t[5, 6]
+    tPhys = tt(t).requires_grad_(True)
+    K_est = conductivity.estimated_conductivity(
+        xPhys,
+        tPhys,
+        e1,
+        e2,
+        w,
+        Q,
+        ROUF,
+        conductivity.half_stencil_weight(3.0),
+        stencil=stencil,
+        kappa=2.3666,
+        g0=0.35,
+        credit="cooling",
+        cooling_time=0.005,
+    )
+    (grad,) = torch.autograd.grad(K_est.sum(), tPhys)
+    assert torch.isfinite(grad).all()
+    assert float(grad.abs().max()) > 0
+
+
+def test_a_soft_cooling_onset_pulls_a_later_neighbor_earlier():
+    """A sharp onset gives a neighbor printed later no gradient toward being earlier,
+    which a time-field basin needs; `k = 1` gives it one, as the source sigmoid does."""
+    t = torch.tensor([0.0, 0.01], dtype=torch.float64, requires_grad=True)
+    a, b = torch.tensor([0]), torch.tensor([1])
+
+    def pull(sharpness):
+        credit = conductivity._cooling_credit(t, a, b, 0.01, sharpness)
+        (grad,) = torch.autograd.grad(credit.sum(), t)
+        return float(-grad[1])
+
+    assert pull(1.0) > 100 * pull(8.0) > 0
+
+
+def test_a_damped_calibration_moves_part_of_the_way_to_each_measurement():
+    """The first measurement is taken whole, later ones move the calibration `rate` of
+    the way, and `reset` takes the next one whole again."""
+    lse = smooth_max.CalibratedLogSumExp(1.0, rate=0.25)
+    one, three = torch.tensor([0.0, -1.0]), torch.tensor([0.0, -1.0, -1.0, -1.0])
+    offset = lambda sev: float(torch.logsumexp(sev, dim=0))  # the max is 0
+    lse.aggregate(one, 0)
+    assert lse.calibration == pytest.approx(offset(one))
+    value = lse.aggregate(three, 0)
+    expected = offset(one) + 0.25 * (offset(three) - offset(one))
+    assert lse.calibration == pytest.approx(expected)
+    assert float(value) == pytest.approx(offset(three) - expected)
+    lse.reset()
+    lse.aggregate(three, 0)
+    assert lse.calibration == pytest.approx(offset(three))

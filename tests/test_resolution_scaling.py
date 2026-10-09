@@ -19,6 +19,7 @@ from jaxtyping import Float
 import sttopt.compliance as compliance
 import sttopt.constraints as constraints
 import sttopt.filters as filters
+import sttopt.run_config as run_config
 import sttopt.seqopt as seqopt
 import sttopt.stto as stto
 import sttopt.torch_util as torch_util
@@ -135,7 +136,8 @@ def test_mean_hotspot_severity_converges():
     def mean_severity(p, x, t):
         K = p.terms.estimated_conductivity(x, t, 0)
         finite = torch.isfinite(K)
-        return ((1 - K[finite]) * x.flatten()[finite] ** p.config.r).mean()
+        r = run_config.weight_at(p.config.r, 0)
+        return ((1 - K[finite]) * x.flatten()[finite] ** r).mean()
 
     values = _at_each_resolution(mean_severity, nelx=NELX[:3], rmin_cond_m=0.018)
     assert _order(values) >= MIN_ORDER, values
@@ -148,7 +150,8 @@ def test_tool_radius_constraint_converges():
     def tool_radius(problem, x, t):
         c = problem.config
         radius = units.in_elements(c.tool_radius_m, c.element_size_m)
-        return constraints.tool_radius(x, t, problem.terms.curvature, radius, c.r, 0)
+        r = run_config.weight_at(c.r, 0)
+        return constraints.tool_radius(x, t, problem.terms.curvature, radius, r, 0)
 
     values = _at_each_resolution(tool_radius)
     assert values[-1] > -1  # non-vacuous: the iso-lines are concave

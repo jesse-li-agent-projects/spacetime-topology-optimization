@@ -56,7 +56,12 @@ DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "configs" / "default.json"
 DEFAULT_SEQ_CONFIG_PATH = Path(__file__).parent.parent / "configs" / "seq_default.json"
 
 
-def default_run_config(*, nely: int | None = None, **overrides) -> RunConfig:
+FIXTURE_CONFIG_PATH = FIXTURES_DIR / "default_config_before_tuning.json"
+
+
+def default_run_config(
+    *, nely: int | None = None, path: Path = DEFAULT_CONFIG_PATH, **overrides
+) -> RunConfig:
     """`RunConfig` loaded from `configs/default.json` (the single source of default
     hyperparameters) with `overrides` applied -- for tests/benchmarks that only care
     about a handful of fields (typically mesh size) and want everything else at the
@@ -66,12 +71,19 @@ def default_run_config(*, nely: int | None = None, **overrides) -> RunConfig:
     small part rather than a coarse one, and every default length keeps its size in
     elements.
     """
-    base = RunConfig.from_dict(json.loads(DEFAULT_CONFIG_PATH.read_text()))
+    base = RunConfig.from_dict(json.loads(path.read_text()))
     h = base.element_size_m
     nelx = overrides.get("nelx", base.nelx)
     overrides.setdefault("width_m", nelx * h)
     overrides.setdefault("height_m", (base.nely if nely is None else nely) * h)
     return dataclasses.replace(base, **overrides)
+
+
+def fixture_run_config(*, nely: int | None = None, **overrides) -> RunConfig:
+    """`default_run_config`, but on the defaults the stored fixtures were generated with
+    (`configs/default.json` before the 2026-10 schedule tuning), so tests pinned to those
+    fixtures do not move when the production defaults do."""
+    return default_run_config(nely=nely, path=FIXTURE_CONFIG_PATH, **overrides)
 
 
 def with_matlab_print_base(problem):

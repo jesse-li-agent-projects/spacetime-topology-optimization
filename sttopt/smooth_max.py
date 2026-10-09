@@ -24,20 +24,42 @@ class CalibratedLogSumExp:
     the sensitivity past a handful of elements at the cost of a bias the calibration
     carries back onto the true maximum. `-inf` severities drop out of the sum.
 
-    Every call measures the calibration afresh and holds it out of the gradient, so the
-    value is the true maximum and the gradient is the smooth surrogate's. `calibration`
-    keeps the last one, for logging.
+    Every call measures the offset afresh and holds the calibration out of the gradient.
+    At `rate` 1 the calibration is that measurement, so the value is the true maximum
+    and the gradient is the smooth surrogate's. A lower `rate` moves it only that share
+    of the way each call (a moving average), so the function an optimizer sees changes
+    slowly between iterations rather than jumping with every measurement (PR #202);
+    the first call, and the first after `reset`, takes the measurement whole.
     """
 
-    def __init__(self, beta: "run_config.Scheduled"):
-        """:param beta: sharpness, possibly scheduled."""
+    def __init__(self, beta: "run_config.Scheduled", rate: float = 1.0):
+        """
+        :param beta: sharpness, possibly scheduled
+        :param rate: weight of each new measurement in the calibration, in (0, 1]
+        """
         self.beta = beta
+        self.rate = rate
         self.calibration = 0.0
+        self.fresh = True  # the next measurement is taken whole
+
+    def reset(self) -> None:
+        """Forget the calibration, so the next call takes its measurement whole."""
+        self.fresh = True
 
     def aggregate(self, sev: Float[Tensor, " n"], loop: int) -> Float[Tensor, ""]:
         """The calibrated smooth maximum of `sev` at iteration `loop`'s sharpness,
         differentiable in `sev`."""
         beta = run_config.weight_at(self.beta, loop)
         numer = torch.logsumexp(beta * sev, dim=0) / beta
-        self.calibration = float(numer.detach()) - float(sev.detach().max())
+        measured = float(numer.detach()) - float(sev.detach().max())
+        self.calibration = blend(
+            self.calibration, measured, 1.0 if self.fresh else self.rate
+        )
+        self.fresh = False
         return numer - self.calibration
+
+
+def blend(old: float, measured: float, rate: float) -> float:
+    """A calibration moved `rate` of the way to a new measurement; at `rate` 1 the
+    measurement exactly, as before damping existed, not `old + (measured - old)`."""
+    return measured if rate == 1 else old + rate * (measured - old)

@@ -32,9 +32,10 @@ where `_conductivity_core` uses `x_j**q` with `q = 3` -- a SIMP-style penalizati
 intermediate density the paper does not have.
 """
 
+import math
 from collections.abc import Callable
 from enum import StrEnum
-from functools import cache
+from functools import cache, partial
 from itertools import product
 from typing import NamedTuple
 
@@ -74,6 +75,21 @@ class Normalization(StrEnum):
 
     NEIGHBORHOOD = "neighborhood"
     HALF_STENCIL = "half_stencil"
+
+
+class PrintOrderCredit(StrEnum):
+    """Names for how much a neighbor printed before an element counts toward its
+    `K_est`, selectable per run; built by `print_order_credit`.
+
+    SIGMOID is the source's soft mask, shifted so that a neighbor printed at the same
+    time gets a set tie credit; the source's `0.5` lets a region printed all at once
+    score like a layered one. COOLING gives a later neighbor nothing and an earlier one
+    full credit once it has had a cooling time to cool. Either credit changes only the
+    numerator: the HALF_STENCIL reference stays the delay-free layered fill.
+    """
+
+    SIGMOID = "sigmoid"
+    COOLING = "cooling"
 
 
 class Aggregation(StrEnum):
@@ -357,20 +373,21 @@ def angular_pair_weights(
     grad: tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]],
     e1: Int[Tensor, " npairs"],
     e2: Int[Tensor, " npairs"],
-    stencil: AngularStencil,
     kappa: float,
     g0: float,
-) -> Float[Tensor, " npairs"]:
+) -> Float[Tensor, " npairs"] | float:
     """`_lobe` for every COO pair, against the print direction of the pair's own first
-    element.
+    element. At `kappa = 0` the lobe is `1` for every pair, returned without evaluating
+    it.
 
     :param grad: `(dt/dx, dt/dy)` per element, per unit length
     :param e1: first index of each COO pair, whose gradient each pair is weighted by
     :param e2: second index of each COO pair
-    :param stencil: the run's `AngularStencil`
     :param kappa: lobe concentration for this iteration
     :param g0: the lobe's gradient scale
     """
+    if kappa == 0:
+        return 1.0
     gx, gy = grad[0].flatten(), grad[1].flatten()
     dirs = _pair_directions(e1, e2, grad[0].shape[1], gx.dtype)
     g_dot_dir = gx[e1] * dirs[:, 0] + gy[e1] * dirs[:, 1]
@@ -430,10 +447,12 @@ def _pairwise_sigmoid(
     a: Int[Tensor, " npairs"],
     b: Int[Tensor, " npairs"],
     rouf: float,
+    tie_credit: float = 0.5,
 ) -> Float[Tensor, " npairs"]:
     """
     `FT_el{a}[b]`: the neighbor-sigmoid weight of a COO pair array, a smooth mask on
-    whether `b` was printed before `a`.
+    whether `b` was printed before `a`, shifted so that a neighbor printed at the same
+    time gets `tie_credit`.
 
     `1/(1+exp(z))` is exactly `sigmoid(-z)`; `torch.sigmoid` evaluates it through its
     own overflow-safe form rather than the MATLAB source's literal expression, which
@@ -443,9 +462,64 @@ def _pairwise_sigmoid(
     :param a: first index of each COO pair
     :param b: second index of each COO pair
     :param rouf: sigmoid sharpness
+    :param tie_credit: the weight at `t_a = t_b`; `0.5` is the source's sigmoid
     :return: `FT`, one value per pair
     """
-    return torch.sigmoid(rouf * (t[a] - t[b]))
+    return torch.sigmoid(rouf * (t[a] - t[b]) + math.log(tie_credit / (1 - tie_credit)))
+
+
+def _cooling_credit(
+    t: Float[Tensor, " nel"],
+    a: Int[Tensor, " npairs"],
+    b: Int[Tensor, " npairs"],
+    cooling_time: float,
+    sharpness: float,
+) -> Float[Tensor, " npairs"]:
+    """
+    `PrintOrderCredit.COOLING`'s weight of a COO pair array: `1 - exp(-dt / tau)` for
+    `b` printed `dt` before `a`, and none for `b` printed after, with the onset at
+    `dt = 0` smoothed by a softplus of sharpness `k`.
+
+    `k` trades the two things a sharp onset costs and buys: a tie gets
+    `1 - 2**(-1/k)`, and a neighbor printed later than `a` gets a gradient toward
+    being earlier only within about `tau / k` of it. At `k = 1` a tie gets 0.5 and
+    that reach is `tau`, as the source sigmoid's is `1 / rouf`.
+
+    :param t: per-element time field, `tPhys.flatten()`
+    :param a: first index of each COO pair
+    :param b: second index of each COO pair
+    :param cooling_time: `tau`, in `t`
+    :param sharpness: `k`
+    :return: one value per pair
+    """
+    k = sharpness
+    s = torch.nn.functional.softplus(k * (t[a] - t[b]) / cooling_time) / k
+    return -torch.expm1(-s)
+
+
+def print_order_credit(
+    credit: "PrintOrderCredit",
+    t: Float[Tensor, " nel"],
+    rouf: float,
+    tie_credit: float,
+    cooling_time: float,
+    cooling_sharpness: float,
+) -> Callable[[Int[Tensor, " n"], Int[Tensor, " n"]], Float[Tensor, " n"]]:
+    """The weight per COO pair `(a, b)` for `b` having been printed before `a`, as
+    `credit` selects.
+
+    :param credit: the run's `PrintOrderCredit`
+    :param t: per-element time field, `tPhys.flatten()`
+    :param rouf: SIGMOID's sharpness
+    :param tie_credit: SIGMOID's weight at equal times
+    :param cooling_time: COOLING's `tau`, in `t`
+    :param cooling_sharpness: COOLING's onset sharpness, as in `_cooling_credit`
+    """
+    if credit == PrintOrderCredit.SIGMOID:
+        return partial(_pairwise_sigmoid, t, rouf=rouf, tie_credit=tie_credit)
+    return partial(
+        _cooling_credit, t, cooling_time=cooling_time, sharpness=cooling_sharpness
+    )
 
 
 def _isotropic(a: Int[Tensor, " n"], b: Int[Tensor, " n"]) -> float:
@@ -471,6 +545,9 @@ def _conductivity_core(
     angular: Callable[
         [Int[Tensor, " n"], Int[Tensor, " n"]], Float[Tensor, " n"] | float
     ] = _isotropic,
+    credit: (
+        Callable[[Int[Tensor, " n"], Int[Tensor, " n"]], Float[Tensor, " n"]] | None
+    ) = None,
 ) -> _ConductivityCore:
     """`K_est` and the divisor it was formed with, shared by `estimated_conductivity`
     and `tests/reference/conductivity.py`'s `_conductivity_terms`.
@@ -481,7 +558,11 @@ def _conductivity_core(
     :param base: print base elements, taken to be infinitely dense (`infinite_base`),
         or `None` to leave them ordinary design material.
     :param angular: an extra weight per pair `(e1, e2)`, multiplying `w`
+    :param credit: the print-order weight per pair `(e1, e2)` (`print_order_credit`), or
+        `None` for `_pairwise_sigmoid` at `rouf`
     """
+    if credit is None:
+        credit = partial(_pairwise_sigmoid, t, rouf=rouf)
     nel = x.shape[0]
     on_base = None
     if base is not None:
@@ -495,7 +576,7 @@ def _conductivity_core(
         """Per element: the numerator, then the divisor if it is derived, then the
         weight landing on the base if there is one."""
         a, b = e1[sl], e2[sl]
-        wFT = w[sl] * _pairwise_sigmoid(t, a, b, rouf) * angular(a, b)
+        wFT = w[sl] * credit(a, b) * angular(a, b)
         sums = [scatter(a, x[b] ** q * wFT)]
         if denom is None:
             sums.append(scatter(a, wFT))
@@ -575,21 +656,33 @@ class PMean:
     is `x**(r*p)`, so `p` cannot be changed without also changing how hard void is
     suppressed, and `r*p <= 1` silently makes the gradient diverge at `x == 0`.
 
-    Every call measures the calibration afresh and holds it out of the gradient, as
-    `smooth_max.CalibratedLogSumExp` does, except where every element contributes zero:
-    the aggregate then says nothing about the maximum, so the last one is kept.
+    Every call measures the calibration afresh, holds it out of the gradient and moves
+    it `rate` of the way there, as `smooth_max.CalibratedLogSumExp` does, except where
+    every element contributes zero: the aggregate then says nothing about the maximum,
+    so the last one is kept.
     """
 
-    def __init__(self, p: float, r: float):
+    def __init__(self, p: float, r: "run_config.Scheduled", rate: float = 1.0):
+        """
+        :param p: the p-mean exponent
+        :param r: the density exponent of the severity, possibly scheduled
+        :param rate: weight of each new measurement in the calibration, in (0, 1]
+        """
         self.p = p
         self.r = r
+        self.rate = rate
         self.calibration = 1.0
+        self.fresh = True  # the next measurement is taken whole
+
+    def reset(self) -> None:
+        """Forget the calibration, so the next call takes its measurement whole."""
+        self.fresh = True
 
     def __call__(
         self, K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"], loop: int
     ) -> Float[Tensor, ""]:
-        """The calibrated aggregate, differentiable in `K_est` and `xPhys`. Nothing here
-        is scheduled, so `loop` is unused.
+        """The calibrated aggregate at iteration `loop`'s `r`, differentiable in `K_est`
+        and `xPhys`.
 
         Written in a NaN-safe form: `(T * x**r) ** p` differentiates to `inf` at
         `x == 0` (density does reach exact zero once the Heaviside projection
@@ -597,13 +690,17 @@ class PMean:
         whose gradient is finite while `r*p > 1`.
         """
         x = xPhys.flatten()
+        r = run_config.weight_at(self.r, loop)
         # An infinitely shielded element contributes nothing, which `(-inf)**p` is not
         # a way to say.
         T = torch.where(torch.isinf(K_est), torch.zeros_like(K_est), 1 - K_est)
-        numer = _safe_pmean(torch.mean(T**self.p * x ** (self.r * self.p)), self.p)
+        numer = _safe_pmean(torch.mean(T**self.p * x ** (r * self.p)), self.p)
         numer_value = float(numer.detach())
         if numer_value != 0:
-            self.calibration = _max_severity(K_est, xPhys, self.r) / numer_value
+            measured = _max_severity(K_est, xPhys, r) / numer_value
+            rate = 1.0 if self.fresh else self.rate
+            self.calibration = smooth_max.blend(self.calibration, measured, rate)
+            self.fresh = False
         return self.calibration * numer
 
 
@@ -620,21 +717,28 @@ class LogSumExp(smooth_max.CalibratedLogSumExp):
     makes negligible.
     """
 
-    def __init__(self, beta: "run_config.Scheduled", r: float):
+    def __init__(
+        self,
+        beta: "run_config.Scheduled",
+        r: "run_config.Scheduled",
+        rate: float = 1.0,
+    ):
         """
         :param beta: sharpness, possibly scheduled
-        :param r: the density exponent of the severity the calibration targets
+        :param r: the density exponent of the severity the calibration targets,
+            possibly scheduled
+        :param rate: weight of each new measurement in the calibration, in (0, 1]
         """
-        super().__init__(beta)
+        super().__init__(beta, rate)
         self.r = r
 
     def __call__(
         self, K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"], loop: int
     ) -> Float[Tensor, ""]:
-        """The calibrated aggregate at iteration `loop`'s sharpness, differentiable in
-        `K_est` and `xPhys`."""
+        """The calibrated aggregate at iteration `loop`'s sharpness and `r`,
+        differentiable in `K_est` and `xPhys`."""
         shielded = torch.isinf(K_est)
-        x_r = smooth_max.density_power(xPhys.flatten(), self.r)
+        x_r = smooth_max.density_power(xPhys.flatten(), run_config.weight_at(self.r, loop))
         # `1 - inf` would poison the `-inf` reselect below through `inf * 0`.
         T = torch.where(shielded, torch.zeros_like(K_est), 1 - K_est)
         sev = torch.where(shielded, -torch.inf, T * x_r)
@@ -642,17 +746,22 @@ class LogSumExp(smooth_max.CalibratedLogSumExp):
 
 
 def make_aggregation(
-    aggregation: Aggregation, p: float, r: float, beta: "run_config.Scheduled"
+    aggregation: Aggregation,
+    p: float,
+    r: "run_config.Scheduled",
+    beta: "run_config.Scheduled",
+    rate: float = 1.0,
 ) -> PMean | LogSumExp:
     """A fresh, uncalibrated aggregation for a run's settings.
 
     :param beta: `LogSumExp` sharpness, possibly scheduled; unused by `PMean`, which
         takes `p` instead.
+    :param rate: weight of each new measurement in the calibration, in (0, 1]
     """
     if aggregation == Aggregation.P_MEAN:
-        return PMean(p, r)
+        return PMean(p, r, rate)
     elif aggregation == Aggregation.LOGSUMEXP:
-        return LogSumExp(beta, r)
+        return LogSumExp(beta, r, rate)
     else:
         raise ValueError(
             f"aggregation must be an Aggregation member, got {aggregation!r}"
@@ -672,6 +781,10 @@ def estimated_conductivity(
     stencil: AngularStencil | None = None,
     kappa: float = 0.0,
     g0: float = 1.0,
+    credit: PrintOrderCredit = PrintOrderCredit.SIGMOID,
+    tie_credit: float = 0.5,
+    cooling_time: float = 0.0,
+    cooling_sharpness: float = 8.0,
 ) -> Float[Tensor, " nely*nelx"]:
     """Local estimated conductivity: how strongly each element's neighborhood has
     already solidified (cooler, earlier `tPhys`) around it, used as an overheating
@@ -687,28 +800,39 @@ def estimated_conductivity(
     :param kappa: angular lobe concentration for this iteration; `0` leaves the stencil
         purely radial, which is this function's behavior with no angular weight at all
     :param g0: the lobe's gradient scale
+    :param credit: the run's `PrintOrderCredit`
+    :param tie_credit: SIGMOID's weight for a neighbor printed at the same time
+    :param cooling_time: COOLING's cooling time, in `t`
+    :param cooling_sharpness: COOLING's onset sharpness, as in `_cooling_credit`
     :raises ValueError: if no element carrying density is left with a finite `K_est`,
-        the whole part being within stencil reach of the print base; or if `kappa > 0`
-        without the constant divisor the directional reference generalizes
+        the whole part being within stencil reach of the print base; if `kappa > 0`
+        without the constant divisor the directional reference generalizes; or if a
+        credit other than the source's sigmoid comes with a divisor derived from it
     """
     x = xPhys.flatten()
     t = tPhys.flatten()
+    credit = PrintOrderCredit(credit)
+    if denom is None and (credit != PrintOrderCredit.SIGMOID or tie_credit != 0.5):
+        raise ValueError(
+            "a tie credit other than 0.5 or a COOLING credit needs a constant reference divisor (HALF_STENCIL): Normalization.NEIGHBORHOOD divides by the credited weight itself, so a region printed all at once still scores K_est = 1"
+        )
+    pair_credit = print_order_credit(
+        credit, t, rouf, tie_credit, cooling_time, cooling_sharpness
+    )
+    angular = _isotropic
     if kappa != 0:
         if stencil is None or denom is None:
             raise ValueError(
                 "an angular weight (kappa > 0) needs an AngularStencil and the HALF_STENCIL normalization, whose constant divisor it generalizes to a per-element directional reference; Normalization.NEIGHBORHOOD derives its own divisor and has no angular variant"
             )
         grad = timefield.central_difference_gradient_vector(tPhys)
-
-        def angular(a: Int[Tensor, " n"], b: Int[Tensor, " n"]) -> Float[Tensor, " n"]:
-            return angular_pair_weights(grad, a, b, stencil, kappa, g0)
-
+        angular = partial(angular_pair_weights, grad, kappa=kappa, g0=g0)
         denom = directed_denominator(
             grad, stencil, kappa, g0, rouf, timefield.unit_length(tPhys)
         )
-    else:
-        angular = _isotropic
-    K_est = _conductivity_core(x, t, e1, e2, w, q, rouf, denom, base, angular).K_est
+    K_est = _conductivity_core(
+        x, t, e1, e2, w, q, rouf, denom, base, angular, pair_credit
+    ).K_est
     if base is not None and not bool((torch.isfinite(K_est) & (x > 0)).any()):
         raise ValueError(
             "every element carrying density has infinite K_est, being within the conductivity stencil's reach of the print base, so the hotspot measure has nothing left to aggregate over; shrink rmin_cond_m or use a normalization that needs no print base (infinite_base)"

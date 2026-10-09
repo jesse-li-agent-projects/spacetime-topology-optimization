@@ -251,7 +251,8 @@ def _constraint_rows(
     loop: int,
 ) -> dict[str, list[float]]:
     """
-    Every constraint's values, at iteration `loop`'s settings.
+    Every constraint's values, at iteration `loop`'s settings, each smooth maximum
+    measured afresh so its row is the true maximum whatever `calibration_rate` is.
 
     :param xPhys: densities, binarized or as optimized
     :param tPhys: physical time field
@@ -259,6 +260,7 @@ def _constraint_rows(
     :return: name to values
     """
     config = problem.config
+    problem.terms.reset_calibrations()
     K_est = problem.terms.estimated_conductivity(xPhys, tPhys, loop)
     g = stto.constraint_values(
         problem,

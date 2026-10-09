@@ -22,7 +22,8 @@ a config file and this module. That holds for a newly added field too, even thou
 means run records written before the field existed no longer load -- add the field to
 every config file instead. The one exception is a field whose default is the only
 behaviour older records could have had (`SpaceTimeConfig.load_case`,
-`support_length_m`).
+`support_length_m`, `hotspot_credit`, `hotspot_tie_credit`, `hotspot_cooling_time`,
+`hotspot_cooling_sharpness`, `hotspot_weight`, `calibration_rate`).
 """
 
 import bisect
@@ -183,6 +184,16 @@ def identically_zero(setting: Scheduled) -> bool:
     return float(setting) == 0
 
 
+def lowest_value(setting: Scheduled) -> float:
+    """The smallest value a possibly-scheduled scalar takes at any iteration: every
+    schedule stays between the values that define it."""
+    if isinstance(setting, CosineSchedule):
+        return min(setting.initial, setting.final)
+    if isinstance(setting, PiecewiseSchedule):
+        return min(p[1] for p in setting.points)
+    return float(setting)
+
+
 def final_value(setting: Scheduled) -> float:
     """The value a possibly-scheduled scalar settles on, for tooling that reads a
     finished run rather than one iteration of it."""
@@ -219,6 +230,15 @@ class SpaceTimeConfig(_ConfigMixin):
     :param roughness_weight: weight on `timefield.relative_roughness`, a number or a
         `CosineSchedule`, as in `SeqRunConfig` -- whose docstring explains why the
         uniformity term needs it.
+    :param calibration_rate: weight of each new measurement in every calibrated smooth
+        maximum's calibration (the hotspot and the time-field constraints), in (0, 1].
+        1, the default, re-measures it every iteration, so each row's value is its true
+        maximum; lower values average it over iterations, so the rows MMA sees do not
+        jump with each measurement.
+    :param hotspot_weight: weight of the hotspot severity as an objective term on the
+        time-field design variables alone, possibly scheduled; 0, the default, disables
+        it. Unlike the hotspot constraint, it acts before `Tcr` binds, so the time field
+        can address a hotspot before the density field has to.
     :param Tcr: bound on the hotspot severity, possibly scheduled. The severity never
         exceeds 1, so a ramp from above 1 is inactive until it crosses 1: start it there,
         or its active part is a step.
@@ -237,6 +257,17 @@ class SpaceTimeConfig(_ConfigMixin):
         knob: a converged field's gradient distribution is tight, so a `g0` near the
         median attenuates `kappa` by a near-constant factor across the whole part, which
         is a second `hotspot_kappa` rather than a floor (measured in `plans/archive/angular_weight.md`, Phase 3 results).
+    :param hotspot_credit: a `conductivity.PrintOrderCredit` member value: how much a
+        neighbor printed before an element counts toward its `K_est`. `sigmoid`, the
+        default and the only behaviour before it existed, or `cooling`.
+    :param hotspot_tie_credit: `sigmoid`'s credit for a neighbor printed at the same
+        time, in (0, 1); `0.5` is the source's. A region printed all at once scores
+        `K_est ~ 2x` this, so it fails the hotspot where `1 - 2x` exceeds `Tcr`.
+    :param hotspot_cooling_time: `cooling`'s cooling time, in `t`, possibly scheduled.
+    :param hotspot_cooling_sharpness: `cooling`'s onset sharpness `k`, possibly
+        scheduled. A tie gets `1 - 2**(-1/k)`, and a later neighbor is pulled earlier
+        only within about `cooling_time / k`, so a schedule from 1 up is a continuation
+        like `rouf`'s (`conductivity._cooling_credit`).
     :param rmin_m: density-filter radius.
     :param tool_radius_m: print tool radius, possibly scheduled. Bounds the concave
         curvature of the time field's iso-lines (`timefield.iso_curvature`) to
@@ -291,6 +322,12 @@ class SpaceTimeConfig(_ConfigMixin):
     hotspot_beta: Scheduled
     hotspot_kappa: Scheduled
     hotspot_g0_per_m: float
+    hotspot_weight: Scheduled = 0.0
+    calibration_rate: float = 1.0
+    hotspot_credit: str = "sigmoid"
+    hotspot_tie_credit: float = 0.5
+    hotspot_cooling_time: Scheduled = 0.0
+    hotspot_cooling_sharpness: Scheduled = 8.0
     print_base: str
     rmin_m: float
     tool_radius_m: Scheduled
@@ -306,8 +343,8 @@ class SpaceTimeConfig(_ConfigMixin):
     penal: Scheduled
     eta: float
     p: float  # p-mean exponent for hotspot severity aggregation (p_mean only)
-    q: float  # hotspot conductivity SIMP exponent
-    r: float  # density exponent for hotspot and curvature severity
+    q: Scheduled  # hotspot conductivity SIMP exponent
+    r: Scheduled  # density exponent for hotspot and curvature severity
     rouf: Scheduled
     a0: float
     mma_c: float
@@ -323,6 +360,10 @@ class SpaceTimeConfig(_ConfigMixin):
         super().__post_init__()
         self.nely  # raises now, at load, on a height that is not whole elements
         load_cases.LoadCase(self.load_case)  # likewise on an unknown case
+        if not 0 < self.calibration_rate <= 1:
+            raise ValueError(
+                f"calibration_rate must be in (0, 1], got {self.calibration_rate}"
+            )
 
     @property
     def element_size_m(self) -> float:

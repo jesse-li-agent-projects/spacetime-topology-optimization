@@ -436,6 +436,25 @@ def constraint_values(
     return g | problem.terms.constraints(xPhys, tPhys, K_est, loop)
 
 
+def _floor_shares(
+    history: mma.History,
+    move_limit: Float[Tensor, " n"],
+    xPhys: Float[Tensor, "nely nelx"],
+    nel: int,
+) -> dict[str, float]:
+    """`mma.floor_share` of the density variables (all, and those of grey elements) and
+    of the time variables: where MMA's trust region has collapsed."""
+    density = torch.zeros_like(move_limit, dtype=torch.bool)
+    density[:nel] = True
+    grey = density.clone()
+    grey[:nel] = (xPhys.flatten() > 0.05) & (xPhys.flatten() < 0.95)
+    return dict(
+        asy_floor_x=mma.floor_share(history, move_limit, density),
+        asy_floor_x_grey=mma.floor_share(history, move_limit, grey),
+        asy_floor_t=mma.floor_share(history, move_limit, ~density),
+    )
+
+
 def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     """Run one optimization iteration: build the objective + every constraint's value
     in the reference's exact order, differentiate the whole graph by autograd
@@ -527,11 +546,12 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     g_all = torch.cat(list(g_parts.values()))
     # Per part, not on `g_all`: a row of the stack would also backpropagate zeros
     # through every other part's graph, the hotspot's included (~35% slower per step, PR #173).
-    dg_dx = torch.cat(
-        [_sensitivity_rows(g, x, t) for g in g_parts.values()],
-        dim=0,
+    g_rows = {name: _sensitivity_rows(g, x, t) for name, g in g_parts.items()}
+    dg_dx = torch.cat(list(g_rows.values()), dim=0)
+    hotspot_weight = problem.terms.add_time_only_hotspot(
+        df_dx, g_rows["hotspot"][0], nel, loop
     )
-    diagnostics = problem.terms.hotspot_diagnostics(g_hotspot_t, K_est_t, xPhys)
+    diagnostics = problem.terms.hotspot_diagnostics(g_hotspot_t, K_est_t, xPhys, loop)
     with torch.no_grad():
         unit_m = timefield.unit_length_m(tPhys, config.element_size_m)
         grad_p10, grad_p50, grad_p90 = (
@@ -548,6 +568,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         calibration=problem.terms.hotspot.calibration,
         penal=penal,
         uniformity_weight=objective.uniformity_weight,
+        hotspot_weight=hotspot_weight,
         Tcr=Tcr,
         rouf=rouf,
         hotspot_beta=run_config.weight_at(config.hotspot_beta, loop),
@@ -555,7 +576,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         beta_t=beta_t,
         tool_radius_m=tool_radius_m,
         admissible_tool_radius_m=problem.terms.admissible_tool_radius_m(
-            xPhys.detach(), tPhys.detach()
+            xPhys.detach(), tPhys.detach(), loop
         ),
         min_gradient_fraction=run_config.weight_at(config.min_gradient_fraction, loop),
         gradient_smoothness_m=run_config.weight_at(config.gradient_smoothness_m, loop),
@@ -570,6 +591,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     # dg_dx are the last gradient-carrying values, detached here on their way in.
     # xval never required grad -- it's built from state.x/state.t, the detached
     # fields, not the x/t leaves above.
+    mma_stats = {"subsolv_cap_hits": 0}
     xmma, lam, mma_history = mma.unit_box_step(
         state.mma,
         loop,
@@ -582,6 +604,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         a0=config.a0,
         c=config.mma_c,
         raa0=config.raa0_total / problem.n,
+        stats=mma_stats,
     )
 
     new_state = State(
@@ -602,6 +625,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         dx_mean=float(step_size[:nel].mean()),
         dt_max=float(step_size[nel:].max()),
         dt_mean=float(step_size[nel:].mean()),
+        **mma_stats,
+        **_floor_shares(mma_history, move_limit, xPhys.detach(), nel),
     )
     record = IterationRecord(
         obj=obj_final_only,

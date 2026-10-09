@@ -91,6 +91,27 @@ class FieldTerms:
                 raise ValueError(
                     f"tool_radius_m needs an interior element to measure curvature at, but iso_curvature measures none on a nelx={nelx}, nely={nely} mesh"
                 )
+        if not 0 < config.hotspot_tie_credit < 1:
+            raise ValueError(
+                f"hotspot_tie_credit is a sigmoid value, so it must lie in (0, 1), got {config.hotspot_tie_credit}"
+            )
+        credit = conductivity.PrintOrderCredit(config.hotspot_credit)
+        cooling_time = config.hotspot_cooling_time
+        if (
+            credit == conductivity.PrintOrderCredit.COOLING
+            and run_config.lowest_value(cooling_time) <= 0
+        ):
+            raise ValueError(
+                f"hotspot_credit 'cooling' divides by hotspot_cooling_time, which must stay positive, got {cooling_time}"
+            )
+        sharpness = config.hotspot_cooling_sharpness
+        if (
+            credit == conductivity.PrintOrderCredit.COOLING
+            and run_config.lowest_value(sharpness) <= 0
+        ):
+            raise ValueError(
+                f"hotspot_credit 'cooling' divides by hotspot_cooling_sharpness, which must stay positive, got {sharpness}"
+            )
         rmin_cond = units.in_elements(config.rmin_cond_m, config.element_size_m)
         normalization = conductivity.Normalization(config.hotspot_normalization)
         e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
@@ -103,7 +124,7 @@ class FieldTerms:
         ) -> smooth_max.CalibratedLogSumExp | None:
             if run_config.identically_zero(setting):
                 return None
-            return smooth_max.CalibratedLogSumExp(beta)
+            return smooth_max.CalibratedLogSumExp(beta, config.calibration_rate)
 
         return cls(
             config=config,
@@ -122,6 +143,7 @@ class FieldTerms:
                 config.p,
                 config.r,
                 config.hotspot_beta,
+                config.calibration_rate,
             ),
             curvature=calibrated(config.tool_radius_m, config.curvature_beta),
             min_gradient=calibrated(
@@ -146,6 +168,12 @@ class FieldTerms:
             if hasattr(term := getattr(self, f.name), "calibration")
         }
 
+    def reset_calibrations(self) -> None:
+        """Forget every smooth maximum's calibration, so the next evaluation measures
+        each afresh and its value is the true maximum whatever `calibration_rate` is."""
+        for name in self.calibrations():
+            getattr(self, name).reset()
+
     def restore_calibrations(self, calibrations: dict[str, float]) -> None:
         """
         Set the calibrations `calibrations()` returned, to resume a run.
@@ -153,7 +181,9 @@ class FieldTerms:
         :param calibrations: calibration value per field name
         """
         for name, value in calibrations.items():
-            getattr(self, name).calibration = value
+            term = getattr(self, name)
+            term.calibration = value
+            term.fresh = False  # continue the run's average, not a new measurement
 
     def estimated_conductivity(
         self,
@@ -183,7 +213,7 @@ class FieldTerms:
             self.e1,
             self.e2,
             self.w,
-            config.q,
+            at(config.q),
             at(config.rouf),
             self.hotspot_denom,
             self.hotspot_base,
@@ -191,6 +221,10 @@ class FieldTerms:
             at(config.hotspot_kappa),
             config.hotspot_g0_per_m
             * timefield.unit_length_m(tPhys, config.element_size_m),
+            conductivity.PrintOrderCredit(config.hotspot_credit),
+            config.hotspot_tie_credit,
+            at(config.hotspot_cooling_time),
+            at(config.hotspot_cooling_sharpness),
         )
 
     def constraints(
@@ -215,6 +249,7 @@ class FieldTerms:
         config = self.config
         h = config.element_size_m
         Tcr = run_config.weight_at(config.Tcr, loop)
+        r = run_config.weight_at(config.r, loop)
         g = {"hotspot": (self.hotspot(K_est, xPhys, loop) / Tcr - 1)[None]}
         if self.curvature is not None:
             g["tool_radius"] = constraints.tool_radius(
@@ -222,7 +257,7 @@ class FieldTerms:
                 tPhys,
                 self.curvature,
                 units.in_elements(run_config.weight_at(config.tool_radius_m, loop), h),
-                config.r,
+                r,
                 loop,
             )
         if self.min_gradient is not None:
@@ -231,7 +266,7 @@ class FieldTerms:
                 tPhys,
                 self.min_gradient,
                 run_config.weight_at(config.min_gradient_fraction, loop),
-                config.r,
+                r,
                 loop,
             )
         if self.gradient_smoothness is not None:
@@ -242,7 +277,7 @@ class FieldTerms:
                 units.in_elements(
                     run_config.weight_at(config.gradient_smoothness_m, loop), h
                 ),
-                config.r,
+                r,
                 loop,
             )
         return g
@@ -280,11 +315,36 @@ class FieldTerms:
             roughness_weight=roughness_weight,
         )
 
+    def add_time_only_hotspot(
+        self,
+        df: Float[Tensor, " n"],
+        hotspot_row: Float[Tensor, " n"],
+        nel: int,
+        loop: int,
+    ) -> float:
+        """Add the hotspot severity at `config.hotspot_weight` to the objective
+        gradient `df`, in place, on the time-field design variables alone: those after
+        the `nel` density variables. A time-only pressure, it has no value of its own
+        to differentiate, so it reads the hotspot constraint's gradient instead.
+
+        :param df: the objective's sensitivity row
+        :param hotspot_row: the hotspot constraint's sensitivity row, same layout
+        :param nel: number of density variables, which lead both rows
+        :param loop: iteration whose schedules apply
+        :return: the weight, for logging
+        """
+        weight = run_config.weight_at(self.config.hotspot_weight, loop)
+        # The constraint is `H / Tcr - 1`
+        Tcr = run_config.weight_at(self.config.Tcr, loop)
+        df[nel:] += weight * Tcr * hotspot_row[nel:]
+        return weight
+
     def hotspot_diagnostics(
         self,
         g_hotspot: Float[Tensor, ""],
         K_est: Float[Tensor, " nel"],
         xPhys: Float[Tensor, "nely nelx"],
+        loop: int,
     ) -> dict:
         """
         The true maximum severity and where it sits, and how many elements share the
@@ -293,13 +353,16 @@ class FieldTerms:
         mean over the part rather than on its maximum.
 
         :param g_hotspot: the hotspot constraint's value, connected to `K_est`
+        :param loop: iteration whose schedules apply
         :return: `true_max`, `hot_row`, `hot_col`, `n_eff`
         """
         (grad,) = torch.autograd.grad(g_hotspot, K_est, retain_graph=True)
         with torch.no_grad():
             a = torch.nan_to_num(grad.abs(), posinf=0.0)
             n_eff = float(a.sum() ** 2 / (a**2).sum()) if bool((a > 0).any()) else 0.0
-            severity = conductivity.severity(K_est, xPhys, self.config.r)
+            severity = conductivity.severity(
+                K_est, xPhys, run_config.weight_at(self.config.r, loop)
+            )
             imax = int(severity.argmax())
         nelx = xPhys.shape[1]
         return dict(
@@ -313,12 +376,15 @@ class FieldTerms:
         self,
         xPhys: Float[Tensor, "nely nelx"],
         tPhys: Float[Tensor, "nely nelx"],
+        loop: int,
     ) -> float:
         """The largest tool radius that no iso-line's concave curvature (density-
-        weighted, per element, as in `constraints.tool_radius`) forbids; `inf` where
-        nothing is concave."""
+        weighted, per element at iteration `loop`'s `r`, as in
+        `constraints.tool_radius`) forbids; `inf` where nothing is concave."""
         kappa = timefield.iso_curvature(tPhys, xPhys).flatten()
-        density_r = smooth_max.density_power(xPhys[1:-1, 1:-1].flatten(), self.config.r)
+        density_r = smooth_max.density_power(
+            xPhys[1:-1, 1:-1].flatten(), run_config.weight_at(self.config.r, loop)
+        )
         concave = -kappa / timefield.unit_length(tPhys) * density_r
         worst = float(concave.max()) if concave.numel() else 0.0
         return self.config.element_size_m / worst if worst > 0 else float("inf")
