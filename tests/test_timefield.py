@@ -40,7 +40,7 @@ def test_timefield_variant_matches_fixture(variant, key):
 
 def test_unknown_variant_rejected():
     with pytest.raises(ValueError):
-        timefield.init_timefield(7, 5, 5)
+        timefield.init_timefield(7, 5, 99)
 
 
 @pytest.mark.parametrize("nelx,nely", [(7, 5), (5, 7), (4, 4), (2, 3)])
@@ -282,6 +282,18 @@ def test_bottom_edge_range_and_orientation():
         np.testing.assert_allclose(row, row[0])
 
 
+def test_right_edge_range_and_orientation():
+    nelx, nely = 6, 9
+    field = timefield.init_timefield(nelx, nely, timefield.TimeField.RIGHT_EDGE)
+    assert field.shape == (nely, nelx)
+    np.testing.assert_allclose(field[:, -1], 0.0)  # right column: t=0
+    np.testing.assert_allclose(field[:, 0], 1.0)  # left column: t=1
+    # Monotonically decreasing left-to-right, constant down each column.
+    assert np.all(np.diff(field[0]) < 0)
+    for row in field:
+        np.testing.assert_allclose(row, field[0])
+
+
 # --- base_elements -----------------------------------------------------------------
 
 
@@ -292,6 +304,7 @@ def test_bottom_edge_range_and_orientation():
         (timefield.TimeField.EDGE, np.arange(5) * 7),
         (timefield.TimeField.OPPOSITE_CORNER, np.array([4 * 7])),
         (timefield.TimeField.BOTTOM_EDGE, 4 * 7 + np.arange(7)),
+        (timefield.TimeField.RIGHT_EDGE, np.arange(5) * 7 + 6),
     ],
 )
 def test_base_elements_all_variants(variant, expected):
@@ -300,7 +313,7 @@ def test_base_elements_all_variants(variant, expected):
 
 def test_base_elements_unknown_variant_rejected():
     with pytest.raises(ValueError):
-        timefield.base_elements(7, 5, 5)
+        timefield.base_elements(7, 5, 99)
 
 
 # --- init_geodesic_timefield -------------------------------------------------------

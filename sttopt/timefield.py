@@ -43,6 +43,7 @@ class TimeField(IntEnum):
     EDGE = 2  # left-edge ramp
     OPPOSITE_CORNER = 3  # bottom-left corner distance
     BOTTOM_EDGE = 4  # bottom-to-top ramp
+    RIGHT_EDGE = 5  # right-to-left ramp
 
 
 def _corner_distance_grid(
@@ -78,8 +79,9 @@ def init_timefield(
 
     CORNER and OPPOSITE_CORNER are normalized distances from the top-left (x=0, y=0)
     and bottom-left (x=0, y=nely) grid corners; EDGE is a left-to-right linear ramp in
-    x, constant down each column; BOTTOM_EDGE is a bottom-to-top ramp (`t=0` on the
-    bottom row, `t=1` on the top), for a build plate at the bottom.
+    x, constant down each column, and RIGHT_EDGE its mirror; BOTTOM_EDGE is a
+    bottom-to-top ramp (`t=0` on the bottom row, `t=1` on the top), for a build plate at
+    the bottom.
 
     :param nelx: element count in x
     :param nely: element count in y
@@ -95,6 +97,8 @@ def init_timefield(
         return _corner_distance_grid(nelx, nely, (0, nely))
     elif variant == TimeField.BOTTOM_EDGE:
         return np.tile(np.linspace(1, 0, nely)[:, None], (1, nelx))
+    elif variant == TimeField.RIGHT_EDGE:
+        return np.tile(np.linspace(1, 0, nelx), (nely, 1))
     else:
         raise ValueError(f"variant must be a TimeField member, got {variant!r}")
 
@@ -126,6 +130,8 @@ def base_elements(nelx: int, nely: int, variant: TimeField) -> Int[np.ndarray, "
         return np.arange(nely) * nelx  # column 0
     elif variant == TimeField.BOTTOM_EDGE:
         return (nely - 1) * nelx + np.arange(nelx)  # bottom row
+    elif variant == TimeField.RIGHT_EDGE:
+        return np.arange(nely) * nelx + nelx - 1  # last column
     else:
         raise ValueError(f"variant must be a TimeField member, got {variant!r}")
 
