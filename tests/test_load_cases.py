@@ -7,9 +7,11 @@ import pytest
 
 import sttopt.fem as fem
 import sttopt.load_cases as load_cases
-from conftest import default_run_config
+from conftest import default_run_config, virtual_heat_config
 from sttopt.load_cases import LoadCase
-from sttopt.run_config import RunConfig
+from sttopt.run_config import HeatRunConfig, LaplaceRunConfig, RunConfig
+
+L_BRACKETS = [LoadCase.L_BRACKET_CORNER, LoadCase.L_BRACKET_MIDDLE]
 
 
 def _resultant(F):
@@ -29,6 +31,8 @@ def _clamped_nodes(freedofs, ndof):
         (LoadCase.CANTILEVER, (0.0, -1.0)),
         (LoadCase.CORNER_LOADS, (0.0, -np.sqrt(2))),
         (LoadCase.EDGE_TRACTION, (1.0, 0.0)),
+        (LoadCase.L_BRACKET_CORNER, (1.0, 0.0)),
+        (LoadCase.L_BRACKET_MIDDLE, (1.0, 0.0)),
     ],
 )
 def test_each_case_carries_its_unit_loads(case, resultant):
@@ -93,3 +97,48 @@ def test_run_config_defaults_to_cantilever_for_records_without_a_load_case():
 def test_run_config_rejects_an_unknown_load_case():
     with pytest.raises(ValueError, match="mbb"):
         dataclasses.replace(default_run_config(), load_case="mbb")
+
+
+@pytest.mark.parametrize(
+    "case,col", [(LoadCase.L_BRACKET_CORNER, 0), (LoadCase.L_BRACKET_MIDDLE, 4)]
+)
+def test_l_brackets_load_down_their_vertical_edge_from_the_top(case, col):
+    nelx, nely = 8, 6
+    F, _ = load_cases.load_case(case, nelx, nely, 2.0, 0.0, 1.0)
+    nodes = fem.node_grid(nelx, nely)
+    loaded = np.flatnonzero(F) // 2
+    np.testing.assert_array_equal(np.sort(loaded), np.sort(nodes[:3, col]))
+    assert not F[1::2].any()  # horizontal
+
+
+@pytest.mark.parametrize("case", L_BRACKETS)
+def test_l_brackets_clamp_the_right_edge_of_their_bottom_half(case):
+    nelx, nely = 8, 6
+    F, freedofs = load_cases.load_case(case, nelx, nely, 0.0, 0.0, 1.0)
+    np.testing.assert_array_equal(
+        _clamped_nodes(freedofs, len(F)), np.sort(fem.node_grid(nelx, nely)[3:, -1])
+    )
+
+
+@pytest.mark.parametrize("case", L_BRACKETS)
+def test_l_brackets_leave_out_the_top_right_quarter(case):
+    active = load_cases.active_mask(case, 8, 6)
+    assert not active[:3, 4:].any()
+    assert active[3:].all() and active[:, :4].all()
+
+
+@pytest.mark.parametrize("case", [LoadCase.CANTILEVER, LoadCase.EDGE_TRACTION])
+def test_rectangular_cases_use_the_whole_mesh(case):
+    assert load_cases.active_mask(case, 5, 3).all()
+
+
+@pytest.mark.parametrize("nelx,nely", [(7, 6), (8, 5)])
+def test_l_brackets_need_an_even_mesh(nelx, nely):
+    with pytest.raises(ValueError, match="even"):
+        load_cases.active_mask(LoadCase.L_BRACKET_CORNER, nelx, nely)
+
+
+@pytest.mark.parametrize("cls", [HeatRunConfig, LaplaceRunConfig])
+def test_virtual_heat_configs_refuse_a_domain_short_of_the_mesh(cls):
+    with pytest.raises(ValueError, match="whole mesh"):
+        virtual_heat_config(cls, nelx=40, nely=20, load_case="l_bracket_corner")

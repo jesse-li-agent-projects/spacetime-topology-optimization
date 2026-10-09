@@ -27,13 +27,15 @@ import sttopt.timefield as timefield
 
 
 def global_volume_fraction(
-    xPhys: Float[Tensor, "nely nelx"], volfrac: float
+    xPhys: Float[Tensor, "nely nelx"], volfrac: float, domain_size: int | None = None
 ) -> Float[Tensor, " 1"]:
     """Global printable-volume-fraction constraint: total deposited material vs. `volfrac`,
     differentiable end to end w.r.t. `xPhys`.
+
+    :param domain_size: elements in the design domain, which `volfrac` is a fraction
+        of; defaults to the whole mesh
     """
-    nely, nelx = xPhys.shape
-    scale = nelx * nely * volfrac
+    scale = (xPhys.numel() if domain_size is None else domain_size) * volfrac
     return (torch.sum(xPhys) / scale - 1)[None]
 
 
