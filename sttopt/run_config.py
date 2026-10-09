@@ -478,6 +478,15 @@ class LaplaceRunConfig(SpaceTimeConfig):
     :param wall_filter_rmin_m: radius of the density-style filter on the wall design
         along the wall arc; without it the wall data is noisy node to node, since each
         node moves a whole wall region of `t`. 0 leaves it unfiltered.
+    :param field_move: MMA trust-region half-width on the time-field variables (`mu`
+        and the wall design), possibly scheduled, as `RunConfig.tmove` is for `t`.
+        `None` uses `move`.
+    :param chi_density_exponent: exponent `e` of the density in
+        `chi = max(xPhys**e, chi_density_floor) * chi(mu)`, possibly scheduled. 0 (the
+        default) leaves `chi` independent of the density; `e > 0` makes time travel
+        through the material rather than through gaps in it.
+    :param chi_density_floor: the floor on `xPhys**e`, which keeps the void's `chi`
+        positive and the solve conditioned.
     """
 
     chi_contrast: float
@@ -485,6 +494,9 @@ class LaplaceRunConfig(SpaceTimeConfig):
     laplace_cg_rtol: float
     poisson_cg_rtol: float
     wall_filter_rmin_m: float = 0.0
+    field_move: Scheduled | None = None
+    chi_density_exponent: Scheduled = 0.0
+    chi_density_floor: float = 1e-2
 
     def __post_init__(self) -> None:
         super().__post_init__()

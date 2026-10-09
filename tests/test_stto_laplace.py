@@ -2,6 +2,7 @@
 and its CLI."""
 
 import dataclasses
+import math
 import json
 import warnings
 from pathlib import Path
@@ -139,9 +140,49 @@ def test_a_step_stays_finite_when_void_is_later_than_the_part():
     )
     assert run_config.weight_at(config.penal, loop) % 1 != 0
     _, sol = stto_laplace.physical_fields(
-        problem, state.x, state.mu, state.wall, state.beta_d
+        problem, state.x, state.mu, state.wall, state.beta_d, loop
     )
     assert float(sol.tPhys.max()) > 1  # non-vacuous
     _, record = stto_laplace.step(problem, state)
     assert np.isfinite(record.f) and np.isfinite(record.g).all()
     assert np.isfinite(record.dg).all()
+
+
+@pytest.mark.filterwarnings("ignore:subsolv:RuntimeWarning")
+def test_field_move_bounds_the_time_field_variables_apart_from_the_density():
+    move, field_move = 0.01, 0.002
+    problem = stto_laplace.build_problem(
+        _config(move=move, field_move=field_move), device="cpu"
+    )
+    state = stto_laplace.init_state(problem)
+    for _ in range(3):
+        state, record = stto_laplace.step(problem, state)
+    diag = record.diagnostics
+    assert diag["dx_max"] <= move + 1e-12
+    assert max(diag["dmu_max"], diag["dwall_max"]) <= field_move + 1e-12
+    assert diag["dx_max"] > field_move  # non-vacuous
+    assert diag["dtphys_max"] > 0
+
+
+@pytest.mark.filterwarnings("ignore:subsolv:RuntimeWarning")
+def test_a_density_exponent_routes_time_through_the_material():
+    """With `chi` following the density, a void gap in a bar slows time across it, so
+    the far side is later than with `chi` blind to the density."""
+    nelx, nely = 30, 10
+    x = torch.full((nely, nelx), 1e-3, dtype=torch.float64)
+    x[:, :12] = 1.0  # a block on the plate, a void gap, then another block
+    x[:, 16:] = 1.0
+    t_far = {}
+    for e in (0.0, 1.0):
+        problem = stto_laplace.build_problem(
+            _config(nelx, nely, chi_density_exponent=e), device="cpu"
+        )
+        state = stto_laplace.init_state(problem)
+        state = dataclasses.replace(state, x=x)
+        _, sol = stto_laplace.physical_fields(
+            problem, state.x, state.mu, state.wall, math.inf, 0
+        )
+        t_far[e] = float(sol.tPhys[:, 20:].mean())
+        _, record = stto_laplace.step(problem, state)
+        assert np.isfinite(record.f) and np.isfinite(record.dg).all()
+    assert t_far[1.0] != t_far[0.0]
