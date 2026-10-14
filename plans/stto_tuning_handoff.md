@@ -2,6 +2,8 @@
 
 A quick start for the next agent. No session ran between 2026-10-10 02:20 and this note.
 The history of each decision is in the files linked below, not here.
+Dashboards (`plot/<study>/dashboard.html`) must be served, not opened from disk; see
+`agent_docs/dashboards.md`.
 
 ## Where things stand
 
