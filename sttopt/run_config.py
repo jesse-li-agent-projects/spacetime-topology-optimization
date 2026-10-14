@@ -23,7 +23,7 @@ means run records written before the field existed no longer load -- add the fie
 every config file instead. The one exception is a field whose default is the only
 behaviour older records could have had (`SpaceTimeConfig.load_case`,
 `support_length_m`, `hotspot_credit`, `hotspot_tie_credit`, `hotspot_cooling_time`,
-`hotspot_cooling_sharpness`, `hotspot_weight`, `calibration_rate`).
+`hotspot_cooling_sharpness`, `hotspot_weight`, `calibration_rate`, `RunConfig.time_init`).
 """
 
 import bisect
@@ -392,6 +392,10 @@ class RunConfig(SpaceTimeConfig):
     :param lrmin_m: continuity-filter radius, as in `SeqRunConfig`.
     :param tmove: MMA trust-region half-width on the time variables, possibly
         scheduled.
+    :param time_init: a `timefield.TimeInit` member value: `ramp`, the default and the
+        only behaviour before it existed, seeds `t` with `print_base`'s ramp over the
+        bounding box; `geodesic` with the distance to the base through the design domain,
+        which follows a non-rectangular domain around its corners.
     """
 
     enable_stage_volume: bool
@@ -400,6 +404,7 @@ class RunConfig(SpaceTimeConfig):
     continuity_tol: float
     lrmin_m: float
     tmove: Scheduled
+    time_init: str = "ramp"
 
 
 # The print bases a virtual-heat time field supports: a build plate along a whole edge.

@@ -282,7 +282,7 @@ def physical_fields(
 
 def init_state(problem: Problem) -> State:
     """Initial state: `x`/`t` are the raw seed (uniform `problem.config.volfrac` over
-    the domain, time field per `problem.config.print_base`).
+    the domain, time field per `problem.config.time_init` and `print_base`).
 
     The MATLAB source leaves `tPhys` unfiltered at initialization, so its first iteration
     reads a different forward map from every later one (PR #26). Here every iteration,
@@ -295,15 +295,18 @@ def init_state(problem: Problem) -> State:
 
     x = config.volfrac * problem.active.to(dtype)
 
-    # init_timefield is a NumPy builder (plans/torch_port_part2.md Phase 3.2 item 2);
+    # The time-field builders are NumPy (plans/torch_port_part2.md Phase 3.2 item 2);
     # converted once here, at the tensor boundary.
-    t = torch_util.to_tensor(
-        timefield.init_timefield(
+    time_init = timefield.TimeInit(config.time_init)
+    if time_init == timefield.TimeInit.GEODESIC:
+        t0 = timefield.init_geodesic_timefield(
+            problem.active.cpu().numpy().astype(float), problem.Nei.cpu().numpy()
+        )
+    else:
+        t0 = timefield.init_timefield(
             nelx, nely, timefield.TimeField[config.print_base.upper()]
-        ),
-        device,
-        dtype,
-    )
+        )
+    t = torch_util.to_tensor(t0, device, dtype)
 
     # MATLAB's xold1=xold2=[x(:); zeros(nel,1)], reproduced for fidelity
     xold = torch.cat([x.flatten(), torch.zeros(nel, device=device, dtype=dtype)])

@@ -206,6 +206,7 @@ def test_the_shared_base_leaves_stto_only_the_fields_the_pde_replaces():
         "continuity_tol",
         "lrmin_m",
         "tmove",
+        "time_init",
     }
 
 

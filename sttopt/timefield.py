@@ -364,6 +364,16 @@ def init_geodesic_timefield(
     return np.minimum(dist / scale, 1.0).reshape(nely, nelx)
 
 
+class TimeInit(StrEnum):
+    """Names for how `stto` seeds its time field: `print_base`'s bounding-box ramp
+    (`init_timefield`), or the geodesic distance to the base through the design domain
+    (`init_geodesic_timefield` with the domain as the solid).
+    """
+
+    RAMP = "ramp"
+    GEODESIC = "geodesic"
+
+
 class VoidExtension(StrEnum):
     """Names for how a geometry-dependent initialization fills the void, selectable per
     run. The solid times are the same either way; these differ only in the free

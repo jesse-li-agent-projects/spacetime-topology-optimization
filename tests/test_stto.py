@@ -1051,15 +1051,14 @@ def test_hotspot_weight_adds_the_hotspot_gradient_to_the_time_variables_alone():
 # --- A design domain short of the mesh (plans/domain_mask.md) ---------------------------
 
 
-def _l_bracket(**kwargs):
+def _l_bracket(**config_overrides):
     return _problem(
         nelx=8,
         nely=6,
         nStage=0,
         tfield=timefield.TimeField.RIGHT_EDGE,
         enable_stage_volume=False,
-        config_overrides=dict(load_case="l_bracket_corner"),
-        **kwargs,
+        config_overrides=dict(load_case="l_bracket_corner", **config_overrides),
     )
 
 
@@ -1085,9 +1084,7 @@ def test_the_volume_row_measures_the_domain():
     problem = _l_bracket()
     state = stto.init_state(problem)
     xPhys, _ = stto.physical_fields(problem, state.x, state.t, 1.0)
-    g = constraints.global_volume_fraction(
-        xPhys, VOLFRAC, int(problem.active.sum())
-    )
+    g = constraints.global_volume_fraction(xPhys, VOLFRAC, int(problem.active.sum()))
     # The seed fills the domain at `volfrac`, short only of the filter's void padding
     assert -0.1 < float(g) < 0
     assert int(problem.active.sum()) == 36
@@ -1100,11 +1097,30 @@ def test_the_print_base_lies_in_the_domain():
     np.testing.assert_array_equal(base, np.arange(3, 6) * 8 + 7)
 
 
+def test_a_geodesic_seed_prints_the_arm_from_the_leg():
+    """The bounding-box ramp prints the L's upright arm all at once along each column;
+    the geodesic seed prints it upward from where it meets the leg, base first."""
+    t = {}
+    for init in ("ramp", "geodesic"):
+        problem = _l_bracket(time_init=init)
+        t[init] = stto.init_state(problem).t.cpu().numpy()
+    arm_edge = t["ramp"][:3, 3]  # the arm's column next to the notch, top to bottom
+    assert np.ptp(arm_edge) == 0
+    arm_edge = t["geodesic"][:3, 3]
+    assert (np.diff(arm_edge) < 0).all()
+    assert (t["geodesic"].flatten()[problem.Nei.cpu().numpy()] == 0).all()
+
+
 @pytest.mark.parametrize(
     "overrides,match",
-    [(dict(time_filter_rmin_m=0.0), "time_filter_rmin_m"), (dict(enable_stage_volume=True), "stage volume")],
+    [
+        (dict(time_filter_rmin_m=0.0), "time_filter_rmin_m"),
+        (dict(enable_stage_volume=True), "stage volume"),
+    ],
 )
-def test_a_domain_short_of_the_mesh_refuses_what_assumes_the_whole_mesh(overrides, match):
+def test_a_domain_short_of_the_mesh_refuses_what_assumes_the_whole_mesh(
+    overrides, match
+):
     config = dict(
         nelx=8,
         nely=6,
