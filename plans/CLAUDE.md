@@ -18,6 +18,10 @@ This directory contains plans for agents.
     - Why `stto` prints a flat time basin on the S 0.3 top bar that the hotspot misses
       (soft print-order sigmoid), and a hotspot that only credits material at least δ
       behind the front, at the part's mean gradient. Includes a plain-TO baseline.
+- stto_tuning_handoff.md
+    - Start here for `stto` tuning: status as of 2026-10-14 (settled schedule, the
+      validation matrix and its two failures, the open grey-nucleation thread, and the
+      PRs and decisions waiting on the user).
 - virtual_heat_tuning.md
     - Schedule tuning and the validation matrix for `stto_heat.py` and
       `stto_laplace.py`, whose time field solves a virtual heat equation (design in
