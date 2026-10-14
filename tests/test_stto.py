@@ -1046,3 +1046,72 @@ def test_hotspot_weight_adds_the_hotspot_gradient_to_the_time_variables_alone():
         on.df[nel:], off.df[nel:] + weight * TCR * hotspot_t, rtol=1e-9
     )
     assert on.diagnostics["hotspot_weight"] == weight
+
+
+# --- A design domain short of the mesh (plans/domain_mask.md) ---------------------------
+
+
+def _l_bracket(**kwargs):
+    return _problem(
+        nelx=8,
+        nely=6,
+        nStage=0,
+        tfield=timefield.TimeField.RIGHT_EDGE,
+        enable_stage_volume=False,
+        config_overrides=dict(load_case="l_bracket_corner"),
+        **kwargs,
+    )
+
+
+def test_outside_the_domain_is_void_and_moves_nothing():
+    """Elements outside the domain have no material, whatever their variables, and no
+    row's gradient reaches their variables."""
+    problem = _l_bracket()
+    state = stto.init_state(problem)
+    outside = ~problem.active
+    x = torch.rand_like(state.x)
+    xPhys, tPhys = stto.physical_fields(problem, x, state.t, 4.0)
+    assert (xPhys[outside] == 0).all()
+    assert tPhys[problem.active].max() == 1
+
+    _, record = stto.step(problem, state)
+    passive = outside.flatten().cpu().numpy()
+    assert not record.df[: problem.n // 2][passive].any()
+    assert not record.dg[:, : problem.n // 2][:, passive].any()
+    assert np.isfinite(record.dg).all()
+
+
+def test_the_volume_row_measures_the_domain():
+    problem = _l_bracket()
+    state = stto.init_state(problem)
+    xPhys, _ = stto.physical_fields(problem, state.x, state.t, 1.0)
+    g = constraints.global_volume_fraction(
+        xPhys, VOLFRAC, int(problem.active.sum())
+    )
+    # The seed fills the domain at `volfrac`, short only of the filter's void padding
+    assert -0.1 < float(g) < 0
+    assert int(problem.active.sum()) == 36
+
+
+def test_the_print_base_lies_in_the_domain():
+    problem = _l_bracket()
+    base = problem.Nei.cpu().numpy()
+    assert problem.active.flatten().cpu().numpy()[base].all()
+    np.testing.assert_array_equal(base, np.arange(3, 6) * 8 + 7)
+
+
+@pytest.mark.parametrize(
+    "overrides,match",
+    [(dict(time_filter_rmin_m=0.0), "time_filter_rmin_m"), (dict(enable_stage_volume=True), "stage volume")],
+)
+def test_a_domain_short_of_the_mesh_refuses_what_assumes_the_whole_mesh(overrides, match):
+    config = dict(
+        nelx=8,
+        nely=6,
+        nStage=0,
+        enable_stage_volume=False,
+        print_base="right_edge",
+        load_case="l_bracket_corner",
+    )
+    with pytest.raises(ValueError, match=match):
+        stto.build_problem(default_run_config(**(config | overrides)))

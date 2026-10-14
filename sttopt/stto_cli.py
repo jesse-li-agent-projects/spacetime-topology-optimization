@@ -145,7 +145,7 @@ def main(args: argparse.Namespace) -> None:
             state, record = stto.step(problem, state)
             xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, state.beta_d)
             diag = record.diagnostics
-            vol = float(xPhys.mean())
+            vol = float(xPhys[problem.active].mean())
             print(
                 f"It.: {it:4d} Obj.: {record.f:10.4f} "
                 f"Vol.: {vol:6.3f} Tm.: {record.tru_max:7.3f} "

@@ -208,14 +208,15 @@ def check_design(
         warn_unsupported(support)
 
     xPhys_np = torch_util.to_numpy(xPhys)
+    active = torch_util.to_numpy(problem.active)
     report = dict(
         loop=loop,
         passed=start["passed"] and support["passed"],
         start=start,
         support=support,
         saddles=int(saddles(tPhys_np, solid, solid).sum()),
-        volume_fraction=float(solid.mean()),
-        grey_fraction=float(((xPhys_np > 0.05) & (xPhys_np < 0.95)).mean()),
+        volume_fraction=float(solid[active].mean()),
+        grey_fraction=float(((xPhys_np > 0.05) & (xPhys_np < 0.95))[active].mean()),
     )
     # The physics has nothing to measure on a design without material.
     if solid.any():

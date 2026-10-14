@@ -74,8 +74,11 @@ class Problem:
     H: torch_util.SymmetricCsr  # shape (nel, nel)
     Hs: Float[Tensor, " nel"]
     # The density filter on `t`, or None when `config.time_filter_rmin_m` is 0.
+    # `time_Hs` sums the weights over the domain only (`physical_fields`).
     time_H: torch_util.SymmetricCsr | None
     time_Hs: Float[Tensor, " nel"] | None
+    # The design domain (`load_cases.active_mask`); elements outside it are void
+    active: Bool[Tensor, "nely nelx"]
     L: Tensor  # sparse CSR, shape (nel, nel)
     C: Tensor  # sparse CSR, shape ((nelx+1)*(nely+1), nel)
     # The hotspot measure and the time-field constraints and regularizers
@@ -184,19 +187,33 @@ def build_problem(
         h,
     )
 
+    active = load_cases.active_mask(load_cases.LoadCase(config.load_case), nelx, nely)
     H, Hs = filters.density_filter(nelx, nely, units.in_elements(config.rmin_m, h))
     time_H = time_Hs = None
     if config.time_filter_rmin_m > 0:
-        time_H_np, time_Hs_np = filters.density_filter(
+        time_H_np, _ = filters.density_filter(
             nelx, nely, units.in_elements(config.time_filter_rmin_m, h)
         )
+        time_Hs_np = time_H_np @ active.flatten().astype(float)
+        # Void beyond the filter radius from the domain averages nothing: t = 0 there,
+        # read by no stencil that reaches material
+        time_Hs_np[time_Hs_np == 0] = 1.0
         time_H = torch_util.symmetric_csr_to_tensor(time_H_np, device, dtype)
         time_Hs = torch_util.to_tensor(time_Hs_np, device, dtype)
+    elif not active.all():
+        raise ValueError(
+            "a non-rectangular domain needs time_filter_rmin_m > 0: the time filter is what extends t to the void elements next to the domain, whose t the time-field gradient reads"
+        )
+    if config.enable_stage_volume and not active.all():
+        raise ValueError(
+            "the stage volume bounds measure volfrac against the whole mesh, not a non-rectangular domain"
+        )
     L = filters.continuity_filter(nelx, nely, units.in_elements(config.lrmin_m, h))
     C = gravity.gravity_load_matrix(nelx, nely)
 
     # Print-start element(s), per constraints.start_point's own docstring.
     Nei = timefield.base_elements(nelx, nely, tfield)
+    Nei = Nei[active.flatten()[Nei]]
 
     n = 2 * nelx * nely
 
@@ -207,6 +224,7 @@ def build_problem(
     int_fields = torch_util.to_tensors(
         {"edofMat": edofMat, "freedofs": freedofs, "Nei": Nei}, device, torch.int64
     )
+    int_fields["active"] = torch.as_tensor(active, device=device)
     return Problem(
         config=config,
         device=device,
@@ -246,20 +264,25 @@ def physical_fields(
 
     :return: `(xPhys, tPhys)`
     """
-    xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
-    xPhys = filters.heaviside_projection(xTilde, beta_d, problem.config.eta)
+    active = problem.active
+    # Outside the domain counts as void in the density filter, so the part's edges along
+    # the domain's own edge are filtered the same as anywhere else in its interior
+    xTilde = filters.apply_density_filter(x * active, problem.H, problem.Hs)
+    xPhys = filters.heaviside_projection(xTilde, beta_d, problem.config.eta) * active
+    # The time filter averages over the domain only: void elements next to it take the
+    # average of their neighbours in it
     tTilde = (
         t
         if problem.time_H is None
-        else filters.apply_density_filter(t, problem.time_H, problem.time_Hs)
+        else filters.apply_density_filter(t * active, problem.time_H, problem.time_Hs)
     )
-    tPhys = tTilde / tTilde.max().detach()
+    tPhys = tTilde / tTilde[active].max().detach()
     return xPhys, tPhys
 
 
 def init_state(problem: Problem) -> State:
-    """Initial state: `x`/`t` are the raw seed (uniform `problem.config.volfrac`, time
-    field per `problem.config.print_base`).
+    """Initial state: `x`/`t` are the raw seed (uniform `problem.config.volfrac` over
+    the domain, time field per `problem.config.print_base`).
 
     The MATLAB source leaves `tPhys` unfiltered at initialization, so its first iteration
     reads a different forward map from every later one (PR #26). Here every iteration,
@@ -270,7 +293,7 @@ def init_state(problem: Problem) -> State:
     nel = nelx * nely
     device, dtype = problem.device, problem.dtype
 
-    x = torch.full((nely, nelx), config.volfrac, device=device, dtype=dtype)
+    x = config.volfrac * problem.active.to(dtype)
 
     # init_timefield is a NumPy builder (plans/torch_port_part2.md Phase 3.2 item 2);
     # converted once here, at the tensor boundary.
@@ -421,7 +444,7 @@ def constraint_values(
     config = problem.config
     g = {
         "global_volume_fraction": constraints.global_volume_fraction(
-            xPhys, config.volfrac
+            xPhys, config.volfrac, int(problem.active.sum())
         )
     }
     if config.enable_continuity:
@@ -535,7 +558,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         torch.full_like(tflat, run_config.weight_at(config.tmove, loop)),
     )
 
-    vol_diag = float(xPhys.detach().sum() / (nelx * nely))
+    vol_diag = float(xPhys.detach().sum() / problem.active.sum())
 
     K_est_t = problem.terms.estimated_conductivity(xPhys, tPhys, loop)
     g_parts = constraint_values(problem, xPhys, tPhys, K_est_t, loop, beta_t)
