@@ -395,7 +395,9 @@ class RunConfig(SpaceTimeConfig):
     :param time_init: a `timefield.TimeInit` member value: `ramp`, the default and the
         only behaviour before it existed, seeds `t` with `print_base`'s ramp over the
         bounding box; `geodesic` with the distance to the base through the design domain,
-        which follows a non-rectangular domain around its corners.
+        which follows a non-rectangular domain around its corners. That distance is
+        approximate (8-connected grid, up to 8% long off the axes and diagonals; see
+        `timefield.init_geodesic_timefield`).
     """
 
     enable_stage_volume: bool

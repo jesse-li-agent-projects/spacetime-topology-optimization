@@ -342,8 +342,9 @@ def init_geodesic_timefield(
     rasterizing a component into a roomier box, leaves them unchanged. Void beyond that
     distance clips to 1.
 
-    Grid-graph metrication error (a few percent, from the 8-connected approximation to
-    true Euclidean distance) is irrelevant for an initialization; this deliberately
+    Distances are 8-connected grid-graph distances, not Euclidean: exact along the axes
+    and diagonals, up to 8% long between them, so iso-distance lines are octagonal
+    rather than circular. That is irrelevant for an initialization; this deliberately
     does not reach for fast marching.
 
     :param xPhys: density field, shape `(nely, nelx)`; every solid element must connect
