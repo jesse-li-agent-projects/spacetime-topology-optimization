@@ -165,7 +165,7 @@ test, not an interaction study.
 | **S** | bottom, 0.6 | bottom, 0.8 | edge, 0.6 | edge, 0.8 |
 | **D** | bottom, 0.8 | bottom, 0.6 | edge, 0.8 | edge, 0.6 |
 
-D cells are dropped from future cell sets; see `print_order_credit.md` (user, 2026-10-07).
+D cells are dropped from future cell sets; see `archive/print_order_credit.md` (user, 2026-10-07).
 
 16 cells × {Variant 1, Variant 2, `stto` control} = 48 runs, about 5 hours at the
 capacity above. The `stto` controls use `stto`'s validated schedule, not a

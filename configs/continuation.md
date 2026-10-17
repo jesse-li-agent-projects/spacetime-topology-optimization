@@ -2,7 +2,7 @@
 
 `default.json` holds the numbers; this is why they sit where they do, for whoever tunes
 them next. Iterations are for `nloop` 600. Settled 2026-10-08 by the tuning in
-`plans/print_order_credit.md` (tuning P and its follow-ups).
+`plans/archive/print_order_credit.md` (tuning P and its follow-ups).
 
 ## Phases
 

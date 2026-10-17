@@ -330,8 +330,11 @@ and the evidence behind each setting are in `configs/continuation.md`. In order:
 - A C1 0.5 diagonal that stays thin is thin in plain TO too; it is not the uniformity
   term (restarted without it, the member drops and the time field breaks down).
 
-Open: the validation matrix, replicates of the marginal cells, the default `Tcr` 0.8
-with this schedule, and the cleanup below.
+Validation matrix (2026-10-10, one run per cell, `Tcr` 0.6 and 0.8, `output/val_*`,
+`plot/val/dashboard.html`; reviewed by the user): 16 of 18 cells pass every gate. Two fail
+once binarization starts, on a region printed all at once: S 0.5 `bottom_edge` at 0.8
+(binarized row +0.15) and L middle at 0.6 (+0.61). Replicates of the marginal cells were
+not run.
 
 ## Cleanup after tuning (user, 2026-10-08)
 
@@ -340,3 +343,6 @@ Once the schedule is settled, simplify the continuation where stages can merge.
   nearly equal (0.0010 vs 0.0012 per iteration), so one ramp 1 -> target over 0-350 may
   do; at target 0.4 they differ (0.0010 vs 0.0018). The 0.95 point only exists to make
   the hotspot bind by ~50; test the single ramp against that.
+
+Tried in `output/simp/` and `output/kcont/` (`eval.json` each); none passed all cells
+with a gain, so the settled schedule stays (user, 2026-10-09).
