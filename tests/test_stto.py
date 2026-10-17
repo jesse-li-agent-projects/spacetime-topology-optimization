@@ -1048,7 +1048,7 @@ def test_hotspot_weight_adds_the_hotspot_gradient_to_the_time_variables_alone():
     assert on.diagnostics["hotspot_weight"] == weight
 
 
-# --- A design domain short of the mesh (plans/domain_mask.md) ---------------------------
+# --- A design domain short of the mesh (plans/archive/domain_mask.md) -------------------
 
 
 def _l_bracket(**config_overrides):
