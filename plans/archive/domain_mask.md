@@ -38,6 +38,8 @@ An L tromino: the bounding box without its top-right quarter.
 - Refused on a domain short of the mesh: the stage volume bounds (deprecated, measured
   against the whole mesh) and the virtual-heat variants.
 
-## Open
+## Result
 
-- L cells in the validation sweep.
+The L corner and L middle cells ran in the validation sweep (2026-10-10, `output/val_L*`).
+L middle at `Tcr` 0.6 fails on a flat time basin, the schedule's failure mode rather
+than the domain's; see `print_order_credit.md`.

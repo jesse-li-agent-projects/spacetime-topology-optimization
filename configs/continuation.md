@@ -2,7 +2,7 @@
 
 `default.json` holds the numbers; this is why they sit where they do, for whoever tunes
 them next. Iterations are for `nloop` 600. Settled 2026-10-08 by the tuning in
-`plans/print_order_credit.md` (tuning P and its follow-ups).
+`plans/archive/print_order_credit.md` (tuning P and its follow-ups).
 
 ## Phases
 
@@ -73,3 +73,18 @@ plain TO. Not yet run: the default `Tcr` 0.8, the validation matrix, replicates.
   one: C1 0.5 sits near several topologies and changes members on small schedule changes.
 - **Hotspot limits**: a straight vertical free wall scores ~0.43, so `Tcr` below that
   needs shaped edges everywhere.
+
+## Judging a run
+
+Metrics are symptoms; look at the checkpoints (density, time field, severity map). A good
+run:
+- has a topology near the plain-TO baseline, without the thin features that would
+  overheat;
+- leaves no stubs or protrusions, and no frozen grey web;
+- builds `t` bottom-up, with one clean maximum where the fronts merge (e.g. on S's top
+  bar, or at a corner);
+- never forms a local minimum or flat basin of `t`. Once one forms the optimizer can
+  hardly push it out, so note the first checkpoint where one appears, even if it later
+  shrinks.
+
+Compliance within ~1.2x the baseline is the expectation for a good optimizer, not a gate.
