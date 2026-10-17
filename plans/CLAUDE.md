@@ -9,6 +9,9 @@ This directory contains plans for agents.
 - laplace_s03_schedule.md
     - Variant 2 (`stto_laplace`) on S 0.3 with the settled `stto` schedule: a separate
       move limit for the time-field variables, calibrated on the realized time steps.
+- variant2_handoff.md
+    - Start here for Variant 2: where its tuning stands, the user's decisions of
+      2026-10-18, the overnight batches, and pointers to the runs and transcripts.
 - length_scale_options.md
     - Deferred: ways to give `stto` a minimum feature size, against the thin necks the
       hotspot constraint adds. Options and their costs only; the user wants other
