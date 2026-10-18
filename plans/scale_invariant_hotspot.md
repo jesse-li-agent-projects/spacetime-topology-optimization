@@ -28,10 +28,69 @@ neighborhood were binarized as they stand; "violating" means `S¹_e > Tcr`.
 - **R3.** Void contributes nothing to the aggregate, whatever its print time (PR #98);
   possibly near-void too.
 
-Exact R0 conflicts with R1 for a bar on void support: R1 has to come from `S_e` rising
-with `x_e`, so a grey reading sits below `S¹_e`, and a marginal violator reads as passing.
-The hiding band's width is the knob. R2 rules out shielding convex in `x_j` (`q > 1`),
-whose slope vanishes at void.
+### The tension, formally
+
+**Setting.** A bar on void support: every earlier neighbor outside the bar is void, and
+the bar is uniform at density $s$. Along $s$ the bar's severity is $\sigma(s)$, with
+$\sigma(1) = S^1$. Define the margin and the hiding
+
+$$m = S^1 - T_{cr}, \qquad h(s) = S^1 - \sigma(s), \quad h(1) = 0.$$
+
+Scaling a bar whose support is void scales its whole neighborhood, so $\sigma'(s)$ is
+R1's removal pressure, and for a shielding that only sees density ratios it is the gate's
+alone: $s\,\sigma'(s) = \sum_j x_j\,\partial S_e/\partial x_j$ (Euler). Treat the
+aggregate as a hard max, so a reading presses iff $\sigma(s) > T_{cr}$.
+
+**The requirements in terms of $h$.**
+
+- R0 *if*: $m \le 0 \Rightarrow h(s) \ge m$. Any $h \ge 0$ (never reads worse than solid)
+  suffices; the `absolute` hump is $h < 0$.
+- R0 *only if*: $m > 0 \Rightarrow h(s) < m$ for all $s \in (0, 1]$.
+- R1: $\sigma' > 0$, and integrated, $\displaystyle\int_a^1 \sigma'(s)\,ds = h(a)$.
+- R3: void reads below $T_{cr}$ by some $\delta > 0$ whatever its print time, so for $S^1$
+  up to 1: $\sigma(0^+) \le T_{cr} - \delta$, i.e. $h(0^+) \ge m + \delta$.
+- R2 is separate: with $K_e = \sum_j w_j\,c(u_j)/D$ and $u_j = (x_j+\varepsilon)/(x_e+\varepsilon)$,
+
+  $$\frac{\partial K_e}{\partial x_j} = \frac{w_j}{D}\,\frac{c'(u_j)}{x_e+\varepsilon},$$
+
+  and void support has $u_j \approx 0$, so R2 $\iff c'(0) > 0$. $c = u^q$ (and `absolute`'s
+  $x_j^q$) has $c'(0) = 0$ for $q > 1$.
+
+**Proposition.** For a violating bar ($m > 0$):
+
+1. R0 *only if* and R3 cannot both hold for a $\sigma$ continuous on $[0, 1]$: since
+   $\sigma(0^+) < T_{cr} < \sigma(1)$, some $s$ has $\sigma(s) = T_{cr}$, and below it the
+   bar reads as passing. Holding both needs a jump at $s = 0$, which in practice is a
+   transition over $(0, \varepsilon)$: batch 14's $x/(x+\varepsilon)$ gate.
+2. R1 is then starved wherever R0 holds: for any $a$ with $h(a) < m$,
+   $\int_a^1 \sigma' = h(a) < m$. The total removal pressure a bar can feel while it still
+   reads as violating is less than its margin; a marginal violator feels none. The rest,
+   $h(0^+) - h(a) > \delta$, is spent in the transition band
+   $B_m = \{s : h(s) \ge m\}$, where R0 fails.
+
+So no formulation meets R0, R1 and R3 exactly. What's left to choose is where the band
+$B_m$ sits and how wide it is; the removal pressure inside it is roughly
+$(m + \delta)/|B_m|$.
+
+| gate | $\sigma(s)$ | $h(s)$ | band $B_m$ |
+|---|---|---|---|
+| multiplicative $x^r$ | $s^r S^1$ | $(1 - s^r)\,S^1$ | $s \le (T_{cr}/S^1)^{1/r}$ |
+| $x/(x+\varepsilon)$ | $\frac{s}{s+\varepsilon}S^1$ | $\frac{\varepsilon}{s+\varepsilon}S^1$ | $s \le \varepsilon\,T_{cr}/m$ |
+| log, $\gamma \ln x$ | $S^1 + \gamma\ln s$ | $\gamma\ln(1/s)$ | $s \le e^{-m/\gamma}$ |
+
+Every band grows to all of $(0, 1)$ as $m \to 0$ (point 2), so R0 *only if* can only be
+required above a tolerance: $m > \tau$.
+
+**Where hiding is free.** Binarization at $\eta$ sends $s < \eta$ to void, so the binarized
+check never sees a bar in $B_m$ if $B_m \subset (0, \eta)$ for all $m > \tau$. That keeps
+the reading honest for the check as it stands; hiding only bites if SIMP later solidifies
+the bar. For the log gate this is $e^{-\tau/\gamma} \le \eta$, i.e.
+
+$$\gamma \le \frac{\tau}{\ln(1/\eta)} \approx 0.014 \quad (\tau = 0.01,\ \eta = 0.5).$$
+
+The price, by point 2: a violating bar denser than $\eta$ feels at most $\tau$ of removal
+pressure in total, so it can only be fixed by R2's support, the time field, or compliance;
+strong R1 exists only below $\eta$.
 
 | formulation | R0 if | R0 only if | R1 | R2 | R3 |
 |---|---|---|---|---|---|
