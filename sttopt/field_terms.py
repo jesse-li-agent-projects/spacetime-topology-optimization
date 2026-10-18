@@ -112,6 +112,13 @@ class FieldTerms:
             raise ValueError(
                 f"hotspot_credit 'cooling' divides by hotspot_cooling_sharpness, which must stay positive, got {sharpness}"
             )
+        shielding = conductivity.Shielding(config.hotspot_shielding)
+        if shielding != conductivity.Shielding.ABSOLUTE and not (
+            config.hotspot_shielding_eps > 0
+        ):
+            raise ValueError(
+                f"hotspot_shielding {shielding.value!r} divides by hotspot_shielding_eps, which must be positive, got {config.hotspot_shielding_eps}"
+            )
         rmin_cond = units.in_elements(config.rmin_cond_m, config.element_size_m)
         normalization = conductivity.Normalization(config.hotspot_normalization)
         e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
@@ -144,6 +151,11 @@ class FieldTerms:
                 config.r,
                 config.hotspot_beta,
                 config.calibration_rate,
+                (
+                    None
+                    if shielding == conductivity.Shielding.ABSOLUTE
+                    else config.hotspot_shielding_eps
+                ),
             ),
             curvature=calibrated(config.tool_radius_m, config.curvature_beta),
             min_gradient=calibrated(
@@ -225,6 +237,8 @@ class FieldTerms:
             config.hotspot_tie_credit,
             at(config.hotspot_cooling_time),
             at(config.hotspot_cooling_sharpness),
+            conductivity.Shielding(config.hotspot_shielding),
+            config.hotspot_shielding_eps,
         )
 
     def constraints(
@@ -361,7 +375,10 @@ class FieldTerms:
             a = torch.nan_to_num(grad.abs(), posinf=0.0)
             n_eff = float(a.sum() ** 2 / (a**2).sum()) if bool((a > 0).any()) else 0.0
             severity = conductivity.severity(
-                K_est, xPhys, run_config.weight_at(self.config.r, loop)
+                K_est,
+                xPhys,
+                run_config.weight_at(self.config.r, loop),
+                self.hotspot.gate_eps,
             )
             imax = int(severity.argmax())
         nelx = xPhys.shape[1]

@@ -263,6 +263,12 @@ class SpaceTimeConfig(_ConfigMixin):
     :param hotspot_tie_credit: `sigmoid`'s credit for a neighbor printed at the same
         time, in (0, 1); `0.5` is the source's. A region printed all at once scores
         `K_est ~ 2x` this, so it fails the hotspot where `1 - 2x` exceeds `Tcr`.
+    :param hotspot_shielding: a `conductivity.Shielding` member value: how a neighbor's
+        density counts toward `K_est`. `absolute`, the default and the only behaviour
+        before it existed, or the scale-invariant `capped_ratio` or `ratio`, which
+        replace the `r` gate with `x / (x + hotspot_shielding_eps)`.
+    :param hotspot_shielding_eps: the relative shieldings' regularization, below which
+        a density counts as void.
     :param hotspot_cooling_time: `cooling`'s cooling time, in `t`, possibly scheduled.
     :param hotspot_cooling_sharpness: `cooling`'s onset sharpness `k`, possibly
         scheduled. A tie gets `1 - 2**(-1/k)`, and a later neighbor is pulled earlier
@@ -326,6 +332,8 @@ class SpaceTimeConfig(_ConfigMixin):
     calibration_rate: float = 1.0
     hotspot_credit: str = "sigmoid"
     hotspot_tie_credit: float = 0.5
+    hotspot_shielding: str = "absolute"
+    hotspot_shielding_eps: float = 1e-3
     hotspot_cooling_time: Scheduled = 0.0
     hotspot_cooling_sharpness: Scheduled = 8.0
     print_base: str
