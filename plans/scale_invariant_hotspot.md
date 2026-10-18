@@ -9,8 +9,36 @@ scaled by `n`. While the bar is grey it reads as unshielded, its own density onl
 gets pushed down (`∂S_e/∂x_e = r x_e^(r-1) (1 - K_e) > 0`), and solidifying it helps only
 once it is solid all at once. Removing the bar also clears the hotspot.
 
-Requirement: `S_e(n x) = S_e(x)` for every element, i.e. `Σ_j x_j ∂S_e/∂x_j = 0`, so the
-hotspot exerts no force along "scale every density".
+First attempt (batch 14): `S_e(n x) = S_e(x)` for every element, i.e.
+`Σ_j x_j ∂S_e/∂x_j = 0`, so the hotspot exerts no force along "scale every density". This
+removed the barrier but also every push to delete or support a violating bar; the
+requirements below replace it.
+
+## Requirements (user, 2026-10-18)
+
+Stated as gradient pressures. `S¹_e` is the severity element `e` would have if it and its
+neighborhood were binarized as they stand; "violating" means `S¹_e > Tcr`.
+
+- **R0, iff.** No hotspot pressure on a bar if and only if its solid version passes. The
+  *if* direction stops grey refusing to solidify (the current formula's barrier); the
+  *only if* direction stops grey hiding a hotspot until binarization (B's failure).
+- **R1.** A violating bar's own material is pushed out: `∂S_e/∂x_e > 0`.
+- **R2.** A violating bar's earlier-printed neighbors, void ones included, are pushed to
+  solidify and support it: `∂S_e/∂x_j < 0`, nonzero at `x_j = 0`.
+- **R3.** Void contributes nothing to the aggregate, whatever its print time (PR #98);
+  possibly near-void too.
+
+Exact R0 conflicts with R1 for a bar on void support: R1 has to come from `S_e` rising
+with `x_e`, so a grey reading sits below `S¹_e`, and a marginal violator reads as passing.
+The hiding band's width is the knob. R2 rules out shielding convex in `x_j` (`q > 1`),
+whose slope vanishes at void.
+
+| formulation | R0 if | R0 only if | R1 | R2 | R3 |
+|---|---|---|---|---|---|
+| `absolute`, `x^r` gate | ✗ hump at `x^q = r/(r+q)` | ✓ for small r | below the hump | ✗ | via `x^r`, weak for small r |
+| A, `x/(x+ε)` gate (batch 14) | ✓ | ✓ | ✗ | ✗ | void only, not near-void |
+| B, `x/(x+ε)` gate (batch 14) | ✓ | ✗ | ✗ | ✗ | void only |
+| A with `q = 1`, `x^r` gate (untested) | ✓ | band `S¹ < Tcr / x^r` | ✓ | ✓ | via `x^r` |
 
 ## Formulations (`hotspot_shielding`)
 
