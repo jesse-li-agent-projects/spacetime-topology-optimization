@@ -60,6 +60,9 @@ Dashboard: `plot/laplace_s03/`.
 
 ## Summary (overnight 2026-10-08/09)
 
+Continued in `variant2_handoff.md`: the user's decisions of 2026-10-18, batches 12–13 (a lower
+starting Tcr, and B on five more cells).
+
 Departures from the steps: step 2's calibration run was skipped (a 600-iteration run
 took 7–20 min on GPU, so the move levels were swept directly), and `stto`'s weights were
 divided by the cell's plain-TO compliance instead of re-measured.

@@ -61,9 +61,49 @@ The queue, configs, logs and `driver.log` are in `output/lap/`, and the runs in 
   final value, so f = 1 holds Tcr at its final value from iteration 0. Controls (f = 0):
   `lap7_S03_B_n800`, `lap11_C103_B_n800`, `lap12_C1_v0.5_e_T0.6_B_n800`.
 
-Results: see "Overnight results" below, if the session got that far. Otherwise evaluate them
-with the `t`-kept gate and extend the dashboard (`plot/laplace_s03/`, built by
-`dash_tabs.tmp.py`, tested by `dash_test.tmp.py`; serve `plot/` per `agent_docs/dashboards.md`).
+## Overnight results (2026-10-18, one run per setting)
+
+All 19 runs finished. Table: `lap_eval12.tmp.py` → `output/lap/eval12.json`. Dashboard:
+`plot/laplace_s03/overnight_1018.html` (built by `lap_dashboard2.tmp.py
+lap_spec_1018.tmp.json` with `LAP_SNAP=output/lap/snapshot_30ce59c`; refs from `val_*`,
+hotspot gated with `t` kept). Hotspot = binarized row with `t` kept (gate ≤ 0.01);
+C = compliance ÷ plain TO (gate ≤ 1.15). Every run passes start and support (0
+interior unsupported).
+
+**Batch 12: B generalizes to every cell, at some cost in compliance.** Both settings pass
+all five cells. That includes S 0.5 b 0.8, which `stto` fails (+0.154); Variant 2 passes it
+on both readings.
+
+| Cell | 800 it, 0.02: hotspot / C | 600 it, 0.01: hotspot / C | `stto`: hotspot / C |
+|---|---|---|---|
+| S 0.5 b 0.8 | −0.273 / 1.011 | −0.216 / 1.014 | +0.154 / 1.002 |
+| C1 0.5 e 0.6 | −0.018 / 1.021 | −0.016 / 1.012 | −0.027 / 1.004 |
+| C2 0.5 e 0.6 | −0.057 / 1.059 | −0.114 / 1.026 | −0.038 / 1.003 |
+| C2 0.5x b 0.6 | −0.089 / 1.093 | −0.110 / 1.082 | −0.027 / 0.999 |
+| S 0.5x e 0.8 | −0.050 / 1.013 | −0.095 / 1.013 | −0.631 / 1.005 |
+
+The check's reading (`t` recomputed) fails 8 of these 10 runs (+0.06 to +0.58). On these
+cells the 600-iteration setting is as good as or better than 800.
+
+**Batch 13: a lower starting Tcr.** f = the fraction of the way to Tcr final.
+
+| f | C1 0.3: hotspot / C | S 0.3: hotspot / C | C1 0.5 (Tcr 0.6): hotspot / C |
+|---|---|---|---|
+| 0 (control) | −0.028 / **1.193** ✗ | −0.207 / 1.011 | −0.018 / 1.021 |
+| 1/3 | −0.011 / 1.132 | −0.237 / 1.021 | −0.021 / 1.020 |
+| 2/3 | −0.008 / **1.275** ✗ | −0.179 / 1.018 | +0.003 / 1.022 |
+| 1 | +0.002 / 1.085 | **+0.663** / 1.186 ✗ | −0.018 / 1.004 |
+| `stto` | −0.021 / 1.093 | −0.226 / 1.003 | −0.027 / 1.004 |
+
+- f = 1/3 is the only f that passes all three cells. f = 1 gives the best C1 compliance
+  (1.085, below `stto`'s 1.093) but breaks S 0.3. The result is not monotone on C1 0.3
+  (f = 2/3 fails), so a single run per f does not separate f from chance there. Next:
+  replicates on C1 0.3 (CPU and GPU), and f = 1/3 at 600 iterations.
+- S 0.3 at f = 1: the hotspot multiplier sits at `mma_c` for 564 of 800 iterations, from
+  iteration ~150. The row stays small while the design is grey (+0.04 at 300), then jumps
+  over the binarization (+0.43 at 350, +0.63 at 450) and does not recover (+0.642 as
+  optimized). This is the same jump as the Oct 9 failures. The layout has not been
+  inspected yet; the frames are in the dashboard.
 
 ## Still open
 
