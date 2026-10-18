@@ -12,6 +12,9 @@ This directory contains plans for agents.
 - variant2_handoff.md
     - Start here for Variant 2: where its tuning stands, the user's decisions of
       2026-10-18, the overnight batches, and pointers to the runs and transcripts.
+- scale_invariant_hotspot.md
+    - A hotspot severity invariant to scaling every density (`hotspot_shielding`), against
+      grey bars that stay grey until forced solid; batch 14 tests it on C1.
 - length_scale_options.md
     - Deferred: ways to give `stto` a minimum feature size, against the thin necks the
       hotspot constraint adds. Options and their costs only; the user wants other
