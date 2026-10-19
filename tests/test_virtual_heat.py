@@ -505,3 +505,96 @@ def test_drain_keeps_T_on_the_part_well_above_the_solve_error():
     part = np.zeros(mesh.ndof, bool)
     part[e[solid.ravel()].ravel()] = True
     assert T[part].min() >= 100 * np.abs(T - direct)[part].max()
+
+
+# -- Variant 2 on a design domain short of the mesh (the L bracket) --------------------
+
+
+def _l_domain(n):
+    """`load_cases.active_mask`'s L: the n x n box without its top-right quarter."""
+    active = np.ones((n, n), bool)
+    active[: n // 2, n // 2 :] = False
+    return active
+
+
+def _rc(nodes, n):
+    return np.stack(np.divmod(np.asarray(nodes), n + 1), axis=-1)
+
+
+@pytest.mark.parametrize("base", ["edge", "bottom_edge", "right_edge"])
+def test_wall_arc_walks_a_rectangle_from_one_plate_corner_to_the_other(base):
+    nelx, nely = 6, 4
+    arc = _rc(vh.wall_arc(nelx, nely, base), nelx)
+    plate = vh.plate_nodes(nelx, nely, base)
+    assert len(arc) == 2 * (nelx + nely) - plate.sum()
+    assert (np.abs(np.diff(arc, axis=0)).sum(axis=1) == 1).all()  # contiguous
+    plate_rc = _rc(np.flatnonzero(plate), nelx)
+    for end in (arc[0], arc[-1]):  # each end steps onto the plate
+        assert (np.abs(plate_rc - end).sum(axis=1) == 1).any()
+
+
+def test_wall_arc_follows_the_l_brackets_inner_walls():
+    n = 8
+    active = _l_domain(n)
+    plate = vh.plate_nodes(n, n, "right_edge", active)
+    plate_rc = _rc(np.flatnonzero(plate), n)
+    # The clamped edge: the right edge of the bottom half, the inner corner's row included
+    np.testing.assert_array_equal(plate_rc, [[r, n] for r in range(n // 2, n + 1)])
+    arc = _rc(vh.wall_arc(n, n, "right_edge", active), n)
+    assert len(arc) == 4 * n - len(plate_rc)  # the L's perimeter is 4n edges
+    assert (np.abs(np.diff(arc, axis=0)).sum(axis=1) == 1).all()
+    arc_set = {tuple(p) for p in arc}
+    assert (n // 2, n // 2) in arc_set  # the re-entrant corner
+    assert all((r, n // 2) in arc_set for r in range(n // 2))  # the inner vertical wall
+    assert all((n // 2, c) in arc_set for c in range(n // 2, n))  # inner horizontal
+    assert (0, n) not in arc_set  # the missing quarter's corner is no wall
+
+
+def test_boundary_loop_rejects_a_domain_with_a_hole():
+    active = np.ones((5, 5), bool)
+    active[2, 2] = False
+    with pytest.raises(ValueError, match="one simple loop"):
+        vh.wall_arc(5, 5, "edge", active)
+
+
+def test_ramp_init_reproduces_the_ramp_on_the_l_bracket():
+    n = 12
+    active = _l_domain(n)
+    mesh = vh.ScalarMesh.build(n, n, "right_edge", CPU, F64, active)
+    config = virtual_heat_config(
+        LaplaceRunConfig,
+        nelx=n,
+        nely=n,
+        print_base="right_edge",
+        laplace_cg_rtol=1e-12,
+    )
+    xPhys = torch.as_tensor(0.5 * active, dtype=F64)
+    tPhys = vh.laplace_time_field(
+        config, mesh, xPhys, _full(n, n, 0.5), vh.ramp_wall(mesh)
+    ).tPhys.numpy()
+    distance = n - np.arange(n)[None, :] - 0.5 + np.zeros((n, 1))
+    np.testing.assert_allclose(
+        tPhys[active], (distance / distance.max())[active], atol=1e-10
+    )
+
+
+def test_the_mesh_outside_the_domain_does_not_reach_it():
+    """`chi` outside the L changes nothing inside it, and `t` there is finite."""
+    n = 12
+    active = _l_domain(n)
+    mesh = vh.ScalarMesh.build(n, n, "right_edge", CPU, F64, active)
+    config = virtual_heat_config(
+        LaplaceRunConfig,
+        nelx=n,
+        nely=n,
+        laplace_cg_rtol=1e-12,
+    )
+    rng = np.random.default_rng(3)
+    xPhys = torch.as_tensor(0.5 * active, dtype=F64)
+    wall = torch.as_tensor(rng.uniform(0, 1, len(mesh.arc)), dtype=F64)
+    mu = torch.as_tensor(rng.uniform(0, 1, (n, n)), dtype=F64)
+    other = torch.where(torch.as_tensor(active), mu, 1 - mu)
+    a = vh.laplace_time_field(config, mesh, xPhys, mu, wall).tPhys
+    b = vh.laplace_time_field(config, mesh, xPhys, other, wall).tPhys
+    np.testing.assert_allclose(a[active].numpy(), b[active].numpy(), atol=1e-10)
+    assert torch.isfinite(a).all()
