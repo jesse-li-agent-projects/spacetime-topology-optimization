@@ -142,7 +142,7 @@ with `q = 1` in `S¹` and `g` increasing, `g(0) = 0`, `g'(0)` finite (e.g. `g = 
   almost none from either. Below the margin softplus decays as `e^{κz}/κ`, a small
   safety margin like LogSumExp's.
 - Caveats: `λ` needs tuning. A neighbor that would itself be unsupported resists
-  filling with force `softplus(z_j)·g'(j)`, hence a finite `g'(0)`; under the capped
+  filling with force `softplus(z_j)·g'(x_j)`, hence a finite `g'(0)`; under the capped
   ratio this starts only once it carries density above ~10ε, since void on void reads
   as a ratio of 1. Since only elements with mass pull, support may grow only about a
   filter radius at a time.
@@ -255,3 +255,36 @@ Same gates and references as batch 14. Code snapshot `output/lap/snapshot_3e1591
 batch script `lap_batch15.tmp.py`, eval `bin_keep_t15.tmp.py` + `lap_eval15.tmp.py`,
 dashboard `lap_dashboard4.tmp.py` (severity − Tcr on RdBu) with spec
 `lap_spec15.tmp.json`.
+
+## Results (batch 15)
+
+Hotspot row binarized with `t` kept (absolute shielding) / compliance ÷ plain TO. ✓ =
+every gate passes. Every run: 0 interior unsupported, print start passes.
+
+| cell | A, f 0 (batch 14) | step100 | phi10 | phi100 |
+|---|---|---|---|---|
+| C1 0.3 | −0.009 / 1.098 ✓ | **−0.018 / 1.086 ✓** | −0.006 / 1.137 ✓ | −0.017 / 1.241 |
+| C1 0.5 | +0.201 / 1.109 | **−0.016 / 1.059 ✓** | +1.112 / 1.063 | +0.023 / 1.069 |
+
+- **step100 passes both cells**, C1 0.5 for the first time in any formulation. At
+  activation the max severity was 0.78 (C1 0.3) and 0.61 (C1 0.5), against 0.93 at
+  iteration 2 under f = 1: by iteration 100 the density had organized (compliance ~390
+  vs ~1500 at the start). The row was violated by 0.30 / 0.53, the multiplier sat at
+  its cap (`mma_c` 2500), and the row was back to ≤ 0.01 by iteration ~150 in both.
+  One run per cell, so this may not be robust; a possible reason, untested, is that
+  the final Tcr then binds through the grey phase (β_d = 4, it 120–350) while the
+  topology can still change.
+- **The shaping term is inconclusive.** λΦ stays ≤ ~1e-3 against log compliance ~5,
+  since it only counts would-be violators. Runs that differ only by it end far apart
+  (C1 0.5: +0.20, +1.11, +0.02), which looks more like path sensitivity than an
+  effect of the term.
+- **phi10 on C1 0.5 broke late.** Feasible at iteration 556 (max 0.397); by 560 the
+  max was 0.79 on the bottom edge near the print start, with the density unchanged:
+  the time field along the bottom edge developed a local dip (t 0.078, 0.075, 0.078
+  across three columns), so an element printed before its left neighbors. The
+  hotspot multiplier stayed ~1e-7 for several iterations while the row was violated,
+  and the run never recovered (`blowup15.tmp.py`). The same fragility as the f = 1
+  failure; whether the shaping term triggered it is unknown.
+
+Dashboard: `plot/laplace_s03/dashboard_shaping.html` (spec `lap_spec15.tmp.json`);
+table `output/lap/eval15.json` (`lap_eval15.tmp.py`).
