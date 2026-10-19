@@ -141,9 +141,16 @@ with `q = 1` in `S¹` and `g` increasing, `g(0) = 0`, `g'(0)` finite (e.g. `g = 
   on a bar's overall density, so with a squared hinge a marginal violator would feel
   almost none from either. Below the margin softplus decays as `e^{κz}/κ`, a small
   safety margin like LogSumExp's.
-- Caveats: `λ` needs tuning. A void neighbor that would itself be unsupported resists
-  filling with force `softplus(z_j)·g'(0)`, hence the finite `g'(0)`; and since only
-  elements with mass pull, support may grow only about a filter radius at a time.
+- Caveats: `λ` needs tuning. A neighbor that would itself be unsupported resists
+  filling with force `softplus(z_j)·g'(j)`, hence a finite `g'(0)`; under the capped
+  ratio this starts only once it carries density above ~10ε, since void on void reads
+  as a ratio of 1. Since only elements with mass pull, support may grow only about a
+  filter radius at a time.
+- Implemented as `hotspot_shaping_weight` / `hotspot_shaping_sharpness`
+  (`FieldTerms.hotspot_shaping`, `g = x`, mean over elements). Unit test, 60×20 mesh, a
+  grey bar on void: the bar's leading column is pushed out (+2.1e-4) and the void
+  columns before it pulled in (−1.4e-4 to −2.9e-4); on solid support the gradient is
+  ~1e-30.
 
 ## Formulations (`hotspot_shielding`)
 
@@ -229,3 +236,22 @@ every gate passes. Every run: 0 interior unsupported, print start passes.
 
 Dashboard: `plot/laplace_s03/dashboard_shielding.html` (spec `lap_spec14.tmp.json`);
 table `output/lap/eval14.json` (`lap_eval14.tmp.py`).
+
+## Batch 15 (2026-10-19)
+
+The user's call after batch 14: don't pursue starting the hotspot at iteration 0 (f > 0)
+for now. Two tests, A (`capped_ratio`) only, since A vs B can't be decided from the data
+yet. Config B at 800 iterations, C1 0.3 (Tcr 0.6) and C1 0.5 (Tcr 0.4):
+
+- **step100:** the constraint off until iteration 100 (Tcr 1.0, the severity's ceiling),
+  then the final Tcr at once. A prototype of activating on the grey fraction, which is
+  the eventual intent.
+- **phi10, phi100:** the f = 0 Tcr schedule plus the shaping term at λ = 10 and 100.
+  These bracket where a typical violator's push equals the median log-compliance
+  gradient on solid elements: ~16 on C1 0.3 (A f = 1, it 200) and ~70 on C1 0.5 (A f = 0,
+  it 400; `shaping_scale.tmp.py`).
+
+Same gates and references as batch 14. Code snapshot `output/lap/snapshot_3e1591d`,
+batch script `lap_batch15.tmp.py`, eval `bin_keep_t15.tmp.py` + `lap_eval15.tmp.py`,
+dashboard `lap_dashboard4.tmp.py` (severity − Tcr on RdBu) with spec
+`lap_spec15.tmp.json`.
