@@ -28,6 +28,8 @@ from typing import NamedTuple
 
 import numpy as np
 import torch
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import dijkstra
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
@@ -448,30 +450,62 @@ def heat_time_field(
     return TimeFieldSolution(normalize(t_e, xPhys), T, phi, t)
 
 
-def _ramp(mesh: ScalarMesh) -> Float[Tensor, " n_arc"]:
-    """The linear ramp away from the plate on the wall arc, `t = distance / l_c`, the
-    distance to the plate's line: harmonic, so it fits any domain's walls."""
-    rc = np.stack(np.divmod(np.arange(mesh.ndof), mesh.nelx + 1), axis=-1)
-    plate = rc[mesh.plate.cpu().numpy()]
-    arc = rc[mesh.arc.cpu().numpy()]
-    # A plate lies along one row or one column of nodes
-    axis = 0 if (plate[:, 0] == plate[0, 0]).all() else 1
-    distance = np.abs(arc[:, axis] - plate[0, axis])
+def _node_edges(
+    active: Bool[np.ndarray, "nely nelx"],
+) -> tuple[Int[np.ndarray, " n"], Int[np.ndarray, " n"], Float[np.ndarray, " n"]]:
+    """The 8-connected node adjacencies that run through the design domain: a diagonal
+    across a domain element, an axis step along an edge of one.
+
+    :return: `(src, dst, step)`, node numbers and the Euclidean step length
+    """
+    nely, nelx = active.shape
+    padded = np.pad(active, 1)  # element (r, c) at padded[r + 1, c + 1]
+    nodes = np.arange((nely + 1) * (nelx + 1)).reshape(nely + 1, nelx + 1)
+    src, dst, step = [], [], []
+    for dr, dc in ((0, 1), (1, 0), (1, 1), (1, -1)):
+        r, c = np.mgrid[: nely + 1 - dr, max(0, -dc) : nelx + 1 - max(0, dc)]
+        c0 = np.minimum(c, c + dc)  # the column of elements the step runs along
+        if dr == 0:  # the elements above and below the edge
+            inside = padded[r, c0 + 1] | padded[r + 1, c0 + 1]
+        elif dc == 0:  # left and right of it
+            inside = padded[r + 1, c0] | padded[r + 1, c0 + 1]
+        else:  # the element it crosses
+            inside = padded[r + 1, c0 + 1]
+        a, b = nodes[r, c][inside], nodes[r + dr, c + dc][inside]
+        src += [a, b]
+        dst += [b, a]
+        step += [np.full(2 * a.size, np.hypot(dr, dc))]
+    return np.concatenate(src), np.concatenate(dst), np.concatenate(step)
+
+
+def _plate_distance(mesh: ScalarMesh) -> Float[Tensor, " n_arc"]:
+    """The wall arc's distance to the plate through the design domain, in `l_c`.
+
+    A grid-graph geodesic, as `timefield.init_geodesic_timefield`'s: exact along the
+    axes and diagonals, up to 8% long between them, so on a rectangle with a plate on
+    one edge it is the distance to the plate's line, and walls behind a re-entrant
+    corner get the path around it.
+    """
+    active = mesh.active.cpu().numpy().reshape(mesh.nely, mesh.nelx)
+    src, dst, step = _node_edges(active)
+    graph = csr_matrix((step, (src, dst)), shape=(mesh.ndof, mesh.ndof))
+    plate = np.flatnonzero(mesh.plate.cpu().numpy())
+    distance = dijkstra(graph, indices=plate, min_only=True)[mesh.arc.cpu().numpy()]
     return torch.as_tensor(
         distance / mesh.unit_length, device=mesh.arc.device, dtype=mesh.KE.dtype
     )
 
 
 def wall_scale(mesh: ScalarMesh) -> float:
-    """The wall data at `wall = 1`: twice the ramp's largest value, so the ramp sits
-    at `wall <= 1/2` and the data can rise above it anywhere."""
-    return 2 * float(_ramp(mesh).max())
+    """The wall data at `wall = 1`: twice the walls' largest distance to the plate, so
+    `distance_wall` sits at `wall <= 1/2` and the data can rise above it anywhere."""
+    return 2 * float(_plate_distance(mesh).max())
 
 
-def ramp_wall(mesh: ScalarMesh) -> Float[Tensor, " n_arc"]:
-    """The wall design of the linear ramp away from the plate: uniform `chi` with this
-    wall data gives a linear `t` in the whole domain."""
-    return _ramp(mesh) / wall_scale(mesh)
+def distance_wall(mesh: ScalarMesh) -> Float[Tensor, " n_arc"]:
+    """The wall design of the distance to the plate through the domain: on a rectangle
+    with uniform `chi`, `t` is then the linear ramp away from the plate."""
+    return _plate_distance(mesh) / wall_scale(mesh)
 
 
 def wall_filter(n_arc: int, rmin: float) -> Float[np.ndarray, "n_arc n_arc"]:

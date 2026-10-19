@@ -94,7 +94,7 @@ def test_one_minus_reproduces_wu_fig_2_6e(beta_wu):
 def test_ramp_init_reproduces_the_ramp(base):
     nelx, nely = 30, 10
     mesh = _mesh(nelx, nely, base)
-    wall = vh.ramp_wall(mesh)
+    wall = vh.distance_wall(mesh)
     # Inside the box with room above it, so the data can rise above the ramp
     assert wall.min() >= 0 and float(wall.max()) == pytest.approx(0.5)
     config = virtual_heat_config(
@@ -118,7 +118,7 @@ def test_start_is_judged_on_the_nodes_not_the_element_means():
     config = virtual_heat_config(
         LaplaceRunConfig, nelx=nelx, nely=nely, laplace_cg_rtol=1e-12
     )
-    wall = vh.ramp_wall(mesh).clone()
+    wall = vh.distance_wall(mesh).clone()
     # The bottom wall rises steeply from the plate corner, the top wall slowly
     wall[:3] *= 4.0
     wall[-3:] *= 0.25
@@ -283,7 +283,7 @@ def test_gradients_are_finite_in_deep_void(cls, time_map):
     x[:, :10] = 1.0  # a solid block at the plate, and void everywhere beyond it
     x.requires_grad_()
     mu = _full(nelx, nely, 0.5).requires_grad_()
-    wall = vh.ramp_wall(mesh).requires_grad_()
+    wall = vh.distance_wall(mesh).requires_grad_()
     tPhys = f(x, mu, wall)
     assert torch.isfinite(tPhys).all()
     (tPhys * torch.rand_like(tPhys)).sum().backward()
@@ -326,7 +326,7 @@ def test_gradient_matches_finite_differences(cls, time_map, monkeypatch):
     mesh, f = _time_field(cls, time_map, nelx, nely, drain_beta=9.0)
     x = torch.tensor(rng.uniform(0.3, 0.9, (nely, nelx))).requires_grad_()
     mu = torch.tensor(rng.uniform(0.2, 0.8, (nely, nelx))).requires_grad_()
-    wall0 = vh.ramp_wall(mesh)
+    wall0 = vh.distance_wall(mesh)
     wall = (wall0 + torch.tensor(rng.uniform(0, 0.3, wall0.shape))).requires_grad_()
     w = torch.tensor(rng.uniform(-1, 1, (nely, nelx)))
 
@@ -557,25 +557,23 @@ def test_boundary_loop_rejects_a_domain_with_a_hole():
         vh.wall_arc(5, 5, "edge", active)
 
 
-def test_ramp_init_reproduces_the_ramp_on_the_l_bracket():
+def test_distance_wall_goes_around_the_l_brackets_re_entrant_corner():
+    """Off the plate's rows, a wall's distance is the way around the inner corner: the
+    inner wall rises from it, where the distance to the plate's line would be flat."""
     n = 12
     active = _l_domain(n)
     mesh = vh.ScalarMesh.build(n, n, "right_edge", CPU, F64, active)
-    config = virtual_heat_config(
-        LaplaceRunConfig,
-        nelx=n,
-        nely=n,
-        print_base="right_edge",
-        laplace_cg_rtol=1e-12,
+    distance = dict(
+        zip(map(tuple, _rc(mesh.arc, n)), (vh._plate_distance(mesh) * n).tolist())
     )
-    xPhys = torch.as_tensor(0.5 * active, dtype=F64)
-    tPhys = vh.laplace_time_field(
-        config, mesh, xPhys, _full(n, n, 0.5), vh.ramp_wall(mesh)
-    ).tPhys.numpy()
-    distance = n - np.arange(n)[None, :] - 0.5 + np.zeros((n, 1))
-    np.testing.assert_allclose(
-        tPhys[active], (distance / distance.max())[active], atol=1e-10
-    )
+    h = n // 2
+    for r in range(h + 1):  # the inner vertical wall, column h
+        assert distance[(r, h)] == pytest.approx(h + (h - r))
+    for c in range(h, n):  # the inner horizontal wall: straight to the plate
+        assert distance[(h, c)] == pytest.approx(n - c)
+    # The far corner: h to the inner corner, then h diagonal steps
+    assert distance[(0, 0)] == pytest.approx(h + h * np.sqrt(2))
+    assert float(vh.distance_wall(mesh).max()) == pytest.approx(0.5)
 
 
 def test_the_mesh_outside_the_domain_does_not_reach_it():
