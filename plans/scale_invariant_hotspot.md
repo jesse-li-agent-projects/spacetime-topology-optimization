@@ -429,3 +429,41 @@ C1 0.5 step 100 + λ 100 with the κ ramp, everything else as batch 16
   ramp.
 
 Dashboard: `plot/laplace_s03/dashboard_kappa_ramp.html` (spec `lap_spec17.tmp.json`).
+
+Showing the time field over the whole domain (user, 2026-10-19; now the dashboards'
+default) shows every failed run in batches 15–16 with `t` in the void far above the
+part's range (largest `t` 3.3–425, the part normalized to 1), every passing run ≤ 1.75.
+It follows the escalation rather than leading it (C1 0.5 Tcr 0.6, batch 16: row +0.6 at
+iteration 130, max `t` leaves 1 at 140), so it marks a failed run, not a cause.
+
+## Batch 18: grey "time wires" and `chi_density_exponent` (2026-10-19)
+
+**The user's hunch:** the near-disconnected island in the lower-right cell of the κ-ramp
+run at Tcr 0.6 is what is left of a thin grey strip that shaped the time field rather
+than carried load, staying thin until binarization forced it solid.
+
+**Checked on the saved design** (`strip_role.tmp.py`): at iteration 300 the strip is 186
+grey elements, mean `xPhys` 0.15, running from the diagonal member to the bottom flange.
+Removing it raises compliance by 0.14% (0.09% at 350), but changes `t` on the part by up
+to 0.059, about six cooling times τ: with it, the member above sits on a raised plateau
+(`t` ≈ 0.836–0.840), without it `t` rises steadily from 0.776 to 0.84 across that stretch.
+With `chi ∝ x^e`, a strip at `x` ≈ 0.15 conducts ~2000× better than void (floor 1e-5), so
+grey material works as a cheap time wire.
+
+**Test:** the κ-ramp run with every `chi_density_exponent` point doubled (2/2/3/5 →
+4/4/6/10) or tripled (→ 6/6/9/15) (`lap_batch18.tmp.py`, `lap_batch18b.tmp.py`; GPU, ~7
+min each).
+
+| exponent | hotspot / compliance | final grey | strip / island |
+|---|---|---|---|
+| ×1 (batch 17) | −0.015 / 1.022 ✓ | 0.033 | strip from ~200, island |
+| ×2 | −0.038 / 1.023 ✓ | 0.028 | neither; a clean triangular cell |
+| ×3 | **+0.054** / 1.024 (+0.010 as optimized) | 0.039 | neither, but two thin grey members remain at the end, and small holes in the bottom-right flange |
+
+- Doubling removes the strip and the island and passes with a larger margin. Tripling
+  removes them too, but stays grey longer (iterations 300–400) and ends with grey
+  members; at an exponent of 15 those cannot conduct `t`, so they are not time wires,
+  which looks like a side effect on how cleanly the density resolves.
+- One run each, on one cell.
+
+Dashboard: `plot/laplace_s03/dashboard_chi2x.html` (spec `lap_spec18.tmp.json`).
