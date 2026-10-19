@@ -382,3 +382,50 @@ unsupported. Eval `lap_eval16.tmp.py` → `output/lap/eval16.json`.
 Dashboard: `plot/laplace_s03/dashboard_batch16.html` (`lap_dashboard5.tmp.py`, spec
 `lap_spec16.tmp.json`, both in the `laplace-l-bracket` worktree; `stto` |Δt| reference
 dropped).
+
+## Edge noise in the severity, and a continuation on the angular lobe (2026-10-19)
+
+**The user's observation:** along the mesh's top edge the hotspot severity is much rougher
+than the time field (C1 0.5 Tcr 0.4 step 100 + λ 100, e.g. iteration 65).
+
+**Cause, measured** (`edge_noise.tmp.py`): the angular lobe. At iteration 65 the top
+row's severity changes by 0.073 per column on average against 0.011 in row 30, while `t`
+changes by 0.005 in both; at κ = 0 the top row's roughness falls to 0.021. The lobe reads
+the direction of ∇t, and on the top row that direction swings by ~21° per column (1° in
+the interior): `dt/dy` there is one-sided (row 0 − row 1), row 0's `t` is half wall
+data, and the wall data has small plateaus (the x-slope varies 0.001–0.006 per column
+against `dt/dy` of ±0.002). Half the stencil lies outside the mesh and counts as
+unshielded, so whether "behind" points in or out decides most of the shielding: e.g.
+−45° gives severity 0.16, +47° gives 0.80 three columns away. Not verified: that this is
+what makes MMA's model fail after the step.
+
+**User decision:** a continuation on `hotspot_kappa` rather than changing the measure:
+linear from 0 (isotropic) at iteration 0 to 2.3666 at 350, where the first two phases end.
+Checked first: the row's value and its gradient (w.r.t. `xPhys` and `tPhys`) are
+continuous as κ → 0, relative change ∝ κ (~1e-6 at κ = 1e-6; `kappa_limit.tmp.py`,
+`kappa_grad.tmp.py`), so the ramp starts at 0. Caveat: on an organized design the
+isotropic stencil reads higher (C1 0.5 at it 400: 0.62 at κ = 0 vs 0.41 at 2.37), so with
+the ramp the step at iteration 100 meets a stricter effective constraint.
+
+### Batch 17
+
+C1 0.5 step 100 + λ 100 with the κ ramp, everything else as batch 16
+(`lap_batch17.tmp.py`; GPU, ~10 min each).
+
+| | κ 2.37 throughout | κ ramp 0 → 2.37 |
+|---|---|---|
+| Tcr 0.4 | −0.051 / 1.047 ✓ (batch 15b) | −0.030 / 1.054 ✓ |
+| Tcr 0.6 | +0.600 / 1.687 (batch 16) | **−0.015 / 1.022 ✓** |
+
+- **Tcr 0.6 now passes.** At the step the row is +0.048 (batch 16: +0.240), back on the
+  constraint by iteration 105, and the multiplier stays small (≤ 0.02) through iteration
+  350; batch 16's run escalated to ~0.97 with the multiplier at its cap.
+- **Tcr 0.4:** +0.575 at the step, cleared smoothly by iteration ~150. Both runs bump at
+  iteration ~400 (β_d ramp, +0.10 / +0.13) and recover.
+- **Top-row roughness** (severity at the run's own κ): iteration 65 0.073 → 0.025, 200
+  0.023 → 0.014, 300 0.023 → 0.016; the direction swing on the top row drops too (20.8° →
+  16.7° at 65, 13.4° → 9.4° at 200).
+- One run per setting, on one cell; batch 16's failures elsewhere are untested with the
+  ramp.
+
+Dashboard: `plot/laplace_s03/dashboard_kappa_ramp.html` (spec `lap_spec17.tmp.json`).
