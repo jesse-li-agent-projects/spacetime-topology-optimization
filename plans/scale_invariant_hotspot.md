@@ -484,8 +484,7 @@ interior unsupported, print start).
 | L middle 0.5 Tcr 0.6 | +0.515 / 1.218 ✗ | +0.513 / 1.143 | ✗ hotspot |
 
 - λ 30 now passes and the C1 0.3 step-120 hotspot passes; the step-120 run at Tcr 0.4
-  still escalates (MMA subsolver hitting its iteration cap from ~iteration 300, void `t`
-  up to 152), so step 120 still looks fragile at Tcr 0.4.
+  still escalates (void `t` up to 152), so step 120 still looks fragile at Tcr 0.4.
 - The L middle run fails with nearly the same hotspot value as batch 16, but unlike the
   C1 failures its time field stays in range (largest `t` 1.27), so the void-`t` marker
   above may not carry over to the L. Its continuous severity is only mildly above Tcr,
@@ -497,7 +496,9 @@ interior unsupported, print start).
 performance mode): 31.0 min of iteration time against 50–60 min for batch 15–16's CPU
 runs at 4 threads, three at once, consistent with the 3×4 vs 1×8 throughput note. The
 laptop slept 21:51–22:04; the runs resumed, and `elapsed` in `iterations.jsonl` leaves
-the sleep out (the driver's wall-clock minutes include it). GPU runs that hit the
-subsolver cap ran at ~2 s/iteration against ~0.5 for clean ones.
+the sleep out (the driver's wall-clock minutes include it). The failing step-120 Tcr 0.4
+run took ~2 s/iteration on the GPU even after the CPU run ended, against ~0.5 for batch
+18's runs; the cause is not yet known (MMA's subsolver hits its inner-loop cap 5–9 times
+in every batch 19 run, passing or not).
 
 Dashboard: `plot/laplace_s03/dashboard_b19.html` (spec `lap_spec19.tmp.json`).
