@@ -22,6 +22,11 @@ neighborhood were binarized as they stand; "violating" means `S¹_e > Tcr`.
 - **R0, iff.** No hotspot pressure on a bar if and only if its solid version passes. The
   *if* direction stops grey refusing to solidify (the current formula's barrier); the
   *only if* direction stops grey hiding a hotspot until binarization (B's failure).
+  Where the two conflict, prefer violating *if* (user, 2026-10-19): a reading that is too
+  loud costs optimality, one that hides costs feasibility. A weaker *if* that may be
+  enough (proposed, untested): if `S¹_e ≤ Tcr`, any hotspot pressure on the bar points
+  toward solid. The `absolute` hump fails even that, since below its peak it pushes grey
+  toward void.
 - **R1.** A violating bar's own material is pushed out: `∂S_e/∂x_e > 0`.
 - **R2.** A violating bar's earlier-printed neighbors, void ones included, are pushed to
   solidify and support it: `∂S_e/∂x_j < 0`, nonzero at `x_j = 0`.
@@ -98,6 +103,47 @@ strong R1 exists only below $\eta$.
 | A, `x/(x+ε)` gate (batch 14) | ✓ | ✓ | ✗ | ✗ | void only, not near-void |
 | B, `x/(x+ε)` gate (batch 14) | ✓ | ✗ | ✗ | ✗ | void only |
 | A with `q = 1`, `x^r` gate (untested) | ✓ | band `S¹ < Tcr / x^r` | ✓ | ✓ | via `x^r` |
+| A, `x/(x+ε)` gate, plus Φ below (untested) | ✓ | ✓ | via Φ | via Φ | void; near-void via `g` |
+
+Point 2 assumes one function supplies both the reading and the pressure. Splitting them
+avoids it; using a pressure that isn't the reading's gradient ("inconsistent
+sensitivities") would too, but would leave MMA's model of the constraint wrong.
+
+### What A's constraint gradient can push on (tentative)
+
+The capped ratio sees only density ratios, so `Σ_j x_j ∂S_e/∂x_j ≈ 0`: no component along
+scaling a whole neighborhood. What seems to be left:
+
+- density *within* a stencil: the bar lighter, non-void support heavier, until the bar is
+  no denser than its support and the cap reads it as fully shielded;
+- print times, including those of near-void cells, since only ratios count;
+- elements below ~10ε, through the gate.
+
+This may be how batch 14's wisps formed (a bar thinned below its support reads as
+shielded), but that hasn't been checked against the runs and needs more investigation.
+
+### Candidate: an objective shaping term (untested)
+
+Keep A with the ε gate as the constraint, an honest reading for R0 and R3, and take the
+pressure from a term in the objective:
+
+$$f = c + \lambda\,\Phi, \qquad \Phi = \sum_e \operatorname{softplus}_\kappa\!\left(S^1_e - T_{cr}\right) g(x_e),$$
+
+with `q = 1` in `S¹` and `g` increasing, `g(0) = 0`, `g'(0)` finite (e.g. `g = x`).
+
+- R0 from the softplus; R1 from `g'` and `∂S¹_e/∂x_e ≥ 0`; R2 from `q = 1`,
+  `∂Φ/∂x_j = −softplus'·g(x_e)·w_j / (D (x_e + ε))`, finite at `x_j = 0`; R3 from
+  `g(0) = 0`. It also reaches the time field through `S¹`.
+- Its gradients are consistent. If `Φ ≈ 0` at the constrained optimum, adding `λΦ ≥ 0`
+  should leave that optimum in place (the exact-penalty argument), so Φ mainly shapes
+  the path out of infeasibility.
+- Softplus, not a squared hinge (user, 2026-10-19): A's constraint puts little pressure
+  on a bar's overall density, so with a squared hinge a marginal violator would feel
+  almost none from either. Below the margin softplus decays as `e^{κz}/κ`, a small
+  safety margin like LogSumExp's.
+- Caveats: `λ` needs tuning. A void neighbor that would itself be unsupported resists
+  filling with force `softplus(z_j)·g'(0)`, hence the finite `g'(0)`; and since only
+  elements with mass pull, support may grow only about a filter radius at a time.
 
 ## Formulations (`hotspot_shielding`)
 
@@ -153,16 +199,33 @@ every gate passes. Every run: 0 interior unsupported, print start passes.
   while the binarized row is +0.44 to +1.50 — grey on partial support reads as safe and
   the hotspot appears on binarizing.
 - **A at f = 0** passes C1 0.3 and cuts C1 0.5's binarized hotspot from +1.49 to +0.20.
-- **A at f > 0** wrecks compliance (1.8–5.6 × plain TO). The hotspot sits on near-void
-  wisps: on C1 0.3 at f = 1, iterations 100–300, the top-50 severities have median
-  density 0.07–0.14 and 500–900 elements exceed Tcr, most with `x < 0.1`
-  (`sev_density.tmp.py`); at f = 0 no element exceeds Tcr there. The `x / (x + ε)` gate
-  counts anything above ~10ε as material, and scaling a wisp's neighborhood down is the
-  very direction the invariance makes force-free, so only the gate could delete it, and
-  it is flat there. The gradient that remains mostly raises the wisp's earlier
-  neighbors, which grows more light material.
-- Next: a gate that is a step at a meaningful density, e.g. `x^k / (x^k + η_g^k)` with
-  `η_g ≈ 0.2–0.3`, so a grey bar sits on its flat part and a wisp on its slope.
+- **A at f > 0** wrecks compliance (1.8–5.6 × plain TO). Later on the hotspot appears to
+  sit on near-void wisps: on C1 0.3 at f = 1, iterations 100–300, the top-50 severities
+  have median density 0.07–0.14 and 500–900 elements exceed Tcr, most with `x < 0.1`
+  (`sev_density.tmp.py`); at f = 0 no element exceeds Tcr there. One possible reason,
+  unconfirmed: the `x / (x + ε)` gate counts anything above ~10ε as material and is flat
+  there, so nothing deletes a wisp.
+- **The f > 0 failure starts in the first iterations** (2026-10-19, `early_hist.tmp.py`,
+  `sev_edge.tmp.py`, `sev_edge2.tmp.py`). On C1 0.3 at f = 1, the max severity jumps from
+  0.54 to 0.93 between iterations 0 and 2, on the top edge near the print start, while
+  density is still uniform at ≈ 0.3. The hotspot row of `g` then stays near +0.63
+  through iteration 50 with its multiplier at 2.5e3, the volume multiplier falls to
+  ~1e-6, and the objective makes no progress (1507 at it 0, 1503 at it 50; 515 for the
+  current formula at the same f). Meanwhile the time field collapses: at column 80,
+  `t` goes from 0.43 to 0.03 by it 20, with local ripples. At it 20, 406 of 466 violators
+  are within 3 rows of the top or bottom edge. B at f = 1 shows the same edge band; A
+  at f = 0 shows the same jump at it 2, but Tcr is 1.0 there; the current formula's max
+  stays ≤ 0.61 at every iteration checked (0–200).
+  Tentative reading: capped-ratio shielding reads a uniform grey field as its solid
+  version, which is honest but holds the early, unorganized time field to the final
+  Tcr. Edge elements lose the outside part of their stencil, so they read highest. At
+  it 0, neighboring print times differ by ≈ 0.005 per column, well under `field_move`
+  0.02, so one MMA step can reorder a neighborhood; that may be what drives the jump.
+  The current formula's `x^r` gate (≈ 0.55 at x = 0.3) keeps grey below 0.6 whatever its
+  shielding, which hides hotspots but also shields the early phase. Which variables
+  moved at iterations 1–2 hasn't been checked yet.
+- Earlier idea, superseded by the requirements above: a step gate
+  `x^k / (x^k + η_g^k)` with `η_g ≈ 0.2–0.3`.
 
 Dashboard: `plot/laplace_s03/dashboard_shielding.html` (spec `lap_spec14.tmp.json`);
 table `output/lap/eval14.json` (`lap_eval14.tmp.py`).
