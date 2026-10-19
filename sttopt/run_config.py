@@ -429,16 +429,23 @@ class RunConfig(SpaceTimeConfig):
 _PLATE_BASES = ("edge", "bottom_edge", "right_edge")
 
 
-def _check_virtual_heat(config: SpaceTimeConfig) -> None:
-    """What a virtual-heat time field supports: a plate base, on the whole mesh."""
+def _check_virtual_heat(config: SpaceTimeConfig, domain_reason: str | None) -> None:
+    """What a virtual-heat time field supports: a plate base, and a domain short of the
+    mesh only where `domain_reason` is `None`.
+
+    :param domain_reason: why this config needs the whole mesh as its domain, or `None`
+    """
     if config.print_base.lower() not in _PLATE_BASES:
         raise ValueError(
             f"print_base must be one of {_PLATE_BASES} for a virtual-heat time field, got {config.print_base!r}"
         )
     case = load_cases.LoadCase(config.load_case)
-    if not load_cases.active_mask(case, config.nelx, config.nely).all():
+    if (
+        domain_reason is not None
+        and not load_cases.active_mask(case, config.nelx, config.nely).all()
+    ):
         raise ValueError(
-            f"a virtual-heat time field needs the whole mesh as its domain; {case} leaves part of it out"
+            f"{domain_reason}, but {case} leaves part of the mesh out of the domain"
         )
 
 
@@ -487,7 +494,9 @@ class HeatRunConfig(SpaceTimeConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        _check_virtual_heat(self)
+        _check_virtual_heat(
+            self, "the virtual heat equation is solved on the whole mesh"
+        )
         HeatTimeMap(self.time_map)
 
 
@@ -528,8 +537,15 @@ class LaplaceRunConfig(SpaceTimeConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        _check_virtual_heat(self)
-        LaplaceTimeMap(self.time_map)
+        time_map = LaplaceTimeMap(self.time_map)
+        _check_virtual_heat(
+            self,
+            (
+                None
+                if time_map == LaplaceTimeMap.IDENTITY
+                else "the poisson time map's distance fit is solved on the whole mesh"
+            ),
+        )
 
 
 @dataclass(kw_only=True)

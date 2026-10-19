@@ -12,6 +12,7 @@ import pytest
 import torch
 
 import sttopt.checks as checks
+import sttopt.load_cases as load_cases
 import sttopt.run_config as run_config
 import sttopt.stto_laplace as stto_laplace
 import sttopt.stto_laplace_cli as stto_laplace_cli
@@ -232,3 +233,30 @@ def test_hotspot_shaping_is_quiet_on_a_bar_whose_solid_version_passes():
 def test_hotspot_shaping_needs_a_relative_shielding():
     with pytest.raises(ValueError, match="hotspot_shaping_weight"):
         stto_laplace.build_problem(_config(hotspot_shaping_weight=1.0), device="cpu")
+
+
+@pytest.mark.filterwarnings("ignore:subsolv:RuntimeWarning")
+def test_an_l_bracket_runs_on_its_domain_alone():
+    n = 24
+    base = _config()
+    config = _config(
+        n,
+        n,
+        load_case="l_bracket_corner",
+        print_base="right_edge",
+        rmin_cond_m=4 * base.element_size_m,
+        nloop=3,
+    )
+    result = stto_laplace.run(config, device="cpu")
+    active = torch.as_tensor(
+        load_cases.active_mask(load_cases.LoadCase(config.load_case), n, n)
+    )
+    for xPhys in result.xPhys_traj:
+        assert float(xPhys[~active].abs().max()) == 0
+    first = result.records[0]
+    # Of the domain, not the mesh
+    assert first.vol == pytest.approx(float(result.xPhys_traj[0].sum() / active.sum()))
+    assert np.isfinite(first.df).all() and np.isfinite(first.dg).all()
+    problem = stto_laplace.build_problem(config, device="cpu")
+    report = stto_laplace.check_design(problem, result.state)
+    assert "constraints" in report

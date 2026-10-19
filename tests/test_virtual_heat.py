@@ -598,3 +598,13 @@ def test_the_mesh_outside_the_domain_does_not_reach_it():
     b = vh.laplace_time_field(config, mesh, xPhys, other, wall).tPhys
     np.testing.assert_allclose(a[active].numpy(), b[active].numpy(), atol=1e-10)
     assert torch.isfinite(a).all()
+
+
+def test_a_domain_short_of_the_mesh_is_laplace_with_the_identity_map_only():
+    l_bracket = dict(nelx=12, nely=12, load_case="l_bracket_corner")
+    l_bracket |= dict(print_base="right_edge")
+    virtual_heat_config(LaplaceRunConfig, **l_bracket)
+    with pytest.raises(ValueError, match="poisson"):
+        virtual_heat_config(LaplaceRunConfig, time_map="poisson", **l_bracket)
+    with pytest.raises(ValueError, match="whole mesh"):
+        virtual_heat_config(HeatRunConfig, **l_bracket)
