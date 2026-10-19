@@ -288,3 +288,25 @@ every gate passes. Every run: 0 interior unsupported, print start passes.
 
 Dashboard: `plot/laplace_s03/dashboard_shaping.html` (spec `lap_spec15.tmp.json`);
 table `output/lap/eval15.json` (`lap_eval15.tmp.py`).
+
+### Batch 15b: the shaping term on the step schedule (2026-10-19)
+
+The step100 schedule plus the shaping term at λ = 10 and 100 (`lap_batch15b.tmp.py`).
+
+| cell | step100 | step100 + λ 10 | step100 + λ 100 |
+|---|---|---|---|
+| C1 0.3 | −0.018 / 1.086 ✓ | −0.015 / 1.078 ✓ | −0.008 / 1.094 ✓ |
+| C1 0.5 | −0.016 / 1.059 ✓ | +1.495 / 1.216 | **−0.051 / 1.047 ✓** |
+
+- Five of six step runs pass; with λ = 100, C1 0.5 has its lowest compliance yet.
+- **λ = 10 on C1 0.5 failed on both schedules.** On the step schedule the row was
+  violated by 0.65 at activation, escalated to ~1.4 by iteration 150 (max severity
+  ~0.97, on the top and bottom edges) and never recovered, with the multiplier at its
+  cap for the rest of the run. Two of two is suggestive, but these runs look
+  path-sensitive: before iteration 100 the three C1 0.5 step runs have the same
+  compliance to within 0.1, yet their max severity swings between 0.6 and 0.94 from
+  iteration to iteration and run to run (the shaping term is ~1e-9 then, since
+  Tcr = 1.0). At activation plain step100 also went up (0.61 → 0.76 at it 120) before
+  recovering, so whether a run recovers may come down to the state at the step.
+
+Dashboard: `plot/laplace_s03/dashboard_shaping_step.html` (spec `lap_spec15b.tmp.json`).
