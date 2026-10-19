@@ -67,6 +67,8 @@ class Problem:
     mesh: virtual_heat.ScalarMesh
     wall_filter: Float[Tensor, "n_arc n_arc"]  # `virtual_heat.wall_filter`
     Nei: Int[Tensor, " k"]  # the elements on the build plate
+    # The design domain (`load_cases.active_mask`); elements outside it are void
+    active: Bool[Tensor, "nely nelx"]
     n: int  # MMA design variables: 2*nelx*nely + n_arc
 
 
@@ -93,7 +95,7 @@ class IterationRecord:
     """Per-iteration diagnostics and raw MMA outputs, as in `stto.IterationRecord`."""
 
     obj: float  # whole-structure compliance
-    vol: float  # volume fraction (mean xPhys)
+    vol: float  # volume fraction of the domain
     tru_max: float  # calibrated hotspot severity
     uniformity: float  # layer-uniformity penalty, before uniformity_weight
     roughness: float  # smoothness regularizer, as a fraction of a layer thickness
@@ -152,12 +154,16 @@ def build_problem(
         config.support_length_m,
         h,
     )
+    active = load_cases.active_mask(load_cases.LoadCase(config.load_case), nelx, nely)
     H, Hs = filters.density_filter(nelx, nely, units.in_elements(config.rmin_m, h))
     C = gravity.gravity_load_matrix(nelx, nely)
     Nei = timefield.base_elements(
         nelx, nely, timefield.TimeField[config.print_base.upper()]
     )
-    mesh = virtual_heat.ScalarMesh.build(nelx, nely, config.print_base, device, dtype)
+    Nei = Nei[active.flatten()[Nei]]
+    mesh = virtual_heat.ScalarMesh.build(
+        nelx, nely, config.print_base, device, dtype, active
+    )
 
     floats = torch_util.to_tensors({"KE": KE, "F": F, "Hs": Hs}, device, dtype)
     ints = torch_util.to_tensors(
@@ -180,6 +186,7 @@ def build_problem(
             device,
             dtype,
         ),
+        active=torch.as_tensor(active, device=device),
         n=2 * nelx * nely + len(mesh.arc),
         **floats,
         **ints,
@@ -208,9 +215,10 @@ def physical_fields(
     :param previous: the last solution, the warm start
     :return: `(xPhys, solution)`, `solution.tPhys` the time field
     """
-    config = problem.config
-    xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
-    xPhys = filters.heaviside_projection(xTilde, beta_d, config.eta)
+    config, active = problem.config, problem.active
+    # Outside the domain counts as void in the density filter, as in `stto`
+    xTilde = filters.apply_density_filter(x * active, problem.H, problem.Hs)
+    xPhys = filters.heaviside_projection(xTilde, beta_d, config.eta) * active
     solution = virtual_heat.laplace_time_field(
         config,
         problem.mesh,
@@ -233,15 +241,15 @@ def wall_data(
 def init_state(problem: Problem) -> State:
     """The initial state: uniform density and diffusivity, and the ramp wall data.
 
-    Density at `volfrac`, `chi = 1` (`mu = 1/2`), and the wall data of the linear ramp
-    away from the plate, which makes the initial `t` that ramp.
+    Density at `volfrac` over the domain, `chi = 1` (`mu = 1/2`), and the wall data of
+    the linear ramp away from the plate, which makes the initial `t` that ramp.
 
     :return: the state before the first iteration
     """
     config = problem.config
     shape = (config.nely, config.nelx)
     kw = dict(device=problem.device, dtype=problem.dtype)
-    x = torch.full(shape, config.volfrac, **kw)
+    x = config.volfrac * problem.active.to(problem.dtype)
     mu = torch.full(shape, 0.5, **kw)
     wall = virtual_heat.ramp_wall(problem.mesh)
     return State(
@@ -284,7 +292,7 @@ def constraint_values(
     """
     g = {
         "global_volume_fraction": constraints.global_volume_fraction(
-            xPhys, problem.config.volfrac
+            xPhys, problem.config.volfrac, int(problem.active.sum())
         )
     }
     return g | problem.terms.constraints(xPhys, tPhys, K_est, loop)
@@ -417,7 +425,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         grad_p10_per_m=grad_p10,
         grad_p50_per_m=grad_p50,
         grad_p90_per_m=grad_p90,
-        grey=_grey_fraction(xPhys),
+        grey=_grey_fraction(xPhys, problem.active),
         calibration=problem.terms.hotspot.calibration,
         penal=penal,
         uniformity_weight=objective.uniformity_weight,
@@ -492,7 +500,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     )
     record = IterationRecord(
         obj=float(c_t.detach()),
-        vol=float(xPhys.detach().mean()),
+        vol=volume_fraction(problem, xPhys),
         tru_max=(float(g_hotspot_t.detach()) + 1) * Tcr,
         uniformity=float(objective.uniformity.detach()),
         roughness=float(objective.roughness.detach()),
@@ -556,9 +564,16 @@ def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
     return RunResult(state, xPhys_traj, tPhys_traj, x_traj, mu_traj, wall_traj, records)
 
 
-def _grey_fraction(xPhys: Float[Tensor, "nely nelx"]) -> float:
-    """The fraction of elements neither near void nor near solid."""
-    return float(((xPhys > 0.05) & (xPhys < 0.95)).double().mean())
+def _grey_fraction(
+    xPhys: Float[Tensor, "nely nelx"], active: Bool[Tensor, "nely nelx"]
+) -> float:
+    """The fraction of the domain's elements neither near void nor near solid."""
+    return float(((xPhys > 0.05) & (xPhys < 0.95))[active].double().mean())
+
+
+def volume_fraction(problem: Problem, xPhys: Float[Tensor, "nely nelx"]) -> float:
+    """The material in `xPhys` as a fraction of the domain, which `volfrac` bounds."""
+    return float(xPhys.detach().sum() / problem.active.sum())
 
 
 def check_design(problem: Problem, state: State) -> dict:
@@ -586,12 +601,12 @@ def check_design(problem: Problem, state: State) -> dict:
 
     start = virtual_heat.start_report(problem.mesh, laplace, solid, base)
     support = checks.support_report(solid, tPhys_np, base)
-    everywhere = np.ones_like(solid)
-    domain_orphans = checks.unsupported(everywhere, tPhys_np, base)
+    active = torch_util.to_numpy(problem.active)
+    domain_orphans = checks.unsupported(active, tPhys_np, base)
     domain = dict(
         unsupported=int(domain_orphans.sum()),
         unsupported_at=np.argwhere(domain_orphans)[:20].tolist(),
-        saddles=int(checks.saddles(tPhys_np, everywhere).sum()),
+        saddles=int(checks.saddles(tPhys_np, active).sum()),
     )
     if not start["passed"]:
         virtual_heat.warn_start(start)
@@ -604,8 +619,8 @@ def check_design(problem: Problem, state: State) -> dict:
         support=support,
         saddles=int(checks.saddles(tPhys_np, solid, solid).sum()),
         domain=domain,
-        volume_fraction=float(solid.mean()),
-        grey_fraction=_grey_fraction(xPhys),
+        volume_fraction=float(solid[active].mean()),
+        grey_fraction=_grey_fraction(xPhys, problem.active),
     )
     if solid.any():
 

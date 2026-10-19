@@ -123,7 +123,7 @@ def main(args: argparse.Namespace) -> None:
                 )
             diag = record.diagnostics
             print(
-                f"It.: {it:4d} Obj.: {record.f:10.4f} Vol.: {float(xPhys.mean()):6.3f} "
+                f"It.: {it:4d} Obj.: {record.f:10.4f} Vol.: {stto_laplace.volume_fraction(problem, xPhys):6.3f} "
                 f"Tm.: {record.tru_max:7.3f} Unif.: {record.uniformity:8.5f} "
                 f"c: {record.obj:9.3f} TmTrue: {diag['true_max']:6.3f}"
             )
@@ -132,7 +132,7 @@ def main(args: argparse.Namespace) -> None:
                 elapsed=time.perf_counter() - start,
                 f=record.f,
                 obj=record.obj,
-                vol=float(xPhys.mean()),
+                vol=stto_laplace.volume_fraction(problem, xPhys),
                 tru_max=record.tru_max,
                 uniformity=record.uniformity,
                 roughness=record.roughness,
