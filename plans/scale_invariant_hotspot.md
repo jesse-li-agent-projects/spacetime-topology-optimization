@@ -502,3 +502,35 @@ run took ~2 s/iteration on the GPU even after the CPU run ended, against ~0.5 fo
 in every batch 19 run, passing or not).
 
 Dashboard: `plot/laplace_s03/dashboard_b19.html` (spec `lap_spec19.tmp.json`).
+
+### The L middle collapse (batch 19, `collapse_*.tmp.py` in the laplace-l-bracket worktree)
+
+From iteration ~410 to ~470 almost all of the part's time variation drains into the upper
+arm near the re-entrant corner; the lower arm ends up printed nearly all at once (median
+`t` 0.003 at 470).
+
+- **Per element, simultaneous printing does read as unshielded**: at 470 the lower arm's
+  median severity is 0.87 (Tcr 0.6), and 4177 of 5399 part elements are above Tcr. Up to
+  iteration 350, though, the cooling credit's sharpness is 1, so a tie gets credit 0.5;
+  with the half-stencil divisor a solid neighbourhood printed all at once then scores
+  `K_est` ≈ 1, i.e. no severity. From 350 to 450 the sharpness ramps to 8 (tie credit
+  0.08).
+- **The row went first**: it violates from iteration 360 (multiplier at the 2500 cap
+  from then on), with one worst element (`n_eff` ≈ 1) on the upper arm's top edge (row 0,
+  columns 40–50). The collapse comes after.
+- **The collapse is the wall data falling**: median wall data 0.32 → 0.009 from 400 to
+  470, which shorts the lower arm to the plate's `t = 0`. The normalizer (raw `t`'s max
+  over the part) barely moves (0.45 → 0.37), pinned at the upper arm's inner edge.
+- **Why the row allows it**: its gradient is the smooth maximum's (β 100), so it sees only
+  the current worst few elements. Linearized, the hotspot row favours that move at every
+  snapshot checked (380–420): steepening `t` around the worst element shields it, while
+  flattening elsewhere, which the gradient does not see. The actual row does not improve
+  (0.27 → 0.60 over 380–425, oscillating), and once the maximum is near 1, more violating
+  elements barely change it. The shaping term (a mean, so it counts the extent) also
+  favoured the move at 420, for reasons not yet looked into.
+- **A possible link to the initial time field**: the wall data starts as the Euclidean
+  ramp from the plate, so the upper arm's inner wall starts at nearly one time (0.50–0.56
+  along it), where a geodesic distance would rise from the corner to the top. At 350 `t`
+  along that wall still peaks mid-arm (0.77) and falls to 0.63 at the top edge, where the
+  worst element sits; batch 16's L middle run also escalated from row 0, columns 43–47.
+  Untested.
