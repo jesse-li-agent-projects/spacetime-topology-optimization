@@ -467,3 +467,37 @@ min each).
 - One run each, on one cell.
 
 Dashboard: `plot/laplace_s03/dashboard_chi2x.html` (spec `lap_spec18.tmp.json`).
+
+## Batch 19: κ ramp + doubled exponent on batch 16's failures (2026-10-19)
+
+Batch 18's ×2 settings (κ ramp, every `chi_density_exponent` point doubled) on the four
+cells batch 16 failed, plus the C1 0.5 Tcr 0.4 reference (`lap_batch19.tmp.py`). Gates as
+in batch 16 (binarized hotspot with `t` kept ≤ 0.01, compliance ≤ 1.15× plain TO, ≤ 5
+interior unsupported, print start).
+
+| cell, schedule | batch 16 (or 15b) | κ ramp + ×2 | |
+|---|---|---|---|
+| C1 0.5 Tcr 0.4, step 100 λ 100 | −0.051 / 1.047 ✓ (15b) | −0.000 / 1.068 | ✓ (on the limit) |
+| C1 0.5 Tcr 0.4, step 100 λ 30 | +1.443 / 2.302 ✗ | −0.004 / 1.057 | ✓ |
+| C1 0.3 Tcr 0.6, step 120 | +0.663 / 1.282 ✗ | −0.007 / **1.226** | ✗ compliance |
+| C1 0.5 Tcr 0.4, step 120 | +1.495 / 1.234 ✗ | +1.495 / 1.330 | ✗ |
+| L middle 0.5 Tcr 0.6 | +0.515 / 1.218 ✗ | +0.513 / 1.143 | ✗ hotspot |
+
+- λ 30 now passes and the C1 0.3 step-120 hotspot passes; the step-120 run at Tcr 0.4
+  still escalates (MMA subsolver hitting its iteration cap from ~iteration 300, void `t`
+  up to 152), so step 120 still looks fragile at Tcr 0.4.
+- The L middle run fails with nearly the same hotspot value as batch 16, but unlike the
+  C1 failures its time field stays in range (largest `t` 1.27), so the void-`t` marker
+  above may not carry over to the L. Its continuous severity is only mildly above Tcr,
+  over the lower arm next to the plate, where `t` is close to 0; not yet looked into.
+- The reference cell's margin shrank from −0.051 to −0.000; with one run per cell it is
+  unclear whether that is the settings or run-to-run spread.
+
+**Timing.** The reference cell ran on the CPU alone at 8 threads (the laptop back in
+performance mode): 31.0 min of iteration time against 50–60 min for batch 15–16's CPU
+runs at 4 threads, three at once, consistent with the 3×4 vs 1×8 throughput note. The
+laptop slept 21:51–22:04; the runs resumed, and `elapsed` in `iterations.jsonl` leaves
+the sleep out (the driver's wall-clock minutes include it). GPU runs that hit the
+subsolver cap ran at ~2 s/iteration against ~0.5 for clean ones.
+
+Dashboard: `plot/laplace_s03/dashboard_b19.html` (spec `lap_spec19.tmp.json`).
