@@ -560,8 +560,14 @@ Dashboard: `plot/laplace_s03/dashboard_b20.html` (spec `lap_spec20.tmp.json`).
 from the plate, under lap19 C1 0.5 Tcr 0.4's settings. The interior stays at 0.17–0.23,
 but the top and bottom rows, free edges along the build direction, sit at 0.43 (κ 2.37,
 cooling sharpness 1) to 0.48 (sharpness 8). Half of their stencil is outside the domain
-and counts as unshielded. So under this formulation a flat-layered edge along the build
-direction cannot pass Tcr 0.4; the passing Tcr 0.4 runs reach ~0.40 by bending the layers.
+and counts as unshielded. Flat layers are not the best print of a bar, though (user): with
+the front flat in the middle and lagging toward the edges, the gradient near an edge
+tilts outward and the lobe stays in the bar (`ideal_bar.tmp.py`, a parabolic front with
+the edges `a h` elements behind the axis). At the final settings, best over `a`: a bar
+8 wide reaches 0.36, 16 wide 0.19, 30 wide 0.16, all under 0.4; at iteration 130's
+settings 0.41, 0.24, 0.18. So edges along the build direction are not an inherent bound,
+except for bars narrower than ~8 elements. The edge lag that does it is a few elements,
+i.e. `t` differences of ~2 cooling times.
 
 **Time alone on a frozen density** (`time_only.tmp.py`): lap19 C1 0.5 Tcr 0.4 step 120's
 density at iteration 130 (60% grey), the run's own severity at iteration 130's settings,
@@ -575,6 +581,13 @@ time field only.
   maximum: direct `t` 0.521, Variant 2 (μ, wall) 0.501, direct `t` on the 0.5-binarized
   density 0.527. None reaches 0.4; the remaining violators lie along the long top and
   bottom bands, i.e. edges along the build direction.
-- So for this density and these settings, the parameterization does not look like the
-  limit (Variant 2 did a little better than free `t`); the edge bound above looks like
-  it. A heuristic optimizer, not a proof of infeasibility, and one density.
+- Given the curved-front result, this is inconclusive about the formulation: neither
+  optimizer found a time field below 0.4, but one likely exists for bars this wide.
+  Variant 2 did no worse than free `t`.
+- **Variant 2 with MMA, hotspot row only, 100 iterations**: at the run's move limit
+  (0.02) the true maximum goes 0.545 → 0.96; at 0.005 → 0.86; at 0.002 it falls steadily
+  to 0.512. So on a frozen density the time-field steps alone, at the run's trust region,
+  escalate the severity: the fast-changing time field can be a cause, not only a symptom.
+  In the runs, the time field's largest change per iteration after the Tcr step is
+  0.026–0.033 (median over 100–200) in the failing ones and 0.002–0.008 in the passing
+  ones, against a cooling time of 0.01.
