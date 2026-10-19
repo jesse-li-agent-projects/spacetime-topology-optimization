@@ -269,6 +269,11 @@ class SpaceTimeConfig(_ConfigMixin):
         replace the `r` gate with `x / (x + hotspot_shielding_eps)`.
     :param hotspot_shielding_eps: the relative shieldings' regularization, below which
         a density counts as void.
+    :param hotspot_shaping_weight: weight of `FieldTerms.hotspot_shaping` in the
+        objective, possibly scheduled; 0, the default, disables it. Needs a relative
+        `hotspot_shielding`.
+    :param hotspot_shaping_sharpness: that term's softplus sharpness, per unit severity,
+        possibly scheduled.
     :param hotspot_cooling_time: `cooling`'s cooling time, in `t`, possibly scheduled.
     :param hotspot_cooling_sharpness: `cooling`'s onset sharpness `k`, possibly
         scheduled. A tie gets `1 - 2**(-1/k)`, and a later neighbor is pulled earlier
@@ -334,6 +339,8 @@ class SpaceTimeConfig(_ConfigMixin):
     hotspot_tie_credit: float = 0.5
     hotspot_shielding: str = "absolute"
     hotspot_shielding_eps: float = 1e-3
+    hotspot_shaping_weight: Scheduled = 0.0
+    hotspot_shaping_sharpness: Scheduled = 100.0
     hotspot_cooling_time: Scheduled = 0.0
     hotspot_cooling_sharpness: Scheduled = 8.0
     print_base: str

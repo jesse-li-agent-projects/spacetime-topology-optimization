@@ -186,3 +186,49 @@ def test_a_density_exponent_routes_time_through_the_material():
         _, record = stto_laplace.step(problem, state)
         assert np.isfinite(record.f) and np.isfinite(record.dg).all()
     assert t_far[1.0] != t_far[0.0]
+
+
+def _shaping_gradient(x, Tcr=0.6):
+    """`FieldTerms.hotspot_shaping` and its density gradient on a 60x20 mesh printed
+    column by column from the left, under capped-ratio shielding."""
+    nely, nelx = x.shape
+    base = _config(nelx, nely)
+    config = _config(
+        nelx,
+        nely,
+        hotspot_shielding="capped_ratio",
+        hotspot_shaping_weight=1.0,
+        rmin_cond_m=4 * base.element_size_m,
+        Tcr=Tcr,
+    )
+    terms = stto_laplace.build_problem(config, device="cpu").terms
+    t = torch.linspace(0, 1, nelx, dtype=torch.float64).expand(nely, nelx)
+    x = x.clone().requires_grad_(True)
+    shaping = terms.hotspot_shaping(x, t, 0)
+    (grad,) = torch.autograd.grad(shaping, x)
+    return float(shaping.detach()), grad
+
+
+def test_hotspot_shaping_pushes_a_violating_bar_out_and_its_void_support_in():
+    x = torch.zeros(20, 60, dtype=torch.float64)
+    x[:, 40:44] = 0.5  # a grey bar with nothing printed before it
+    _, grad = _shaping_gradient(x)
+    rows = slice(8, 12)
+    assert (grad[rows, 40] > 0).all()  # R1
+    assert (grad[rows, 38] < 0).all()  # R2, on void
+
+
+def test_hotspot_shaping_is_quiet_on_a_bar_whose_solid_version_passes():
+    x = torch.zeros(20, 60, dtype=torch.float64)
+    x[:, :40] = 1.0
+    x[:, 40:44] = 0.5  # the same bar, on solid support
+    _, quiet = _shaping_gradient(x)
+    x[:, :40] = 0.0
+    _, loud = _shaping_gradient(x)
+    rows = slice(8, 12)
+    assert quiet[rows, 36:44].abs().max() < 1e-3 * loud[rows, 40].abs().min()
+
+
+def test_hotspot_shaping_needs_a_relative_shielding():
+    with pytest.raises(ValueError, match="hotspot_shaping_weight"):
+        stto_laplace.build_problem(_config(hotspot_shaping_weight=1.0), device="cpu")

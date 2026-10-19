@@ -421,6 +421,8 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         calibration=problem.terms.hotspot.calibration,
         penal=penal,
         uniformity_weight=objective.uniformity_weight,
+        shaping=float(objective.shaping.detach()),
+        shaping_weight=objective.shaping_weight,
         hotspot_weight=hotspot_weight,
         Tcr=Tcr,
         rouf=run_config.weight_at(config.rouf, loop),

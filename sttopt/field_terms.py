@@ -32,8 +32,10 @@ class ObjectiveTerms(NamedTuple):
     value: Float[Tensor, ""]  # the objective the terms were added to
     uniformity: Float[Tensor, ""]  # layer-uniformity penalty, before its weight
     roughness: Float[Tensor, ""]  # roughness regularizer, before its weight
+    shaping: Float[Tensor, ""]  # `FieldTerms.hotspot_shaping`, before its weight
     uniformity_weight: float
     roughness_weight: float
+    shaping_weight: float
 
 
 @dataclass(frozen=True)
@@ -119,6 +121,12 @@ class FieldTerms:
             raise ValueError(
                 f"hotspot_shielding {shielding.value!r} divides by hotspot_shielding_eps, which must be positive, got {config.hotspot_shielding_eps}"
             )
+        if shielding == conductivity.Shielding.ABSOLUTE and not (
+            run_config.identically_zero(config.hotspot_shaping_weight)
+        ):
+            raise ValueError(
+                "hotspot_shaping_weight needs a relative hotspot_shielding: under 'absolute' shielding, 1 - K_est is not the severity an element would have once solid"
+            )
         rmin_cond = units.in_elements(config.rmin_cond_m, config.element_size_m)
         normalization = conductivity.Normalization(config.hotspot_normalization)
         e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
@@ -202,6 +210,7 @@ class FieldTerms:
         xPhys: Float[Tensor, "nely nelx"],
         tPhys: Float[Tensor, "nely nelx"],
         loop: int | None = None,
+        q: float | None = None,
     ) -> Float[Tensor, " nel"]:
         """The `K_est` field behind the run's hotspot term.
 
@@ -211,6 +220,7 @@ class FieldTerms:
 
         :param loop: the iteration whose scheduled settings apply, or `None` for the
             values a finished run settles on.
+        :param q: overrides `config.q`
         """
         config = self.config
 
@@ -225,7 +235,7 @@ class FieldTerms:
             self.e1,
             self.e2,
             self.w,
-            at(config.q),
+            at(config.q) if q is None else q,
             at(config.rouf),
             self.hotspot_denom,
             self.hotspot_base,
@@ -303,9 +313,9 @@ class FieldTerms:
         tPhys: Float[Tensor, "nely nelx"],
         loop: int,
     ) -> ObjectiveTerms:
-        """`f` plus the layer-uniformity penalty and the roughness regularizer at
-        iteration `loop`'s weights. Both are weighted by `xPhys`, so they measure the
-        layers of the part, and their gradients move material as well as print time.
+        """`f` plus the layer-uniformity penalty, the roughness regularizer and
+        `hotspot_shaping` at iteration `loop`'s weights. All are weighted by `xPhys`, so
+        they measure the part, and their gradients move material as well as print time.
 
         :param f: the structural objective, e.g. the compliance terms
         :param xPhys: physical densities
@@ -321,13 +331,52 @@ class FieldTerms:
         roughness = timefield.relative_roughness(tPhys, weights=xPhys)
         uniformity_weight = run_config.weight_at(config.uniformity_weight, loop)
         roughness_weight = run_config.weight_at(config.roughness_weight, loop)
+        shaping_weight = run_config.weight_at(config.hotspot_shaping_weight, loop)
+        shaping = (
+            self.hotspot_shaping(xPhys, tPhys, loop)
+            if shaping_weight != 0
+            else torch.zeros((), dtype=f.dtype, device=f.device)
+        )
         return ObjectiveTerms(
-            value=f + uniformity_weight * uniformity + roughness_weight * roughness,
+            value=f
+            + uniformity_weight * uniformity
+            + roughness_weight * roughness
+            + shaping_weight * shaping,
             uniformity=uniformity,
             roughness=roughness,
+            shaping=shaping,
             uniformity_weight=uniformity_weight,
             roughness_weight=roughness_weight,
+            shaping_weight=shaping_weight,
         )
+
+    def hotspot_shaping(
+        self,
+        xPhys: Float[Tensor, "nely nelx"],
+        tPhys: Float[Tensor, "nely nelx"],
+        loop: int,
+    ) -> Float[Tensor, ""]:
+        """A pressure on would-be hotspots, for the objective: the mean over elements of
+        `softplus(S1 - Tcr) * xPhys`, where `S1 = 1 - K_est` at `q = 1` is the severity
+        an element would have once it and its support were solid.
+
+        The relative shieldings read that severity honestly in the hotspot constraint,
+        but its gradient barely moves a bar's overall density or its void support. This
+        term pushes a would-be violator's own density down and, since `q = 1` keeps the
+        shielding's slope finite at void, its earlier neighbors' up; it is near zero
+        wherever the solid design passes, so it shapes the path more than the optimum.
+        See `plans/scale_invariant_hotspot.md`.
+        """
+        config = self.config
+        Tcr = run_config.weight_at(config.Tcr, loop)
+        sharpness = run_config.weight_at(config.hotspot_shaping_sharpness, loop)
+        K_est = self.estimated_conductivity(xPhys, tPhys, loop, q=1.0)
+        # The print base's infinite `K_est` is no hotspot: select it out, as in
+        # `conductivity.LogSumExp`, so its `inf` never reaches the backward pass.
+        finite = torch.isfinite(K_est)
+        excess = torch.where(finite, 1 - K_est, Tcr) - Tcr
+        pressure = torch.nn.functional.softplus(excess, beta=sharpness)
+        return torch.where(finite, pressure * xPhys.flatten(), 0).mean()
 
     def add_time_only_hotspot(
         self,
