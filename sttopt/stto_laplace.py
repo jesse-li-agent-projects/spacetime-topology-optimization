@@ -239,10 +239,12 @@ def wall_data(
 
 
 def init_state(problem: Problem) -> State:
-    """The initial state: uniform density and diffusivity, and the ramp wall data.
+    """The initial state: uniform density and diffusivity, and the wall data of the
+    distance to the plate.
 
-    Density at `volfrac` over the domain, `chi = 1` (`mu = 1/2`), and the wall data of
-    the linear ramp away from the plate, which makes the initial `t` that ramp.
+    Density at `volfrac` over the domain, `chi = 1` (`mu = 1/2`), and the walls' distance
+    to the plate through the domain (`virtual_heat.distance_wall`), which on a rectangle
+    makes the initial `t` the linear ramp away from the plate.
 
     :return: the state before the first iteration
     """
@@ -251,7 +253,7 @@ def init_state(problem: Problem) -> State:
     kw = dict(device=problem.device, dtype=problem.dtype)
     x = config.volfrac * problem.active.to(problem.dtype)
     mu = torch.full(shape, 0.5, **kw)
-    wall = virtual_heat.ramp_wall(problem.mesh)
+    wall = virtual_heat.distance_wall(problem.mesh)
     return State(
         x=x,
         mu=mu,
