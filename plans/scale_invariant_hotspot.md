@@ -534,3 +534,47 @@ arm near the re-entrant corner; the lower arm ends up printed nearly all at once
   along that wall still peaks mid-arm (0.77) and falls to 0.63 at the top edge, where the
   worst element sits; batch 16's L middle run also escalated from row 0, columns 43–47.
   Untested.
+
+## Batch 20: L brackets with the geodesic wall start (2026-10-19)
+
+PR #213 bce86b0 starts the wall data at the walls' distance to the plate through the
+domain (8-connected grid geodesic, as stto's `time_init = geodesic`); identical to the
+old ramp on rectangles. lap19's L settings otherwise (`lap_batch20.tmp.py`).
+
+| cell | earlier | geodesic start |
+|---|---|---|
+| L middle 0.5 Tcr 0.6 | +0.513 / 1.143 ✗ (batch 19) | +0.527 / 1.135 ✗ |
+| L corner 0.5 Tcr 0.6 | −0.034 / 1.006 ✓ (batch 16) | +0.006 / 1.012 ✓ |
+
+The start along the upper arm's inner wall now rises from the corner to the top (0.42 →
+0.77, against 0.50–0.56), but L middle escalated earlier: at the Tcr step (true maximum
+0.73 at iteration 100), a collapse by 175, partial recovery over 225–350, a second
+escalation from 375, ending with the worst elements on the lower arm's bottom edge, a
+free edge along the build direction. So the start was probably not the main cause.
+
+Dashboard: `plot/laplace_s03/dashboard_b20.html` (spec `lap_spec20.tmp.json`).
+
+## Is Tcr 0.4 reachable by the time field alone? (2026-10-20)
+
+**An ideal print** (`ideal_block.tmp.py`): the whole C1 domain solid, `t` the linear ramp
+from the plate, under lap19 C1 0.5 Tcr 0.4's settings. The interior stays at 0.17–0.23,
+but the top and bottom rows, free edges along the build direction, sit at 0.43 (κ 2.37,
+cooling sharpness 1) to 0.48 (sharpness 8). Half of their stencil is outside the domain
+and counts as unshielded. So under this formulation a flat-layered edge along the build
+direction cannot pass Tcr 0.4; the passing Tcr 0.4 runs reach ~0.40 by bending the layers.
+
+**Time alone on a frozen density** (`time_only.tmp.py`): lap19 C1 0.5 Tcr 0.4 step 120's
+density at iteration 130 (60% grey), the run's own severity at iteration 130's settings,
+time field only.
+
+- MMA at the run's move limit (0.02, twice the cooling time 0.01) makes it worse in one
+  step (true maximum 0.545 → 0.89–0.94) for both parameterizations, with no other term in
+  the objective: the same jump the run made over 120–150. Smaller moves (0.002, 0.0005)
+  are stable but barely move it.
+- Adam on a smooth maximum sharpening from β 20 to 400, 2000 iterations, best true
+  maximum: direct `t` 0.521, Variant 2 (μ, wall) 0.501, direct `t` on the 0.5-binarized
+  density 0.527. None reaches 0.4; the remaining violators lie along the long top and
+  bottom bands, i.e. edges along the build direction.
+- So for this density and these settings, the parameterization does not look like the
+  limit (Variant 2 did a little better than free `t`); the edge bound above looks like
+  it. A heuristic optimizer, not a proof of infeasibility, and one density.
