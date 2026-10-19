@@ -310,3 +310,26 @@ The step100 schedule plus the shaping term at λ = 10 and 100 (`lap_batch15b.tmp
   recovering, so whether a run recovers may come down to the state at the step.
 
 Dashboard: `plot/laplace_s03/dashboard_shaping_step.html` (spec `lap_spec15b.tmp.json`).
+
+## Batch 16: robustness and generality of step 100 + λ 100 (2026-10-19)
+
+User decisions:
+- Tentatively adopt step 100 + λ 100 and test how robust it is.
+- **One fixed hyperparameter set for every problem, no per-cell rescaling.** Log
+  compliance makes the weights relative, so rescaling by each cell's plain-TO compliance
+  (as batches 11–15 did) only reproduced `stto`'s cell-to-cell drift. The fixed set is
+  `lap11_C105_B_n800`'s: uniformity 0.115, time-only hotspot 0.288, roughness 1.15e-3 →
+  1.15e-4.
+- No comparison against `stto` or a λ = 0 baseline: the question is whether Variant 2
+  works, period. Gates unchanged.
+- Cells: C1 at Tcr 0.6 only (plus the C1 0.5 Tcr 0.4 robustness cell), no x cells, no C1
+  0.7, one C2 (0.3, left edge, Tcr 0.6), one S printed from the left (0.3, Tcr 0.6), and
+  the L brackets at Tcr 0.6 once `stto_laplace` supports them.
+
+Runs (`lap_batch16.tmp.py`, snapshot `output/lap/snapshot_3e1591d`):
+- Robustness on C1 0.3 (Tcr 0.6) and C1 0.5 (Tcr 0.4): step 80 and 120 at λ 100; λ 30 and
+  300 at step 100; and C1 0.3 step 100 + λ 100 again under the fixed weights (its batch
+  15b run used ~1.5× smaller ones). The C1 0.5 reference is batch 15b's.
+- Geometries, step 100 + λ 100: C1 0.5 e Tcr 0.6, C2 0.3 e Tcr 0.6, S 0.3 e Tcr 0.6.
+  Plain-TO references: `val_C1_v0.5_e_plainTO`, `val_C2_v0.3_e_plainTO`,
+  `val_S_v0.3_b_plainTO` (plain TO does not depend on the print base: within 0.05%).
