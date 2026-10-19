@@ -333,3 +333,52 @@ Runs (`lap_batch16.tmp.py`, snapshot `output/lap/snapshot_3e1591d`):
 - Geometries, step 100 + λ 100: C1 0.5 e Tcr 0.6, C2 0.3 e Tcr 0.6, S 0.3 e Tcr 0.6.
   Plain-TO references: `val_C1_v0.5_e_plainTO`, `val_C2_v0.3_e_plainTO`,
   `val_S_v0.3_b_plainTO` (plain TO does not depend on the print base: within 0.05%).
+- L corner and L middle at Tcr 0.6 (120×120, volfrac 0.5, from the clamped right edge),
+  from PR #213's code (`snapshot_a8294d7`, `lap_batch16L.tmp.py`): `t` is solved on the
+  L only, with wall data on every L wall but the clamped edge.
+
+## Results (batch 16)
+
+Binarized hotspot row with `t` kept / compliance ÷ the cell's plain TO. ✓ = every gate
+passes. Every run passes start; all but C1 0.3 step 120 (1 element) have 0 interior
+unsupported. Eval `lap_eval16.tmp.py` → `output/lap/eval16.json`.
+
+**Robustness** (one knob at a time around step 100 + λ 100):
+
+| | C1 0.3 (Tcr 0.6) | C1 0.5 (Tcr 0.4) |
+|---|---|---|
+| step 100, λ 100 | −0.021 / 1.135 ✓ | −0.051 / 1.047 ✓ (batch 15b) |
+| step 80 | −0.002 / 1.099 ✓ | −0.029 / 1.056 ✓ |
+| step 120 | **+0.663 / 1.282** | **+1.495 / 1.234** |
+| λ 30 | −0.005 / 1.091 ✓ | **+1.443 / 2.302** |
+| λ 300 | −0.019 / 1.150 (compliance 1.1504, just over) | −0.069 / 1.057 ✓ |
+
+**Geometries** (step 100 + λ 100):
+
+| cell | result |
+|---|---|
+| C1 0.5 e, Tcr 0.6 | **+0.600 / 1.687** |
+| C2 0.3 e, Tcr 0.6 | −0.173 / 0.999 ✓ |
+| S 0.3 e, Tcr 0.6 | −0.255 / 1.003 ✓ |
+| L corner, Tcr 0.6 | −0.034 / 1.006 ✓ |
+| L middle, Tcr 0.6 | **+0.515 / 1.218** |
+
+- **Not robust: 9 of 14 pass.** Every failure is the same mode, seen before in batch
+  15/15b's λ = 10 runs: the row is violated at the step, the max severity climbs to
+  ~0.9–1.0 within ~50 iterations, mostly on the mesh's top and bottom edges, and the
+  run never recovers, with the multiplier alternating between ~1e-7 and its cap
+  (`mma_c` 2500). A multiplier near zero on a violated row means MMA's linear model
+  expects the step to clear the violation, and the time-field step then does not.
+- **Failures are not monotone in the knobs.** Step 120 failed both cells; step 80 passed
+  both. Lower λ failed C1 0.5 (10, 10, 30) but not C1 0.3 (30). C1 0.5 passes at the
+  stricter Tcr 0.4 but fails at 0.6. With one run per setting, this reads more like a
+  run-to-run bifurcation at the step than a trend.
+- **C2 and S pass with wide margins** (−0.17, −0.26): Tcr 0.6 barely binds there.
+- **L corner passes;** its final time field carries sharp features in the wall data along
+  the inner vertical wall, on void and outside the L. **L middle fails** with the time
+  field over the whole bottom arm nearly flat near 0, a flat time basin, the failure
+  `stto` also has on this cell at Tcr 0.6 (+0.607).
+
+Dashboard: `plot/laplace_s03/dashboard_batch16.html` (`lap_dashboard5.tmp.py`, spec
+`lap_spec16.tmp.json`, both in the `laplace-l-bracket` worktree; `stto` |Δt| reference
+dropped).
