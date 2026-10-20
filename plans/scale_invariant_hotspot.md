@@ -842,7 +842,7 @@ the net push. The reversing elements sit at a near-exact balance: their median n
 ## Batch 29: penal schedules (2026-10-20)
 
 Ramp A with penal only changed (q unchanged). A: 2 → 3 over 100–200 instead of 150–350.
-B: 3 → 4 over the 350–550 hold instead of 3. Each run twice, the replicate with the
+B: 3 → 4 over the 350–550 hold instead of 3, which makes penal a single straight ramp 2 → 5 over 150–750 (penal no longer held). Each run twice, the replicate with the
 roughness weight × (1 + 1e-4). Binarized row with `t` kept / C ÷ plain TO / grey:
 
 | run | result | grey at 350 | bulk grey at 350 | grey at 650 |
@@ -862,3 +862,20 @@ contour, as a share of the domain.
   and about equal at the end.
 - **Penal 4 in the hold** changes little before 550 but binarizes faster in 550–650. Both
   runs pass with margin, close to each other.
+
+## Batch 30: penal not held + density move 0.02 (2026-10-20)
+
+Batch 29's B (penal ramps straight 2 → 5 over 150–750) with batch 28's density move
+(0.02 over 100–550), run twice. Binarized row with `t` kept / C ÷ plain TO / grey:
+
+| run | result | grey at 550 / 650 | bulk grey at 550 |
+|---|---|---|---|
+| ramp A | −0.017 / 1.062 / 2.6% ✓ | 0.34 / 0.10 | 0.067 |
+| move 0.02 (two runs) | −0.027, −0.024 / 1.055 ✓✓ | 0.33 / 0.06 | 0.07 |
+| penal not held (two runs) | −0.024, −0.016 / 1.059 ✓✓ | 0.31 / 0.05 | 0.055 |
+| both | −0.030 / 1.052 / 2.1% ✓ | 0.29 / 0.03 | 0.046 |
+| both, replicate | −0.046 / 1.054 / 2.3% ✓ | 0.30 / 0.04 | 0.054 |
+
+The combination has the best margins and compliance so far, and binarizes fastest in
+550–650. Phase 2 is still about as slow as before (grey at 350 is 0.51–0.52 against 0.53).
+Two runs.
