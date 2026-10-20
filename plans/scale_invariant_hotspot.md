@@ -643,3 +643,31 @@ plain TO / grey:
   element-scale control of χ the hotspot needs near edges (not checked).
 
 Dashboard: `plot/laplace_s03/dashboard_b21.html` (spec `lap_spec21.tmp.json`).
+
+## Batch 23: phase 2 held 200 iterations longer (2026-10-20)
+
+User's hypothesis: after the Tcr step the optimizer spends its effort moving material to
+meet the constraint and runs out of time to optimize the topology before the schedule
+freezes it. Test: every schedule held at its iteration-350 value for 200 iterations
+(1000 in all; the small roughness weight's cosine decay stretched instead,
+`lap_batch23.tmp.py`).
+
+| C1 0.5 Tcr 0.4 s100 | without the hold | with the hold |
+|---|---|---|
+| move 0.002 after the step (batch 21) | +0.429 / 1.139 / 14% ✗ | **−0.021 / 1.058 / 2.7% ✓** |
+| move 0.02 (batch 19) | −0.000 / 1.068 ✓ | +1.385 / 1.585 / 27% ✗ |
+
+- With the small move limit the extra time fixes it, better than batch 19's pass.
+- The move-0.02 hold run says nothing about the hold: it collapsed at iteration 115–125,
+  before the hold, where its schedules equal batch 19's. The only difference there is
+  the roughness weight (0.4% apart, ~5e-6 absolute); density differences reach 0.02–0.05
+  by iteration 50–100, and at the step one run recovers (worst severity 0.54 at 120) and
+  the other escalates (0.89 at 125). So at move 0.02 the step is a coin flip, and batch
+  19's pass may have been luck: single runs per cell cannot rank settings there. None of
+  the four move-0.002 runs collapsed after the step.
+
+**Time alone at the step** (`time_only.tmp.py`, the move-0.002 run's iteration-100 density
+and settings): worst severity 0.638 as the run had it; MMA at 0.002 reaches 0.607 and
+stalls (1000 iterations); MMA at 0.02 escalates to 0.99; Adam on Variant 2's variables
+0.601. The run itself reached 0.40 by iteration 150 by moving material (density changes
+twice batch 19's over 100–200, compliance 204 → 260).
