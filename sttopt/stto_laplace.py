@@ -66,6 +66,9 @@ class Problem:
     # The scalar mesh the time field is solved on, with the plate and the wall arc
     mesh: virtual_heat.ScalarMesh
     wall_filter: Float[Tensor, "n_arc n_arc"]  # `virtual_heat.wall_filter`
+    # The filter on `mu`, its weights summed over the domain only; None when unfiltered
+    mu_H: torch_util.SymmetricCsr | None
+    mu_Hs: Float[Tensor, " nel"] | None
     Nei: Int[Tensor, " k"]  # the elements on the build plate
     # The design domain (`load_cases.active_mask`); elements outside it are void
     active: Bool[Tensor, "nely nelx"]
@@ -156,6 +159,16 @@ def build_problem(
     )
     active = load_cases.active_mask(load_cases.LoadCase(config.load_case), nelx, nely)
     H, Hs = filters.density_filter(nelx, nely, units.in_elements(config.rmin_m, h))
+    mu_H = mu_Hs = None
+    if config.mu_filter_rmin_m > 0:
+        mu_H_np, _ = filters.density_filter(
+            nelx, nely, units.in_elements(config.mu_filter_rmin_m, h)
+        )
+        mu_Hs_np = mu_H_np @ active.flatten().astype(float)
+        # Outside the domain `chi` is 1 whatever `mu` is
+        mu_Hs_np[mu_Hs_np == 0] = 1.0
+        mu_H = torch_util.symmetric_csr_to_tensor(mu_H_np, device, dtype)
+        mu_Hs = torch_util.to_tensor(mu_Hs_np, device, dtype)
     C = gravity.gravity_load_matrix(nelx, nely)
     Nei = timefield.base_elements(
         nelx, nely, timefield.TimeField[config.print_base.upper()]
@@ -186,6 +199,8 @@ def build_problem(
             device,
             dtype,
         ),
+        mu_H=mu_H,
+        mu_Hs=mu_Hs,
         active=torch.as_tensor(active, device=device),
         n=2 * nelx * nely + len(mesh.arc),
         **floats,
@@ -208,7 +223,7 @@ def physical_fields(
     with what `step` optimized.
 
     :param x: raw density, filtered and Heaviside-projected at sharpness `beta_d`
-    :param mu: diffusivity design field
+    :param mu: diffusivity design field, filtered when `mu_filter_rmin_m` is set
     :param wall: wall design along the arc, filtered along it
     :param beta_d: projection sharpness
     :param loop: iteration whose `chi_density_exponent` applies
@@ -223,12 +238,23 @@ def physical_fields(
         config,
         problem.mesh,
         xPhys,
-        mu,
+        filtered_mu(problem, mu),
         problem.wall_filter @ wall,
         previous,
         density_exponent=run_config.weight_at(config.chi_density_exponent, loop),
     )
     return xPhys, solution
+
+
+def filtered_mu(
+    problem: Problem, mu: Float[Tensor, "nely nelx"]
+) -> Float[Tensor, "nely nelx"]:
+    """The diffusivity design field `physical_fields` sets `chi` from."""
+    if problem.mu_H is None:
+        return mu
+    return filters.apply_density_filter(
+        mu * problem.active, problem.mu_H, problem.mu_Hs
+    )
 
 
 def wall_data(

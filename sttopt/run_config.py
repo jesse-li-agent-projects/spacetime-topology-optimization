@@ -515,6 +515,10 @@ class LaplaceRunConfig(SpaceTimeConfig):
     :param wall_filter_rmin_m: radius of the density-style filter on the wall design
         along the wall arc; without it the wall data is noisy node to node, since each
         node moves a whole wall region of `t`. 0 leaves it unfiltered.
+    :param mu_filter_rmin_m: radius of the density-style filter on `mu` before it sets
+        `chi`. Element-mean `t` barely sees `chi` alternating element to element across
+        the flow, so unfiltered `mu` grows such stripes; a radius of 2 elements or more
+        removes them. 0 leaves `mu` unfiltered.
     :param field_move: MMA trust-region half-width on the time-field variables (`mu`
         and the wall design), possibly scheduled, as `RunConfig.tmove` is for `t`.
         `None` uses `move`.
@@ -531,6 +535,7 @@ class LaplaceRunConfig(SpaceTimeConfig):
     laplace_cg_rtol: float
     poisson_cg_rtol: float
     wall_filter_rmin_m: float = 0.0
+    mu_filter_rmin_m: float = 0.0
     field_move: Scheduled | None = None
     chi_density_exponent: Scheduled = 0.0
     chi_density_floor: float = 1e-2

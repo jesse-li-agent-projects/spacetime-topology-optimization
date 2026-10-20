@@ -260,3 +260,31 @@ def test_an_l_bracket_runs_on_its_domain_alone():
     problem = stto_laplace.build_problem(config, device="cpu")
     report = stto_laplace.check_design(problem, result.state)
     assert "constraints" in report
+
+
+def test_the_mu_filter_removes_element_stripes_and_keeps_a_constant_on_the_domain():
+    n = 24
+    base = _config()
+    kwargs = dict(load_case="l_bracket_corner", print_base="right_edge")
+    unfiltered = stto_laplace.build_problem(_config(n, n, **kwargs), device="cpu")
+    problem = stto_laplace.build_problem(
+        _config(n, n, mu_filter_rmin_m=2 * base.element_size_m, **kwargs),
+        device="cpu",
+    )
+    active = problem.active
+    constant = torch.full((n, n), 0.3, dtype=torch.float64)
+    # Normalized over the domain, so its edges along the cut-out keep the value too
+    assert torch.allclose(
+        stto_laplace.filtered_mu(problem, constant)[active], constant[active]
+    )
+    stripes = 0.5 + 0.5 * (-1.0) ** torch.arange(n, dtype=torch.float64).expand(n, n)
+    assert stto_laplace.filtered_mu(unfiltered, stripes) is stripes
+    interior = torch.zeros_like(active)
+    interior[2:-2, 2:-2] = True
+    interior &= (
+        torch.nn.functional.max_pool2d((~active)[None, None].double(), 5, 1, 2)[0, 0]
+        == 0
+    )
+    assert interior.sum() > 50
+    left = stto_laplace.filtered_mu(problem, stripes)[interior] - 0.5
+    assert float(left.abs().max()) < 0.05 * 0.5
