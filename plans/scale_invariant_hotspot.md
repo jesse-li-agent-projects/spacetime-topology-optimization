@@ -671,3 +671,25 @@ and settings): worst severity 0.638 as the run had it; MMA at 0.002 reaches 0.60
 stalls (1000 iterations); MMA at 0.02 escalates to 0.99; Adam on Variant 2's variables
 0.601. The run itself reached 0.40 by iteration 150 by moving material (density changes
 twice batch 19's over 100–200, compliance 204 → 260).
+
+## Batch 24: Tcr ramps instead of the step (2026-10-20)
+
+User decision: move 0.002 is the working default for now; the slower schedule it needs
+(phase 2 held 200 longer) is an accepted cost, to refine later. The μ filter makes the
+design field more sensible, so it is retested at move 0.002 (batch 25).
+
+C1 0.5 Tcr 0.4 from the passing step run (move 0.002 after the step, phase-2 hold),
+changing only Tcr and where the move limit drops (`lap_batch24.tmp.py`):
+
+| Tcr | binarized, t kept / C ÷ TO / grey | hotspot binding | mean \|ΔxPhys\| 100–150, 150–200 | C at 150 |
+|---|---|---|---|---|
+| step at 100 (lap23) | −0.021 / 1.058 / 2.7% ✓ | from 100 | 0.147, 0.134 | 275 |
+| ramp A, 1 → 0.4 over 0–100 (move 0.002 from 0) | −0.017 / 1.062 / 2.6% ✓ | from ~70 | 0.075, 0.037 | 207 |
+| ramp B, 1 until 100, → 0.4 by 200 | +0.070 / 1.072 / 3.8% ✗ (as optimized +0.008) | from ~160 | 0.026, 0.110 | 201 (258 at 200) |
+
+- Ramp A meets the constraint as it tightens: at iteration 100 the worst severity is
+  0.42 against the step run's 0.65, and the density moves half as much afterwards. The
+  final designs end up alike (C 186–189), so the gentler approach shows in the transient,
+  not in the result, at least with the phase-2 hold.
+- Ramp B arrives at Tcr 0.4 with the same 0.24 excess as the step, 100 iterations later,
+  and fails narrowly once binarized. One run each.
