@@ -821,3 +821,44 @@ roughness weight × (1 + 1e-4). Binarized row with `t` kept / C ÷ plain TO / gr
   imbalance, not by the ceiling.
 - **Both runs pass, with slightly better compliance, and they agree with each other.** They
   are less grey by 650 (0.058 against 0.077–0.097). Two runs, so this may be luck.
+
+### What reverses the grey (`flip_terms.tmp.py`, `hot_jump.tmp.py`)
+
+MMA moves each variable against its multiplier-weighted net gradient (checked: this
+predicts the direction of 100% of moving grey elements). So a reversal is a sign flip of
+the net push. The reversing elements sit at a near-exact balance: their median net push is
+±0.6% of the sum of the terms. In the burst (replay steps 205–208):
+
+- The hotspot maximum alternates every iteration between two distant spots, (32, 32) and
+  (33, 167), with gaps of 0.004–0.007. The softmax weight near each spot stays at 12–14%,
+  and the raw hotspot-row gradient on the reversing elements keeps its sign on 92% of them.
+- The multipliers zigzag in step: λ_vol 1.482/1.465/1.496/1.475, λ_hot
+  0.244/0.206/0.259/0.221. Per reversing element, the term that did most to turn it
+  around is volume (λ_vol's swing) for about half and the hotspot for the other half.
+  After the burst (209–212) the maximum stays on the right, and 6–18% reverse.
+- `calibration_rate` (0.1) averages only the calibration offset, so it steadies the row's
+  value, not its gradient or the multipliers.
+
+## Batch 29: penal schedules (2026-10-20)
+
+Ramp A with penal only changed (q unchanged). A: 2 → 3 over 100–200 instead of 150–350.
+B: 3 → 4 over the 350–550 hold instead of 3. Each run twice, the replicate with the
+roughness weight × (1 + 1e-4). Binarized row with `t` kept / C ÷ plain TO / grey:
+
+| run | result | grey at 350 | bulk grey at 350 | grey at 650 |
+|---|---|---|---|---|
+| ramp A / replicate | −0.017 ✓ / +0.052 ✗, 1.062, 2.3–2.6% | 0.53 | 0.16 | 0.08–0.10 |
+| A, penal early | +0.001 / 1.053 / 7.3% ✓ | 0.39 | 0.10 | 0.085 |
+| A, replicate | +0.011 / 1.062 / 4.6% ✗ | 0.38 | 0.10 | 0.072 |
+| B, penal 4 in hold | −0.024 / 1.059 / 2.5% ✓ | 0.53 | 0.16 | 0.054 |
+| B, replicate | −0.016 / 1.059 / 2.4% ✓ | 0.53 | 0.16 | 0.052 |
+
+Bulk grey means grey more than 4 elements (the filter radius) from the xPhys = 0.5
+contour, as a share of the domain.
+
+- **An earlier penal ramp does speed phase 2:** grey at 350 is 0.39 against 0.53, and bulk
+  grey 0.10 against 0.16. But it ends greyer (4.6–7.3%: two thin diagonal members stay
+  grey) and is marginal at the gate. Compliance is higher early (239 against 213 at 185)
+  and about equal at the end.
+- **Penal 4 in the hold** changes little before 550 but binarizes faster in 550–650. Both
+  runs pass with margin, close to each other.
