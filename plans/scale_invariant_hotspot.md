@@ -591,3 +591,27 @@ time field only.
   In the runs, the time field's largest change per iteration after the Tcr step is
   0.026–0.033 (median over 100–200) in the failing ones and 0.002–0.008 in the passing
   ones, against a cooling time of 0.01.
+
+## Element-scale stripes in the diffusivity field (2026-10-20)
+
+χ<sub>μ</sub> alternates high/low every element in layers across the flow, e.g. along the
+passing L corner's bottom chord next to the plate (lap20_Lc05, `mu_stripes.tmp.py`,
+plot `plot/laplace_s03/stripes/`). Roughness alone does not separate passing from
+failing runs; the share of the part with μ at a bound does (upper bound 0–4% passing,
+24–52% failing).
+
+- **A near-null mode.** μ enters χ unfiltered. In 1-D series flow the element-mean `t`
+  differences depend only on adjacent-pair sums of the resistance 1/χ, so an alternation
+  of 1/χ is invisible apart from a constant offset; nodal `t` becomes a staircase (row
+  112 at iteration 400: node steps alternate 0.002/0.010, element-mean steps 0.0066–0.0070).
+  In 2-D it is nearly so: removing the alternation in that window (`mu_destripe2.tmp.py`,
+  0.37 decades of log χ on average) moves tPhys by ≤ 0.003 and the severity by ≤ 0.05,
+  against 0.018 and 0.18 for a uniform change of the same size.
+- **A weak push.** In that window the uniformity term's gradient has a small consistent
+  component along the stripes over iterations 100–300 while they grow (μ amplitude 0.001
+  → 0.076), and the moves follow it; it reverses by 400 and growth stops
+  (`mu_stripe_drive.tmp.py`). The hotspot term barely acts there (λ ~ 1e-7), and the
+  roughness term, decayed to ~1e-4, contributes nothing measurable. One window of one run.
+- So with nothing restoring it, a small push accumulates into stripes that cost MMA
+  steps and push μ to its bounds without changing the print. A filter on μ (as on the
+  density) would remove the mode at its source.
