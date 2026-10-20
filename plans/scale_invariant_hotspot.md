@@ -715,3 +715,57 @@ Binarized row with `t` kept / C ÷ plain TO / grey:
   L brackets it is about even (L corner compliance 1.011 against 1.016, L middle split
   1–1). So the filter makes χ<sub>μ</sub> readable but, at radius 2, makes C1 worse; why is
   not checked (one guess: the hotspot uses element-scale χ near member edges).
+
+The user's call (2026-10-20): no μ filter for now, kept in mind because the unfiltered
+χ<sub>μ</sub> looks rough. A narrower χ range (`chi_contrast` 100 and 10, batch 26) was
+queued and then put on hold (`output/lap/backlog/batch26`) for batch 27.
+
+## Batch 27: is ramp A repeatable, and a softer hotspot aggregation (2026-10-20)
+
+All C1 0.5 Tcr 0.4 ramp A (batch 24). The replicate has the roughness weight × (1 + 1e-4);
+the β runs hold `hotspot_beta` at 50 or 20 until 550, then ramp it (log) to 100 by 650,
+alongside binarization. Binarized row with `t` kept / C ÷ plain TO / grey:
+
+| run | result | as optimized |
+|---|---|---|
+| ramp A (batch 24) | −0.017 / 1.062 / 2.6% ✓ | +0.009 |
+| ramp A, replicate | +0.052 / 1.062 / 2.3% ✗ | +0.007 |
+| β 50 → 100 | +0.012 / 1.083 / 3.9% ✗ | +0.013 |
+| β 20 → 100 | −0.057 / 1.059 / 2.3% ✓ | −0.049 |
+
+- The replicate tracks the original closely (compliance, grey and row within ~1% through
+  the run; first visible split at iteration 88), but it fails once binarized. So ramp A's
+  pass is marginal: the binarization step decides it, not a different trajectory.
+- β 20 stays much greyer until 550 (0.49 grey against 0.34) and then binarizes quickly. It
+  is the only run of the four whose row settles below 0.01 well before the end (from 708),
+  with margin after binarizing. One run.
+- At β 100 the row's softmax already spreads over ~250–1100 elements (1/Σw²); β 20 spreads
+  over ~3000 of 10800.
+
+### What keeps ramp A grey (`grey_pressure.tmp.py`)
+
+Per term on grey elements (0.05 < xPhys < 0.95): the gradient with respect to the density
+design, constraints weighted by their logged λ. Compliance pushes density up and volume
+pushes it down, and the two cancel to within a few percent, so what matters is how the
+push differs between grey above 0.5 and below it. A push that is the same everywhere is
+absorbed by λ_vol. The table gives that above-minus-below difference at iteration 185
+(same penal and β_d in both runs); positive binarizes:
+
+| term | ramp A | plain TO |
+|---|---|---|
+| compliance | −0.098 | +0.033 |
+| volume | +0.202 | +0.106 |
+| hotspot (λ 0.20) | −0.063 | — |
+| uniformity + shaping | −0.025 | ~0 |
+| total | +0.018 | +0.138 |
+
+- The hotspot row adds material almost everywhere (on 99% of grey below 0.5 and 65% above),
+  most strongly to low-density grey. That slows binarization.
+- In ramp A, compliance itself pushes low-density grey up harder than high-density grey,
+  which is the opposite of plain TO. Not checked why.
+- Plain TO stalls at 0.31 grey while β_d is 4. It binarizes during its β_d ramp (350–450),
+  which the hold moves to 550–650 in ramp A. At the point each leaves β_d = 4, the grey
+  fractions are similar (0.31 against 0.34).
+- At 385, ramp A's difference matches plain TO's at the same grey fraction (iteration 185),
+  yet its grey moves half as fast. Not explained: possibly MMA's asymptotes, since ~25× more
+  grey variables are at the floor.
