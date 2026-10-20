@@ -769,3 +769,55 @@ absorbed by λ_vol. The table gives that above-minus-below difference at iterati
 - At 385, ramp A's difference matches plain TO's at the same grey fraction (iteration 185),
   yet its grey moves half as fast. Not explained: possibly MMA's asymptotes, since ~25× more
   grey variables are at the floor.
+
+### Why ramp A's grey moves slowly: MMA's step, split (`asy_replay.tmp.py`)
+
+The density step of each grey variable is its asymptote distance s (MMA's step budget)
+times the step per unit s (the gradient imbalance). Replayed with the current code:
+
+| | ramp A at 185 | plain TO at 185 | ramp A at 385 |
+|---|---|---|---|
+| grey at the s ceiling (0.2) | 53% | 97% | 22% |
+| median step per unit s | 0.003 | 0.008 | 0.020 |
+| mean step toward a bound | +0.00026 | +0.00184 | +0.00141 |
+| the same with every grey s at the ceiling | +0.00059 | +0.00184 | +0.00322 |
+
+At 185 the imbalance accounts for about 3× and the shrunken asymptotes for about 2.3×. At
+385 the asymptotes are the limit. s shrinks because whole regions of the grey reverse
+direction together, in bursts: a mean of 24% of the grey per iteration in ramp A, against
+1% in plain TO. The bursts barely follow swings in either multiplier.
+
+### Line sweeps through a burst (`line_sweep.tmp.py`)
+
+These start from replayed states and run along the step MMA took. In this replay the
+burst fell at steps 206–208 rather than 209–212. Each value is the actual change at the
+step divided by the linear prediction:
+
+| step | grey reversing | hotspot row | Lagrangian | density part only: hotspot row | time part only: hotspot row |
+|---|---|---|---|---|---|
+| 206–208 (burst) | 53–56% | 0.24–0.72 | 0.61–0.84 | −0.86 to +0.52 | 0.95–0.96 |
+| 209–211 (calm) | 7–18% | 0.80–0.89 | 0.92–0.96 | 1.30–1.57 | 0.96–0.98 |
+
+In the burst steps, the hotspot row's response to the density part of the step doesn't
+even keep the linear prediction's sign. MMA's own model still predicts 0.84–0.91 of the
+linear change. The time-field part stays near-linear throughout. Not yet separated: the
+density reaching the hotspot through χ ∝ xPhys^e (e ≈ 4.6 here), or acting on it directly
+through the density gate and shielding.
+
+## Batch 28: density move 0.02 over iterations 100–550 (2026-10-20)
+
+This is ramp A with the density move limit raised from 0.01 to 0.02 over iterations
+100–550, which doubles MMA's asymptote ceiling. Run twice, the replicate with the
+roughness weight × (1 + 1e-4). Binarized row with `t` kept / C ÷ plain TO / grey:
+
+| run | result | as optimized |
+|---|---|---|
+| ramp A / replicate (batches 24, 27) | −0.017 ✓ / +0.052 ✗, both 1.062 | +0.009 / +0.007 |
+| move 0.02 | −0.027 / 1.055 / 2.1% ✓ | +0.003 |
+| move 0.02, replicate | −0.024 / 1.055 / 2.2% ✓ | +0.006 |
+
+- **It doesn't speed up phase 2.** Grey at 350 is 0.52 against 0.53, and at 550 it is
+  0.33 against 0.34. This fits the split above: the step is limited by reversals and
+  imbalance, not by the ceiling.
+- **Both runs pass, with slightly better compliance, and they agree with each other.** They
+  are less grey by 650 (0.058 against 0.077–0.097). Two runs, so this may be luck.
