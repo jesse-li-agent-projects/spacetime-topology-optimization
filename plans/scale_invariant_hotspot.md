@@ -615,3 +615,28 @@ failing runs; the share of the part with μ at a bound does (upper bound 0–4% 
 - So with nothing restoring it, a small push accumulates into stripes that cost MMA
   steps and push μ to its bounds without changing the print. A filter on μ (as on the
   density) would remove the mode at its source.
+
+## Batches 21–22: the time-field move limit, and a filter on μ (2026-10-20)
+
+Batch 21 (`lap_batch21.tmp.py`): `field_move` 0.02 until the Tcr step, then 0.002.
+Batch 22 (`lap_batch22.tmp.py`, branch `laplace-mu-filter` eb964ac): each base config plus
+`mu_filter_rmin_m` = 2 elements, move 0.02 throughout. Binarized row with `t` kept / C ÷
+plain TO / grey:
+
+| cell | base | 21: move 0.002 after step | 22: μ filter |
+|---|---|---|---|
+| L middle 0.5 Tcr 0.6 | +0.527 / 1.135 ✗ | −0.052 / 1.042 / 1.8% ✓ | +0.543 / 1.158 / 14% ✗ |
+| C1 0.5 Tcr 0.4 s120 | +1.495 / 1.330 ✗ | −0.009 / 1.099 / 7.7% ✓ | +0.313 / 1.113 / 4.9% ✗ (as optimized +0.010) |
+| C1 0.5 Tcr 0.4 s100 | −0.000 / 1.068 ✓ | +0.429 / 1.139 / 14% ✗ (as optimized +0.014) | pending |
+
+- The cut move limit rescues both failing cells; L middle passes for the first time. It
+  also keeps μ off its bounds (part share at the upper bound 0–2%, against 11–42% in the
+  base runs). But it slows binarization: the s100 control ends 14% grey (base 4%) and
+  fails once binarized, the risk noted beforehand. A move limit between 0.002 and 0.02,
+  or one that relaxes as the density binarizes, is the next thing to try.
+- The μ filter does what it was meant to (stripe amplitude p90 0.02–0.06 in log χ,
+  against 0.2–0.5 unfiltered) but does not stop the saturation: L middle's filtered μ
+  still sits at a bound over 15–20% of the part, in blocks, and fails as before. So the
+  stripes were not what decides a run; the time field's step size looks like it.
+
+Dashboard: `plot/laplace_s03/dashboard_b21.html` (spec `lap_spec21.tmp.json`).
