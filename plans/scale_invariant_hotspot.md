@@ -693,3 +693,25 @@ changing only Tcr and where the move limit drops (`lap_batch24.tmp.py`):
   not in the result, at least with the phase-2 hold.
 - Ramp B arrives at Tcr 0.4 with the same 0.24 excess as the step, 100 iterations later,
   and fails narrowly once binarized. One run each.
+
+## Batch 25: the μ filter at move 0.002, with repeats (2026-10-20)
+
+Every run at move 0.002 after the Tcr step; μ filter radius 2 elements; each config run
+twice, the repeat with the roughness weight × (1 + 1e-4) (`lap_batch25.tmp.py`).
+Binarized row with `t` kept / C ÷ plain TO / grey:
+
+| cell | no filter | no filter, repeat | μ filter | μ filter, repeat |
+|---|---|---|---|---|
+| L middle 0.5 Tcr 0.6 | −0.052 / 1.042 / 1.8% ✓ | −0.020 / 1.033 / 1.8% ✓ | +0.055 / 1.039 / 3.0% ✗ | −0.072 / 1.036 / 1.4% ✓ |
+| C1 0.5 Tcr 0.4 s120 | −0.009 / 1.099 / 7.7% ✓ | −0.023 / 1.100 / 6.8% ✓ | +0.044 / 1.183 / 10% ✗ | +0.191 / 1.171 / 12% ✗ |
+| C1 0.5 Tcr 0.4 s100 + hold | −0.021 / 1.058 / 2.7% ✓ | −0.014 / 1.045 / 2.4% ✓ | +0.006 / 1.098 / 4.2% ✓ | +0.002 / 1.086 / 4.1% ✓ |
+| L corner 0.5 Tcr 0.6 | −0.072 / 1.015 / 1.8% ✓ | −0.068 / 1.017 / 1.7% ✓ | −0.039 / 1.011 / 1.4% ✓ | −0.032 / 1.011 / 2.0% ✓ |
+
+- **Move 0.002 holds up under the perturbation**: 8 of 8 without the filter pass, and
+  each repeat lands near its original (at move 0.02 the same perturbation split a pass
+  from a collapse).
+- **The μ filter costs**: 5 of 8 pass. On C1 it ends greyer (4–12% against 2–8%) with
+  worse compliance (1.086–1.183 against 1.045–1.100), and C1 s120 fails both times; on the
+  L brackets it is about even (L corner compliance 1.011 against 1.016, L middle split
+  1–1). So the filter makes χ<sub>μ</sub> readable but, at radius 2, makes C1 worse; why is
+  not checked (one guess: the hotspot uses element-scale χ near member edges).
