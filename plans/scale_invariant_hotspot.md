@@ -627,7 +627,8 @@ plain TO / grey:
 |---|---|---|---|
 | L middle 0.5 Tcr 0.6 | +0.527 / 1.135 ✗ | −0.052 / 1.042 / 1.8% ✓ | +0.543 / 1.158 / 14% ✗ |
 | C1 0.5 Tcr 0.4 s120 | +1.495 / 1.330 ✗ | −0.009 / 1.099 / 7.7% ✓ | +0.313 / 1.113 / 4.9% ✗ (as optimized +0.010) |
-| C1 0.5 Tcr 0.4 s100 | −0.000 / 1.068 ✓ | +0.429 / 1.139 / 14% ✗ (as optimized +0.014) | pending |
+| C1 0.5 Tcr 0.4 s100 | −0.000 / 1.068 ✓ | +0.429 / 1.139 / 14% ✗ (as optimized +0.014) | +0.089 / 1.107 / 9.1% ✗ (as optimized +0.011) |
+| L corner 0.5 Tcr 0.6 | +0.006 / 1.012 ✓ | – | +0.528 / 1.106 / 3.7% ✗ |
 
 - The cut move limit rescues both failing cells; L middle passes for the first time. It
   also keeps μ off its bounds (part share at the upper bound 0–2%, against 11–42% in the
@@ -636,7 +637,9 @@ plain TO / grey:
   or one that relaxes as the density binarizes, is the next thing to try.
 - The μ filter does what it was meant to (stripe amplitude p90 0.02–0.06 in log χ,
   against 0.2–0.5 unfiltered) but does not stop the saturation: L middle's filtered μ
-  still sits at a bound over 15–20% of the part, in blocks, and fails as before. So the
-  stripes were not what decides a run; the time field's step size looks like it.
+  still sits at a bound over 15–20% of the part, in blocks, and fails as before. It also
+  breaks both passing cells (C1 s100, L corner). So the stripes were not what decides a
+  run, and removing the mode is harmful as it stands: possibly the filter cuts the
+  element-scale control of χ the hotspot needs near edges (not checked).
 
 Dashboard: `plot/laplace_s03/dashboard_b21.html` (spec `lap_spec21.tmp.json`).
