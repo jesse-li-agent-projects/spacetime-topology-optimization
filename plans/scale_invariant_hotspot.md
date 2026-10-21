@@ -879,3 +879,49 @@ Batch 29's B (penal ramps straight 2 → 5 over 150–750) with batch 28's densi
 The combination has the best margins and compliance so far, and binarizes fastest in
 550–650. Phase 2 is still about as slow as before (grey at 350 is 0.51–0.52 against 0.53).
 Two runs.
+
+The user's call (2026-10-21): penal ramped straight 2 → 5 and the density move of 0.02
+over 100–550 are part of the default from batch 31 on.
+
+## Batch 31: the L cells on the current recipe (2026-10-21)
+
+L middle and L corner (Tcr 0.6) on the full recipe: Tcr ramp 1 → 0.6 over 0–100, phase-2
+hold, time-field move 0.002 throughout, and the two new defaults. Each run twice
+(`lap_batch31_32.tmp.py`). Binarized row with `t` kept / C ÷ plain TO / grey:
+
+| cell | batch 25 (step at 100, no hold), run / repeat | current recipe, run / duplicate |
+|---|---|---|
+| L middle | −0.052 / 1.042, −0.020 / 1.033 | −0.083 / 1.012 / 1.6%, −0.028 / 1.012 / 1.6% |
+| L corner | −0.072 / 1.015, −0.068 / 1.017 | −0.037 / 1.016 / 1.5%, −0.030 / 1.017 / 1.5% |
+
+All four pass. L middle's compliance improves markedly (1.012 against 1.033–1.042). L
+corner's is unchanged, with a smaller (still clear) margin.
+
+## Batch 32: C1 with the first 100 iterations removed (2026-10-21)
+
+The batch-30 recipe with every schedule shifted 100 earlier (900 iterations). Tcr still
+ramps over 0–100, and the density move is 0.02 from 0 to 450. Penal: 'from 0' ramps 2 → 5
+over 0–600; 'held' stays at 2 for 150, then ramps 2 → 5 over 150–750; 'from 1' ramps
+1 → 5 over 0–600. β_d: the full 1 → 4 ramp over 0–120, or held at 2 or at 4, each followed
+by the final ramp to 32 over 450–550. Binarized row with `t` kept / C ÷ plain TO, run and
+duplicate. Grey is compared at the start of the β_d ramp to 32 (450 here, 550 in batch 30):
+
+| penal | β_d | result, run / duplicate | grey when β_d starts rising |
+|---|---|---|---|
+| batch 30 (not cut) | ramp | −0.030 / 1.052, −0.046 / 1.054 | 0.29, 0.30 |
+| from 0 | ramp | **−0.035 / 1.043, −0.015 / 1.047** | **0.20, 0.23** |
+| from 0 | hold 2 | −0.022 / 1.061, −0.001 / 1.042 | 0.31, 0.31 |
+| from 0 | hold 4 | −0.031 / 1.076, −0.016 / 1.066 | 0.32, 0.33 |
+| held | ramp | −0.000 / 1.052, −0.034 / 1.066 | 0.43, 0.43 |
+| held | hold 2 | −0.016 / 1.069, −0.030 / 1.072 (5.2% grey) | 0.51, 0.52 |
+| held | hold 4 | −0.008 / 1.070, −0.008 / 1.066 | 0.44, 0.43 |
+| from 1 (one run each) | ramp / hold 2 / hold 4 | −0.020 / 1.068; **+0.035 / 1.077 ✗**; −0.000 / 1.066 | 0.40 / 0.46 / 0.43 |
+
+- **Removing the first 100 iterations costs nothing with penal from 0 and the β_d ramp.**
+  It has the best compliance so far (1.043, 1.047), both runs pass, and it is less grey at
+  the matching point (0.20–0.23 against 0.29–0.30), in 900 iterations instead of 1000.
+- **Holding penal at 2 for 150 iterations slows binarization** (0.43–0.52 grey at that
+  point) and costs compliance. Starting penal at 1 is worse again, and is the only failure
+  in the batch.
+- **Holding β_d at 2 or 4 from the start** is no better than the ramp with penal from 0
+  (one hold-2 duplicate reaches 1.042; the others reach 1.061–1.076).
