@@ -1053,3 +1053,20 @@ snapshot from which the gate stays within 0.01:
 - Holes: C1 Tcr 0.4 again grows one at about (54, 169) in both A and B (and one at
   (51, 108) in B); filling any of them leaves the gate unchanged. It recurs in 6 C1 Tcr 0.4
   runs, and not in plain TO or at Tcr 0.6.
+
+**A+B** (phase 1 over 0–300, then β_d 2 → 128 over 300–600; cooling sharpness 300–400;
+800 iterations): C1 −0.036 / 1.038 / 0.7%, L middle −0.147 / 1.009 / 0.1%, L corner
+−0.040 / 1.010 / 0.1%, all ✓. The gate stays within 0.01 from 600 on C1 (+0.007 at 600,
+−0.031 at 625) and from 550 on both L cells, and C1's compliance is settled by 550. So
+A+B could end at about 650 (a 50-iteration margin after the ramp), against 800; B alone
+could end at 750. One run per cell. C1 again grows the hole at about (54, 169) (and one
+at (51, 104)); filling either leaves the gate unchanged.
+
+**Why C1 0.3 fails (batch 35), `q_gap.tmp.py`.** On grey, the capped ratio credits a
+neighbour `(x_b / x_a)^q`, so q = 1 reads grey support generously, and binarizing then
+drops the neighbours below 0.5. Read on the continuous final design with q = 1 / 3 / 5:
+C1 0.3 −0.013 / +0.163 / +0.247 (binarized +0.041); C1 Tcr 0.4 batch 34 −0.039 / +0.033 /
++0.043 (−0.007); C1 Tcr 0.6 −0.071 / −0.060 / −0.050 (−0.067); batch 36 B (0.6% grey)
+−0.034 / −0.016 / −0.004 (−0.038). Thin members put more of a hot element's stencil in
+the grey edge band; ending near-binary (B's ramp) removes the dependence rather than a
+different q.
