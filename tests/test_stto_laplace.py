@@ -98,6 +98,8 @@ def test_check_design_reports_the_domain_as_well(smoke_run):
     assert "over the domain:" in checks.summary(report)
 
 
+# Three iterations leave the design grey, so binarizing moves the hotspot row a lot.
+@pytest.mark.filterwarnings("ignore:binarizing raised the hotspot row:UserWarning")
 def test_cli_writes_the_run_artefacts(tmp_path, monkeypatch):
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(_config(nloop=3).to_dict()))
@@ -130,7 +132,7 @@ def test_a_step_stays_finite_when_void_is_later_than_the_part():
     state = stto_laplace.init_state(problem)
     x = torch.full_like(state.x, 1e-3)
     x[:, :8] = 1.0
-    loop = 200  # penal ramps 2 -> 3 over 150-350
+    loop = 150  # where the default penal is fractional
     state = dataclasses.replace(
         state,
         x=x,
@@ -231,4 +233,7 @@ def test_hotspot_shaping_is_quiet_on_a_bar_whose_solid_version_passes():
 
 def test_hotspot_shaping_needs_a_relative_shielding():
     with pytest.raises(ValueError, match="hotspot_shaping_weight"):
-        stto_laplace.build_problem(_config(hotspot_shaping_weight=1.0), device="cpu")
+        stto_laplace.build_problem(
+            _config(hotspot_shielding="absolute", hotspot_shaping_weight=1.0),
+            device="cpu",
+        )
