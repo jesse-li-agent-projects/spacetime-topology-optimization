@@ -990,3 +990,42 @@ Binarized row with `t` kept / C ÷ plain TO / grey, and the gate on snapshots:
   for the two 0.01 runs) and ends slightly worse.
 - The host was suspended 13:44–14:04 during this batch (monotonic timers 20 min behind
   wall time); the runs resumed normally.
+
+The user's call (2026-10-21): β_d held at 2 and q = 1 are locked in, and runs end at 800
+iterations (late schedules re-anchored: time-field move 0.002 → 0.001 over 700–750,
+roughness decay over 750).
+
+## Batch 35: validation of the locked schedule (2026-10-21)
+
+One run per cell (`lap_batch35_36.tmp.py`; cell settings from earlier configs, weights
+fixed). Binarized row with `t` kept / C ÷ the cell's plain TO (`stto`'s) / grey:
+
+| cell | result |
+|---|---|
+| C1 0.5 Tcr 0.6, left | −0.067 / 1.014 / 2.0% ✓ |
+| C1 0.3 Tcr 0.6, left | **+0.041** / 1.115 / 3.5% ✗ (as optimized −0.007) |
+| C2 0.5 Tcr 0.4, left | −0.145 / 1.008 / 1.1% ✓ |
+| S 0.3 Tcr 0.6, left | −0.222 / 1.010 / 1.2% ✓ |
+| S 0.3 Tcr 0.6, bottom | −0.198 / 1.012 / 1.3% ✓ |
+
+- **C1 0.3 fails** by 0.041 once binarized; it is still improving at the end (+0.077 at
+  650–700, +0.041 at 800), and its compliance is the worst of the cells. It was the hard
+  cell before too (batches 12–13).
+- No small enclosed holes (< 40 elements) in any final design.
+
+**Sequential reference on C1 0.5 Tcr 0.6** (`lap_seq_ref.tmp.py`): plain TO on the same
+schedule with Tcr held at 2, then the density frozen and the time field alone optimized
+for 300 iterations at Tcr 0.6.
+
+| | C | gate |
+|---|---|---|
+| sequential: plain TO, then time only | 176.7 | **+0.014** ✗ (as optimized +0.008) |
+| simultaneous (the locked schedule) | 177.1 (+0.2%) | −0.067 ✓ |
+| `stto` plain TO / `stto` at Tcr 0.6 | 174.7 / 175.4 | |
+
+- The simultaneous and sequential designs differ on 0.8% of the domain: the same
+  topology. Moving that 0.8% (and optimizing `t` with it) buys a 0.08 margin for 0.2% in
+  compliance; the time field alone cannot quite meet Tcr 0.6 on the plain-TO design.
+- Our plain TO is a different topology from `stto`'s (22% of the domain differs) and
+  1.2% worse in compliance, so part of every C ÷ plain TO figure here is the schedule's
+  own plain-TO optimum, not the hotspot.
