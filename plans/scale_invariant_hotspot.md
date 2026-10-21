@@ -955,3 +955,38 @@ Binarized row with `t` kept / C ÷ plain TO / grey:
 - **q = 1 gives the best C1 compliance yet** and the fastest early binarization. On a
   binary design the capped ratio is 0 or 1, so q only shapes the grey; this is the first
   sign that it need not be continued. One run.
+
+### When the result settles (batch 33 snapshots, `bin_keep_t22_at.tmp.py`)
+
+The gate row on the binarized snapshot keeps moving after compliance and grey have
+settled (C1 compliance is within 0.3% of final by 650–700). On batch 33's q = 1 run it is
++0.088 at 700 and −0.006 at 899. Swapping fields between the 700 and 899 snapshots, the
+density recovers 0.049 of that and the time field 0.030. The density changes are a
+handful of elements near the hotspot (mean step ~1.5e-4), pinned at the 0.01 density move
+limit; the time field's steps stay below its own limit. Evaluate snapshots with a fresh
+problem each: the hotspot calibration is an EMA across calls.
+
+## Batch 34: one-phase with β_d held at 2 and q = 1 (2026-10-21)
+
+Batch 33's one-phase schedule with β_d held at 2 until 450 and q held at 1 throughout
+(`lap_batch34.tmp.py`), plus a C1 run with the density move kept at 0.02 to the end.
+Binarized row with `t` kept / C ÷ plain TO / grey, and the gate on snapshots:
+
+| run | result | 600 | 650 | 700 | 750 | 800 | 850 |
+|---|---|---|---|---|---|---|---|
+| C1 | −0.007 / 1.042 / 3.1% | +0.053 | +0.035 | −0.004 | −0.004 | −0.001 | −0.005 |
+| C1, duplicate | −0.001 / 1.042 / 3.2% | +0.064 | +0.090 | +0.048 | +0.031 | +0.002 | −0.000 |
+| C1, move 0.02 tail | +0.006 / 1.047 / 2.8% | +0.051 | +0.088 | +0.042 | +0.000 | +0.002 | +0.007 |
+| L middle | −0.198 / 1.009 / 1.4% | −0.095 | −0.170 | −0.194 | −0.196 | −0.197 | −0.197 |
+| L corner | −0.044 / 1.011 / 1.2% | −0.031 | −0.039 | −0.043 | −0.043 | −0.049 | −0.047 |
+
+- **C1 compliance 1.042 on both runs**, the best and most repeatable so far; the L cells
+  are unchanged (1.009, 1.011). The cost is margin: C1 passes by 0.001–0.007 binarized
+  against −0.033 as optimized. q = 1 reads grey support leniently, so the continuous
+  design under-protects and the binarized row lands near the limit.
+- **Cutoff: 800.** Every run stays within the 0.01 tolerance from 800; at 700 the C1
+  duplicate is +0.048. The L cells pass from 550.
+- **The 0.02 move tail does not converge sooner** (passes from 750 against 700 and 800
+  for the two 0.01 runs) and ends slightly worse.
+- The host was suspended 13:44–14:04 during this batch (monotonic timers 20 min behind
+  wall time); the runs resumed normally.
