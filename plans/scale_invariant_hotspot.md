@@ -1029,3 +1029,27 @@ for 300 iterations at Tcr 0.6.
 - Our plain TO is a different topology from `stto`'s (22% of the domain differs) and
   1.2% worse in compliance, so part of every C ÷ plain TO figure here is the schedule's
   own plain-TO optimum, not the hotspot.
+
+## Batch 36: a shorter phase 1 (A) and a slower, higher β_d ramp (B) (2026-10-21)
+
+On the locked schedule, 800 iterations each (`lap_batch35_36.tmp.py`). A: phase 1 over
+0–300 (κ, penal, β_t compressed; Tcr still over 0–100), cleanup at 300–400. B: phase 1
+as locked, β_d 2 → 128 over 450–750 (geometric, half batch 34's rate; cooling sharpness
+still 450–550). Binarized row with `t` kept / C ÷ plain TO / grey, and the first
+snapshot from which the gate stays within 0.01:
+
+| run | C1 0.5 Tcr 0.4 | L middle | L corner |
+|---|---|---|---|
+| batch 34 | −0.007 / 1.042 / 3.1%, from 700 (duplicate 800) | −0.198 / 1.009 / 1.4% | −0.044 / 1.011 / 1.2% |
+| A: phase 1 300 | −0.029 / 1.046 / 3.0%, from 650 | −0.144 / 1.013 / 1.3% | −0.055 / 1.013 / 1.3% |
+| B: β_d → 128 over 300 | −0.038 / **1.034 / 0.6%**, from 750 | −0.177 / **1.006 / 0.1%** | −0.032 / 1.010 / 0.2% |
+
+- **B removes the compliance blow-up**: C1's compliance peaks at 211 at the start of the
+  ramp, against 386 (batch 34) and 411 (A) when β_d is 25–27. It ends nearly binary
+  (0.1–0.6% grey), with the best C1 compliance so far, and the binarized row is now at or
+  below the as-optimized one (−0.038 against −0.024): the continuous/binary gap is gone.
+- **A works as well as batch 34** in 300 fewer iterations of phase 1 and passes from 650
+  on C1. Its β_d ramp tears the design like batch 34's.
+- Holes: C1 Tcr 0.4 again grows one at about (54, 169) in both A and B (and one at
+  (51, 108) in B); filling any of them leaves the gate unchanged. It recurs in 6 C1 Tcr 0.4
+  runs, and not in plain TO or at Tcr 0.6.
