@@ -925,3 +925,33 @@ duplicate. Grey is compared at the start of the β_d ramp to 32 (450 here, 550 i
   in the batch.
 - **Holding β_d at 2 or 4 from the start** is no better than the ramp with penal from 0
   (one hold-2 duplicate reaches 1.042; the others reach 1.061–1.076).
+
+## Batch 33: the one-phase schedule (2026-10-21)
+
+Under capped-ratio shielding `r` no longer enters the severity (the gate is
+`x / (x + eps)`), and with `tool_radius_m = 0` nothing else reads it, so the `r` and
+`curvature_beta` schedules are inert and are held constant from here on.
+
+One ramp phase, then cleanup (`lap_batch33.tmp.py`, 900 iterations). Over 0–450 every
+continuation parameter ramps linearly: κ 0 → 2.37, penal and q 2 → 5, β_d 1 → 4, β_t
+10 → 50; Tcr keeps its 1 → Tcr ramp over 0–100, and the χ exponent e is held at 4. From
+450: β_d 4 → 32 and cooling sharpness 1 → 8 over 450–550, density move 0.02 → 0.01.
+Binarized row with `t` kept / C ÷ plain TO / grey:
+
+| run | result | grey at 200 / 450 |
+|---|---|---|
+| C1, batch 32 best (cut100, β_d 1 → 4 over 0–120) | −0.035 / 1.043, −0.015 / 1.047 | 0.57–0.59 / 0.20–0.23 |
+| C1, one-phase / duplicate | −0.023 / 1.057, +0.009 / 1.067 | 0.64 / 0.23–0.26 |
+| C1, one-phase, β_d held at 2 | −0.004 / 1.062 / 2.2% | 0.62 / 0.31 |
+| C1, one-phase, q = 1 throughout | −0.006 / **1.039** / 2.9% | **0.53** / 0.23 |
+| L middle, batch 31 / one-phase | −0.083 / 1.012 → **−0.238 / 1.008** / 1.5% | |
+| L corner, batch 31 / one-phase | −0.037 / 1.016 → **−0.085 / 1.010** / 1.2% | |
+
+- **The L cells improve on both margin and compliance** in 100 fewer iterations.
+- **C1 loses about 0.015 in compliance** and its gate margin shrinks (the duplicate passes
+  at +0.009, inside the 0.01 tolerance). The extra grey is early: at 200 the one-phase run
+  is 0.64 grey against 0.57–0.59, when its β_d is 2.3 rather than 4. That matches batch
+  32's β_d hold-2 runs.
+- **q = 1 gives the best C1 compliance yet** and the fastest early binarization. On a
+  binary design the capped ratio is 0 or 1, so q only shapes the grey; this is the first
+  sign that it need not be continued. One run.
