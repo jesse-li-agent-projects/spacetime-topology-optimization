@@ -1070,3 +1070,31 @@ C1 0.3 −0.013 / +0.163 / +0.247 (binarized +0.041); C1 Tcr 0.4 batch 34 −0.0
 −0.034 / −0.016 / −0.004 (−0.038). Thin members put more of a hot element's stencil in
 the grey edge band; ending near-binary (B's ramp) removes the dependence rather than a
 different q.
+
+## Gate tolerance in severity units (user, 2026-10-21)
+
+From batch 37 on, a binarized design passes the hotspot gate if its worst severity is at
+most Tcr + 0.025 (was: severity / Tcr − 1 ≤ 0.01). The allowance stands in for the
+precision of the heuristic, in the units of the quantity that is compared.
+
+## Batch 38: an 8 mm hotspot stencil (2026-10-21)
+
+C1 0.5 Tcr 0.4 on the locked schedule with `rmin_cond_m` 0.008 (`lap_batch38.tmp.py`).
+At 8 mm the worst severity of a 12 mm design sits in a band one stencil radius from the
+plate and at inside corners, while p90–p95 barely move (`stencil_maps.tmp.py`); so Tcr
+was rescaled by the p99 ratio away from the plate (1.14 → 0.46), and also run at 0.40.
+
+| run | own gate (excess over Tcr) | C ÷ plain TO | grey | read at 12 mm, Tcr 0.4: worst |
+|---|---|---|---|---|
+| 12 mm, batch 37 locked | +0.017 ✓ | 1.042 | 1.1% | 0.417 |
+| 8 mm, Tcr 0.46 / duplicate | −0.015 ✓ / +0.025 ✗ (by 0.0001) | 1.029 / 1.028 | 1.0% / 0.9% | 0.540 / 0.542 |
+| 8 mm, Tcr 0.40 / duplicate | +0.016 ✓ / +0.034 ✗ | 1.055 / 1.058 | 2.3% / 2.0% | 0.507 / 0.491 |
+
+- **No small holes in any of the four 8 mm runs.** The hole at about (54–55, 169–173)
+  is in 10 of the 11 12 mm C1 Tcr 0.4 runs since batch 34.
+- **The 8 mm designs are a different truss**: more, thinner diagonals. Read with the
+  12 mm stencil, their member interiors are above Tcr (worst 0.49–0.54), because a 12 mm
+  stencil around a thin member is mostly void. So the stencil radius sets a minimum
+  member thickness as well as the hole behaviour; the two are confounded here.
+- The plate band that dominates a 12 mm design read at 8 mm is not a problem for the
+  8 mm runs themselves: their own worst elements are mid-span.
