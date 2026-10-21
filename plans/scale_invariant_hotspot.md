@@ -1098,3 +1098,32 @@ was rescaled by the p99 ratio away from the plate (1.14 → 0.46), and also run 
   member thickness as well as the hole behaviour; the two are confounded here.
 - The plate band that dominates a 12 mm design read at 8 mm is not a problem for the
   8 mm runs themselves: their own worst elements are mid-span.
+
+## Batch 37: k ramp, μ filter and q ramp on the locked schedule (2026-10-21)
+
+The schedule locked after batch 36 (A+B ending at 650; `lap_batch37.tmp.py`; also the new
+`configs/laplace_default.json`). Worst binarized severity − Tcr (pass ≤ +0.025) / C ÷
+plain TO / grey; one run each:
+
+| variant | C1 0.5 Tcr 0.4 | L middle | L corner | C1 0.3 Tcr 0.6 |
+|---|---|---|---|---|
+| locked | +0.017 / 1.042 / 1.1% | −0.032 / 1.009 / 0.1% | −0.026 / 1.010 / 0.1% | **+0.028** ✗ / 1.070 / 0.9% |
+| k ramp (1 → 8 linear over phase 1) | −0.005 / 1.052 / 0.8% | −0.098 / 1.007 / 0.2% | −0.032 / 1.010 / 0.2% | |
+| q ramp (1 → 3 over 300–600) | −0.016 / 1.051 / 1.0% | −0.017 / 1.009 / 0.2% | −0.028 / 1.010 / 0.1% | −0.023 / 1.084 / 0.3% |
+| μ filter 1.5 | **+0.126** ✗ / 1.084 / 7.3% | −0.060 / 1.013 / 0.2% | −0.040 / 1.011 / 0.3% | |
+| μ filter 2 | **+0.153** ✗ / 1.071 / 9.4% | −0.051 / 1.007 / 0.2% | −0.031 / 1.011 / 0.3% | |
+
+- **The q ramp** brings both C1 cells inside Tcr after binarizing (C1 0.3 from a fail to
+  −0.023) for about 1% (C1 0.5) to 1.4% (C1 0.3) in compliance; on the L cells it is
+  neutral.
+- **The k ramp** is about neutral (C1 slightly better margin, slightly worse compliance).
+- **The μ filter** halves χ<sub>μ</sub> roughness on every cell (L: 0.35 → 0.16–0.21; C1:
+  0.77 → 0.39–0.50) and is harmless on the L cells, but on C1 it leaves 7–9% grey and
+  fails badly once binarized, as in batch 25.
+- The C1 Tcr 0.4 tip hole is in every C1 run; no L-cell run has a small hole.
+
+Plain TO on the locked schedule (Tcr held at 2, `lap38_C105_plainTO`): C 175.9 (1.007 ×
+`stto`'s plain TO), no small holes; read at Tcr 0.4 its worst severity is 0.596 (12 mm)
+and 0.633 (8 mm). So the hotspot costs C1 Tcr 0.4 about 3.4% in compliance at 12 mm
+(181.9) and 2.2% at 8 mm with Tcr 0.46 (179.7), and the tip hole appears only with the
+12 mm constraint active.
