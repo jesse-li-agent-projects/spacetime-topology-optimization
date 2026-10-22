@@ -1127,3 +1127,66 @@ Plain TO on the locked schedule (Tcr held at 2, `lap38_C105_plainTO`): C 175.9 (
 and 0.633 (8 mm). So the hotspot costs C1 Tcr 0.4 about 3.4% in compliance at 12 mm
 (181.9) and 2.2% at 8 mm with Tcr 0.46 (179.7), and the tip hole appears only with the
 12 mm constraint active.
+
+## Dropped and deferred (user, 2026-10-22)
+
+- **μ filter: dropped.** It fails C1 once binarized in batches 25 and 37 and does nothing
+  for the cells it doesn't hurt.
+- **Small holes: a future direction, not pursued.** Batch 38 is weak evidence that a
+  smaller (8 mm) stencil avoids the C1 tip hole, confounded by a different truss. Options
+  if it is picked up: an intermediate radius (10 mm), or a connected (path-distance)
+  stencil that credits a neighbour only through solid.
+
+## Batch 40: the locked schedule on every cell, and β_d branches (2026-10-22)
+
+The locked schedule plus cooling sharpness k 1 → 8 geometric over 0–300 and q 1 → 3 over
+300–600 (now `configs/laplace_default.json`; `lap_batch40.tmp.py`; batch 39 was the same
+runs, stopped early to restart them with branching). Gate / C ÷ plain TO / grey; one run
+each:
+
+| cell | new locked | previous |
+|---|---|---|
+| C1 0.5 Tcr 0.4 | −0.013 / 1.041 / 0.7% | b37 q ramp −0.017 / 1.051 |
+| C1 0.3 Tcr 0.6 | −0.016 / 1.074 / 0.3% | b37 q ramp −0.023 / 1.084 |
+| C1 0.5 Tcr 0.6 | −0.047 / 1.009 / 0.2% | b35 −0.040 / 1.014 |
+| C2 0.5 Tcr 0.4 | −0.058 / 1.007 / 0.2% | b35 −0.058 / 1.008 |
+| S 0.3 bottom | −0.060 / 1.012 / 0.3% | b35 −0.119 / 1.012 |
+| S 0.3 edge | −0.101 / 1.007 / 0.0% | b35 −0.133 / 1.010 |
+| L middle | −0.109 / 1.011 / 0.1% | b37 −0.032 / 1.009 |
+| L corner | −0.039 / 1.010 / 0.2% | b37 −0.026 / 1.010 |
+
+k linear instead of geometric: C1 0.5 −0.014 / 1.051, C1 0.3 −0.006 / 1.073.
+
+**β_d branches.** `lap_branch.tmp.py` runs the control and keeps its full optimizer state
+(MMA history, the smooth maxima's calibrations) at 300; each branch continues from it
+(a branch with no overrides reproduces the control exactly). Snapshots alone can't do
+this: they hold only the design fields.
+
+| β_d after 300 | C1 0.5 Tcr 0.4 | C1 0.3 | L middle | S bottom |
+|---|---|---|---|---|
+| → 128 (control) | −0.013 / 1.041 / 0.7% | −0.016 / 1.074 / 0.3% | −0.109 / 1.011 / 0.1% | −0.060 / 1.012 / 0.3% |
+| → 8 (300–400) | +0.023 / 1.040 / 13% | −0.002 / 1.066 / 13% | −0.073 / 1.010 / 11% | −0.096 / 1.013 / 9% |
+| → 4 (300–350) | +0.017 / 1.047 / 23% | +0.034 ✗ / 1.063 / 25% | −0.062 / 1.007 / 22% | −0.082 / 1.011 / 17% |
+| held at 2 | +0.062 ✗ / 1.044 / 33% | +0.067 ✗ / 1.073 / 33% | −0.006 / 1.005 / 28% | −0.050 / 1.011 / 23% |
+
+β_d → 8 passes every branched cell with the same topology as the control, smooth 0.5
+contours and equal or better compliance; → 4 and held at 2 leave faint grey members.
+Snapshots (`settle_bd8.tmp.py`): the β_d → 8 gate passes from 525 (C1 0.5), 500 (C1 0.3),
+425 (L middle) and 300 (S bottom), with compliance within 0.1% of the final from 525; the
+per-element severity reading does not depend on q.
+
+## Is the binarized edge excess a grid artefact? (2026-10-22)
+
+The iteration-300 design passes as optimized (C1 0.5 Tcr 0.4, batch 37 locked) but its
+binarized form is +0.14 over Tcr, nearly all in the outermost element layer
+(`edge_sev.tmp.py`). Read at 2× resolution (`upsample_resolve.tmp.py`: density from the
+0.5 contour, μ and the wall data carried over, t re-solved), the excess is a layer about
+2 mm deep at both resolutions, so it comes from binarizing (grey edge elements are
+discounted by the density gate and credit grey neighbours), not from the staircase.
+
+The final design is not resolution-robust, though: re-solving t at 2× moves it by
+≤ 0.013 but puts 44% of the outer 1 mm over Tcr (worst +0.31). The cooling credit
+resolves Δt at τ = 0.01, about two elements of print time, and at k = 8 smooth
+perturbations of 0.005–0.01 in t alone raise the worst severity by up to +0.17
+(`t_sensitivity.tmp.py`). Not yet controlled for the 2× mapping of μ (a 1× → 2× → 1×
+round trip would).
