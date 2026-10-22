@@ -1190,3 +1190,44 @@ resolves Δt at τ = 0.01, about two elements of print time, and at k = 8 smooth
 perturbations of 0.005–0.01 in t alone raise the worst severity by up to +0.17
 (`t_sensitivity.tmp.py`). Not yet controlled for the 2× mapping of μ (a 1× → 2× → 1×
 round trip would).
+
+## Batch 41: β_d and q ramped together, density move fixed (2026-10-22)
+
+The locked schedule with β_d 2 → 8 and q 1 → 3 both over 300–400 then held, and the
+density move limit fixed at 0.02 (`lap_batch41.tmp.py`). Gate / C ÷ plain TO / grey; "from"
+is the snapshot after which the gate stays passing (`settle_bd8.tmp.py`):
+
+| cell | batch 41 | from | b40 β_d → 8 (q over 300–600, move 0.01) | b40 control (locked) |
+|---|---|---|---|---|
+| C1 0.5 Tcr 0.4 | −0.002 / 1.044 / 12.6%; duplicate +0.009 / 1.037 | 425; 475 | +0.023 / 1.040 | −0.013 / 1.041 |
+| C1 0.3 Tcr 0.6 | +0.003 / 1.060 / 13.4% | 475 | −0.002 / 1.066 | −0.016 / 1.074 |
+| C1 0.5 Tcr 0.6 | −0.025 / 1.007 / 12.5% | ≤ 400 | | −0.047 / 1.009 |
+| C2 0.5 Tcr 0.4 | −0.089 / 1.006 / 6.4% | ≤ 400 | | −0.058 / 1.007 |
+| S 0.3 bottom | −0.087 / 1.010 / 8.8% | ≤ 400 | −0.096 / 1.013 | −0.060 / 1.012 |
+| S 0.3 edge | −0.093 / 1.008 / 8.7% | ≤ 400 | | −0.101 / 1.007 |
+| L middle | −0.051 / 1.009 / 11.6% | ≤ 400 | −0.073 / 1.010 | −0.109 / 1.011 |
+| L corner | −0.014 / 1.008 / 10.8% | ≤ 400 | | −0.039 / 1.010 |
+
+Every cell passes. Compliance is within 0.15% of the final by 600 on every run (0.3% at
+550 on C1), and at most 85 elements still change after 550.
+
+## Sequential reference (2026-10-22)
+
+Plain TO on the locked schedule (Tcr held at 2), then `sttopt-seq` minimizing the hotspot
+on its binarized design (`lap_seqref.tmp.py`, `lap41seq_*`); scored with our gate
+(`seq_gate.tmp.py`). seqopt has no cooling credit, so it minimizes a different severity
+from the one gated; the plain-TO run's own Laplace time field (no hotspot) is given too.
+
+| cell | plain TO: C ÷ `stto` plain TO | worst − Tcr, seqopt t | worst − Tcr, plain TO's own t |
+|---|---|---|---|
+| C1 0.5 Tcr 0.4 | 1.007 | **+0.206** ✗ | +0.193 ✗ |
+| C1 0.5 Tcr 0.6 | 1.007 | +0.006 | −0.007 |
+| C1 0.3 Tcr 0.6 | 1.043 | **+0.152** ✗ | +0.115 ✗ |
+| C2 0.5 Tcr 0.4 | 1.006 | −0.058 | −0.019 |
+| S 0.3 bottom | 1.010 | −0.029 | −0.077 |
+| S 0.3 edge | 1.010 | −0.128 | |
+| L middle | 1.012 | −0.040 | −0.069 |
+| L corner | 1.009 | +0.014 | +0.046 ✗ |
+
+Only the two tight C1 cells need the density to move; on the rest, the simultaneous
+design costs about nothing in compliance over the sequential one.
