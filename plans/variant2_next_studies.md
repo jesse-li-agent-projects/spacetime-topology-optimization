@@ -25,13 +25,16 @@ Suspects, from the config diff:
 - **The time-field objective terms.** Uniformity and roughness reach the density through
   χ = ρ⁴, so "plain TO" with Tcr at 2 still trades compliance for the time field.
 
-Runs, C1 0.5 and C1 0.3:
-- the control: plain TO on the current default;
-- the time-field terms off;
-- `stto`'s density schedule;
-- both changes.
+**User decisions (2026-10-23):**
+- Plain TO is compliance alone: the time field's objective terms are off.
+- Try penal schedules on C1 0.5, both as plain TO and as STTO-laplace: penal 2 → 4
+  instead of 5, and a longer ramp (phase 1 in general longer). The goal is to recover
+  `stto`'s plain-TO topology.
+- A separate experiment: STTO-laplace with the density's sensitivity through χ cut
+  (`chi_density_sensitivity`, PR #218). The coupled default stays, since it works.
 
-If one closes the gap, rerun the simultaneous C1 cells with it.
+Batch 43 (`lap_batch43.tmp.py`, CPU): those runs, with phase 1 stretched 1.5× for
+"longer", plus plain TO under the old definition for comparison.
 
 ## 2. A fair sequential reference
 
@@ -43,14 +46,14 @@ gate:
 
 So a failing sequential cell doesn't show that the density had to move.
 
-- **2a, direct t** (the user prefers it for `seqopt`):
-  - Add `hotspot_credit`, `hotspot_cooling_time` and `hotspot_cooling_sharpness` to
-    `SeqRunConfig`, scheduled so it can ramp k 1 → 8. `conductivity` already supports
-    them.
-  - Make Tcr binding, either as a constraint or as a heavier weight. This is the user's
-    call.
-- **2b, Laplace t:** freeze the plain-TO density and optimize μ and the wall data
-  against the gate (as `lap_seq_ref.tmp.py` did in batch 35).
+- **2a, direct t** (`seqopt`): the hotspot stays an objective (user). First check whether
+  raising its weight 3× or 10× changes the time field and lowers the severity; if not,
+  there is nothing more to say. Its other objective terms are layer uniformity, the one
+  that matters, and the roughness regularizer.
+- **2b, Laplace t:** freeze the plain-TO density (ours, subject to study 1) and optimize
+  μ and the wall data against the gate (as `lap_seq_ref.tmp.py` did in batch 35).
+- Both follow the locked STTO-laplace time-field schedule as far as possible, k 1 → 8
+  included (user). What that implies for each is to be confirmed with the user.
 
 Eight cells each. Report the gate, and compliance against the simultaneous design.
 
@@ -63,14 +66,17 @@ differs.
   equal (schedules, `capped_ratio`, the cooling credit). Agree with the user what can't
   be shared (`stto`'s `tmove` and its time-field regularizers against `field_move`, μ
   and the wall data).
-- **Metrics:** gate, compliance, grey, the time field's saddles and unsupported elements,
-  and the spread over repeats (runs are not bitwise reproducible).
+- **Metrics:** gate, compliance, grey, the time field's saddles and unsupported elements.
+  One run per cell (user).
+- **The point to show is qualitative** (user): `stto_laplace` joins print fronts at the
+  truss's natural junctions rather than mid-member.
 
 ## 4. C1 at a higher resolution
 
-C1 0.5 Tcr 0.4 and C1 0.3 at 360 × 120 on the default. Lengths are in metres, so the
-filters and stencil keep their physical size; τ is in units of t and does not scale.
-Estimate memory before the first CPU run (four times the elements). Questions:
+C1 0.5 Tcr 0.4 and C1 0.3 Tcr 0.6 at 360 × 120 on the default (user). Lengths are in
+metres, so the filters and stencil keep their physical size; τ stays in units of t
+(user). Measured on CPU at 4 threads: 4.6 GB peak and about 32 s per iteration early on
+(1×: 2.3 GB, 1.5 s), so roughly 5–8 h per run. Questions:
 - Does the 2× run pass its own gate?
 - Is its topology the 1× one?
 - How does its compliance ratio compare?
