@@ -23,7 +23,7 @@ The move limits are fixed: 0.02 on the density, 0.002 on the time-field variable
   while `beta_d` sharpens makes the reading of grey support as strict as binarizing
   would be. Since the design still ends 6-13% grey, `q` matters to the end.
 - **`beta_d` ends at 8, not 128.** Branched from 300 on the four hardest cells: -> 8
-  passes all of them with equal or better compliance (C1 0.3 1.066 against 1.074 at
+  passes all of them with about the same compliance (C1 0.3 1.066 against 1.074 at
   128) and smooth 0.5 contours; -> 4 and held at 2 fail on C1. Ending grey means gating
   on the binarized hotspot row, not the one as optimized.
 - **`beta_d` held at 2 until 300, then a gentle ramp.** Held low with `q` = 1, C1 got its
