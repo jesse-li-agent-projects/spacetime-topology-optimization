@@ -92,6 +92,60 @@ class PrintOrderCredit(StrEnum):
     COOLING = "cooling"
 
 
+class Shielding(StrEnum):
+    """Names for how a neighbor's density counts toward an element's `K_est`,
+    selectable per run.
+
+    ABSOLUTE counts `x_j**q`, so scaling every density by `n` scales `K_est` by `n**q`:
+    a grey region reads as unshielded until it is solid all at once. CAPPED_RATIO and
+    RATIO count `x_j` relative to the element's own density, which makes the severity
+    invariant to that scaling. CAPPED_RATIO credits a neighbor at least as dense as the
+    element in full, so a grey element reads as it would once it and its support were
+    solid; RATIO is uncapped, so one dense neighbor can make up for a missing one. Both
+    swap the severity's `x**r` gate for `density_gate`'s, and all three agree on binary
+    designs to within `eps`. See `plans/scale_invariant_hotspot.md`.
+    """
+
+    ABSOLUTE = "absolute"
+    CAPPED_RATIO = "capped_ratio"
+    RATIO = "ratio"
+
+
+def shielding_term(
+    shielding: Shielding, x: Float[Tensor, " nel"], q: float, eps: float
+) -> Callable[[Int[Tensor, " n"], Int[Tensor, " n"]], Float[Tensor, " n"]]:
+    """What neighbor `b` contributes to element `a`'s `K_est` per unit stencil weight.
+
+    :param eps: regularizes the relative shieldings' ratio, so void on void reads as a
+        ratio of 1 rather than `0 / 0`
+    """
+    if shielding == Shielding.ABSOLUTE:
+        return lambda a, b: x[b] ** q
+
+    def ratio(a: Int[Tensor, " n"], b: Int[Tensor, " n"]) -> Float[Tensor, " n"]:
+        return (x[b] + eps) / (x[a] + eps)
+
+    if shielding == Shielding.CAPPED_RATIO:
+        return lambda a, b: ratio(a, b).clamp(max=1) ** q
+    elif shielding == Shielding.RATIO:
+        return lambda a, b: ratio(a, b) ** q
+    raise ValueError(f"shielding must be a Shielding member, got {shielding!r}")
+
+
+def density_gate(
+    x: Float[Tensor, " n"], r: float, eps: float | None
+) -> Float[Tensor, " n"]:
+    """The severity's density factor, which keeps void out of the hotspot measure.
+
+    `x**r` for ABSOLUTE shielding (`eps` is `None`). The relative shieldings take
+    `x / (x + eps)` instead: it zeroes void like `x**r` does, but is flat above `~10 eps`,
+    so it keeps the severity scale-invariant and barely pushes grey density down.
+    """
+    if eps is None:
+        return smooth_max.density_power(x, r)
+    return x / (x + eps)
+
+
 class Aggregation(StrEnum):
     """Names for how the per-element severity field collapses to the one scalar the
     hotspot term reports, selectable per run: `PMean` or `LogSumExp`, as built by
@@ -548,6 +602,9 @@ def _conductivity_core(
     credit: (
         Callable[[Int[Tensor, " n"], Int[Tensor, " n"]], Float[Tensor, " n"]] | None
     ) = None,
+    shield: (
+        Callable[[Int[Tensor, " n"], Int[Tensor, " n"]], Float[Tensor, " n"]] | None
+    ) = None,
 ) -> _ConductivityCore:
     """`K_est` and the divisor it was formed with, shared by `estimated_conductivity`
     and `tests/reference/conductivity.py`'s `_conductivity_terms`.
@@ -560,9 +617,13 @@ def _conductivity_core(
     :param angular: an extra weight per pair `(e1, e2)`, multiplying `w`
     :param credit: the print-order weight per pair `(e1, e2)` (`print_order_credit`), or
         `None` for `_pairwise_sigmoid` at `rouf`
+    :param shield: neighbor `e2`'s contribution to `e1` per unit weight
+        (`shielding_term`), or `None` for `x[e2]**q`
     """
     if credit is None:
         credit = partial(_pairwise_sigmoid, t, rouf=rouf)
+    if shield is None:
+        shield = shielding_term(Shielding.ABSOLUTE, x, q, 0.0)
     nel = x.shape[0]
     on_base = None
     if base is not None:
@@ -577,7 +638,7 @@ def _conductivity_core(
         weight landing on the base if there is one."""
         a, b = e1[sl], e2[sl]
         wFT = w[sl] * credit(a, b) * angular(a, b)
-        sums = [scatter(a, x[b] ** q * wFT)]
+        sums = [scatter(a, shield(a, b) * wFT)]
         if denom is None:
             sums.append(scatter(a, wFT))
         if on_base is not None:
@@ -624,10 +685,13 @@ def _safe_pmean(u: Float[Tensor, ""], p: float) -> Float[Tensor, ""]:
 
 
 def severity(
-    K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"], r: float
+    K_est: Float[Tensor, " nel"],
+    xPhys: Float[Tensor, "nely nelx"],
+    r: float,
+    eps: float | None = None,
 ) -> Float[Tensor, " nel"]:
-    """The per-element overheating severity `(1 - K_est) * xPhys**r`, `-inf` where an
-    element is infinitely shielded and so has no severity to compare.
+    """The per-element overheating severity `(1 - K_est) * density_gate(xPhys, r, eps)`,
+    `-inf` where an element is infinitely shielded and so has no severity to compare.
 
     The one no-grad statement of the quantity the aggregations smooth-max and the
     calibration targets, so a reading of the field cannot drift from the optimized one.
@@ -635,14 +699,18 @@ def severity(
     """
     with torch.no_grad():
         finite = torch.isfinite(K_est)
-        return torch.where(finite, (1 - K_est) * xPhys.flatten() ** r, -torch.inf)
+        gate = density_gate(xPhys.flatten(), r, eps)
+        return torch.where(finite, (1 - K_est) * gate, -torch.inf)
 
 
 def _max_severity(
-    K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"], r: float
+    K_est: Float[Tensor, " nel"],
+    xPhys: Float[Tensor, "nely nelx"],
+    r: float,
+    eps: float | None = None,
 ) -> float:
     """The true maximum severity a smooth maximum stands in for."""
-    return float(severity(K_est, xPhys, r).max())
+    return float(severity(K_est, xPhys, r, eps).max())
 
 
 class PMean:
@@ -661,6 +729,8 @@ class PMean:
     every element contributes zero: the aggregate then says nothing about the maximum,
     so the last one is kept.
     """
+
+    gate_eps = None  # only the `x**r` gate: see `make_aggregation`
 
     def __init__(self, p: float, r: "run_config.Scheduled", rate: float = 1.0):
         """
@@ -722,15 +792,18 @@ class LogSumExp(smooth_max.CalibratedLogSumExp):
         beta: "run_config.Scheduled",
         r: "run_config.Scheduled",
         rate: float = 1.0,
+        gate_eps: float | None = None,
     ):
         """
         :param beta: sharpness, possibly scheduled
         :param r: the density exponent of the severity the calibration targets,
             possibly scheduled
         :param rate: weight of each new measurement in the calibration, in (0, 1]
+        :param gate_eps: `density_gate`'s `eps`, `None` for the `x**r` gate
         """
         super().__init__(beta, rate)
         self.r = r
+        self.gate_eps = gate_eps
 
     def __call__(
         self, K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"], loop: int
@@ -738,10 +811,12 @@ class LogSumExp(smooth_max.CalibratedLogSumExp):
         """The calibrated aggregate at iteration `loop`'s sharpness and `r`,
         differentiable in `K_est` and `xPhys`."""
         shielded = torch.isinf(K_est)
-        x_r = smooth_max.density_power(xPhys.flatten(), run_config.weight_at(self.r, loop))
+        gate = density_gate(
+            xPhys.flatten(), run_config.weight_at(self.r, loop), self.gate_eps
+        )
         # `1 - inf` would poison the `-inf` reselect below through `inf * 0`.
         T = torch.where(shielded, torch.zeros_like(K_est), 1 - K_est)
-        sev = torch.where(shielded, -torch.inf, T * x_r)
+        sev = torch.where(shielded, -torch.inf, T * gate)
         return self.aggregate(sev, loop)
 
 
@@ -751,17 +826,25 @@ def make_aggregation(
     r: "run_config.Scheduled",
     beta: "run_config.Scheduled",
     rate: float = 1.0,
+    gate_eps: float | None = None,
 ) -> PMean | LogSumExp:
     """A fresh, uncalibrated aggregation for a run's settings.
 
     :param beta: `LogSumExp` sharpness, possibly scheduled; unused by `PMean`, which
         takes `p` instead.
     :param rate: weight of each new measurement in the calibration, in (0, 1]
+    :param gate_eps: `density_gate`'s `eps`, `None` for the `x**r` gate
+    :raises ValueError: for `PMean` with `gate_eps`: the relative shieldings it comes
+        with leave the severity unbounded below, which `PMean`'s powers cannot take
     """
     if aggregation == Aggregation.P_MEAN:
+        if gate_eps is not None:
+            raise ValueError(
+                "a relative hotspot_shielding needs the logsumexp aggregation: its severity is unbounded below, which p_mean's powers cannot take"
+            )
         return PMean(p, r, rate)
     elif aggregation == Aggregation.LOGSUMEXP:
-        return LogSumExp(beta, r, rate)
+        return LogSumExp(beta, r, rate, gate_eps)
     else:
         raise ValueError(
             f"aggregation must be an Aggregation member, got {aggregation!r}"
@@ -785,6 +868,8 @@ def estimated_conductivity(
     tie_credit: float = 0.5,
     cooling_time: float = 0.0,
     cooling_sharpness: float = 8.0,
+    shielding: Shielding = Shielding.ABSOLUTE,
+    shielding_eps: float = 1e-3,
 ) -> Float[Tensor, " nely*nelx"]:
     """Local estimated conductivity: how strongly each element's neighborhood has
     already solidified (cooler, earlier `tPhys`) around it, used as an overheating
@@ -804,6 +889,8 @@ def estimated_conductivity(
     :param tie_credit: SIGMOID's weight for a neighbor printed at the same time
     :param cooling_time: COOLING's cooling time, in `t`
     :param cooling_sharpness: COOLING's onset sharpness, as in `_cooling_credit`
+    :param shielding: the run's `Shielding`
+    :param shielding_eps: `shielding_term`'s `eps`
     :raises ValueError: if no element carrying density is left with a finite `K_est`,
         the whole part being within stencil reach of the print base; if `kappa > 0`
         without the constant divisor the directional reference generalizes; or if a
@@ -830,8 +917,9 @@ def estimated_conductivity(
         denom = directed_denominator(
             grad, stencil, kappa, g0, rouf, timefield.unit_length(tPhys)
         )
+    shield = shielding_term(Shielding(shielding), x, q, shielding_eps)
     K_est = _conductivity_core(
-        x, t, e1, e2, w, q, rouf, denom, base, angular, pair_credit
+        x, t, e1, e2, w, q, rouf, denom, base, angular, pair_credit, shield
     ).K_est
     if base is not None and not bool((torch.isfinite(K_est) & (x > 0)).any()):
         raise ValueError(

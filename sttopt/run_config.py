@@ -263,6 +263,17 @@ class SpaceTimeConfig(_ConfigMixin):
     :param hotspot_tie_credit: `sigmoid`'s credit for a neighbor printed at the same
         time, in (0, 1); `0.5` is the source's. A region printed all at once scores
         `K_est ~ 2x` this, so it fails the hotspot where `1 - 2x` exceeds `Tcr`.
+    :param hotspot_shielding: a `conductivity.Shielding` member value: how a neighbor's
+        density counts toward `K_est`. `absolute`, the default and the only behaviour
+        before it existed, or the scale-invariant `capped_ratio` or `ratio`, which
+        replace the `r` gate with `x / (x + hotspot_shielding_eps)`.
+    :param hotspot_shielding_eps: the relative shieldings' regularization, below which
+        a density counts as void.
+    :param hotspot_shaping_weight: weight of `FieldTerms.hotspot_shaping` in the
+        objective, possibly scheduled; 0, the default, disables it. Needs a relative
+        `hotspot_shielding`.
+    :param hotspot_shaping_sharpness: that term's softplus sharpness, per unit severity,
+        possibly scheduled.
     :param hotspot_cooling_time: `cooling`'s cooling time, in `t`, possibly scheduled.
     :param hotspot_cooling_sharpness: `cooling`'s onset sharpness `k`, possibly
         scheduled. A tie gets `1 - 2**(-1/k)`, and a later neighbor is pulled earlier
@@ -326,6 +337,10 @@ class SpaceTimeConfig(_ConfigMixin):
     calibration_rate: float = 1.0
     hotspot_credit: str = "sigmoid"
     hotspot_tie_credit: float = 0.5
+    hotspot_shielding: str = "absolute"
+    hotspot_shielding_eps: float = 1e-3
+    hotspot_shaping_weight: Scheduled = 0.0
+    hotspot_shaping_sharpness: Scheduled = 100.0
     hotspot_cooling_time: Scheduled = 0.0
     hotspot_cooling_sharpness: Scheduled = 8.0
     print_base: str
@@ -411,19 +426,26 @@ class RunConfig(SpaceTimeConfig):
 
 # The print bases a virtual-heat time field supports: a build plate along a whole edge.
 # A near-point base puts a log singularity in the field and has no physical use.
-_PLATE_BASES = ("edge", "bottom_edge")
+_PLATE_BASES = ("edge", "bottom_edge", "right_edge")
 
 
-def _check_virtual_heat(config: SpaceTimeConfig) -> None:
-    """What a virtual-heat time field supports: a plate base, on the whole mesh."""
+def _check_virtual_heat(config: SpaceTimeConfig, domain_reason: str | None) -> None:
+    """What a virtual-heat time field supports: a plate base, and a domain short of the
+    mesh only where `domain_reason` is `None`.
+
+    :param domain_reason: why this config needs the whole mesh as its domain, or `None`
+    """
     if config.print_base.lower() not in _PLATE_BASES:
         raise ValueError(
             f"print_base must be one of {_PLATE_BASES} for a virtual-heat time field, got {config.print_base!r}"
         )
     case = load_cases.LoadCase(config.load_case)
-    if not load_cases.active_mask(case, config.nelx, config.nely).all():
+    if (
+        domain_reason is not None
+        and not load_cases.active_mask(case, config.nelx, config.nely).all()
+    ):
         raise ValueError(
-            f"a virtual-heat time field needs the whole mesh as its domain; {case} leaves part of it out"
+            f"{domain_reason}, but {case} leaves part of the mesh out of the domain"
         )
 
 
@@ -472,7 +494,9 @@ class HeatRunConfig(SpaceTimeConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        _check_virtual_heat(self)
+        _check_virtual_heat(
+            self, "the virtual heat equation is solved on the whole mesh"
+        )
         HeatTimeMap(self.time_map)
 
 
@@ -491,6 +515,15 @@ class LaplaceRunConfig(SpaceTimeConfig):
     :param wall_filter_rmin_m: radius of the density-style filter on the wall design
         along the wall arc; without it the wall data is noisy node to node, since each
         node moves a whole wall region of `t`. 0 leaves it unfiltered.
+    :param field_move: MMA trust-region half-width on the time-field variables (`mu`
+        and the wall design), possibly scheduled, as `RunConfig.tmove` is for `t`.
+        `None` uses `move`.
+    :param chi_density_exponent: exponent `e` of the density in
+        `chi = max(xPhys**e, chi_density_floor) * chi(mu)`, possibly scheduled. 0 (the
+        default) leaves `chi` independent of the density; `e > 0` makes time travel
+        through the material rather than through gaps in it.
+    :param chi_density_floor: the floor on `xPhys**e`, which keeps the void's `chi`
+        positive and the solve conditioned.
     """
 
     chi_contrast: float
@@ -498,11 +531,21 @@ class LaplaceRunConfig(SpaceTimeConfig):
     laplace_cg_rtol: float
     poisson_cg_rtol: float
     wall_filter_rmin_m: float = 0.0
+    field_move: Scheduled | None = None
+    chi_density_exponent: Scheduled = 0.0
+    chi_density_floor: float = 1e-2
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        _check_virtual_heat(self)
-        LaplaceTimeMap(self.time_map)
+        time_map = LaplaceTimeMap(self.time_map)
+        _check_virtual_heat(
+            self,
+            (
+                None
+                if time_map == LaplaceTimeMap.IDENTITY
+                else "the poisson time map's distance fit is solved on the whole mesh"
+            ),
+        )
 
 
 @dataclass(kw_only=True)

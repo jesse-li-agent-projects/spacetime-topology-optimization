@@ -7,9 +7,9 @@ import pytest
 
 import sttopt.fem as fem
 import sttopt.load_cases as load_cases
-from conftest import default_run_config, virtual_heat_config
+from conftest import default_run_config
 from sttopt.load_cases import LoadCase
-from sttopt.run_config import HeatRunConfig, LaplaceRunConfig, RunConfig
+from sttopt.run_config import RunConfig
 
 L_BRACKETS = [LoadCase.L_BRACKET_CORNER, LoadCase.L_BRACKET_MIDDLE]
 
@@ -136,9 +136,3 @@ def test_rectangular_cases_use_the_whole_mesh(case):
 def test_l_brackets_need_an_even_mesh(nelx, nely):
     with pytest.raises(ValueError, match="even"):
         load_cases.active_mask(LoadCase.L_BRACKET_CORNER, nelx, nely)
-
-
-@pytest.mark.parametrize("cls", [HeatRunConfig, LaplaceRunConfig])
-def test_virtual_heat_configs_refuse_a_domain_short_of_the_mesh(cls):
-    with pytest.raises(ValueError, match="whole mesh"):
-        virtual_heat_config(cls, nelx=40, nely=20, load_case="l_bracket_corner")

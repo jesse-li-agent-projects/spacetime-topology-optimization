@@ -28,6 +28,8 @@ from typing import NamedTuple
 
 import numpy as np
 import torch
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import dijkstra
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
@@ -64,10 +66,28 @@ def _shape_gradients() -> Float[np.ndarray, "4 2 4"]:
     )
 
 
-def plate_nodes(nelx: int, nely: int, print_base: str) -> Bool[np.ndarray, " nnodes"]:
-    """The build plate's nodes.
+def _whole(nelx: int, nely: int) -> Bool[np.ndarray, "nely nelx"]:
+    return np.ones((nely, nelx), bool)
 
-    :param print_base: `edge` (the left edge) or `bottom_edge`
+
+def domain_nodes(
+    active: Bool[np.ndarray, "nely nelx"],
+) -> Bool[np.ndarray, "nely+1 nelx+1"]:
+    """The nodes of the design domain: those of at least one of its elements."""
+    padded = np.pad(active, 1)
+    return padded[1:, 1:] | padded[1:, :-1] | padded[:-1, 1:] | padded[:-1, :-1]
+
+
+def plate_nodes(
+    nelx: int,
+    nely: int,
+    print_base: str,
+    active: Bool[np.ndarray, "nely nelx"] | None = None,
+) -> Bool[np.ndarray, " nnodes"]:
+    """The build plate's nodes: those of the print-base edge on the design domain.
+
+    :param print_base: `edge` (the left edge), `bottom_edge` or `right_edge`
+    :param active: the design domain (`load_cases.active_mask`); the whole mesh if `None`
     :return: a mask over the nodes
     :raises ValueError: for any other print base
     """
@@ -77,22 +97,61 @@ def plate_nodes(nelx: int, nely: int, print_base: str) -> Bool[np.ndarray, " nno
         plate[:, 0] = True
     elif base == "bottom_edge":
         plate[-1, :] = True
+    elif base == "right_edge":
+        plate[:, -1] = True
     else:
         raise ValueError(
-            f"a virtual-heat time field needs a plate print base (edge or bottom_edge), got {print_base!r}"
+            f"a virtual-heat time field needs a plate print base (edge, bottom_edge or right_edge), got {print_base!r}"
         )
-    return plate.ravel()
+    active = _whole(nelx, nely) if active is None else active
+    return (plate & domain_nodes(active)).ravel()
 
 
-def wall_arc(nelx: int, nely: int, print_base: str) -> Int[np.ndarray, " n_arc"]:
-    """The boundary nodes off the plate, in order along the boundary from one end of
-    the plate to the other. A corner shared with the plate belongs to the plate."""
+def _boundary_loop(active: Bool[np.ndarray, "nely nelx"]) -> Int[np.ndarray, " n"]:
+    """The design domain's boundary nodes, each once, clockwise from its top-left node.
+
+    :raises ValueError: if the boundary is not one simple loop: a domain with a hole,
+        two pieces, or two elements touching only at a corner
+    """
+    nely, nelx = active.shape
+    padded = np.pad(active, 1)
+    # Edges with the domain on exactly one side, as node (row, col) pairs
+    horizontal = padded[1:, 1:-1] != padded[:-1, 1:-1]  # (nely+1, nelx): (r,c)-(r,c+1)
+    vertical = padded[1:-1, 1:] != padded[1:-1, :-1]  # (nely, nelx+1): (r,c)-(r+1,c)
+    neighbours: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    for edges, (dr, dc) in ((horizontal, (0, 1)), (vertical, (1, 0))):
+        for r, c in zip(*np.nonzero(edges)):
+            a, b = (int(r), int(c)), (int(r) + dr, int(c) + dc)
+            neighbours.setdefault(a, []).append(b)
+            neighbours.setdefault(b, []).append(a)
+    if any(len(n) != 2 for n in neighbours.values()):
+        raise ValueError("the design domain's boundary must be one simple loop")
+    start = min(neighbours)  # the top row's leftmost node, a convex corner
+    loop, previous, node = [start], start, (start[0], start[1] + 1)  # rightwards first
+    while node != start:
+        loop.append(node)
+        previous, node = node, next(n for n in neighbours[node] if n != previous)
+    if len(loop) != len(neighbours):
+        raise ValueError("the design domain's boundary must be one simple loop")
     nodes = fem.node_grid(nelx, nely)
-    # The boundary loop, clockwise from the top-left corner, each node once
-    loop = np.concatenate(
-        [nodes[0, :], nodes[1:, -1], nodes[-1, -2::-1], nodes[-2:0:-1, 0]]
-    )
-    on_plate = plate_nodes(nelx, nely, print_base)
+    return np.array([nodes[r, c] for r, c in loop])
+
+
+def wall_arc(
+    nelx: int,
+    nely: int,
+    print_base: str,
+    active: Bool[np.ndarray, "nely nelx"] | None = None,
+) -> Int[np.ndarray, " n_arc"]:
+    """The design domain's boundary nodes off the plate, in order along the boundary
+    from one end of the plate to the other. A corner shared with the plate belongs to
+    the plate.
+
+    :param active: the design domain; the whole mesh if `None`
+    """
+    active = _whole(nelx, nely) if active is None else active
+    loop = _boundary_loop(active)
+    on_plate = plate_nodes(nelx, nely, print_base, active)
     last = np.flatnonzero(on_plate[loop])[-1]
     rotated = np.roll(loop, -(last + 1))
     # A plate is one contiguous run of the loop, so after the rotation it is the tail
@@ -146,7 +205,8 @@ class ScalarMesh:
     KE: Float[Tensor, "4 4"]
     B: Float[Tensor, "4 2 4"]  # shape-function gradients at the Gauss points
     plate: Bool[Tensor, " ndof"]
-    arc: Int[Tensor, " n_arc"]  # the walls off the plate, in boundary order
+    arc: Int[Tensor, " n_arc"]  # the domain's walls off the plate, in boundary order
+    active: Bool[Tensor, " nel"]  # the design domain (`load_cases.active_mask`)
 
     @classmethod
     def build(
@@ -156,17 +216,23 @@ class ScalarMesh:
         print_base: str,
         device: torch.device,
         dtype: torch.dtype,
+        active: Bool[np.ndarray, "nely nelx"] | None = None,
     ) -> "ScalarMesh":
+        """:param active: the design domain; the whole mesh if `None`"""
         ints = dict(device=device, dtype=torch.int64)
         floats = dict(device=device, dtype=dtype)
+        active = _whole(nelx, nely) if active is None else active
         return cls(
             nelx=nelx,
             nely=nely,
             edof=torch.as_tensor(fem.element_dof_map(nelx, nely, 1), **ints),
             KE=torch.as_tensor(fem.diffusion_KE(), **floats),
             B=torch.as_tensor(_shape_gradients(), **floats),
-            plate=torch.as_tensor(plate_nodes(nelx, nely, print_base), device=device),
-            arc=torch.as_tensor(wall_arc(nelx, nely, print_base), **ints),
+            plate=torch.as_tensor(
+                plate_nodes(nelx, nely, print_base, active), device=device
+            ),
+            arc=torch.as_tensor(wall_arc(nelx, nely, print_base, active), **ints),
+            active=torch.as_tensor(active.ravel(), device=device),
         )
 
     @property
@@ -384,28 +450,62 @@ def heat_time_field(
     return TimeFieldSolution(normalize(t_e, xPhys), T, phi, t)
 
 
-def _ramp(mesh: ScalarMesh) -> Float[Tensor, " n_arc"]:
-    """The linear ramp away from the plate on the wall arc, `t = distance / l_c`."""
-    xy = np.stack(np.divmod(np.arange(mesh.ndof), mesh.nelx + 1), axis=-1)
-    plate = xy[mesh.plate.cpu().numpy()]
-    arc = xy[mesh.arc.cpu().numpy()]
-    # Distance to the nearest plate node: to the plate line, for a straight plate
-    distance = np.sqrt(((arc[:, None] - plate[None]) ** 2).sum(-1)).min(axis=1)
+def _node_edges(
+    active: Bool[np.ndarray, "nely nelx"],
+) -> tuple[Int[np.ndarray, " n"], Int[np.ndarray, " n"], Float[np.ndarray, " n"]]:
+    """The 8-connected node adjacencies that run through the design domain: a diagonal
+    across a domain element, an axis step along an edge of one.
+
+    :return: `(src, dst, step)`, node numbers and the Euclidean step length
+    """
+    nely, nelx = active.shape
+    padded = np.pad(active, 1)  # element (r, c) at padded[r + 1, c + 1]
+    nodes = np.arange((nely + 1) * (nelx + 1)).reshape(nely + 1, nelx + 1)
+    src, dst, step = [], [], []
+    for dr, dc in ((0, 1), (1, 0), (1, 1), (1, -1)):
+        r, c = np.mgrid[: nely + 1 - dr, max(0, -dc) : nelx + 1 - max(0, dc)]
+        c0 = np.minimum(c, c + dc)  # the column of elements the step runs along
+        if dr == 0:  # the elements above and below the edge
+            inside = padded[r, c0 + 1] | padded[r + 1, c0 + 1]
+        elif dc == 0:  # left and right of it
+            inside = padded[r + 1, c0] | padded[r + 1, c0 + 1]
+        else:  # the element it crosses
+            inside = padded[r + 1, c0 + 1]
+        a, b = nodes[r, c][inside], nodes[r + dr, c + dc][inside]
+        src += [a, b]
+        dst += [b, a]
+        step += [np.full(2 * a.size, np.hypot(dr, dc))]
+    return np.concatenate(src), np.concatenate(dst), np.concatenate(step)
+
+
+def _plate_distance(mesh: ScalarMesh) -> Float[Tensor, " n_arc"]:
+    """The wall arc's distance to the plate through the design domain, in `l_c`.
+
+    A grid-graph geodesic, as `timefield.init_geodesic_timefield`'s: exact along the
+    axes and diagonals, up to 8% long between them, so on a rectangle with a plate on
+    one edge it is the distance to the plate's line, and walls behind a re-entrant
+    corner get the path around it.
+    """
+    active = mesh.active.cpu().numpy().reshape(mesh.nely, mesh.nelx)
+    src, dst, step = _node_edges(active)
+    graph = csr_matrix((step, (src, dst)), shape=(mesh.ndof, mesh.ndof))
+    plate = np.flatnonzero(mesh.plate.cpu().numpy())
+    distance = dijkstra(graph, indices=plate, min_only=True)[mesh.arc.cpu().numpy()]
     return torch.as_tensor(
         distance / mesh.unit_length, device=mesh.arc.device, dtype=mesh.KE.dtype
     )
 
 
 def wall_scale(mesh: ScalarMesh) -> float:
-    """The wall data at `wall = 1`: twice the ramp's largest value, so the ramp sits
-    at `wall <= 1/2` and the data can rise above it anywhere."""
-    return 2 * float(_ramp(mesh).max())
+    """The wall data at `wall = 1`: twice the walls' largest distance to the plate, so
+    `distance_wall` sits at `wall <= 1/2` and the data can rise above it anywhere."""
+    return 2 * float(_plate_distance(mesh).max())
 
 
-def ramp_wall(mesh: ScalarMesh) -> Float[Tensor, " n_arc"]:
-    """The wall design of the linear ramp away from the plate: uniform `chi` with this
-    wall data gives a linear `t` in the whole domain."""
-    return _ramp(mesh) / wall_scale(mesh)
+def distance_wall(mesh: ScalarMesh) -> Float[Tensor, " n_arc"]:
+    """The wall design of the distance to the plate through the domain: on a rectangle
+    with uniform `chi`, `t` is then the linear ramp away from the plate."""
+    return _plate_distance(mesh) / wall_scale(mesh)
 
 
 def wall_filter(n_arc: int, rmin: float) -> Float[np.ndarray, "n_arc n_arc"]:
@@ -438,18 +538,30 @@ def laplace_time_field(
     mu: Float[Tensor, "nely nelx"],
     wall: Float[Tensor, " n_arc"],
     previous: TimeFieldSolution | None = None,
+    density_exponent: float = 0.0,
 ) -> TimeFieldSolution:
-    """Variant 2: the time field of `div(chi grad t) = 0` over the whole domain.
+    """Variant 2: the time field of `div(chi grad t) = 0` over the design domain.
 
-    :param xPhys: physical densities; they only set the normalization, since the field
-        does not see the part
+    Every node on the domain's boundary is fixed, so the mesh outside the domain does
+    not reach it; `t` there is the harmonic extension (`chi = 1`) of the domain's walls,
+    with zero flux at the mesh edge, so differences read across a wall stay smooth.
+
+    :param xPhys: physical densities; they set the normalization, and `chi` through
+        `density_exponent`
     :param mu: diffusivity design field
     :param wall: wall design on `[0, 1]`; the wall data is `wall * wall_scale(mesh)`
     :param previous: the last iteration's solution, the warm start
+    :param density_exponent: `e` in `chi = max(xPhys**e, config.chi_density_floor) *
+        chi(mu)`; 0 leaves `chi` independent of the density
     :return: `tPhys` and the nodal solutions
     """
     shape = xPhys.shape
     chi = diffusivity(mu.flatten(), config.chi_contrast)
+    if density_exponent != 0:
+        chi = chi * torch.clamp(
+            xPhys.flatten() ** density_exponent, min=config.chi_density_floor
+        )
+    chi = torch.where(mesh.active, chi, 1.0)
     b = wall * wall_scale(mesh)
 
     g = torch.zeros(mesh.ndof, device=chi.device, dtype=chi.dtype).index_put(

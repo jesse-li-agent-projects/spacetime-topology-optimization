@@ -67,6 +67,8 @@ class Problem:
     mesh: virtual_heat.ScalarMesh
     wall_filter: Float[Tensor, "n_arc n_arc"]  # `virtual_heat.wall_filter`
     Nei: Int[Tensor, " k"]  # the elements on the build plate
+    # The design domain (`load_cases.active_mask`); elements outside it are void
+    active: Bool[Tensor, "nely nelx"]
     n: int  # MMA design variables: 2*nelx*nely + n_arc
 
 
@@ -93,7 +95,7 @@ class IterationRecord:
     """Per-iteration diagnostics and raw MMA outputs, as in `stto.IterationRecord`."""
 
     obj: float  # whole-structure compliance
-    vol: float  # volume fraction (mean xPhys)
+    vol: float  # volume fraction of the domain
     tru_max: float  # calibrated hotspot severity
     uniformity: float  # layer-uniformity penalty, before uniformity_weight
     roughness: float  # smoothness regularizer, as a fraction of a layer thickness
@@ -152,12 +154,16 @@ def build_problem(
         config.support_length_m,
         h,
     )
+    active = load_cases.active_mask(load_cases.LoadCase(config.load_case), nelx, nely)
     H, Hs = filters.density_filter(nelx, nely, units.in_elements(config.rmin_m, h))
     C = gravity.gravity_load_matrix(nelx, nely)
     Nei = timefield.base_elements(
         nelx, nely, timefield.TimeField[config.print_base.upper()]
     )
-    mesh = virtual_heat.ScalarMesh.build(nelx, nely, config.print_base, device, dtype)
+    Nei = Nei[active.flatten()[Nei]]
+    mesh = virtual_heat.ScalarMesh.build(
+        nelx, nely, config.print_base, device, dtype, active
+    )
 
     floats = torch_util.to_tensors({"KE": KE, "F": F, "Hs": Hs}, device, dtype)
     ints = torch_util.to_tensors(
@@ -180,6 +186,7 @@ def build_problem(
             device,
             dtype,
         ),
+        active=torch.as_tensor(active, device=device),
         n=2 * nelx * nely + len(mesh.arc),
         **floats,
         **ints,
@@ -192,6 +199,7 @@ def physical_fields(
     mu: Float[Tensor, "nely nelx"],
     wall: Float[Tensor, " n_arc"],
     beta_d: float,
+    loop: int,
     previous: virtual_heat.TimeFieldSolution | None = None,
 ) -> tuple[Float[Tensor, "nely nelx"], virtual_heat.TimeFieldSolution]:
     """The density and time fields the physics reads, from the design variables.
@@ -203,13 +211,22 @@ def physical_fields(
     :param mu: diffusivity design field
     :param wall: wall design along the arc, filtered along it
     :param beta_d: projection sharpness
+    :param loop: iteration whose `chi_density_exponent` applies
     :param previous: the last solution, the warm start
     :return: `(xPhys, solution)`, `solution.tPhys` the time field
     """
-    xTilde = filters.apply_density_filter(x, problem.H, problem.Hs)
-    xPhys = filters.heaviside_projection(xTilde, beta_d, problem.config.eta)
+    config, active = problem.config, problem.active
+    # Outside the domain counts as void in the density filter, as in `stto`
+    xTilde = filters.apply_density_filter(x * active, problem.H, problem.Hs)
+    xPhys = filters.heaviside_projection(xTilde, beta_d, config.eta) * active
     solution = virtual_heat.laplace_time_field(
-        problem.config, problem.mesh, xPhys, mu, problem.wall_filter @ wall, previous
+        config,
+        problem.mesh,
+        xPhys,
+        mu,
+        problem.wall_filter @ wall,
+        previous,
+        density_exponent=run_config.weight_at(config.chi_density_exponent, loop),
     )
     return xPhys, solution
 
@@ -222,19 +239,21 @@ def wall_data(
 
 
 def init_state(problem: Problem) -> State:
-    """The initial state: uniform density and diffusivity, and the ramp wall data.
+    """The initial state: uniform density and diffusivity, and the wall data of the
+    distance to the plate.
 
-    Density at `volfrac`, `chi = 1` (`mu = 1/2`), and the wall data of the linear ramp
-    away from the plate, which makes the initial `t` that ramp.
+    Density at `volfrac` over the domain, `chi = 1` (`mu = 1/2`), and the walls' distance
+    to the plate through the domain (`virtual_heat.distance_wall`), which on a rectangle
+    makes the initial `t` the linear ramp away from the plate.
 
     :return: the state before the first iteration
     """
     config = problem.config
     shape = (config.nely, config.nelx)
     kw = dict(device=problem.device, dtype=problem.dtype)
-    x = torch.full(shape, config.volfrac, **kw)
+    x = config.volfrac * problem.active.to(problem.dtype)
     mu = torch.full(shape, 0.5, **kw)
-    wall = virtual_heat.ramp_wall(problem.mesh)
+    wall = virtual_heat.distance_wall(problem.mesh)
     return State(
         x=x,
         mu=mu,
@@ -275,7 +294,7 @@ def constraint_values(
     """
     g = {
         "global_volume_fraction": constraints.global_volume_fraction(
-            xPhys, problem.config.volfrac
+            xPhys, problem.config.volfrac, int(problem.active.sum())
         )
     }
     return g | problem.terms.constraints(xPhys, tPhys, K_est, loop)
@@ -293,10 +312,48 @@ def _sensitivity_rows(
     return torch.cat(sensitivity.jacobian_rows(outputs, leaves), dim=-1)
 
 
+def _floor_shares(
+    history: mma.History,
+    move_limit: Float[Tensor, " n"],
+    xPhys: Float[Tensor, "nely nelx"],
+    nel: int,
+) -> dict[str, float]:
+    """`mma.floor_share` of each design group, and of the grey elements' densities:
+    where MMA's trust region has collapsed, as in `stto`."""
+    groups = {
+        "x": slice(0, nel),
+        "mu": slice(nel, 2 * nel),
+        "wall": slice(2 * nel, None),
+    }
+    shares = {}
+    for name, part in groups.items():
+        mask = torch.zeros_like(move_limit, dtype=torch.bool)
+        mask[part] = True
+        shares[f"asy_floor_{name}"] = mma.floor_share(history, move_limit, mask)
+    grey = torch.zeros_like(move_limit, dtype=torch.bool)
+    grey[:nel] = ((xPhys > 0.05) & (xPhys < 0.95)).flatten()
+    shares["asy_floor_x_grey"] = mma.floor_share(history, move_limit, grey)
+    return shares
+
+
+def _time_steps(
+    tPhys: Float[Tensor, "nely nelx"],
+    previous: virtual_heat.TimeFieldSolution | None,
+    xPhys: Float[Tensor, "nely nelx"],
+) -> dict[str, float]:
+    """How far the last step moved the time field on the part: the largest and mean
+    `|delta tPhys|` over `virtual_heat.part_mask`. A move limit on `mu` and the wall is
+    not one on `t`, so this is what compares with `stto`'s time steps."""
+    if previous is None:
+        return {"dtphys_max": 0.0, "dtphys_mean": 0.0}
+    step = (tPhys - previous.tPhys)[virtual_heat.part_mask(xPhys)].abs()
+    return {"dtphys_max": float(step.max()), "dtphys_mean": float(step.mean())}
+
+
 def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     """One optimization iteration: the objective and every constraint, their gradients
     by autograd (through the time-field solve's adjoint), and an MMA step on
-    `[x; mu; wall]` with one scheduled move limit for every group.
+    `[x; mu; wall]`, with the density's move limit and the time field's.
 
     :param problem: the problem being optimized
     :param state: the state after `state.loop` iterations
@@ -308,11 +365,14 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     loop, beta_t, beta_d = state.loop, state.beta_t, state.beta_d
     penal = run_config.weight_at(config.penal, loop)
     Tcr = run_config.weight_at(config.Tcr, loop)
+    field_move = run_config.weight_at(
+        config.move if config.field_move is None else config.field_move, loop
+    )
 
     leaves = tuple(
         v.clone().requires_grad_(True) for v in (state.x, state.mu, state.wall)
     )
-    xPhys, laplace = physical_fields(problem, *leaves, beta_d, state.laplace)
+    xPhys, laplace = physical_fields(problem, *leaves, beta_d, loop, state.laplace)
     tPhys = laplace.tPhys
 
     c_t, stage_cs, U_new = compliance.batched_whole_and_gravity_compliance(
@@ -367,10 +427,12 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         grad_p10_per_m=grad_p10,
         grad_p50_per_m=grad_p50,
         grad_p90_per_m=grad_p90,
-        grey=_grey_fraction(xPhys),
+        grey=_grey_fraction(xPhys, problem.active),
         calibration=problem.terms.hotspot.calibration,
         penal=penal,
         uniformity_weight=objective.uniformity_weight,
+        shaping=float(objective.shaping.detach()),
+        shaping_weight=objective.shaping_weight,
         hotspot_weight=hotspot_weight,
         Tcr=Tcr,
         rouf=run_config.weight_at(config.rouf, loop),
@@ -379,6 +441,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         beta_d=beta_d,
         beta_t=beta_t,
         move=run_config.weight_at(config.move, loop),
+        field_move=field_move,
         tool_radius_m=run_config.weight_at(config.tool_radius_m, loop),
         min_gradient_fraction=run_config.weight_at(config.min_gradient_fraction, loop),
         gradient_smoothness_m=run_config.weight_at(config.gradient_smoothness_m, loop),
@@ -392,7 +455,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     )
 
     xval = _flatten(state.x, state.mu, state.wall)
-    move_limit = torch.full_like(xval, run_config.weight_at(config.move, loop))
+    move_limit = torch.full_like(xval, field_move)
+    move_limit[:nel] = run_config.weight_at(config.move, loop)
+    mma_stats = {"subsolv_cap_hits": 0}
     xmma, lam, mma_history = mma.unit_box_step(
         state.mma,
         loop,
@@ -405,6 +470,7 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         a0=config.a0,
         c=config.mma_c,
         raa0=config.raa0_total / problem.n,
+        stats=mma_stats,
     )
     x_new, mu_new, wall_new = torch.split(xmma, [nel, nel, n_arc])
     new_state = State(
@@ -429,9 +495,14 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         diagnostics.update(
             {f"{name}_max": float(part.max()), f"{name}_mean": float(part.mean())}
         )
+    diagnostics.update(
+        **mma_stats,
+        **_floor_shares(mma_history, move_limit, xPhys.detach(), nel),
+        **_time_steps(tPhys.detach(), state.laplace, xPhys.detach()),
+    )
     record = IterationRecord(
         obj=float(c_t.detach()),
-        vol=float(xPhys.detach().mean()),
+        vol=volume_fraction(problem, xPhys),
         tru_max=(float(g_hotspot_t.detach()) + 1) * Tcr,
         uniformity=float(objective.uniformity.detach()),
         roughness=float(objective.roughness.detach()),
@@ -478,6 +549,7 @@ def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
                 state.mu,
                 state.wall,
                 state.beta_d,
+                state.loop,
                 state.laplace,
             )
         xPhys_traj.append(xPhys)
@@ -494,9 +566,16 @@ def run_from_state(problem: Problem, state: State, nloop: int) -> RunResult:
     return RunResult(state, xPhys_traj, tPhys_traj, x_traj, mu_traj, wall_traj, records)
 
 
-def _grey_fraction(xPhys: Float[Tensor, "nely nelx"]) -> float:
-    """The fraction of elements neither near void nor near solid."""
-    return float(((xPhys > 0.05) & (xPhys < 0.95)).double().mean())
+def _grey_fraction(
+    xPhys: Float[Tensor, "nely nelx"], active: Bool[Tensor, "nely nelx"]
+) -> float:
+    """The fraction of the domain's elements neither near void nor near solid."""
+    return float(((xPhys > 0.05) & (xPhys < 0.95))[active].double().mean())
+
+
+def volume_fraction(problem: Problem, xPhys: Float[Tensor, "nely nelx"]) -> float:
+    """The material in `xPhys` as a fraction of the domain, which `volfrac` bounds."""
+    return float(xPhys.detach().sum() / problem.active.sum())
 
 
 def check_design(problem: Problem, state: State) -> dict:
@@ -515,8 +594,8 @@ def check_design(problem: Problem, state: State) -> dict:
     design = (state.x, state.mu, state.wall)
     beta_d = run_config.weight_at(config.beta_d_schedule, loop)
     with torch.no_grad():
-        xPhys, as_optimized = physical_fields(problem, *design, beta_d)
-        xBin, laplace = physical_fields(problem, *design, math.inf)
+        xPhys, as_optimized = physical_fields(problem, *design, beta_d, loop)
+        xBin, laplace = physical_fields(problem, *design, math.inf, loop)
     tPhys = laplace.tPhys
     xBin_np, tPhys_np = torch_util.to_numpy(xBin), torch_util.to_numpy(tPhys)
     solid = geometry.solid_mask(xBin_np).reshape(xBin_np.shape)
@@ -524,12 +603,12 @@ def check_design(problem: Problem, state: State) -> dict:
 
     start = virtual_heat.start_report(problem.mesh, laplace, solid, base)
     support = checks.support_report(solid, tPhys_np, base)
-    everywhere = np.ones_like(solid)
-    domain_orphans = checks.unsupported(everywhere, tPhys_np, base)
+    active = torch_util.to_numpy(problem.active)
+    domain_orphans = checks.unsupported(active, tPhys_np, base)
     domain = dict(
         unsupported=int(domain_orphans.sum()),
         unsupported_at=np.argwhere(domain_orphans)[:20].tolist(),
-        saddles=int(checks.saddles(tPhys_np, everywhere).sum()),
+        saddles=int(checks.saddles(tPhys_np, active).sum()),
     )
     if not start["passed"]:
         virtual_heat.warn_start(start)
@@ -542,8 +621,8 @@ def check_design(problem: Problem, state: State) -> dict:
         support=support,
         saddles=int(checks.saddles(tPhys_np, solid, solid).sum()),
         domain=domain,
-        volume_fraction=float(solid.mean()),
-        grey_fraction=_grey_fraction(xPhys),
+        volume_fraction=float(solid[active].mean()),
+        grey_fraction=_grey_fraction(xPhys, problem.active),
     )
     if solid.any():
 

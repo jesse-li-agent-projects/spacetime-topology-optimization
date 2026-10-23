@@ -149,6 +149,8 @@ radius, `min_gradient` ≤ 0.01 as optimized; start on the nodes; interior suppo
 - Open: how to judge S with all constraints; the S 3c GPU replicate; step 5
   (600 iterations). Undulating wall data on D lies in the void only; the time field on
   the part is clean, so it is left as it is.
+- Resumed on S 0.3 with the settled `stto` schedule (2026-10-08/09): see
+  `laplace_s03_schedule.md`.
 
 ## Phase 9: validation matrix
 

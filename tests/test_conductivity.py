@@ -2157,3 +2157,78 @@ def test_a_damped_calibration_moves_part_of_the_way_to_each_measurement():
     lse.reset()
     lse.aggregate(three, 0)
     assert lse.calibration == pytest.approx(offset(three))
+
+
+def _shielded_severity(xPhys, tPhys, shielding, eps, r=R, q=Q):
+    """The severity field on a 16x12 mesh under the HALF_STENCIL normalization."""
+    nely, nelx = xPhys.shape
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, RMIN_COND)
+    denom = conductivity.constant_denominator(
+        conductivity.Normalization.HALF_STENCIL, RMIN_COND
+    )
+    K = conductivity.estimated_conductivity(
+        tt(xPhys),
+        tt(tPhys),
+        tti(e1),
+        tti(e2),
+        tt(w),
+        q,
+        ROUF,
+        denom,
+        shielding=shielding,
+        shielding_eps=eps,
+    )
+    gate_eps = None if shielding == conductivity.Shielding.ABSOLUTE else eps
+    return torch_util.to_numpy(conductivity.severity(K, tt(xPhys), r, gate_eps))
+
+
+_LAYERED_T = np.tile(np.linspace(1, 0, 12)[:, None], (1, 16))
+
+
+@pytest.mark.parametrize(
+    "shielding", [conductivity.Shielding.CAPPED_RATIO, conductivity.Shielding.RATIO]
+)
+def test_relative_shielding_severity_is_invariant_to_scaling_every_density(shielding):
+    rng = np.random.default_rng(7)
+    xPhys = rng.uniform(0.2, 1.0, size=(12, 16))
+    base = _shielded_severity(xPhys, _LAYERED_T, shielding, 1e-12)
+    scaled = _shielded_severity(0.3 * xPhys, _LAYERED_T, shielding, 1e-12)
+    assert_close(scaled, base, atol=1e-9)
+    # ABSOLUTE is not, so the test above is not vacuous.
+    absolute = conductivity.Shielding.ABSOLUTE
+    assert not np.allclose(
+        _shielded_severity(0.3 * xPhys, _LAYERED_T, absolute, 0.0),
+        _shielded_severity(xPhys, _LAYERED_T, absolute, 0.0),
+    )
+
+
+@pytest.mark.parametrize(
+    "shielding", [conductivity.Shielding.CAPPED_RATIO, conductivity.Shielding.RATIO]
+)
+def test_relative_shielding_matches_absolute_on_binary_designs(shielding):
+    rng = np.random.default_rng(11)
+    xPhys = (rng.uniform(size=(12, 16)) > 0.4).astype(float)
+    absolute = _shielded_severity(
+        xPhys, _LAYERED_T, conductivity.Shielding.ABSOLUTE, 0.0
+    )
+    relative = _shielded_severity(xPhys, _LAYERED_T, shielding, 1e-6)
+    assert_close(relative, absolute, atol=1e-5)
+
+
+def test_capped_ratio_rates_grey_on_solid_support_as_solid():
+    """A grey element sitting on solid reads as it will once solid itself; RATIO
+    instead over-credits it."""
+    solid = np.ones((12, 16))
+    grey_top = solid.copy()
+    grey_top[0] = 0.5  # row 0 is printed last under `_LAYERED_T`
+    capped = conductivity.Shielding.CAPPED_RATIO
+    assert_close(
+        _shielded_severity(grey_top, _LAYERED_T, capped, 1e-6)[:16],
+        _shielded_severity(solid, _LAYERED_T, capped, 1e-6)[:16],
+        atol=1e-5,
+    )
+    ratio = conductivity.Shielding.RATIO
+    assert (
+        _shielded_severity(grey_top, _LAYERED_T, ratio, 1e-6)[:16]
+        < _shielded_severity(solid, _LAYERED_T, ratio, 1e-6)[:16] - 0.1
+    ).all()
