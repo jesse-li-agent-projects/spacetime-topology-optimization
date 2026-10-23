@@ -177,23 +177,7 @@
   "laplace_cg_rtol": 1e-08,
   "poisson_cg_rtol": 1e-08,
   "wall_filter_rmin_m": 0.004,
-  "field_move": {
-    "points": [
-      [
-        0,
-        0.002
-      ],
-      [
-        550,
-        0.002
-      ],
-      [
-        600,
-        0.001
-      ]
-    ],
-    "mode": "log"
-  },
+  "field_move": 0.002,
   "chi_density_exponent": {
     "points": [
       [
