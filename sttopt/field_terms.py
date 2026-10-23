@@ -365,7 +365,7 @@ class FieldTerms:
         term pushes a would-be violator's own density down and, since `q = 1` keeps the
         shielding's slope finite at void, its earlier neighbors' up; it is near zero
         wherever the solid design passes, so it shapes the path more than the optimum.
-        See `plans/scale_invariant_hotspot.md`.
+        See `plans/archive/scale_invariant_hotspot.md`.
         """
         config = self.config
         Tcr = run_config.weight_at(config.Tcr, loop)
