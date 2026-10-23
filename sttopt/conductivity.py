@@ -103,7 +103,7 @@ class Shielding(StrEnum):
     element in full, so a grey element reads as it would once it and its support were
     solid; RATIO is uncapped, so one dense neighbor can make up for a missing one. Both
     swap the severity's `x**r` gate for `density_gate`'s, and all three agree on binary
-    designs to within `eps`. See `plans/scale_invariant_hotspot.md`.
+    designs to within `eps`. See `plans/archive/scale_invariant_hotspot.md`.
     """
 
     ABSOLUTE = "absolute"

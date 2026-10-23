@@ -2,7 +2,7 @@
 
 `laplace_default.json` holds the numbers for `stto_laplace`; this is why they sit where
 they do. Iterations are for `nloop` 600. Evidence per batch is in
-`plans/scale_invariant_hotspot.md` (PR #207).
+`plans/archive/scale_invariant_hotspot.md` (PR #207).
 
 ## Phases
 
