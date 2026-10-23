@@ -1231,3 +1231,30 @@ from the one gated; the plain-TO run's own Laplace time field (no hotspot) is gi
 
 Only the two tight C1 cells need the density to move; on the rest, the simultaneous
 design costs about nothing in compliance over the sequential one.
+
+**Side by side** (`seq_vs_sim_fig.tmp.py`, `plot/laplace_s03/seq_vs_sim_{C105T04,C103T06}.png`):
+the sequential design's excess sits along whole members, not at one site; the
+simultaneous design keeps the topology and costs 3.6% (C1 0.5) and 1.7% (C1 0.3) in
+binarized compliance over it.
+
+## The 2× reading, controlled for the μ mapping (2026-10-23)
+
+`roundtrip.tmp.py`, on batch 37's final C1 0.5 Tcr 0.4 design and batch 41's at 600.
+Severity − Tcr, binarized, t kept; share of the outer 1 mm over Tcr:
+
+| reading | batch 37 (650) | batch 41 (600) |
+|---|---|---|
+| 1×, as optimized | +0.017, 0.6% | +0.007, 0.1% |
+| 1×, μ and wall round-tripped 1× → 2× → 1× | +0.099 ✗, 40% | +0.135 ✗, 42% |
+| 2×, bilinear μ (the earlier test) | +0.321 ✗, 49% | +0.426 ✗, 42% |
+| 2×, μ and density copied into 2×2 blocks | +0.289 ✗, 17% | +0.473 ✗, 12% |
+| 2×, as above on the 1× staircase | +0.331 ✗, 16% | +0.473 ✗, 13% |
+
+- **The bilinear μ mapping caused most of the spread.** μ has element-scale structure (the
+  round trip moves it by up to 0.29 of its 0–1 range), and the round trip alone, with no
+  change of resolution, puts 40% of the outer 1 mm over Tcr.
+- **With the coefficient field carried exactly, 2× still fails at the worst element**
+  (+0.29, +0.47), though over 12–17% of the outer 1 mm rather than 42–49%. t moves by
+  only 0.006–0.009 from the 1× solution, so this is the gate's sensitivity to t at the
+  scale of τ, not the contour fill (the staircase reads the same).
+- Batch 41's ending grey is no more resolution-robust than batch 37's near-binary design.
