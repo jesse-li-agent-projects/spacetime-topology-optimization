@@ -10,6 +10,10 @@ This directory contains plans for agents.
     - Deferred: ways to give `stto` a minimum feature size, against the thin necks the
       hotspot constraint adds. Options and their costs only; the user wants other
       avenues tried first.
+- nucleation.md
+    - Open: the hotspot pulls light, ungrounded material in as "support" under hot
+      regions. Status, the pressures wanted per situation, and whether they conflict.
+      Start here to resume the problem.
 - virtual_heat_tuning.md
     - Schedule tuning and the validation matrix for `stto_heat.py` and
       `stto_laplace.py`, whose time field solves a virtual heat equation (design in
