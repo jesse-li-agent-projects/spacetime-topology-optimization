@@ -12,7 +12,7 @@ they do. Iterations are for `nloop` 600. Evidence per batch is in
 | 300-400 | sharpen | `beta_d` 2 -> 8 (geometric) and `q` 1 -> 3, together |
 | 400-600 | settle | nothing ramps; the roughness weight reaches its floor at 600 |
 
-The density move limit is 0.02 throughout.
+The move limits are fixed: 0.02 on the density, 0.002 on the time-field variables.
 
 ## Why
 
@@ -31,12 +31,16 @@ The density move limit is 0.02 throughout.
   peaks near 400 against about 210).
 - **`k` geometric.** `k` is a softplus sharpness, so equal ratios are equal steps; as good
   as or better than linear on C1.
-- **Ends at 600.** Every cell passes the binarized gate from 475 on, and compliance is
-  within 0.15% of its final value by 600.
+- **Ends at 600.** Every cell passes the binarized gate from 500 on in both validation
+  batches, and the last 50 iterations move compliance by at most 0.3% (C1).
+- **Fixed move limits.** Dropping the density limit's halving after 300 (together with
+  the faster `q` ramp) cost nothing; dropping the time field's halving over 550-600 made
+  no difference beyond run-to-run noise (compliance within 0.25% on every cell).
 - **No `mu` filter** (`mu_filter_rmin_m`): it halves the diffusivity's roughness but
   leaves C1 grey and failing once binarized.
 
 ## Validated on
 
-Eight cells, one run each (two on C1 0.5 Tcr 0.4): C1 0.5 at Tcr 0.4 and 0.6, C1 0.3,
-C2 0.5, S 0.3 bottom and edge, L middle and corner. All pass, at 1.006-1.060 x plain TO.
+Eight cells, two runs each (batches 41 and 42; three on C1 0.5 Tcr 0.4): C1 0.5 at Tcr
+0.4 and 0.6, C1 0.3, C2 0.5, S 0.3 bottom and edge, L middle and corner. All pass, at
+1.006-1.060 x plain TO.

@@ -1258,3 +1258,27 @@ Severity − Tcr, binarized, t kept; share of the outer 1 mm over Tcr:
   only 0.006–0.009 from the 1× solution, so this is the gate's sensitivity to t at the
   scale of τ, not the contour fill (the staircase reads the same).
 - Batch 41's ending grey is no more resolution-robust than batch 37's near-binary design.
+
+## Batch 42: the time-field move limit fixed (2026-10-23)
+
+The new default (batch 41's schedule, 600 iterations) with `field_move` fixed at 0.002
+instead of 0.002 → 0.001 over 550–600 (`lap_batch42.tmp.py`, CPU only). Gate / binarized
+C against batch 41 at 600 (which had the drop) / grey; "from" is the snapshot after which
+the gate stays passing (`settle42.tmp.py`):
+
+| cell | batch 42 | C ÷ b41 at 600 | from | b41 at 600 |
+|---|---|---|---|---|
+| C1 0.5 Tcr 0.4 | −0.001 / 12.7% | 0.998 | 450 | +0.007 |
+| C1 0.5 Tcr 0.6 | −0.023 / 12.5% | 1.000 | ≤ 400 | −0.009 |
+| C1 0.3 Tcr 0.6 | −0.004 / 13.0% | 1.002 | 500 | +0.000 |
+| C2 0.5 Tcr 0.4 | −0.098 / 6.5% | 1.000 | ≤ 400 | −0.069 |
+| S 0.3 bottom | −0.094 / 8.8% | 1.000 | ≤ 400 | −0.085 |
+| S 0.3 edge | −0.094 / 8.8% | 1.001 | ≤ 400 | −0.089 |
+| L middle | −0.053 / 11.5% | 1.000 | ≤ 400 | −0.064 |
+| L corner | −0.019 / 10.8% | 1.000 | ≤ 400 | −0.025 |
+
+No difference beyond run-to-run noise, so the time-field move limit is fixed at 0.002 in
+the default. Runs are not bitwise reproducible even on CPU at the same thread count:
+batch 41 and 42 differ by 1e-12 in compliance at iteration 2 and diverge from there, so
+a repeat run is not the earlier run's snapshot (the batch 40 branch that matched its
+trunk exactly ran in one process).
