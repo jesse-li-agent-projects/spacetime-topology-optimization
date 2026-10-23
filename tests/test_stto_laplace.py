@@ -241,6 +241,7 @@ def test_hotspot_shaping_needs_a_relative_shielding():
 
 
 @pytest.mark.filterwarnings("ignore:subsolv:RuntimeWarning")
+@pytest.mark.filterwarnings("ignore:binarizing raised the hotspot row:UserWarning")
 def test_an_l_bracket_runs_on_its_domain_alone():
     n = 24
     base = _config()
