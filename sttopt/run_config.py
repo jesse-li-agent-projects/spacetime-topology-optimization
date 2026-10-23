@@ -524,6 +524,9 @@ class LaplaceRunConfig(SpaceTimeConfig):
         through the material rather than through gaps in it.
     :param chi_density_floor: the floor on `xPhys**e`, which keeps the void's `chi`
         positive and the solve conditioned.
+    :param chi_density_sensitivity: whether the density's sensitivity flows through
+        `chi`. ``False`` reads `xPhys` in `chi` as a constant, so the time field's terms
+        cannot pull on the density through its diffusivity.
     """
 
     chi_contrast: float
@@ -534,6 +537,7 @@ class LaplaceRunConfig(SpaceTimeConfig):
     field_move: Scheduled | None = None
     chi_density_exponent: Scheduled = 0.0
     chi_density_floor: float = 1e-2
+    chi_density_sensitivity: bool = True
 
     def __post_init__(self) -> None:
         super().__post_init__()
