@@ -16,6 +16,7 @@ import sttopt.load_cases as load_cases
 import sttopt.run_config as run_config
 import sttopt.stto_laplace as stto_laplace
 import sttopt.stto_laplace_cli as stto_laplace_cli
+import sttopt.virtual_heat as virtual_heat
 from sttopt.run_config import LaplaceRunConfig
 
 CONFIG_PATH = Path(__file__).parent.parent / "configs" / "laplace_default.json"
@@ -189,6 +190,29 @@ def test_a_density_exponent_routes_time_through_the_material():
         _, record = stto_laplace.step(problem, state)
         assert np.isfinite(record.f) and np.isfinite(record.dg).all()
     assert t_far[1.0] != t_far[0.0]
+
+
+@pytest.mark.parametrize("sensitivity", [True, False])
+def test_the_density_sensitivity_through_chi_can_be_cut(sensitivity):
+    """With `chi_density_sensitivity` off, `t` still follows the density but no
+    gradient reaches it through `chi`."""
+    nelx, nely = 30, 10
+    config = _config(
+        nelx, nely, chi_density_exponent=4.0, chi_density_sensitivity=sensitivity
+    )
+    problem = stto_laplace.build_problem(config, device="cpu")
+    state = stto_laplace.init_state(problem)
+    xPhys = torch.rand(nely, nelx, dtype=torch.float64).clamp(0.1).requires_grad_()
+    sol = virtual_heat.laplace_time_field(
+        config,
+        problem.mesh,
+        xPhys,
+        state.mu.clone().requires_grad_(),  # so `t` has a graph either way
+        problem.wall_filter @ state.wall,
+        density_exponent=4.0,
+    )
+    (grad,) = torch.autograd.grad(sol.tPhys.sum(), xPhys, allow_unused=True)
+    assert (grad is not None and float(grad.abs().max()) > 0) == sensitivity
 
 
 def _shaping_gradient(x, Tcr=0.6, **overrides):
