@@ -10,6 +10,26 @@ Compute: CPU only until the user frees the GPU. A 180 × 60 run of 600 iteration
 25–35 min at 4 threads, three at a time (`lap_driver4.tmp.py`, worktree
 `laplace-s03-schedule`).
 
+## 0. Objective terms (2026-10-25)
+
+Batches 44-46, the three C1 cells, one run each (`lap_batch44.tmp.py`, `lap_batch46.tmp.py`;
+dashboard `plot/laplace_s03/dashboard_b44.html`, table `output/lap/eval44.json`).
+- **Rounded weights: locked in** (`laplace_continuation.md`).
+- **Uniformity and roughness off, with the diffusivity range C at 1000, 100 or 10:** the
+  uniformity CV gets 2.5-7x worse at every C, so most of the uneven layering comes from
+  the wall data and the geometry, not μ. Narrowing C fails the tight cells (C1 0.3 at
+  every C, C1 0.5 Tcr 0.4 at C 10). Not adopted.
+- **Void switch `x^4/(x^4 + 0.05^4)`** (PR #219): it takes the near-void fringe out of the
+  hot set, but the gate and compliance don't change beyond scatter. Left out for
+  simplicity (user).
+
+Batch 47 (`lap_batch47.tmp.py`):
+- **Roughness off, uniformity kept.** At C 10 the sawtooth was back at baseline without
+  roughness, so it may not be needed.
+- **The shaping term reading `S_e`** (the run's `q`) instead of `S¹_e` (`q` = 1); the
+  two differ only after 300. Expected cost: above `q` = 1 the pull on void support (R2)
+  nearly vanishes.
+
 ## 1. The plain-TO gap
 
 Variant 2's plain TO (its schedule, Tcr held at 2) is coarser than `stto`'s: C1 0.5
