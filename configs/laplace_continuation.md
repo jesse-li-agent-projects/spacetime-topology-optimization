@@ -36,6 +36,11 @@ The move limits are fixed: 0.02 on the density, 0.002 on the time-field variable
 - **Fixed move limits.** Dropping the density limit's halving after 300 (together with
   the faster `q` ramp) cost nothing; dropping the time field's halving over 550-600 made
   no difference beyond run-to-run noise (compliance within 0.25% on every cell).
+- **Objective weights to one significant figure.** Uniformity 0.1, time-only hotspot 0.3,
+  roughness 0.001 -> 0.0001: `stto`'s weights divided by one C1 plain-TO compliance
+  (173.78), since the objective here is log compliance, then rounded. On the three C1
+  cells the rounded weights pass at unchanged compliance, with gate margins 0.01-0.05
+  thinner, about the scatter between near-identical configs (batch 44).
 - **No `mu` filter** (`mu_filter_rmin_m`): it halves the diffusivity's roughness but
   leaves C1 grey and failing once binarized.
 
@@ -43,4 +48,4 @@ The move limits are fixed: 0.02 on the density, 0.002 on the time-field variable
 
 Eight cells, two runs each (batches 41 and 42; three on C1 0.5 Tcr 0.4): C1 0.5 at Tcr
 0.4 and 0.6, C1 0.3, C2 0.5, S 0.3 bottom and edge, L middle and corner. All pass, at
-1.006-1.060 x plain TO.
+1.006-1.060 x plain TO. The rounded weights: the three C1 cells, one run each (batch 44).

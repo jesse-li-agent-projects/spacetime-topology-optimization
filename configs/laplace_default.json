@@ -10,11 +10,11 @@
   "nStage": 0,
   "Theta": 0.0,
   "uniformity_metric": "gradient_cv",
-  "uniformity_weight": 0.11508934466485911,
+  "uniformity_weight": 0.1,
   "roughness_weight": {
-    "initial": 0.0011508934466485912,
+    "initial": 0.001,
     "decay_iterations": 600,
-    "final": 0.00011508934466485911
+    "final": 0.0001
   },
   "Tcr": {
     "points": [
@@ -46,7 +46,7 @@
     "mode": "linear"
   },
   "hotspot_g0_per_m": 0.6736,
-  "hotspot_weight": 0.2877233616621478,
+  "hotspot_weight": 0.3,
   "calibration_rate": 0.1,
   "hotspot_credit": "cooling",
   "hotspot_tie_credit": 0.5,
