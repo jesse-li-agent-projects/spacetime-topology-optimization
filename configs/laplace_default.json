@@ -11,11 +11,7 @@
   "Theta": 0.0,
   "uniformity_metric": "gradient_cv",
   "uniformity_weight": 0.1,
-  "roughness_weight": {
-    "initial": 0.001,
-    "decay_iterations": 600,
-    "final": 0.0001
-  },
+  "roughness_weight": 0.0,
   "Tcr": {
     "points": [
       [
