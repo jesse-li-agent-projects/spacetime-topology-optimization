@@ -266,9 +266,12 @@ class SpaceTimeConfig(_ConfigMixin):
     :param hotspot_shielding: a `conductivity.Shielding` member value: how a neighbor's
         density counts toward `K_est`. `absolute`, the default and the only behaviour
         before it existed, or the scale-invariant `capped_ratio` or `ratio`, which
-        replace the `r` gate with `x / (x + hotspot_shielding_eps)`.
-    :param hotspot_shielding_eps: the relative shieldings' regularization, below which
-        a density counts as void.
+        replace the `r` gate with a `conductivity.VoidSwitch`.
+    :param hotspot_shielding_eps: the relative shieldings' ratio regularization, so void
+        on void reads as a ratio of 1.
+    :param hotspot_void_eps: the relative shieldings' `VoidSwitch` threshold, the
+        density below which an element counts as void.
+    :param hotspot_void_exponent: that switch's sharpness, at least 1.
     :param hotspot_shaping_weight: weight of `FieldTerms.hotspot_shaping` in the
         objective, possibly scheduled; 0, the default, disables it. Needs a relative
         `hotspot_shielding`.
@@ -342,6 +345,8 @@ class SpaceTimeConfig(_ConfigMixin):
     hotspot_tie_credit: float = 0.5
     hotspot_shielding: str = "absolute"
     hotspot_shielding_eps: float = 1e-3
+    hotspot_void_eps: float = 1e-3
+    hotspot_void_exponent: float = 1.0
     hotspot_shaping_weight: Scheduled = 0.0
     hotspot_shaping_sharpness: Scheduled = 100.0
     hotspot_shaping_q: Scheduled = 1.0

@@ -121,6 +121,12 @@ class FieldTerms:
             raise ValueError(
                 f"hotspot_shielding {shielding.value!r} divides by hotspot_shielding_eps, which must be positive, got {config.hotspot_shielding_eps}"
             )
+        if shielding != conductivity.Shielding.ABSOLUTE and not (
+            config.hotspot_void_eps > 0 and config.hotspot_void_exponent >= 1
+        ):
+            raise ValueError(
+                f"hotspot_shielding {shielding.value!r} needs hotspot_void_eps > 0 and hotspot_void_exponent >= 1 (below 1 its gradient diverges at void), got {config.hotspot_void_eps} and {config.hotspot_void_exponent}"
+            )
         if shielding == conductivity.Shielding.ABSOLUTE and not (
             run_config.identically_zero(config.hotspot_shaping_weight)
         ):
@@ -162,7 +168,9 @@ class FieldTerms:
                 (
                     None
                     if shielding == conductivity.Shielding.ABSOLUTE
-                    else config.hotspot_shielding_eps
+                    else conductivity.VoidSwitch(
+                        config.hotspot_void_eps, config.hotspot_void_exponent
+                    )
                 ),
             ),
             curvature=calibrated(config.tool_radius_m, config.curvature_beta),
@@ -435,7 +443,7 @@ class FieldTerms:
                 K_est,
                 xPhys,
                 run_config.weight_at(self.config.r, loop),
-                self.hotspot.gate_eps,
+                self.hotspot.void_switch,
             )
             imax = int(severity.argmax())
         nelx = xPhys.shape[1]

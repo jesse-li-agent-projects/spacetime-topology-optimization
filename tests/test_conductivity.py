@@ -2178,8 +2178,12 @@ def _shielded_severity(xPhys, tPhys, shielding, eps, r=R, q=Q):
         shielding=shielding,
         shielding_eps=eps,
     )
-    gate_eps = None if shielding == conductivity.Shielding.ABSOLUTE else eps
-    return torch_util.to_numpy(conductivity.severity(K, tt(xPhys), r, gate_eps))
+    switch = (
+        None
+        if shielding == conductivity.Shielding.ABSOLUTE
+        else conductivity.VoidSwitch(eps)
+    )
+    return torch_util.to_numpy(conductivity.severity(K, tt(xPhys), r, switch))
 
 
 _LAYERED_T = np.tile(np.linspace(1, 0, 12)[:, None], (1, 16))
@@ -2213,6 +2217,16 @@ def test_relative_shielding_matches_absolute_on_binary_designs(shielding):
     )
     relative = _shielded_severity(xPhys, _LAYERED_T, shielding, 1e-6)
     assert_close(relative, absolute, atol=1e-5)
+
+
+def test_a_sharp_void_switch_drops_near_void_but_not_grey():
+    """At a physically small `eps` the default `n = 1` already discounts grey material,
+    which a sharper switch does not."""
+    x = torch.tensor([0.0, 0.01, 0.3, 0.5, 1.0], dtype=torch.float64)
+    sharp = conductivity.VoidSwitch(0.05, 4.0)(x)
+    assert sharp[1] < 0.01
+    assert sharp[2:].min() > 0.99
+    assert conductivity.VoidSwitch(0.05)(x)[3] < 0.95
 
 
 def test_capped_ratio_rates_grey_on_solid_support_as_solid():
