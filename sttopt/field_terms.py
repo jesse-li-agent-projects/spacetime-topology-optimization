@@ -357,8 +357,9 @@ class FieldTerms:
         loop: int,
     ) -> Float[Tensor, ""]:
         """A pressure on would-be hotspots, for the objective: the mean over elements of
-        `softplus(S1 - Tcr) * xPhys`, where `S1 = 1 - K_est` at `q = 1` is the severity
-        an element would have once it and its support were solid.
+        `softplus(S1 - Tcr) * xPhys`, where `S1 = 1 - K_est` at `hotspot_shaping_q`. At
+        its default `q = 1`, `S1` is the severity an element would have once it and its
+        support were solid.
 
         The relative shieldings read that severity honestly in the hotspot constraint,
         but its gradient barely moves a bar's overall density or its void support. This
@@ -370,7 +371,9 @@ class FieldTerms:
         config = self.config
         Tcr = run_config.weight_at(config.Tcr, loop)
         sharpness = run_config.weight_at(config.hotspot_shaping_sharpness, loop)
-        K_est = self.estimated_conductivity(xPhys, tPhys, loop, q=1.0)
+        K_est = self.estimated_conductivity(
+            xPhys, tPhys, loop, q=run_config.weight_at(config.hotspot_shaping_q, loop)
+        )
         # The print base's infinite `K_est` is no hotspot: select it out, as in
         # `conductivity.LogSumExp`, so its `inf` never reaches the backward pass.
         finite = torch.isfinite(K_est)
