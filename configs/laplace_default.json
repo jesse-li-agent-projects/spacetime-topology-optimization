@@ -50,6 +50,23 @@
   "hotspot_shielding_eps": 0.001,
   "hotspot_shaping_weight": 100.0,
   "hotspot_shaping_sharpness": 100.0,
+  "hotspot_shaping_q": {
+    "points": [
+      [
+        0,
+        1.0
+      ],
+      [
+        300,
+        1.0
+      ],
+      [
+        400,
+        3.0
+      ]
+    ],
+    "mode": "linear"
+  },
   "hotspot_cooling_time": 0.01,
   "hotspot_cooling_sharpness": {
     "points": [

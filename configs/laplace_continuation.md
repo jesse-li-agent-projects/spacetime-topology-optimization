@@ -22,6 +22,9 @@ The move limits are fixed: 0.02 on the density, 0.002 on the time-field variable
   it lets a grey design pass that fails once binarized (C1 0.3 by +0.04). Raising it to 3
   while `beta_d` sharpens makes the reading of grey support as strict as binarizing
   would be. Since the design still ends 6-13% grey, `q` matters to the end.
+- **The shaping term reads the constraint's own severity** (`hotspot_shaping_q` follows
+  `q`) rather than a separate reading at `q` = 1. All eight cells pass at unchanged
+  compliance (batches 47 and 49), and the formulation loses a second severity.
 - **`beta_d` ends at 8, not 128.** Branched from 300 on the four hardest cells: -> 8
   passes all of them with about the same compliance (C1 0.3 1.066 against 1.074 at
   128) and smooth 0.5 contours; -> 4 and held at 2 fail on C1. Ending grey means gating
