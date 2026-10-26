@@ -10,12 +10,8 @@
   "nStage": 0,
   "Theta": 0.0,
   "uniformity_metric": "gradient_cv",
-  "uniformity_weight": 0.11508934466485911,
-  "roughness_weight": {
-    "initial": 0.0011508934466485912,
-    "decay_iterations": 600,
-    "final": 0.00011508934466485911
-  },
+  "uniformity_weight": 0.1,
+  "roughness_weight": 0.0,
   "Tcr": {
     "points": [
       [
@@ -46,7 +42,7 @@
     "mode": "linear"
   },
   "hotspot_g0_per_m": 0.6736,
-  "hotspot_weight": 0.2877233616621478,
+  "hotspot_weight": 0.3,
   "calibration_rate": 0.1,
   "hotspot_credit": "cooling",
   "hotspot_tie_credit": 0.5,
@@ -54,6 +50,23 @@
   "hotspot_shielding_eps": 0.001,
   "hotspot_shaping_weight": 100.0,
   "hotspot_shaping_sharpness": 100.0,
+  "hotspot_shaping_q": {
+    "points": [
+      [
+        0,
+        1.0
+      ],
+      [
+        300,
+        1.0
+      ],
+      [
+        400,
+        3.0
+      ]
+    ],
+    "mode": "linear"
+  },
   "hotspot_cooling_time": 0.01,
   "hotspot_cooling_sharpness": {
     "points": [
@@ -177,23 +190,7 @@
   "laplace_cg_rtol": 1e-08,
   "poisson_cg_rtol": 1e-08,
   "wall_filter_rmin_m": 0.004,
-  "field_move": {
-    "points": [
-      [
-        0,
-        0.002
-      ],
-      [
-        550,
-        0.002
-      ],
-      [
-        600,
-        0.001
-      ]
-    ],
-    "mode": "log"
-  },
+  "field_move": 0.002,
   "chi_density_exponent": {
     "points": [
       [

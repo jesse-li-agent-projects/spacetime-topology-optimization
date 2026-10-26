@@ -558,8 +558,9 @@ def laplace_time_field(
     shape = xPhys.shape
     chi = diffusivity(mu.flatten(), config.chi_contrast)
     if density_exponent != 0:
+        rho = xPhys if config.chi_density_sensitivity else xPhys.detach()
         chi = chi * torch.clamp(
-            xPhys.flatten() ** density_exponent, min=config.chi_density_floor
+            rho.flatten() ** density_exponent, min=config.chi_density_floor
         )
     chi = torch.where(mesh.active, chi, 1.0)
     b = wall * wall_scale(mesh)

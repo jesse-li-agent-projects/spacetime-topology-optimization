@@ -134,7 +134,7 @@ case.
   over hot neighbours' multipliers. A purely selfish per-element objective would never
   thicken anything (L1). It only pays off combined with a change to what credit means.
 - **A real heat path.** The virtual-heat variants: `stto_heat` (set aside, see
-  `plans/virtual_heat_tuning.md`) and `stto_laplace` (PR #207, open). Groundedness comes
+  `plans/archive/virtual_heat_tuning.md`) and `stto_laplace` (PR #207, open). Groundedness comes
   for free. The user's stated purpose for Variant 2 is to rule out a class of local
   minima and maxima.
 
@@ -161,7 +161,7 @@ case.
 ## References
 
 - Plans: `print_order_credit.md`, `s03_material_behind_front.md`, `length_scale_options.md`
-  (necking), `virtual_heat_tuning.md`, `configs/continuation.md`. The earlier handoff
+  (necking), `archive/virtual_heat_tuning.md`, `configs/continuation.md`. The earlier handoff
   section is in `plans/stto_tuning_handoff.md`, on the unmerged branch
   `worktree-tuning-handoff` (PR #209, closed).
 - Code: `sttopt/conductivity.py` (`_conductivity_core`: g is `x[b] ** q`; credits;

@@ -121,6 +121,12 @@ class FieldTerms:
             raise ValueError(
                 f"hotspot_shielding {shielding.value!r} divides by hotspot_shielding_eps, which must be positive, got {config.hotspot_shielding_eps}"
             )
+        if shielding != conductivity.Shielding.ABSOLUTE and not (
+            config.hotspot_void_eps > 0 and config.hotspot_void_exponent >= 1
+        ):
+            raise ValueError(
+                f"hotspot_shielding {shielding.value!r} needs hotspot_void_eps > 0 and hotspot_void_exponent >= 1 (below 1 its gradient diverges at void), got {config.hotspot_void_eps} and {config.hotspot_void_exponent}"
+            )
         if shielding == conductivity.Shielding.ABSOLUTE and not (
             run_config.identically_zero(config.hotspot_shaping_weight)
         ):
@@ -162,7 +168,9 @@ class FieldTerms:
                 (
                     None
                     if shielding == conductivity.Shielding.ABSOLUTE
-                    else config.hotspot_shielding_eps
+                    else conductivity.VoidSwitch(
+                        config.hotspot_void_eps, config.hotspot_void_exponent
+                    )
                 ),
             ),
             curvature=calibrated(config.tool_radius_m, config.curvature_beta),
@@ -357,20 +365,28 @@ class FieldTerms:
         loop: int,
     ) -> Float[Tensor, ""]:
         """A pressure on would-be hotspots, for the objective: the mean over elements of
-        `softplus(S1 - Tcr) * xPhys`, where `S1 = 1 - K_est` at `q = 1` is the severity
-        an element would have once it and its support were solid.
+        `softplus(S1 - Tcr) * xPhys`, where `S1 = 1 - K_est` at `hotspot_shaping_q`. At
+        its default `q = 1`, `S1` is the severity an element would have once it and its
+        support were solid.
 
         The relative shieldings read that severity honestly in the hotspot constraint,
         but its gradient barely moves a bar's overall density or its void support. This
         term pushes a would-be violator's own density down and, since `q = 1` keeps the
         shielding's slope finite at void, its earlier neighbors' up; it is near zero
         wherever the solid design passes, so it shapes the path more than the optimum.
-        See `plans/scale_invariant_hotspot.md`.
+        See `plans/archive/scale_invariant_hotspot.md`.
+
+        :param xPhys: physical density
+        :param tPhys: physical time field
+        :param loop: iteration whose schedules apply
+        :return: the term's value
         """
         config = self.config
         Tcr = run_config.weight_at(config.Tcr, loop)
         sharpness = run_config.weight_at(config.hotspot_shaping_sharpness, loop)
-        K_est = self.estimated_conductivity(xPhys, tPhys, loop, q=1.0)
+        K_est = self.estimated_conductivity(
+            xPhys, tPhys, loop, q=run_config.weight_at(config.hotspot_shaping_q, loop)
+        )
         # The print base's infinite `K_est` is no hotspot: select it out, as in
         # `conductivity.LogSumExp`, so its `inf` never reaches the backward pass.
         finite = torch.isfinite(K_est)
@@ -427,7 +443,7 @@ class FieldTerms:
                 K_est,
                 xPhys,
                 run_config.weight_at(self.config.r, loop),
-                self.hotspot.gate_eps,
+                self.hotspot.void_switch,
             )
             imax = int(severity.argmax())
         nelx = xPhys.shape[1]

@@ -16,6 +16,7 @@ import sttopt.load_cases as load_cases
 import sttopt.run_config as run_config
 import sttopt.stto_laplace as stto_laplace
 import sttopt.stto_laplace_cli as stto_laplace_cli
+import sttopt.virtual_heat as virtual_heat
 from sttopt.run_config import LaplaceRunConfig
 
 CONFIG_PATH = Path(__file__).parent.parent / "configs" / "laplace_default.json"
@@ -191,9 +192,35 @@ def test_a_density_exponent_routes_time_through_the_material():
     assert t_far[1.0] != t_far[0.0]
 
 
-def _shaping_gradient(x, Tcr=0.6):
+@pytest.mark.parametrize("sensitivity", [True, False])
+def test_the_density_sensitivity_through_chi_can_be_cut(sensitivity):
+    """With `chi_density_sensitivity` off, `t` still follows the density but no
+    gradient reaches it through `chi`."""
+    nelx, nely = 30, 10
+    config = _config(
+        nelx, nely, chi_density_exponent=4.0, chi_density_sensitivity=sensitivity
+    )
+    problem = stto_laplace.build_problem(config, device="cpu")
+    state = stto_laplace.init_state(problem)
+    xPhys = torch.rand(nely, nelx, dtype=torch.float64).clamp(0.1).requires_grad_()
+    sol = virtual_heat.laplace_time_field(
+        config,
+        problem.mesh,
+        xPhys,
+        state.mu.clone().requires_grad_(),  # so `t` has a graph either way
+        problem.wall_filter @ state.wall,
+        density_exponent=4.0,
+    )
+    (grad,) = torch.autograd.grad(sol.tPhys.sum(), xPhys, allow_unused=True)
+    assert (grad is not None and float(grad.abs().max()) > 0) == sensitivity
+
+
+def _shaping_gradient(x, Tcr=0.6, **overrides):
     """`FieldTerms.hotspot_shaping` and its density gradient on a 60x20 mesh printed
-    column by column from the left, under capped-ratio shielding."""
+    column by column from the left, under capped-ratio shielding.
+
+    :param overrides: config fields to set on top of that setup
+    """
     nely, nelx = x.shape
     base = _config(nelx, nely)
     config = _config(
@@ -203,6 +230,7 @@ def _shaping_gradient(x, Tcr=0.6):
         hotspot_shaping_weight=1.0,
         rmin_cond_m=4 * base.element_size_m,
         Tcr=Tcr,
+        **overrides,
     )
     terms = stto_laplace.build_problem(config, device="cpu").terms
     t = torch.linspace(0, 1, nelx, dtype=torch.float64).expand(nely, nelx)
@@ -219,6 +247,18 @@ def test_hotspot_shaping_pushes_a_violating_bar_out_and_its_void_support_in():
     rows = slice(8, 12)
     assert (grad[rows, 40] > 0).all()  # R1
     assert (grad[rows, 38] < 0).all()  # R2, on void
+
+
+def test_hotspot_shaping_above_q_1_barely_pulls_void_support_in():
+    """What reading the constraint's own severity (`q > 1`) costs: R2's pull on void is
+    the shielding's slope at void, which `q > 1` flattens."""
+    x = torch.zeros(20, 60, dtype=torch.float64)
+    x[:, 40:44] = 0.5
+    rows = slice(8, 12)
+    _, solid = _shaping_gradient(x)
+    _, own = _shaping_gradient(x, hotspot_shaping_q=3.0)
+    assert (own[rows, 40] > 0).all()  # R1 survives
+    assert own[rows, 38].abs().max() < 1e-2 * solid[rows, 38].abs().min()
 
 
 def test_hotspot_shaping_is_quiet_on_a_bar_whose_solid_version_passes():

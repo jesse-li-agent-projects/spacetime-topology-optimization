@@ -103,7 +103,7 @@ class Shielding(StrEnum):
     element in full, so a grey element reads as it would once it and its support were
     solid; RATIO is uncapped, so one dense neighbor can make up for a missing one. Both
     swap the severity's `x**r` gate for `density_gate`'s, and all three agree on binary
-    designs to within `eps`. See `plans/scale_invariant_hotspot.md`.
+    designs to within `eps`. See `plans/archive/scale_invariant_hotspot.md`.
     """
 
     ABSOLUTE = "absolute"
@@ -132,18 +132,40 @@ def shielding_term(
     raise ValueError(f"shielding must be a Shielding member, got {shielding!r}")
 
 
+class VoidSwitch(NamedTuple):
+    """The relative shieldings' density factor `x**n / (x**n + eps**n)`: about 0 below
+    `eps`, about 1 above it, sharper as `n` grows.
+
+    At `n = 1` the factor is flat only above `~10 eps`, so a physically small `eps` (a
+    few percent) needs a larger `n` to leave grey material reading at full severity.
+
+    :param eps: the density below which an element counts as void
+    :param exponent: the sharpness `n`
+    """
+
+    eps: float
+    exponent: float = 1.0
+
+    def __call__(self, x: Float[Tensor, " n"]) -> Float[Tensor, " n"]:
+        xn = x**self.exponent
+        return xn / (xn + self.eps**self.exponent)
+
+
 def density_gate(
-    x: Float[Tensor, " n"], r: float, eps: float | None
+    x: Float[Tensor, " n"], r: float, switch: VoidSwitch | None
 ) -> Float[Tensor, " n"]:
     """The severity's density factor, which keeps void out of the hotspot measure.
 
-    `x**r` for ABSOLUTE shielding (`eps` is `None`). The relative shieldings take
-    `x / (x + eps)` instead: it zeroes void like `x**r` does, but is flat above `~10 eps`,
-    so it keeps the severity scale-invariant and barely pushes grey density down.
+    `x**r` for ABSOLUTE shielding (`switch` is `None`). The relative shieldings take a
+    `VoidSwitch` instead: it zeroes void like `x**r` does, but is flat on material, so
+    it keeps the severity scale-invariant and barely pushes grey density down.
+
+    :param r: the `x**r` exponent, unused when `switch` is given
+    :param switch: the relative shieldings' void switch, `None` for ABSOLUTE
     """
-    if eps is None:
+    if switch is None:
         return smooth_max.density_power(x, r)
-    return x / (x + eps)
+    return switch(x)
 
 
 class Aggregation(StrEnum):
@@ -688,18 +710,21 @@ def severity(
     K_est: Float[Tensor, " nel"],
     xPhys: Float[Tensor, "nely nelx"],
     r: float,
-    eps: float | None = None,
+    switch: VoidSwitch | None = None,
 ) -> Float[Tensor, " nel"]:
-    """The per-element overheating severity `(1 - K_est) * density_gate(xPhys, r, eps)`,
-    `-inf` where an element is infinitely shielded and so has no severity to compare.
+    """The per-element overheating severity `(1 - K_est) * density_gate(...)`, `-inf`
+    where an element is infinitely shielded and so has no severity to compare.
 
     The one no-grad statement of the quantity the aggregations smooth-max and the
     calibration targets, so a reading of the field cannot drift from the optimized one.
     The aggregations build their own gradient-safe variants of it.
+
+    :param r: `density_gate`'s `r`
+    :param switch: `density_gate`'s switch
     """
     with torch.no_grad():
         finite = torch.isfinite(K_est)
-        gate = density_gate(xPhys.flatten(), r, eps)
+        gate = density_gate(xPhys.flatten(), r, switch)
         return torch.where(finite, (1 - K_est) * gate, -torch.inf)
 
 
@@ -707,10 +732,10 @@ def _max_severity(
     K_est: Float[Tensor, " nel"],
     xPhys: Float[Tensor, "nely nelx"],
     r: float,
-    eps: float | None = None,
+    switch: VoidSwitch | None = None,
 ) -> float:
     """The true maximum severity a smooth maximum stands in for."""
-    return float(severity(K_est, xPhys, r, eps).max())
+    return float(severity(K_est, xPhys, r, switch).max())
 
 
 class PMean:
@@ -730,7 +755,7 @@ class PMean:
     so the last one is kept.
     """
 
-    gate_eps = None  # only the `x**r` gate: see `make_aggregation`
+    void_switch = None  # only the `x**r` gate: see `make_aggregation`
 
     def __init__(self, p: float, r: "run_config.Scheduled", rate: float = 1.0):
         """
@@ -792,18 +817,18 @@ class LogSumExp(smooth_max.CalibratedLogSumExp):
         beta: "run_config.Scheduled",
         r: "run_config.Scheduled",
         rate: float = 1.0,
-        gate_eps: float | None = None,
+        void_switch: VoidSwitch | None = None,
     ):
         """
         :param beta: sharpness, possibly scheduled
         :param r: the density exponent of the severity the calibration targets,
             possibly scheduled
         :param rate: weight of each new measurement in the calibration, in (0, 1]
-        :param gate_eps: `density_gate`'s `eps`, `None` for the `x**r` gate
+        :param void_switch: `density_gate`'s switch, `None` for the `x**r` gate
         """
         super().__init__(beta, rate)
         self.r = r
-        self.gate_eps = gate_eps
+        self.void_switch = void_switch
 
     def __call__(
         self, K_est: Float[Tensor, " nel"], xPhys: Float[Tensor, "nely nelx"], loop: int
@@ -812,7 +837,7 @@ class LogSumExp(smooth_max.CalibratedLogSumExp):
         differentiable in `K_est` and `xPhys`."""
         shielded = torch.isinf(K_est)
         gate = density_gate(
-            xPhys.flatten(), run_config.weight_at(self.r, loop), self.gate_eps
+            xPhys.flatten(), run_config.weight_at(self.r, loop), self.void_switch
         )
         # `1 - inf` would poison the `-inf` reselect below through `inf * 0`.
         T = torch.where(shielded, torch.zeros_like(K_est), 1 - K_est)
@@ -826,25 +851,25 @@ def make_aggregation(
     r: "run_config.Scheduled",
     beta: "run_config.Scheduled",
     rate: float = 1.0,
-    gate_eps: float | None = None,
+    void_switch: VoidSwitch | None = None,
 ) -> PMean | LogSumExp:
     """A fresh, uncalibrated aggregation for a run's settings.
 
     :param beta: `LogSumExp` sharpness, possibly scheduled; unused by `PMean`, which
         takes `p` instead.
     :param rate: weight of each new measurement in the calibration, in (0, 1]
-    :param gate_eps: `density_gate`'s `eps`, `None` for the `x**r` gate
-    :raises ValueError: for `PMean` with `gate_eps`: the relative shieldings it comes
+    :param void_switch: `density_gate`'s switch, `None` for the `x**r` gate
+    :raises ValueError: for `PMean` with `void_switch`: the relative shieldings it comes
         with leave the severity unbounded below, which `PMean`'s powers cannot take
     """
     if aggregation == Aggregation.P_MEAN:
-        if gate_eps is not None:
+        if void_switch is not None:
             raise ValueError(
                 "a relative hotspot_shielding needs the logsumexp aggregation: its severity is unbounded below, which p_mean's powers cannot take"
             )
         return PMean(p, r, rate)
     elif aggregation == Aggregation.LOGSUMEXP:
-        return LogSumExp(beta, r, rate, gate_eps)
+        return LogSumExp(beta, r, rate, void_switch)
     else:
         raise ValueError(
             f"aggregation must be an Aggregation member, got {aggregation!r}"

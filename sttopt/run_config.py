@@ -266,14 +266,20 @@ class SpaceTimeConfig(_ConfigMixin):
     :param hotspot_shielding: a `conductivity.Shielding` member value: how a neighbor's
         density counts toward `K_est`. `absolute`, the default and the only behaviour
         before it existed, or the scale-invariant `capped_ratio` or `ratio`, which
-        replace the `r` gate with `x / (x + hotspot_shielding_eps)`.
-    :param hotspot_shielding_eps: the relative shieldings' regularization, below which
-        a density counts as void.
+        replace the `r` gate with a `conductivity.VoidSwitch`.
+    :param hotspot_shielding_eps: the relative shieldings' ratio regularization, so void
+        on void reads as a ratio of 1.
+    :param hotspot_void_eps: the relative shieldings' `VoidSwitch` threshold, the
+        density below which an element counts as void.
+    :param hotspot_void_exponent: that switch's sharpness, at least 1.
     :param hotspot_shaping_weight: weight of `FieldTerms.hotspot_shaping` in the
         objective, possibly scheduled; 0, the default, disables it. Needs a relative
         `hotspot_shielding`.
     :param hotspot_shaping_sharpness: that term's softplus sharpness, per unit severity,
         possibly scheduled.
+    :param hotspot_shaping_q: the shielding exponent that term reads `K_est` at,
+        possibly scheduled. 1, the default, is the severity an element would have once
+        solid; the run's `q` schedule makes it read the constraint's own severity.
     :param hotspot_cooling_time: `cooling`'s cooling time, in `t`, possibly scheduled.
     :param hotspot_cooling_sharpness: `cooling`'s onset sharpness `k`, possibly
         scheduled. A tie gets `1 - 2**(-1/k)`, and a later neighbor is pulled earlier
@@ -339,8 +345,11 @@ class SpaceTimeConfig(_ConfigMixin):
     hotspot_tie_credit: float = 0.5
     hotspot_shielding: str = "absolute"
     hotspot_shielding_eps: float = 1e-3
+    hotspot_void_eps: float = 1e-3
+    hotspot_void_exponent: float = 1.0
     hotspot_shaping_weight: Scheduled = 0.0
     hotspot_shaping_sharpness: Scheduled = 100.0
+    hotspot_shaping_q: Scheduled = 1.0
     hotspot_cooling_time: Scheduled = 0.0
     hotspot_cooling_sharpness: Scheduled = 8.0
     print_base: str
@@ -524,6 +533,9 @@ class LaplaceRunConfig(SpaceTimeConfig):
         through the material rather than through gaps in it.
     :param chi_density_floor: the floor on `xPhys**e`, which keeps the void's `chi`
         positive and the solve conditioned.
+    :param chi_density_sensitivity: whether the density's sensitivity flows through
+        `chi`. ``False`` reads `xPhys` in `chi` as a constant, so the time field's terms
+        cannot pull on the density through its diffusivity.
     """
 
     chi_contrast: float
@@ -534,6 +546,7 @@ class LaplaceRunConfig(SpaceTimeConfig):
     field_move: Scheduled | None = None
     chi_density_exponent: Scheduled = 0.0
     chi_density_floor: float = 1e-2
+    chi_density_sensitivity: bool = True
 
     def __post_init__(self) -> None:
         super().__post_init__()
