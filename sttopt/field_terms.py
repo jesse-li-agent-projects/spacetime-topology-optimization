@@ -367,6 +367,11 @@ class FieldTerms:
         shielding's slope finite at void, its earlier neighbors' up; it is near zero
         wherever the solid design passes, so it shapes the path more than the optimum.
         See `plans/archive/scale_invariant_hotspot.md`.
+
+        :param xPhys: physical density
+        :param tPhys: physical time field
+        :param loop: iteration whose schedules apply
+        :return: the term's value
         """
         config = self.config
         Tcr = run_config.weight_at(config.Tcr, loop)

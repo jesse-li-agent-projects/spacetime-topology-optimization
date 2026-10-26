@@ -193,7 +193,10 @@ def test_a_density_exponent_routes_time_through_the_material():
 
 def _shaping_gradient(x, Tcr=0.6, **overrides):
     """`FieldTerms.hotspot_shaping` and its density gradient on a 60x20 mesh printed
-    column by column from the left, under capped-ratio shielding."""
+    column by column from the left, under capped-ratio shielding.
+
+    :param overrides: config fields to set on top of that setup
+    """
     nely, nelx = x.shape
     base = _config(nelx, nely)
     config = _config(
