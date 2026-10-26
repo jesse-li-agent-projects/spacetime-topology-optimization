@@ -536,6 +536,9 @@ class LaplaceRunConfig(SpaceTimeConfig):
     :param chi_density_sensitivity: whether the density's sensitivity flows through
         `chi`. ``False`` reads `xPhys` in `chi` as a constant, so the time field's terms
         cannot pull on the density through its diffusivity.
+    :param hotspot_constraint: whether the hotspot row is in MMA's constraint stack.
+        ``False`` still measures it, for the time-only hotspot objective and the logs,
+        but leaves the density's hotspot pressure to the shaping term alone.
     """
 
     chi_contrast: float
@@ -547,6 +550,7 @@ class LaplaceRunConfig(SpaceTimeConfig):
     chi_density_exponent: Scheduled = 0.0
     chi_density_floor: float = 1e-2
     chi_density_sensitivity: bool = True
+    hotspot_constraint: bool = True
 
     def __post_init__(self) -> None:
         super().__post_init__()

@@ -405,10 +405,11 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     K_est_t = problem.terms.estimated_conductivity(xPhys, tPhys, loop)
     g_parts = constraint_values(problem, xPhys, tPhys, K_est_t, loop)
     g_hotspot_t = g_parts["hotspot"][0]
-    g_all = torch.cat(list(g_parts.values()))
     # Per part, not on `g_all`, as in `stto.step` (PR #173)
     g_rows = {name: _sensitivity_rows(g, leaves) for name, g in g_parts.items()}
-    dg_dx = torch.cat(list(g_rows.values()), dim=0)
+    stacked = [n for n in g_parts if config.hotspot_constraint or n != "hotspot"]
+    g_all = torch.cat([g_parts[n] for n in stacked])
+    dg_dx = torch.cat([g_rows[n] for n in stacked], dim=0)
     hotspot_weight = problem.terms.add_time_only_hotspot(
         df_dx, g_rows["hotspot"][0], nel, loop
     )
