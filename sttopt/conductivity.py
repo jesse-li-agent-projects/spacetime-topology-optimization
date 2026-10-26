@@ -136,9 +136,11 @@ class VoidSwitch(NamedTuple):
     """The relative shieldings' density factor `x**n / (x**n + eps**n)`: about 0 below
     `eps`, about 1 above it, sharper as `n` grows.
 
-    `eps` is the density below which an element counts as void. At `n = 1` the factor is
-    flat only above `~10 eps`, so a physically small `eps` (a few percent) needs a larger
-    `n` to leave grey material reading at full severity.
+    At `n = 1` the factor is flat only above `~10 eps`, so a physically small `eps` (a
+    few percent) needs a larger `n` to leave grey material reading at full severity.
+
+    :param eps: the density below which an element counts as void
+    :param exponent: the sharpness `n`
     """
 
     eps: float
@@ -157,6 +159,9 @@ def density_gate(
     `x**r` for ABSOLUTE shielding (`switch` is `None`). The relative shieldings take a
     `VoidSwitch` instead: it zeroes void like `x**r` does, but is flat on material, so
     it keeps the severity scale-invariant and barely pushes grey density down.
+
+    :param r: the `x**r` exponent, unused when `switch` is given
+    :param switch: the relative shieldings' void switch, `None` for ABSOLUTE
     """
     if switch is None:
         return smooth_max.density_power(x, r)
@@ -707,12 +712,15 @@ def severity(
     r: float,
     switch: VoidSwitch | None = None,
 ) -> Float[Tensor, " nel"]:
-    """The per-element overheating severity `(1 - K_est) * density_gate(xPhys, r, switch)`,
-    `-inf` where an element is infinitely shielded and so has no severity to compare.
+    """The per-element overheating severity `(1 - K_est) * density_gate(...)`, `-inf`
+    where an element is infinitely shielded and so has no severity to compare.
 
     The one no-grad statement of the quantity the aggregations smooth-max and the
     calibration targets, so a reading of the field cannot drift from the optimized one.
     The aggregations build their own gradient-safe variants of it.
+
+    :param r: `density_gate`'s `r`
+    :param switch: `density_gate`'s switch
     """
     with torch.no_grad():
         finite = torch.isfinite(K_est)
