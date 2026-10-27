@@ -134,7 +134,7 @@ def test_a_step_stays_finite_when_void_is_later_than_the_part():
     state = stto_laplace.init_state(problem)
     x = torch.full_like(state.x, 1e-3)
     x[:, :8] = 1.0
-    loop = 150  # where the default penal is fractional
+    loop = 225  # where the default penal is fractional
     state = dataclasses.replace(
         state,
         x=x,

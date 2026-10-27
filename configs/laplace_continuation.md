@@ -1,16 +1,17 @@
 # The default Laplace continuation schedule
 
 `laplace_default.json` holds the numbers for `stto_laplace`; this is why they sit where
-they do. Iterations are for `nloop` 600. Evidence per batch is in
-`plans/archive/scale_invariant_hotspot.md` (PR #207).
+they do. Evidence per batch is in `plans/archive/scale_invariant_hotspot.md` (PR #207).
+Batches up to 49 ran phase 1 over 0-300 (`nloop` 600); the iterations they quote below
+are on that schedule.
 
 ## Phases
 
 | Iterations | Phase | What moves |
 |---|---|---|
-| 0-300 | layout forms | `hotspot_kappa`, `penal`, `beta_t` ramp linearly; cooling sharpness `k` 1 -> 8 (geometric); `Tcr` 1 -> target over 0-100; `beta_d` held at 2, `q` held at 1 |
-| 300-400 | sharpen | `beta_d` 2 -> 8 (geometric) and `q` 1 -> 3, together |
-| 400-600 | settle | nothing ramps |
+| 0-450 | layout forms | `hotspot_kappa`, `penal`, `beta_t` ramp linearly; cooling sharpness `k` 1 -> 8 (geometric); `Tcr` 1 -> target over 0-150; `beta_d` held at 2, `q` held at 1 |
+| 450-550 | sharpen | `beta_d` 2 -> 8 (geometric) and `q` 1 -> 3, together |
+| 550-750 | settle | nothing ramps |
 
 The move limits are fixed: 0.02 on the density, 0.002 on the time-field variables.
 
@@ -34,8 +35,12 @@ The move limits are fixed: 0.02 on the density, 0.002 on the time-field variable
   peaks near 400 against about 210).
 - **`k` geometric.** `k` is a softplus sharpness, so equal ratios are equal steps; as good
   as or better than linear on C1.
-- **Ends at 600.** Every cell passes the binarized gate from 500 on in both validation
-  batches, and the last 50 iterations move compliance by at most 0.3% (C1).
+- **Phase 1 over 450 iterations, not 300** (batch 51, `penal` 2 -> 5 kept). On C1 0.5
+  it ends less grey (11-13% against 14%) at about 0.5% lower compliance; C1 0.3 was mixed
+  (+0.066 over the gate on one run, passing on its GPU rerun in batch 52).
+- **Settles for 200 iterations.** On the 600-iteration schedule every cell passed the
+  binarized gate from 500 on in both validation batches, and the last 50 iterations
+  moved compliance by at most 0.3% (C1).
 - **Fixed move limits.** Dropping the density limit's halving after 300 (together with
   the faster `q` ramp) cost nothing; dropping the time field's halving over 550-600 made
   no difference beyond run-to-run noise (compliance within 0.25% on every cell).
@@ -49,7 +54,7 @@ The move limits are fixed: 0.02 on the density, 0.002 on the time-field variable
   move both ways by about the rounding's own scatter (batches 47 and 49).
 - **No hotspot constraint** (`hotspot_constraint`): the shaping term and the time-only
   hotspot objective hold the severity at `Tcr` on their own. Without the row, all eight
-  cells pass at the same or slightly lower compliance (batch 52, `nloop` 750); the
+  cells pass at the same or slightly lower compliance (batch 52); the
   severity overshoots `Tcr` by up to about 0.1 mid-run, but ends below it.
 - **No `mu` filter** (`mu_filter_rmin_m`): it halves the diffusivity's roughness but
   leaves C1 grey and failing once binarized.
@@ -59,4 +64,5 @@ The move limits are fixed: 0.02 on the density, 0.002 on the time-field variable
 Eight cells, two runs each (batches 41 and 42; three on C1 0.5 Tcr 0.4): C1 0.5 at Tcr
 0.4 and 0.6, C1 0.3, C2 0.5, S 0.3 bottom and edge, L middle and corner. All pass, at
 1.006-1.060 x plain TO. The rounded weights, and the roughness term off: all eight cells,
-one run each (batches 44, 47 and 49).
+one run each (batches 44, 47 and 49). This schedule, with the hotspot constraint on and off:
+all eight cells, one run each (batch 52).
