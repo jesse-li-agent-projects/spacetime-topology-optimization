@@ -47,6 +47,10 @@ The move limits are fixed: 0.02 on the density, 0.002 on the time-field variable
 - **No roughness term.** At its rounded weight (0.001 -> 0.0001) it was too weak to act:
   turning it off passes all eight cells at unchanged compliance, and the layer measures
   move both ways by about the rounding's own scatter (batches 47 and 49).
+- **No hotspot constraint** (`hotspot_constraint`): the shaping term and the time-only
+  hotspot objective hold the severity at `Tcr` on their own. Without the row, all eight
+  cells pass at the same or slightly lower compliance (batch 52, `nloop` 750); the
+  severity overshoots `Tcr` by up to about 0.1 mid-run, but ends below it.
 - **No `mu` filter** (`mu_filter_rmin_m`): it halves the diffusivity's roughness but
   leaves C1 grey and failing once binarized.
 
