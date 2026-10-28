@@ -134,7 +134,7 @@ def test_a_step_stays_finite_when_void_is_later_than_the_part():
     state = stto_laplace.init_state(problem)
     x = torch.full_like(state.x, 1e-3)
     x[:, :8] = 1.0
-    loop = 150  # where the default penal is fractional
+    loop = 225  # where the default penal is fractional
     state = dataclasses.replace(
         state,
         x=x,
@@ -213,6 +213,22 @@ def test_the_density_sensitivity_through_chi_can_be_cut(sensitivity):
     )
     (grad,) = torch.autograd.grad(sol.tPhys.sum(), xPhys, allow_unused=True)
     assert (grad is not None and float(grad.abs().max()) > 0) == sensitivity
+
+
+def test_the_hotspot_is_measured_but_not_constrained():
+    """MMA's stack is the volume row alone, while the record still reads the hotspot."""
+    problem = stto_laplace.build_problem(_config(), device="cpu")
+    _, record = stto_laplace.step(problem, stto_laplace.init_state(problem))
+    assert record.g.shape == record.lam.shape == (1,)
+    assert np.isfinite(record.tru_max)
+
+
+@pytest.mark.parametrize(
+    "name", ["tool_radius_m", "min_gradient_fraction", "gradient_smoothness_m"]
+)
+def test_time_field_constraints_are_rejected(name):
+    with pytest.raises(ValueError, match=name):
+        _config(**{name: 0.1})
 
 
 def _shaping_gradient(x, Tcr=0.6, **overrides):

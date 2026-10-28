@@ -515,7 +515,9 @@ class LaplaceRunConfig(SpaceTimeConfig):
     Hyperparameters of a `stto_laplace` run, where the time field is harmonic,
     `div(chi grad t) = 0`, with `t = 0` on the build plate, optimized nonnegative data
     on every other wall, and `chi` an optimized diffusivity over the whole domain. The
-    field has no interior extremum over the domain.
+    field has no interior extremum over the domain. The time-field constraints
+    (`tool_radius_m`, `min_gradient_fraction`, `gradient_smoothness_m`) are out of its
+    scope, so must be 0.
 
     :param chi_contrast: as in `HeatRunConfig`.
     :param time_map: a `LaplaceTimeMap` member value.
@@ -559,6 +561,11 @@ class LaplaceRunConfig(SpaceTimeConfig):
                 else "the poisson time map's distance fit is solved on the whole mesh"
             ),
         )
+        for name in ("tool_radius_m", "min_gradient_fraction", "gradient_smoothness_m"):
+            if not identically_zero(getattr(self, name)):
+                raise ValueError(
+                    f"{name} must be 0: the Laplace driver has no time-field constraints"
+                )
 
 
 @dataclass(kw_only=True)
