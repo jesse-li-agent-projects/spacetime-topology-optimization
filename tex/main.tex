@@ -48,7 +48,7 @@
     linkcolor=blue,
 }
 
-\title{Research project}
+\title{Internal Research Project: Space-time topology optimization for overheating prevention in metal additive manufacturing}
 
 \author{Jesse Li (6399053)}
 \date{2026}
@@ -57,6 +57,23 @@
 \begin{document}
 
 \maketitle
+
+\section{Introduction}
+Short description of the assignment, its relevance andthe field. (1 page)
+
+
+\section{Methodology}
+(2 pages). Analysis of the research or engineering challenge and the
+research plan.
+\section{Results}
+(4 pages). Description of execution and findings.
+\section{Discussion and conclusions}
+(2 page). Discussion of the results and Conclusions connecting
+results to research or design question.
+\section{Reflection}
+(1 page) Discussion and reflection on project execution and own functioning.
+
+\newpage
 
 \section{Background and Motivation}
 
@@ -122,6 +139,104 @@ $$\nabla\cdot\big(k(x)\,\nabla u\big) = 0, \qquad 0 < \lambda \le k(x) \le \Lamb
 Let $k(x) = e^{w(x)}$.
 \[0 = \nabla \cdot (k \nabla u) = k \Delta u + \nabla k \cdot \nabla u = e^w \Delta u + e^w \nabla w \cdot \nabla u\]
 \[\nabla u \cdot \nabla w = -\Delta u\]
+
+\section{Density-scale-invariant hotspot severity}
+
+\subsection*{Current measure}
+For element $e$ with filtered density $x_e$, stencil weights $w_{ej}$, print-order credit $F_{ej}$ and the constant HALF\_STENCIL denominator $D$:
+\[
+    K_e = \frac{1}{D} \sum_{j} w_{ej} F_{ej}\, x_j^{\,q},
+    \qquad
+    S_e = (1 - K_e)\, x_e^{\,r}
+\]
+Under a global scaling $x \mapsto n x$:
+\[
+    K_e \mapsto n^q K_e, \qquad x_e^{\,r} \mapsto n^r x_e^{\,r}
+\]
+with $q$ scheduled $2 \to 5$ and $r$ scheduled $0.5 \to 0.05$, so the dependence on scale is mostly in $K_e$.
+
+\paragraph{Sensitivities on a grey bar.}
+\[
+    \frac{\partial S_e}{\partial x_e} = r\, x_e^{\,r-1} (1 - K_e) > 0,
+    \qquad
+    \frac{\partial S_e}{\partial x_j} = -\frac{q}{D}\, x_e^{\,r}\, w_{ej} F_{ej}\, x_j^{\,q-1}
+\]
+The first always pushes an element's own density down ($0.71\,(1-K_e)$ at $r = 0.5$, $x_e = 0.5$). The second, the shielding pull from earlier neighbors, is weak at grey $x_j$ and absent for the element printed first in the bar.
+
+\subsection*{A. Shielding relative to the element's own density, capped (recommended)}
+\[
+    K_e = \frac{1}{D} \sum_{j} w_{ej} F_{ej}\, c\!\left(\frac{x_j}{x_e + \varepsilon}\right),
+    \qquad
+    c(u) = \operatorname{smoothmin}(1, u)^q
+\]
+\begin{itemize}
+    \item Invariant to $x \mapsto n x$ for $x_e \gg \varepsilon$: a neighbor at least as dense as $e$ shields it fully, so grey on equally grey material scores as solid on solid.
+    \item Identical to the current $K_e$ on binary designs, so $T_{cr}$, calibration and the binarized gate are unchanged.
+    \item Solid on void or on grey reads as unshielded; void anywhere reads as shielded.
+    \item Each pair contributes at most $w_{ej} F_{ej} / D$, so it pairs with either aggregation.
+\end{itemize}
+
+\subsection*{B. Heat in over conduction out, uncapped}
+\[
+    K_e = \frac{\sum_{j} w_{ej} F_{ej}\, x_j^{\,q}}{D\, (x_e^{\,q} + \varepsilon)}
+\]
+\begin{itemize}
+    \item Physical motivation: in a SIMP heat equation $x^q c\, \partial_t T = \nabla \cdot (x^q k \nabla T) + x^q Q$, the temperature is exactly invariant to $x \mapsto n x$.
+    \item Unbounded above, so LogSumExp only; rewards an element being less dense than its support, over-crediting grey on solid.
+\end{itemize}
+
+\subsection*{C. Fraction of neighboring material printed earlier}
+\[
+    K_e = \frac{\sum_{j} w_{ej} F_{ej}\, x_j^{\,q}}{\sum_{j} w_{ej}\, x_j^{\,q} + \varepsilon}
+\]
+Void drops out of the denominator, so a free surface or an overhang over void becomes partly invisible --- the boundary blindness of PR \#98. Rejected.
+
+\subsection*{D. Global normalization}
+\[
+    K_e = \frac{\sum_{j} w_{ej} F_{ej}\, x_j^{\,q}}{D \cdot \frac{1}{N}\sum_{k} x_k^{\,q}}
+\]
+The literal global invariance, but couples every element to every other, and does nothing for one grey bar in an otherwise solid design.
+
+\subsection*{The gate}
+Exact invariance for all $n$ would make void ($n \to 0$) indistinguishable from solid, so the gate $x_e^{\,r}$ must break it. Its push down $r\,x_e^{\,r-1}(1-K_e)$ remains under A or B, so pair either with
+\begin{itemize}
+    \item a small $r$ from iteration 0, or
+    \item a gate flat above a threshold, e.g.\ $S_e = (1 - K_e)\, H_\beta(x_e; \eta_g)$ with a smoothed Heaviside $H_\beta$ at $\eta_g \approx 0.3$, separating void from material only.
+\end{itemize}
+
+\subsection*{Targeting $S_e$ directly}
+The requirement is on $S_e$: $S_e(n\mathbf{x}) = S_e(\mathbf{x})$. By Euler's theorem for degree-0 homogeneous functions, equivalently
+\[
+    \sum_j x_j \frac{\partial S_e}{\partial x_j} = 0 \quad \forall e,
+\]
+i.e.\ the hotspot exerts no force along the ``scale every density'' direction --- a condition a unit test can check on random $\mathbf{x}$.
+
+The gate exists because, under the current $K_e$, a void element in a void neighborhood is unshielded and would otherwise force material into the void (Das 2025, Fig.~6a). Option A with a symmetric regularization,
+\[
+    K_e = \frac{1}{D} \sum_{j} w_{ej} F_{ej}\, c\!\left(\frac{x_j + \varepsilon}{x_e + \varepsilon}\right),
+\]
+already reads void on void as shielded (ratio $\to 1$) and solid on void as unshielded (ratio $\to \varepsilon$). The gate is then redundant, and with $r = 0$:
+\[
+    S_e = 1 - K_e
+\]
+is invariant for $x \gg \varepsilon$.
+
+\paragraph{B with $S_e = 1 - K_e$.} Regularized symmetrically,
+\[
+    K_e = \frac{1}{D} \sum_{j} w_{ej} F_{ej}\, \frac{x_j^{\,q} + \varepsilon}{x_e^{\,q} + \varepsilon}.
+\]
+A and B coincide wherever $x_e \ge x_j$ for every earlier neighbor (the cap is inactive), so on binary designs both equal the current $K_e$. They differ only for an element lighter than its support:
+\[
+    x_e = 0.5,\ x_j = 1,\ q = 3: \qquad c_A = 1, \qquad c_B = 8.
+\]
+\begin{itemize}
+    \item B lets one dense neighbor make up for a missing direction, so a grey element on partial support reads as safe, and solidifying it reveals the hotspot --- the same hidden-until-binarized failure, moved elsewhere.
+    \item A rates such an element exactly as it would be rated with its support solid, so the grey reading predicts the binarized one.
+    \item B's own-density sensitivity is always active, $\partial \log K_e / \partial \log x_e = -q$; A's is zero while capped.
+    \item $S_e$ is unbounded below ($\approx -1/\varepsilon$ for void beside earlier solid): fine for LogSumExp, which ignores it, but not for P-mean.
+\end{itemize}
+
+Out-of-mesh stencil positions must then count as neighbors of density $0$ rather than be dropped; otherwise void at the mesh edge reads as unshielded and no design change can fix it.
 
 \end{document}
 
