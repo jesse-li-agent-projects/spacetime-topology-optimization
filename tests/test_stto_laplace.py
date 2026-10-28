@@ -215,20 +215,20 @@ def test_the_density_sensitivity_through_chi_can_be_cut(sensitivity):
     assert (grad is not None and float(grad.abs().max()) > 0) == sensitivity
 
 
-def test_the_hotspot_row_can_leave_the_constraint_stack():
-    """Without the hotspot constraint, MMA sees every other row unchanged, and the
-    time-only hotspot objective still reads the row's gradient."""
-    records = {}
-    for on in (True, False):
-        problem = stto_laplace.build_problem(
-            _config(hotspot_weight=0.3, hotspot_constraint=on), device="cpu"
-        )
-        _, records[on] = stto_laplace.step(problem, stto_laplace.init_state(problem))
-    with_row, without = records[True], records[False]
-    assert without.tru_max == with_row.tru_max
-    np.testing.assert_array_equal(without.df, with_row.df)
-    np.testing.assert_array_equal(without.g, np.delete(with_row.g, 1))  # after volume
-    assert without.lam.shape == without.g.shape
+def test_the_hotspot_is_measured_but_not_constrained():
+    """MMA's stack is the volume row alone, while the record still reads the hotspot."""
+    problem = stto_laplace.build_problem(_config(), device="cpu")
+    _, record = stto_laplace.step(problem, stto_laplace.init_state(problem))
+    assert record.g.shape == record.lam.shape == (1,)
+    assert np.isfinite(record.tru_max)
+
+
+@pytest.mark.parametrize(
+    "name", ["tool_radius_m", "min_gradient_fraction", "gradient_smoothness_m"]
+)
+def test_time_field_constraints_are_rejected(name):
+    with pytest.raises(ValueError, match=name):
+        _config(**{name: 0.1})
 
 
 def _shaping_gradient(x, Tcr=0.6, **overrides):

@@ -515,7 +515,9 @@ class LaplaceRunConfig(SpaceTimeConfig):
     Hyperparameters of a `stto_laplace` run, where the time field is harmonic,
     `div(chi grad t) = 0`, with `t = 0` on the build plate, optimized nonnegative data
     on every other wall, and `chi` an optimized diffusivity over the whole domain. The
-    field has no interior extremum over the domain.
+    field has no interior extremum over the domain. The time-field constraints
+    (`tool_radius_m`, `min_gradient_fraction`, `gradient_smoothness_m`) are out of its
+    scope, so must be 0.
 
     :param chi_contrast: as in `HeatRunConfig`.
     :param time_map: a `LaplaceTimeMap` member value.
@@ -536,9 +538,6 @@ class LaplaceRunConfig(SpaceTimeConfig):
     :param chi_density_sensitivity: whether the density's sensitivity flows through
         `chi`. ``False`` reads `xPhys` in `chi` as a constant, so the time field's terms
         cannot pull on the density through its diffusivity.
-    :param hotspot_constraint: whether the hotspot row is in MMA's constraint stack.
-        ``False`` still measures it, for the time-only hotspot objective and the logs,
-        but leaves the density's hotspot pressure to the shaping term alone.
     """
 
     chi_contrast: float
@@ -550,7 +549,6 @@ class LaplaceRunConfig(SpaceTimeConfig):
     chi_density_exponent: Scheduled = 0.0
     chi_density_floor: float = 1e-2
     chi_density_sensitivity: bool = True
-    hotspot_constraint: bool = True
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -563,6 +561,11 @@ class LaplaceRunConfig(SpaceTimeConfig):
                 else "the poisson time map's distance fit is solved on the whole mesh"
             ),
         )
+        for name in ("tool_radius_m", "min_gradient_fraction", "gradient_smoothness_m"):
+            if not identically_zero(getattr(self, name)):
+                raise ValueError(
+                    f"{name} must be 0: the Laplace driver has no time-field constraints"
+                )
 
 
 @dataclass(kw_only=True)

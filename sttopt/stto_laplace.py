@@ -6,7 +6,7 @@ domain, and the wall design `wall` (`virtual_heat.laplace_time_field`), all on
 `[0, 1]`. `tPhys` solves `div(chi(mu) grad t) = 0` with `t = 0` on the build plate and
 nonnegative wall data on every other wall, so it has no interior extremum over the
 domain by construction. The wall data may have several peaks, where branches of the
-print merge; a dip in it is a local minimum on the wall, left to the hotspot row where
+print merge; a dip in it is a local minimum on the wall, left to the hotspot terms where
 it is on the part. `check_design` judges support over the part, as `checks` does, and
 reports the domain-level check. Compliance, the gravity
 stages, the hotspot and time-field terms (`field_terms`) and the MMA step (`mma`) are
@@ -275,29 +275,23 @@ def _flatten(*parts: Tensor) -> Float[Tensor, " n"]:
     return torch.cat([p.flatten() for p in parts])
 
 
-def constraint_values(
+def hotspot_severity(
     problem: Problem,
-    xPhys: Float[Tensor, "nely nelx"],
-    tPhys: Float[Tensor, "nely nelx"],
     K_est: Float[Tensor, " nel"],
+    xPhys: Float[Tensor, "nely nelx"],
     loop: int,
-) -> dict[str, Float[Tensor, " k"]]:
+) -> Float[Tensor, ""]:
     """
-    Every constraint's values at iteration `loop`'s settings, in stack order: the
-    global volume, then `FieldTerms.constraints`.
+    The hotspot relative to `Tcr`, `H / Tcr - 1`: positive where the part overheats.
+    Measured, not constrained: the shaping term and the time-only hotspot objective
+    hold it at `Tcr` (`configs/laplace_continuation.md`).
 
+    :param K_est: `FieldTerms.estimated_conductivity` at `loop`
     :param xPhys: physical densities
-    :param tPhys: physical time field
-    :param K_est: `FieldTerms.estimated_conductivity` of the same fields at `loop`
     :param loop: iteration whose schedules apply
-    :return: each constraint's rows
     """
-    g = {
-        "global_volume_fraction": constraints.global_volume_fraction(
-            xPhys, problem.config.volfrac, int(problem.active.sum())
-        )
-    }
-    return g | problem.terms.constraints(xPhys, tPhys, K_est, loop)
+    Tcr = run_config.weight_at(problem.config.Tcr, loop)
+    return problem.terms.hotspot(K_est, xPhys, loop) / Tcr - 1
 
 
 def _sensitivity_rows(
@@ -402,16 +396,14 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     f_val = float(objective.value.detach())
     df_dx = _sensitivity_rows(objective.value[None], leaves)[0]
 
+    g_all = constraints.global_volume_fraction(
+        xPhys, config.volfrac, int(problem.active.sum())
+    )
+    dg_dx = _sensitivity_rows(g_all, leaves)
     K_est_t = problem.terms.estimated_conductivity(xPhys, tPhys, loop)
-    g_parts = constraint_values(problem, xPhys, tPhys, K_est_t, loop)
-    g_hotspot_t = g_parts["hotspot"][0]
-    # Per part, not on `g_all`, as in `stto.step` (PR #173)
-    g_rows = {name: _sensitivity_rows(g, leaves) for name, g in g_parts.items()}
-    stacked = [n for n in g_parts if config.hotspot_constraint or n != "hotspot"]
-    g_all = torch.cat([g_parts[n] for n in stacked])
-    dg_dx = torch.cat([g_rows[n] for n in stacked], dim=0)
+    g_hotspot_t = hotspot_severity(problem, K_est_t, xPhys, loop)
     hotspot_weight = problem.terms.add_time_only_hotspot(
-        df_dx, g_rows["hotspot"][0], nel, loop
+        df_dx, _sensitivity_rows(g_hotspot_t[None], leaves)[0], nel, loop
     )
 
     diagnostics = problem.terms.hotspot_diagnostics(g_hotspot_t, K_est_t, xPhys, loop)
@@ -629,7 +621,12 @@ def check_design(problem: Problem, state: State) -> dict:
 
         def rows(density, t):
             K_est = problem.terms.estimated_conductivity(density, t, loop)
-            g = constraint_values(problem, density, t, K_est, loop)
+            g = {
+                "global_volume_fraction": constraints.global_volume_fraction(
+                    density, config.volfrac, int(problem.active.sum())
+                ),
+                "hotspot": hotspot_severity(problem, K_est, density, loop)[None],
+            }
             return {k: torch_util.to_numpy(v).tolist() for k, v in g.items()}
 
         c, _ = compliance.whole_compliance(

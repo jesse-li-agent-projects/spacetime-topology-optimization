@@ -200,6 +200,5 @@
     ],
     "mode": "linear"
   },
-  "chi_density_floor": 1e-05,
-  "hotspot_constraint": false
+  "chi_density_floor": 1e-05
 }
