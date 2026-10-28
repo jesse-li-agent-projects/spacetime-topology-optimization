@@ -37,6 +37,10 @@
 
 \usepackage{appendix}
 
+\usepackage[backend=biber, style=numeric-comp, sorting=none]{biblatex}
+\addbibresource{references.bib}
+\AtEndDocument{\printbibliography}
+
 % Enable links for figure numbers
 \usepackage{hyperref} % note - hyperref likes to be last package
 \hypersetup{
