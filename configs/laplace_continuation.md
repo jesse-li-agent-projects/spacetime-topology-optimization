@@ -56,6 +56,11 @@ The move limits are fixed: 0.02 on the density, 0.002 on the time-field variable
   hotspot objective hold the severity at `Tcr` on their own. Without the row, all eight
   cells pass at the same or slightly lower compliance (batch 52); the
   severity overshoots `Tcr` by up to about 0.1 mid-run, but ends below it.
+- **The plate as a solid half-plane** (`hotspot_plate`), not an exemption for every
+  element within stencil reach of it. Read that way, batch 52's designs fail on four
+  cells, C1 0.5 Tcr 0.4 by +0.32 at the free surfaces next to the plate, which the
+  exemption had hidden from the optimizer. Optimized with it, all eight cells pass at
+  compliance within 0.11% of batch 52 (batch 54).
 - **No `mu` filter** (`mu_filter_rmin_m`): it halves the diffusivity's roughness but
   leaves C1 grey and failing once binarized.
 
@@ -65,4 +70,5 @@ Eight cells, two runs each (batches 41 and 42; three on C1 0.5 Tcr 0.4): C1 0.5 
 0.4 and 0.6, C1 0.3, C2 0.5, S 0.3 bottom and edge, L middle and corner. All pass, at
 1.006-1.060 x plain TO. The rounded weights, and the roughness term off: all eight cells,
 one run each (batches 44, 47 and 49). This schedule, with the hotspot constraint on and off:
-all eight cells, one run each (batch 52).
+all eight cells, one run each (batch 52). The plate as a half-plane: all eight cells, one
+run each (batch 54).

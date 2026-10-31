@@ -81,6 +81,7 @@
     ],
     "mode": "log"
   },
+  "hotspot_plate": "half_plane",
   "print_base": "edge",
   "rmin_m": 0.004,
   "tool_radius_m": 0.0,
