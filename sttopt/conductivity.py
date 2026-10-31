@@ -285,6 +285,90 @@ def infinite_base(
     return None if normalization == Normalization.NEIGHBORHOOD else base
 
 
+class Substrate(NamedTuple):
+    """The build plate as a solid half-plane beyond the plate line, printed before
+    anything else: every stencil offset from an element that lands in it, built by
+    `substrate`.
+
+    An alternative to `infinite_base`'s exemption that keeps the elements near the
+    plate in the hotspot measure. It has to be the whole half-plane, not a pad the width
+    of the mesh, or an element at the end of the plate reads as less shielded than one
+    mid-plate: the substrate does not stop where the mesh is cut off (PR #230).
+    """
+
+    e: Int[Tensor, " npairs"]  # the element each offset is taken from
+    offset: Float[Tensor, "npairs 2"]  # (dx, dy) to the substrate, in elements
+    w: Float[Tensor, " npairs"]  # radial stencil weight
+
+
+def substrate(
+    nelx: int,
+    nely: int,
+    rmin_cond: float,
+    plate: "timefield.TimeField",
+    dtype: torch.dtype,
+    device: torch.device | str | None = None,
+) -> Substrate:
+    """The `Substrate` beyond a plate along one whole mesh edge.
+
+    :param rmin_cond: conductivity-neighborhood radius, in elements
+    :param plate: the time-field variant whose print-start edge is the plate
+    :raises ValueError: for a variant that starts from a corner, which defines no plate
+        line to take a half-plane beyond
+    """
+    e = np.arange(nelx * nely)
+    i, j = e % nelx, e // nelx
+    beyond = {
+        timefield.TimeField.EDGE: lambda di, dj: i + di < 0,
+        timefield.TimeField.RIGHT_EDGE: lambda di, dj: i + di >= nelx,
+        timefield.TimeField.BOTTOM_EDGE: lambda di, dj: j + dj >= nely,
+    }.get(plate)
+    if beyond is None:
+        raise ValueError(
+            f"a substrate needs a plate along a mesh edge to take the half-plane beyond, but {plate!r} starts from a corner"
+        )
+    es, offsets, ws = [], [], []
+    for di, dj, weight in _stencil_offsets(rmin_cond):
+        hit = beyond(di, dj)
+        es.append(e[hit])
+        offsets.append(np.tile([di, dj], (hit.sum(), 1)))
+        ws.append(np.full(hit.sum(), weight))
+    return Substrate(
+        e=torch.as_tensor(np.concatenate(es), device=device),
+        offset=torch.as_tensor(np.concatenate(offsets), dtype=dtype, device=device),
+        w=torch.as_tensor(np.concatenate(ws), dtype=dtype, device=device),
+    )
+
+
+def _substrate_numerator(
+    sub: Substrate,
+    x: Float[Tensor, " nel"],
+    grad: tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]] | None,
+    kappa: float,
+    g0: float,
+    shielding: "Shielding",
+    q: float,
+    shielding_eps: float,
+) -> Float[Tensor, " nel"]:
+    """What the substrate adds to each element's `K_est` numerator: full density with
+    full print-order credit, since it was there before anything was printed.
+
+    :param grad: the time field's gradient, for the angular weight; unused at
+        `kappa = 0`
+    """
+    nel = x.shape[0]
+    # The substrate as one extra, solid element, so `shielding_term` reads it as it
+    # reads any other neighbor.
+    shield = shielding_term(shielding, torch.cat([x, x.new_ones(1)]), q, shielding_eps)
+    v = sub.w * shield(sub.e, torch.full_like(sub.e, nel))
+    if kappa != 0:
+        gx, gy = grad[0].flatten()[sub.e], grad[1].flatten()[sub.e]
+        dirs = _unit_rows(sub.offset)
+        g_dot_dir = gx * dirs[:, 0] + gy * dirs[:, 1]
+        v = v * _lobe(g_dot_dir, _gradient_magnitude(grad)[sub.e], dirs, kappa, g0)
+    return torch.zeros_like(x).index_add(0, sub.e, v)
+
+
 def neighbor_weights(
     nelx: int, nely: int, rmin_cond: float
 ) -> tuple[
@@ -895,6 +979,7 @@ def estimated_conductivity(
     cooling_sharpness: float = 8.0,
     shielding: Shielding = Shielding.ABSOLUTE,
     shielding_eps: float = 1e-3,
+    substrate: Substrate | None = None,
 ) -> Float[Tensor, " nely*nelx"]:
     """Local estimated conductivity: how strongly each element's neighborhood has
     already solidified (cooler, earlier `tPhys`) around it, used as an overheating
@@ -916,14 +1001,20 @@ def estimated_conductivity(
     :param cooling_sharpness: COOLING's onset sharpness, as in `_cooling_credit`
     :param shielding: the run's `Shielding`
     :param shielding_eps: `shielding_term`'s `eps`
+    :param substrate: the plate as a solid half-plane, in place of `base`
     :raises ValueError: if no element carrying density is left with a finite `K_est`,
-        the whole part being within stencil reach of the print base; if `kappa > 0`
+        the whole part being within stencil reach of the print base; if a substrate
+        comes with a print base or without a constant divisor; if `kappa > 0`
         without the constant divisor the directional reference generalizes; or if a
         credit other than the source's sigmoid comes with a divisor derived from it
     """
     x = xPhys.flatten()
     t = tPhys.flatten()
     credit = PrintOrderCredit(credit)
+    if substrate is not None and (base is not None or denom is None):
+        raise ValueError(
+            "a substrate replaces the infinite print base and adds to a constant reference divisor (HALF_STENCIL), so it takes neither a base nor Normalization.NEIGHBORHOOD"
+        )
     if denom is None and (credit != PrintOrderCredit.SIGMOID or tie_credit != 0.5):
         raise ValueError(
             "a tie credit other than 0.5 or a COOLING credit needs a constant reference divisor (HALF_STENCIL): Normalization.NEIGHBORHOOD divides by the credited weight itself, so a region printed all at once still scores K_est = 1"
@@ -932,6 +1023,7 @@ def estimated_conductivity(
         credit, t, rouf, tie_credit, cooling_time, cooling_sharpness
     )
     angular = _isotropic
+    grad = None
     if kappa != 0:
         if stencil is None or denom is None:
             raise ValueError(
@@ -946,6 +1038,10 @@ def estimated_conductivity(
     K_est = _conductivity_core(
         x, t, e1, e2, w, q, rouf, denom, base, angular, pair_credit, shield
     ).K_est
+    if substrate is not None:
+        K_est = K_est + _substrate_numerator(
+            substrate, x, grad, kappa, g0, Shielding(shielding), q, shielding_eps
+        ) / torch.as_tensor(denom, dtype=x.dtype, device=x.device)
     if base is not None and not bool((torch.isfinite(K_est) & (x > 0)).any()):
         raise ValueError(
             "every element carrying density has infinite K_est, being within the conductivity stencil's reach of the print base, so the hotspot measure has nothing left to aggregate over; shrink rmin_cond_m or use a normalization that needs no print base (infinite_base)"
