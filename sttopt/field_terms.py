@@ -219,6 +219,7 @@ class FieldTerms:
         tPhys: Float[Tensor, "nely nelx"],
         loop: int | None = None,
         q: float | None = None,
+        substrate: conductivity.Substrate | None = None,
     ) -> Float[Tensor, " nel"]:
         """The `K_est` field behind the run's hotspot term.
 
@@ -229,6 +230,8 @@ class FieldTerms:
         :param loop: the iteration whose scheduled settings apply, or `None` for the
             values a finished run settles on.
         :param q: overrides `config.q`
+        :param substrate: reads the plate as a solid half-plane (`substrate`) instead of
+            the run's infinite print base
         """
         config = self.config
 
@@ -246,7 +249,7 @@ class FieldTerms:
             at(config.q) if q is None else q,
             at(config.rouf),
             self.hotspot_denom,
-            self.hotspot_base,
+            self.hotspot_base if substrate is None else None,
             self.hotspot_stencil,
             at(config.hotspot_kappa),
             config.hotspot_g0_per_m
@@ -257,6 +260,22 @@ class FieldTerms:
             at(config.hotspot_cooling_sharpness),
             conductivity.Shielding(config.hotspot_shielding),
             config.hotspot_shielding_eps,
+            substrate,
+        )
+
+    def substrate(self, plate: timefield.TimeField) -> conductivity.Substrate:
+        """The run's stencil's `conductivity.Substrate` beyond `plate`.
+
+        :param plate: the time-field variant whose print-start edge is the plate
+        """
+        config = self.config
+        return conductivity.substrate(
+            config.nelx,
+            config.nely,
+            units.in_elements(config.rmin_cond_m, config.element_size_m),
+            plate,
+            self.w.dtype,
+            self.w.device,
         )
 
     def constraints(
