@@ -23,7 +23,8 @@ means run records written before the field existed no longer load -- add the fie
 every config file instead. The one exception is a field whose default is the only
 behaviour older records could have had (`SpaceTimeConfig.load_case`,
 `support_length_m`, `hotspot_credit`, `hotspot_tie_credit`, `hotspot_cooling_time`,
-`hotspot_cooling_sharpness`, `hotspot_weight`, `calibration_rate`, `RunConfig.time_init`).
+`hotspot_cooling_sharpness`, `hotspot_plate`, `hotspot_weight`, `calibration_rate`,
+`RunConfig.time_init`).
 """
 
 import bisect
@@ -285,6 +286,10 @@ class SpaceTimeConfig(_ConfigMixin):
         scheduled. A tie gets `1 - 2**(-1/k)`, and a later neighbor is pulled earlier
         only within about `cooling_time / k`, so a schedule from 1 up is a continuation
         like `rouf`'s (`conductivity._cooling_credit`).
+    :param hotspot_plate: a `conductivity.Plate` member value: how the hotspot reads
+        the build plate. `exempt`, the default and the only behaviour before it existed,
+        or `half_plane`, which needs `half_stencil` normalization and a `print_base`
+        along a whole mesh edge.
     :param rmin_m: density-filter radius.
     :param tool_radius_m: print tool radius, possibly scheduled. Bounds the concave
         curvature of the time field's iso-lines (`timefield.iso_curvature`) to
@@ -352,6 +357,7 @@ class SpaceTimeConfig(_ConfigMixin):
     hotspot_shaping_q: Scheduled = 1.0
     hotspot_cooling_time: Scheduled = 0.0
     hotspot_cooling_sharpness: Scheduled = 8.0
+    hotspot_plate: str = "exempt"
     print_base: str
     rmin_m: float
     tool_radius_m: Scheduled
