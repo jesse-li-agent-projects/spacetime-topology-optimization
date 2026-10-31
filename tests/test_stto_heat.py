@@ -156,3 +156,12 @@ def test_penalized_conduction_takes_the_penal_of_the_iteration():
     linear = virtual_heat.heat_time_field(config, problem.mesh, xPhys, state.mu)
     torch.testing.assert_close(heat.primary, expected.primary)
     assert not torch.allclose(heat.primary, linear.primary)
+
+
+def test_a_half_plane_plate_leaves_nothing_exempt():
+    problem = stto_heat.build_problem(_config(hotspot_plate="half_plane"), device="cpu")
+    K = problem.terms.estimated_conductivity(
+        torch.full((10, 30), 0.5, dtype=torch.float64),
+        torch.rand(10, 30, dtype=torch.float64),
+    )
+    assert torch.isfinite(K).all()
