@@ -285,6 +285,18 @@ def infinite_base(
     return None if normalization == Normalization.NEIGHBORHOOD else base
 
 
+class Plate(StrEnum):
+    """Names for how the hotspot measure reads the build plate, selectable per run.
+
+    EXEMPT takes every element within stencil reach of the plate out of the measure
+    (`infinite_base`). HALF_PLANE keeps them in, shielded by the plate as a solid
+    half-plane printed before anything else (`Substrate`).
+    """
+
+    EXEMPT = "exempt"
+    HALF_PLANE = "half_plane"
+
+
 class Substrate(NamedTuple):
     """The build plate as a solid half-plane, printed before anything else, as the
     stencil offsets from each element that land in it (see `substrate`).

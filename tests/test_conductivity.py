@@ -2317,3 +2317,39 @@ def test_substrate_shields_the_first_layer_like_the_layers_above_it(kappa):
 def test_substrate_needs_a_plate_along_an_edge(plate):
     with pytest.raises(ValueError, match="starts from a corner"):
         conductivity.substrate(NELX, NELY, RMIN_COND, plate, torch.float64)
+
+
+@pytest.mark.parametrize("shielding", list(conductivity.Shielding))
+def test_substrate_sensitivity_matches_finite_differences(shielding):
+    """The substrate term's gradient, through the angular weight's time field and the
+    relative shieldings' own density."""
+    nelx, nely, rmin = 6, 5, 2.5
+    rng = np.random.default_rng(3)
+    x = tt(rng.uniform(0.3, 1.0, (nely, nelx))).requires_grad_(True)
+    t = _linear_timefield(nelx, nely, 0.4, 1.0) + tt(rng.uniform(0, 0.05, (nely, nelx)))
+    t = t.detach().requires_grad_(True)
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin)
+    sub = conductivity.substrate(
+        nelx, nely, rmin, timefield.TimeField.EDGE, torch.float64
+    )
+
+    def K(x, t):
+        return conductivity.estimated_conductivity(
+            x,
+            t,
+            tti(e1),
+            tti(e2),
+            tt(w),
+            Q,
+            ROUF,
+            conductivity.half_stencil_weight(rmin),
+            stencil=conductivity.angular_stencil(rmin, torch.float64, 1.0),
+            kappa=2.3666,
+            g0=0.35,
+            credit=conductivity.PrintOrderCredit.COOLING,
+            cooling_time=0.05,
+            shielding=shielding,
+            substrate=sub,
+        )
+
+    assert torch.autograd.gradcheck(K, (x, t))

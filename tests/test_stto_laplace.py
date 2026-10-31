@@ -322,3 +322,27 @@ def test_an_l_bracket_runs_on_its_domain_alone():
     problem = stto_laplace.build_problem(config, device="cpu")
     report = stto_laplace.check_design(problem, result.state)
     assert "constraints" in report
+
+
+def test_a_half_plane_plate_keeps_every_element_in_the_hotspot():
+    """With the plate as a substrate, nothing near it is exempt, and a short run's
+    hotspot and gradients stay finite."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", "subsolv", RuntimeWarning)
+        result = stto_laplace.run(_config(hotspot_plate="half_plane"), device="cpu")
+    problem = stto_laplace.build_problem(
+        _config(hotspot_plate="half_plane"), device="cpu"
+    )
+    K = problem.terms.estimated_conductivity(
+        result.xPhys_traj[-1], result.tPhys_traj[-1], NITER
+    )
+    assert torch.isfinite(K).all()
+    for record in result.records:
+        assert math.isfinite(record.tru_max)
+        assert np.isfinite(record.df).all() and np.isfinite(record.dg).all()
+
+
+def test_a_half_plane_plate_needs_the_half_stencil_reference():
+    config = _config(hotspot_plate="half_plane", hotspot_normalization="neighborhood")
+    with pytest.raises(ValueError, match="half_plane"):
+        stto_laplace.build_problem(config, device="cpu")

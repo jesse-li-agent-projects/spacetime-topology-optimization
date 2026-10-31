@@ -55,8 +55,11 @@ class FieldTerms:
     # `conductivity.angular_stencil`.
     hotspot_stencil: conductivity.AngularStencil | None
     # Print base elements the hotspot measure treats as infinitely dense, or None where
-    # the normalization needs no print base -- `conductivity.infinite_base`.
+    # the normalization needs no print base or the plate is a substrate --
+    # `conductivity.infinite_base`.
     hotspot_base: Int[Tensor, " k"] | None
+    # The plate as a solid half-plane, or None where it is exempt -- `conductivity.Plate`.
+    hotspot_substrate: conductivity.Substrate | None
     # Smooth maximum of the hotspot severity.
     hotspot: conductivity.PMean | conductivity.LogSumExp
     # Smooth maximum of the tool-radius curvature severity, or None where
@@ -137,6 +140,21 @@ class FieldTerms:
         normalization = conductivity.Normalization(config.hotspot_normalization)
         e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
         hotspot_base = conductivity.infinite_base(normalization, base)
+        substrate = None
+        if conductivity.Plate(config.hotspot_plate) == conductivity.Plate.HALF_PLANE:
+            if normalization != conductivity.Normalization.HALF_STENCIL:
+                raise ValueError(
+                    f"hotspot_plate 'half_plane' adds to half_stencil's constant reference, so it needs hotspot_normalization 'half_stencil', got {normalization.value!r}"
+                )
+            hotspot_base = None
+            substrate = conductivity.substrate(
+                nelx,
+                nely,
+                rmin_cond,
+                timefield.TimeField[config.print_base.upper()],
+                dtype,
+                device,
+            )
         # int32 halves the largest arrays a run keeps: the pair list.
         ints = torch_util.to_tensors({"e1": e1, "e2": e2}, device, torch.int32)
 
@@ -159,6 +177,7 @@ class FieldTerms:
                 if hotspot_base is None
                 else torch_util.to_tensor(base, device, torch.int64)
             ),
+            hotspot_substrate=substrate,
             hotspot=conductivity.make_aggregation(
                 conductivity.Aggregation(config.hotspot_aggregation),
                 config.p,
@@ -219,7 +238,6 @@ class FieldTerms:
         tPhys: Float[Tensor, "nely nelx"],
         loop: int | None = None,
         q: float | None = None,
-        substrate: conductivity.Substrate | None = None,
     ) -> Float[Tensor, " nel"]:
         """The `K_est` field behind the run's hotspot term.
 
@@ -230,8 +248,6 @@ class FieldTerms:
         :param loop: the iteration whose scheduled settings apply, or `None` for the
             values a finished run settles on.
         :param q: overrides `config.q`
-        :param substrate: reads the plate as a solid half-plane (`substrate`) instead of
-            the run's infinite print base
         """
         config = self.config
 
@@ -249,7 +265,7 @@ class FieldTerms:
             at(config.q) if q is None else q,
             at(config.rouf),
             self.hotspot_denom,
-            self.hotspot_base if substrate is None else None,
+            self.hotspot_base,
             self.hotspot_stencil,
             at(config.hotspot_kappa),
             config.hotspot_g0_per_m
@@ -260,22 +276,7 @@ class FieldTerms:
             at(config.hotspot_cooling_sharpness),
             conductivity.Shielding(config.hotspot_shielding),
             config.hotspot_shielding_eps,
-            substrate,
-        )
-
-    def substrate(self, plate: timefield.TimeField) -> conductivity.Substrate:
-        """The run's stencil's `conductivity.Substrate` beyond `plate`.
-
-        :param plate: the time-field variant whose print-start edge is the plate
-        """
-        config = self.config
-        return conductivity.substrate(
-            config.nelx,
-            config.nely,
-            units.in_elements(config.rmin_cond_m, config.element_size_m),
-            plate,
-            self.w.dtype,
-            self.w.device,
+            self.hotspot_substrate,
         )
 
     def constraints(
@@ -406,7 +407,7 @@ class FieldTerms:
         K_est = self.estimated_conductivity(
             xPhys, tPhys, loop, q=run_config.weight_at(config.hotspot_shaping_q, loop)
         )
-        # The print base's infinite `K_est` is no hotspot: select it out, as in
+        # An exempt print base's infinite `K_est` is no hotspot: select it out, as in
         # `conductivity.LogSumExp`, so its `inf` never reaches the backward pass.
         finite = torch.isfinite(K_est)
         excess = torch.where(finite, 1 - K_est, Tcr) - Tcr
