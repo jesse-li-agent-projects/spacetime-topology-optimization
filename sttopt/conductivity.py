@@ -297,6 +297,20 @@ class Plate(StrEnum):
     HALF_PLANE = "half_plane"
 
 
+class Reference(StrEnum):
+    """Names for the ideal layered fill `HALF_STENCIL` measures against once the stencil
+    carries an angular weight, selectable per run.
+
+    DIRECTED is the fill at each element's own print direction and layer thickness
+    (`directed_denominator`), a per-element divisor. THIN_LAYER is its limit of
+    vanishingly thin layers (`thin_layer_denominator`): direction-free up to lattice
+    ripple, so one divisor for every element, depending on `kappa` alone.
+    """
+
+    DIRECTED = "directed"
+    THIN_LAYER = "thin_layer"
+
+
 class Substrate(NamedTuple):
     """The build plate as a solid half-plane, printed before anything else, as the
     stencil offsets from each element that land in it (see `substrate`).
@@ -563,6 +577,24 @@ def angular_pair_weights(
     dirs = _pair_directions(e1, e2, grad[0].shape[1], gx.dtype)
     g_dot_dir = gx[e1] * dirs[:, 0] + gy[e1] * dirs[:, 1]
     return _lobe(g_dot_dir, _gradient_magnitude(grad)[e1], dirs, kappa, g0)
+
+
+def thin_layer_denominator(stencil: AngularStencil, kappa: float) -> float:
+    """`Reference.THIN_LAYER`'s divisor: `directed_denominator` as `|grad t| -> inf`,
+    where the print-order mask becomes a step and the lobe loses its `g0`.
+
+    Taken along a mesh axis; any other direction differs only by lattice ripple, ~0.2%
+    at `kappa = 2.37` on a 12-element radius. At `kappa = 0` it is
+    `half_stencil_weight` exactly.
+
+    :param stencil: the run's `AngularStencil`
+    :param kappa: lobe concentration for this iteration
+    """
+    g = stencil.offset.new_tensor([0.0, 1.0])
+    # Offsets on the front take half credit, as the sigmoid gives them at any sharpness.
+    mask = torch.heaviside(-(stencil.offset @ g), stencil.offset.new_tensor(0.5))
+    w_ang = _lobe(stencil.offset_dir @ g, 1.0, stencil.offset_dir, kappa, 0.0)
+    return float((stencil.offset_w * w_ang * mask).sum())
 
 
 def directed_denominator(
@@ -991,6 +1023,7 @@ def estimated_conductivity(
     shielding: Shielding = Shielding.ABSOLUTE,
     shielding_eps: float = 1e-3,
     substrate: Substrate | None = None,
+    reference: Reference = Reference.DIRECTED,
 ) -> Float[Tensor, " nely*nelx"]:
     """Local estimated conductivity: how strongly each element's neighborhood has
     already solidified (cooler, earlier `tPhys`) around it, used as an overheating
@@ -999,8 +1032,8 @@ def estimated_conductivity(
 
     With `kappa > 0` the stencil additionally carries `_lobe`'s angular weight, favoring
     neighbors that lie behind the local print direction, and `denom` is replaced by
-    `directed_denominator`'s per-element reference -- the two go together, since the
-    angular factor is what stops a constant divisor from being the right one.
+    `reference`'s -- the two go together, since the angular factor is what stops
+    `half_stencil_weight` from being the right divisor.
 
     :param stencil: the run's `AngularStencil`; required for `kappa > 0`
     :param kappa: angular lobe concentration for this iteration; `0` leaves the stencil
@@ -1013,6 +1046,7 @@ def estimated_conductivity(
     :param shielding: the run's `Shielding`
     :param shielding_eps: `shielding_term`'s `eps`
     :param substrate: the plate as a solid half-plane, in place of `base`
+    :param reference: the run's `Reference`, for `kappa > 0`
     :raises ValueError: if no element carrying density is left with a finite `K_est`,
         the whole part being within stencil reach of the print base; if a substrate
         comes with a print base or without a constant divisor; if `kappa > 0`
@@ -1042,9 +1076,12 @@ def estimated_conductivity(
             )
         grad = timefield.central_difference_gradient_vector(tPhys)
         angular = partial(angular_pair_weights, grad, kappa=kappa, g0=g0)
-        denom = directed_denominator(
-            grad, stencil, kappa, g0, rouf, timefield.unit_length(tPhys)
-        )
+        if Reference(reference) == Reference.DIRECTED:
+            denom = directed_denominator(
+                grad, stencil, kappa, g0, rouf, timefield.unit_length(tPhys)
+            )
+        else:
+            denom = thin_layer_denominator(stencil, kappa)
     shield = shielding_term(Shielding(shielding), x, q, shielding_eps)
     K_est = _conductivity_core(
         x, t, e1, e2, w, q, rouf, denom, base, angular, pair_credit, shield

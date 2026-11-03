@@ -1778,6 +1778,33 @@ def test_directed_denominator_tracks_the_lobe_at_nonzero_kappa():
         previous = value
 
 
+@pytest.mark.parametrize("rmin_cond", [3.0, 5.0])
+def test_thin_layer_denominator_is_the_half_stencil_constant_at_kappa_zero(rmin_cond):
+    stencil = conductivity.angular_stencil(rmin_cond, torch.float64, 1.0)
+    assert conductivity.thin_layer_denominator(stencil, 0.0) == pytest.approx(
+        conductivity.half_stencil_weight(rmin_cond)
+    )
+
+
+@pytest.mark.parametrize("angle", [0.0, np.pi / 2, 0.3, 2.0])
+@pytest.mark.parametrize("kappa", [1.0, 2.3666])
+def test_thin_layer_denominator_is_the_directed_one_at_steep_gradients(angle, kappa):
+    """The limit it names; exact on a mesh axis, within lattice ripple off it (a few
+    percent on a stencil this small)."""
+    nelx, nely, rmin_cond = 11, 9, 3.0
+    _, _, _, stencil = _stencil(nelx, nely, rmin_cond)
+    tPhys = _linear_timefield(nelx, nely, angle, 1e5)
+    grad = timefield.central_difference_gradient_vector(tPhys)
+    directed = conductivity.directed_denominator(
+        grad, stencil, kappa, 0.35, ROUF, timefield.unit_length(tPhys)
+    )
+    on_axis = angle in (0.0, np.pi / 2)
+    assert float(directed.mean()) == pytest.approx(
+        conductivity.thin_layer_denominator(stencil, kappa),
+        rel=1e-4 if on_axis else 5e-2,
+    )
+
+
 def test_kappa_zero_leaves_K_est_bit_for_bit_unchanged():
     """The continuation starts from the present behavior, so `kappa = 0` must not
     perturb it at all -- the angular path is skipped, not evaluated to 1."""
