@@ -13,14 +13,6 @@ This directory contains plans for agents.
 - variant2_next_studies.md
     - Start here for Variant 2: the studies to run next on the settled default (plain-TO
       gap, a fair sequential reference, virtual vs direct time field, C1 at 2x).
-- length_scale_options.md
-    - Deferred: ways to give `stto` a minimum feature size, against the thin necks the
-      hotspot constraint adds. Options and their costs only; the user wants other
-      avenues tried first.
-- nucleation.md
-    - Open: the hotspot pulls light, ungrounded material in as "support" under hot
-      regions. Status, the pressures wanted per situation, and whether they conflict.
-      Start here to resume the problem.
 Completed plans live in `plans/archive/` and are not summarized here to keep this
 index short. Only open one if you specifically need the history behind a past
 decision.

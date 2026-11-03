@@ -1,6 +1,6 @@
 # Minimum length scale: options (deferred)
 
-**Status: deferred (user, 2026-10-08).** None of the options below is appealing enough
+**Closed, not implemented (user, 2026-11-03):** `stto` is retired (`retire_stto.md`). Deferred since 2026-10-08: None of the options below is appealing enough
 to implement yet; try other avenues first. This note keeps the options and the evidence
 so they need not be re-derived.
 

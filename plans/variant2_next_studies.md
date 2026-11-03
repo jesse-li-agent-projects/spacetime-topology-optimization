@@ -114,6 +114,6 @@ resolution.
 ## Not on this list
 
 - **Small enclosed holes:** tabled 2026-10-22.
-- **Nucleation:** open, with questions for the user in `nucleation.md`.
+- **Nucleation:** closed with `stto`'s retirement (`archive/nucleation.md`).
 - **The μ filter:** dropped.
-- **Minimum length scale:** deferred, in `length_scale_options.md`.
+- **Minimum length scale:** closed with `stto`'s retirement (`archive/length_scale_options.md`).
