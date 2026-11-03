@@ -285,6 +285,115 @@ def infinite_base(
     return None if normalization == Normalization.NEIGHBORHOOD else base
 
 
+class Plate(StrEnum):
+    """Names for how the hotspot measure reads the build plate, selectable per run.
+
+    EXEMPT takes every element within stencil reach of the plate out of the measure
+    (`infinite_base`). HALF_PLANE keeps them in, shielded by the plate as a solid
+    half-plane printed before anything else (`Substrate`).
+    """
+
+    EXEMPT = "exempt"
+    HALF_PLANE = "half_plane"
+
+
+class Reference(StrEnum):
+    """Names for the ideal layered fill `HALF_STENCIL` measures against once the stencil
+    carries an angular weight, selectable per run.
+
+    DIRECTED is the fill at each element's own print direction and layer thickness
+    (`directed_denominator`), a per-element divisor. THIN_LAYER is its limit of
+    vanishingly thin layers (`thin_layer_denominator`): direction-free up to lattice
+    ripple, so one divisor for every element, depending on `kappa` alone.
+    """
+
+    DIRECTED = "directed"
+    THIN_LAYER = "thin_layer"
+
+
+class Substrate(NamedTuple):
+    """The build plate as a solid half-plane, printed before anything else, as the
+    stencil offsets from each element that land in it (see `substrate`).
+
+    An alternative to `infinite_base`'s exemption that keeps the elements near the
+    plate in the hotspot measure. It must be the whole half-plane, not a pad the width
+    of the mesh, or an element at the end of the plate reads as less shielded than one
+    mid-plate (PR #230).
+    """
+
+    e: Int[Tensor, " npairs"]  # the element each offset is taken from
+    offset: Float[Tensor, "npairs 2"]  # (dx, dy) to the substrate, in elements
+    w: Float[Tensor, " npairs"]  # radial stencil weight
+
+
+def substrate(
+    nelx: int,
+    nely: int,
+    rmin_cond: float,
+    plate: "timefield.TimeField",
+    dtype: torch.dtype,
+    device: torch.device | str | None = None,
+) -> Substrate:
+    """The `Substrate` beyond a plate along one whole mesh edge.
+
+    :param rmin_cond: conductivity-neighborhood radius, in elements
+    :param plate: the time-field variant whose print-start edge is the plate
+    :raises ValueError: for a variant that starts from a corner, which defines no plate
+        line to take a half-plane beyond
+    """
+    e = np.arange(nelx * nely)
+    i, j = e % nelx, e // nelx
+    beyond = {
+        timefield.TimeField.EDGE: lambda di, dj: i + di < 0,
+        timefield.TimeField.RIGHT_EDGE: lambda di, dj: i + di >= nelx,
+        timefield.TimeField.BOTTOM_EDGE: lambda di, dj: j + dj >= nely,
+    }.get(plate)
+    if beyond is None:
+        raise ValueError(
+            f"a substrate needs a plate along a mesh edge to take the half-plane beyond, but {plate!r} starts from a corner"
+        )
+    es, offsets, ws = [], [], []
+    for di, dj, weight in _stencil_offsets(rmin_cond):
+        hit = beyond(di, dj)
+        es.append(e[hit])
+        offsets.append(np.tile([di, dj], (hit.sum(), 1)))
+        ws.append(np.full(hit.sum(), weight))
+    return Substrate(
+        e=torch.as_tensor(np.concatenate(es), device=device),
+        offset=torch.as_tensor(np.concatenate(offsets), dtype=dtype, device=device),
+        w=torch.as_tensor(np.concatenate(ws), dtype=dtype, device=device),
+    )
+
+
+def _substrate_numerator(
+    sub: Substrate,
+    x: Float[Tensor, " nel"],
+    grad: tuple[Float[Tensor, "nely nelx"], Float[Tensor, "nely nelx"]] | None,
+    kappa: float,
+    g0: float,
+    shielding: "Shielding",
+    q: float,
+    shielding_eps: float,
+) -> Float[Tensor, " nel"]:
+    """What the substrate adds to each element's `K_est` numerator: full density with
+    full print-order credit, since it was there before anything was printed.
+
+    :param grad: the time field's gradient, for the angular weight; unused at
+        `kappa = 0`
+    """
+    nel = x.shape[0]
+    # The substrate as one extra, solid element, so `shielding_term` reads it as it
+    # reads any other neighbor.
+    shield = shielding_term(shielding, torch.cat([x, x.new_ones(1)]), q, shielding_eps)
+    v = sub.w * shield(sub.e, torch.full_like(sub.e, nel))
+    if kappa != 0:
+        gx, gy = grad[0].flatten()[sub.e], grad[1].flatten()[sub.e]
+        dirs = _unit_rows(sub.offset)
+        g_dot_dir = gx * dirs[:, 0] + gy * dirs[:, 1]
+        v = v * _lobe(g_dot_dir, _gradient_magnitude(grad)[sub.e], dirs, kappa, g0)
+    return torch.zeros_like(x).index_add(0, sub.e, v)
+
+
 def neighbor_weights(
     nelx: int, nely: int, rmin_cond: float
 ) -> tuple[
@@ -468,6 +577,24 @@ def angular_pair_weights(
     dirs = _pair_directions(e1, e2, grad[0].shape[1], gx.dtype)
     g_dot_dir = gx[e1] * dirs[:, 0] + gy[e1] * dirs[:, 1]
     return _lobe(g_dot_dir, _gradient_magnitude(grad)[e1], dirs, kappa, g0)
+
+
+def thin_layer_denominator(stencil: AngularStencil, kappa: float) -> float:
+    """`Reference.THIN_LAYER`'s divisor: `directed_denominator` as `|grad t| -> inf`,
+    where the print-order mask becomes a step and the lobe loses its `g0`.
+
+    Taken along a mesh axis; any other direction differs only by lattice ripple, ~0.2%
+    at `kappa = 2.37` on a 12-element radius. At `kappa = 0` it is
+    `half_stencil_weight` exactly.
+
+    :param stencil: the run's `AngularStencil`
+    :param kappa: lobe concentration for this iteration
+    """
+    g = stencil.offset.new_tensor([0.0, 1.0])
+    # Offsets on the front take half credit, as the sigmoid gives them at any sharpness.
+    mask = torch.heaviside(-(stencil.offset @ g), stencil.offset.new_tensor(0.5))
+    w_ang = _lobe(stencil.offset_dir @ g, 1.0, stencil.offset_dir, kappa, 0.0)
+    return float((stencil.offset_w * w_ang * mask).sum())
 
 
 def directed_denominator(
@@ -895,6 +1022,8 @@ def estimated_conductivity(
     cooling_sharpness: float = 8.0,
     shielding: Shielding = Shielding.ABSOLUTE,
     shielding_eps: float = 1e-3,
+    substrate: Substrate | None = None,
+    reference: Reference = Reference.DIRECTED,
 ) -> Float[Tensor, " nely*nelx"]:
     """Local estimated conductivity: how strongly each element's neighborhood has
     already solidified (cooler, earlier `tPhys`) around it, used as an overheating
@@ -903,8 +1032,8 @@ def estimated_conductivity(
 
     With `kappa > 0` the stencil additionally carries `_lobe`'s angular weight, favoring
     neighbors that lie behind the local print direction, and `denom` is replaced by
-    `directed_denominator`'s per-element reference -- the two go together, since the
-    angular factor is what stops a constant divisor from being the right one.
+    `reference`'s -- the two go together, since the angular factor is what stops
+    `half_stencil_weight` from being the right divisor.
 
     :param stencil: the run's `AngularStencil`; required for `kappa > 0`
     :param kappa: angular lobe concentration for this iteration; `0` leaves the stencil
@@ -916,14 +1045,21 @@ def estimated_conductivity(
     :param cooling_sharpness: COOLING's onset sharpness, as in `_cooling_credit`
     :param shielding: the run's `Shielding`
     :param shielding_eps: `shielding_term`'s `eps`
+    :param substrate: the plate as a solid half-plane, in place of `base`
+    :param reference: the run's `Reference`, for `kappa > 0`
     :raises ValueError: if no element carrying density is left with a finite `K_est`,
-        the whole part being within stencil reach of the print base; if `kappa > 0`
+        the whole part being within stencil reach of the print base; if a substrate
+        comes with a print base or without a constant divisor; if `kappa > 0`
         without the constant divisor the directional reference generalizes; or if a
         credit other than the source's sigmoid comes with a divisor derived from it
     """
     x = xPhys.flatten()
     t = tPhys.flatten()
     credit = PrintOrderCredit(credit)
+    if substrate is not None and (base is not None or denom is None):
+        raise ValueError(
+            "a substrate replaces the infinite print base and adds to a constant reference divisor (HALF_STENCIL), so it takes neither a base nor Normalization.NEIGHBORHOOD"
+        )
     if denom is None and (credit != PrintOrderCredit.SIGMOID or tie_credit != 0.5):
         raise ValueError(
             "a tie credit other than 0.5 or a COOLING credit needs a constant reference divisor (HALF_STENCIL): Normalization.NEIGHBORHOOD divides by the credited weight itself, so a region printed all at once still scores K_est = 1"
@@ -932,6 +1068,7 @@ def estimated_conductivity(
         credit, t, rouf, tie_credit, cooling_time, cooling_sharpness
     )
     angular = _isotropic
+    grad = None
     if kappa != 0:
         if stencil is None or denom is None:
             raise ValueError(
@@ -939,13 +1076,20 @@ def estimated_conductivity(
             )
         grad = timefield.central_difference_gradient_vector(tPhys)
         angular = partial(angular_pair_weights, grad, kappa=kappa, g0=g0)
-        denom = directed_denominator(
-            grad, stencil, kappa, g0, rouf, timefield.unit_length(tPhys)
-        )
+        if Reference(reference) == Reference.DIRECTED:
+            denom = directed_denominator(
+                grad, stencil, kappa, g0, rouf, timefield.unit_length(tPhys)
+            )
+        else:
+            denom = thin_layer_denominator(stencil, kappa)
     shield = shielding_term(Shielding(shielding), x, q, shielding_eps)
     K_est = _conductivity_core(
         x, t, e1, e2, w, q, rouf, denom, base, angular, pair_credit, shield
     ).K_est
+    if substrate is not None:
+        K_est = K_est + _substrate_numerator(
+            substrate, x, grad, kappa, g0, Shielding(shielding), q, shielding_eps
+        ) / torch.as_tensor(denom, dtype=x.dtype, device=x.device)
     if base is not None and not bool((torch.isfinite(K_est) & (x > 0)).any()):
         raise ValueError(
             "every element carrying density has infinite K_est, being within the conductivity stencil's reach of the print base, so the hotspot measure has nothing left to aggregate over; shrink rmin_cond_m or use a normalization that needs no print base (infinite_base)"

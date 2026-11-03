@@ -55,8 +55,11 @@ class FieldTerms:
     # `conductivity.angular_stencil`.
     hotspot_stencil: conductivity.AngularStencil | None
     # Print base elements the hotspot measure treats as infinitely dense, or None where
-    # the normalization needs no print base -- `conductivity.infinite_base`.
+    # the normalization needs no print base or the plate is a substrate --
+    # `conductivity.infinite_base`.
     hotspot_base: Int[Tensor, " k"] | None
+    # The plate as a solid half-plane, or None where it is exempt -- `conductivity.Plate`.
+    hotspot_substrate: conductivity.Substrate | None
     # Smooth maximum of the hotspot severity.
     hotspot: conductivity.PMean | conductivity.LogSumExp
     # Smooth maximum of the tool-radius curvature severity, or None where
@@ -137,6 +140,21 @@ class FieldTerms:
         normalization = conductivity.Normalization(config.hotspot_normalization)
         e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin_cond)
         hotspot_base = conductivity.infinite_base(normalization, base)
+        substrate = None
+        if conductivity.Plate(config.hotspot_plate) == conductivity.Plate.HALF_PLANE:
+            if normalization != conductivity.Normalization.HALF_STENCIL:
+                raise ValueError(
+                    f"hotspot_plate 'half_plane' adds to half_stencil's constant reference, so it needs hotspot_normalization 'half_stencil', got {normalization.value!r}"
+                )
+            hotspot_base = None
+            substrate = conductivity.substrate(
+                nelx,
+                nely,
+                rmin_cond,
+                timefield.TimeField[config.print_base.upper()],
+                dtype,
+                device,
+            )
         # int32 halves the largest arrays a run keeps: the pair list.
         ints = torch_util.to_tensors({"e1": e1, "e2": e2}, device, torch.int32)
 
@@ -159,6 +177,7 @@ class FieldTerms:
                 if hotspot_base is None
                 else torch_util.to_tensor(base, device, torch.int64)
             ),
+            hotspot_substrate=substrate,
             hotspot=conductivity.make_aggregation(
                 conductivity.Aggregation(config.hotspot_aggregation),
                 config.p,
@@ -257,6 +276,8 @@ class FieldTerms:
             at(config.hotspot_cooling_sharpness),
             conductivity.Shielding(config.hotspot_shielding),
             config.hotspot_shielding_eps,
+            self.hotspot_substrate,
+            conductivity.Reference(config.hotspot_reference),
         )
 
     def constraints(
@@ -365,9 +386,9 @@ class FieldTerms:
         loop: int,
     ) -> Float[Tensor, ""]:
         """A pressure on would-be hotspots, for the objective: the mean over elements of
-        `softplus(S1 - Tcr) * xPhys`, where `S1 = 1 - K_est` at `hotspot_shaping_q`. At
-        its default `q = 1`, `S1` is the severity an element would have once it and its
-        support were solid.
+        `softplus(S1 - Tcr) * xPhys`, where `S1 = 1 - K_est` is the hotspot's own severity,
+        at the run's `q`. At `q = 1`, `S1` is the severity an element would have once it
+        and its support were solid.
 
         The relative shieldings read that severity honestly in the hotspot constraint,
         but its gradient barely moves a bar's overall density or its void support. This
@@ -384,10 +405,8 @@ class FieldTerms:
         config = self.config
         Tcr = run_config.weight_at(config.Tcr, loop)
         sharpness = run_config.weight_at(config.hotspot_shaping_sharpness, loop)
-        K_est = self.estimated_conductivity(
-            xPhys, tPhys, loop, q=run_config.weight_at(config.hotspot_shaping_q, loop)
-        )
-        # The print base's infinite `K_est` is no hotspot: select it out, as in
+        K_est = self.estimated_conductivity(xPhys, tPhys, loop)
+        # An exempt print base's infinite `K_est` is no hotspot: select it out, as in
         # `conductivity.LogSumExp`, so its `inf` never reaches the backward pass.
         finite = torch.isfinite(K_est)
         excess = torch.where(finite, 1 - K_est, Tcr) - Tcr

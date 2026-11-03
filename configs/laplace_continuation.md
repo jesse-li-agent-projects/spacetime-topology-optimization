@@ -9,23 +9,32 @@ are on that schedule.
 
 | Iterations | Phase | What moves |
 |---|---|---|
-| 0-450 | layout forms | `hotspot_kappa`, `penal`, `beta_t` ramp linearly; cooling sharpness `k` 1 -> 8 (geometric); `Tcr` 1 -> target over 0-150; `beta_d` held at 2, `q` held at 1 |
-| 450-550 | sharpen | `beta_d` 2 -> 8 (geometric) and `q` 1 -> 3, together |
+| 0-450 | layout forms | `hotspot_kappa`, `penal`, `beta_t` ramp linearly; cooling sharpness `k` 1 -> 8 (geometric); `Tcr` 1 -> target over 0-150; `beta_d` held at 2 |
+| 450-550 | sharpen | `beta_d` 2 -> 8 (geometric) |
 | 550-750 | settle | nothing ramps |
 
-The move limits are fixed: 0.02 on the density, 0.002 on the time-field variables.
+The move limits are fixed: 0.02 on the density, 0.002 on the time-field variables. `q`
+is 2 throughout.
 
 ## Why
 
-- **`q` follows `beta_d`.** The hotspot credits a grey neighbour `(x_b / x_a)^q`; on a
-  binary design that is 0 or 1, so `q` only shapes the grey. `q` = 1 while the layout
-  forms reads grey support generously, which gave the best compliance. Held to the end,
-  it lets a grey design pass that fails once binarized (C1 0.3 by +0.04). Raising it to 3
-  while `beta_d` sharpens makes the reading of grey support as strict as binarizing
-  would be. Since the design still ends 6-13% grey, `q` matters to the end.
-- **The shaping term reads the constraint's own severity** (`hotspot_shaping_q` follows
-  `q`) rather than a separate reading at `q` = 1. All eight cells pass at unchanged
-  compliance (batches 47 and 49), and the formulation loses a second severity.
+- **`q` = 2 throughout.** The hotspot credits a grey neighbour `(x_b / x_a)^q`; on a
+  binary design that is 0 or 1, so `q` only shapes the grey, and the design still ends
+  6-13% grey.
+  - Not 1 while the layout forms: there the hotspot reads a grey strut as cooler than
+    both its void and its solid version, and the shaping term holds it grey (C1 0.5 Tcr
+    0.4 kept one to the end, batch 55, on CPU and on GPU). Held at 1 to the end, a grey
+    design also passed that failed once binarized (C1 0.3 by +0.04). Starting at 2
+    resolves the strut; all eight cells pass with compliance within 0.008x of `q` from 1
+    and the same or less final grey (batch 56). On C1, 1.5 removed the strut and 3 left
+    it faint: not monotonic, one run each.
+  - No ramp to 3 while `beta_d` sharpens: holding 2 passes all eight cells at the same or
+    lower compliance (C1 0.3 1.048 against 1.054), with the overshoot of `Tcr` after 450
+    similar or smaller (batch 57). The ramp only read grey support a little more strictly
+    (C1 0.3: binarizing raised the severity by 0.012 with it, 0.029 without).
+- **The shaping term reads the hotspot's own severity**, at `q`, rather than a separate
+  reading at `q` = 1. All eight cells pass at unchanged compliance (batches 47 and 49),
+  and the formulation loses a second severity.
 - **`beta_d` ends at 8, not 128.** Branched from 300 on the four hardest cells: -> 8
   passes all of them with about the same compliance (C1 0.3 1.066 against 1.074 at
   128) and smooth 0.5 contours; -> 4 and held at 2 fail on C1. Ending grey means gating
@@ -56,6 +65,16 @@ The move limits are fixed: 0.02 on the density, 0.002 on the time-field variable
   hotspot objective hold the severity at `Tcr` on their own. Without the row, all eight
   cells pass at the same or slightly lower compliance (batch 52); the
   severity overshoots `Tcr` by up to about 0.1 mid-run, but ends below it.
+- **The plate as a solid half-plane** (`hotspot_plate`), not an exemption for every
+  element within stencil reach of it. Read that way, batch 52's designs fail on four
+  cells, C1 0.5 Tcr 0.4 by +0.32 at the free surfaces next to the plate, which the
+  exemption had hidden from the optimizer. Optimized with it, all eight cells pass at
+  compliance within 0.11% of batch 52 (batch 54).
+- **One reference for every element** (`hotspot_reference: thin_layer`): the half-stencil
+  divisor is the ideal thin-layer fill's, one number per iteration, instead of each
+  element's own `D_e` at its own `|grad t|`. `D_e` varied by about 3% over the part
+  (p5-p95); all eight cells pass at compliance within 0.006x of the per-element divisor
+  (batch 55).
 - **No `mu` filter** (`mu_filter_rmin_m`): it halves the diffusivity's roughness but
   leaves C1 grey and failing once binarized.
 
@@ -65,4 +84,7 @@ Eight cells, two runs each (batches 41 and 42; three on C1 0.5 Tcr 0.4): C1 0.5 
 0.4 and 0.6, C1 0.3, C2 0.5, S 0.3 bottom and edge, L middle and corner. All pass, at
 1.006-1.060 x plain TO. The rounded weights, and the roughness term off: all eight cells,
 one run each (batches 44, 47 and 49). This schedule, with the hotspot constraint on and off:
-all eight cells, one run each (batch 52).
+all eight cells, one run each (batch 52). The plate as a half-plane: all eight cells, one
+run each (batch 54). The thin-layer reference: all eight cells, one run each (batch 55).
+`q` from 2, with it: all eight cells, one run each (batch 56); held at 2 to the end
+(batch 57).

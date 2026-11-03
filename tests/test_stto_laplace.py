@@ -231,9 +231,9 @@ def test_time_field_constraints_are_rejected(name):
         _config(**{name: 0.1})
 
 
-def _shaping_gradient(x, Tcr=0.6, **overrides):
+def _shaping_gradient(x, Tcr=0.6, q=1.0, **overrides):
     """`FieldTerms.hotspot_shaping` and its density gradient on a 60x20 mesh printed
-    column by column from the left, under capped-ratio shielding.
+    column by column from the left, under capped-ratio shielding, at a constant `q`.
 
     :param overrides: config fields to set on top of that setup
     """
@@ -246,6 +246,7 @@ def _shaping_gradient(x, Tcr=0.6, **overrides):
         hotspot_shaping_weight=1.0,
         rmin_cond_m=4 * base.element_size_m,
         Tcr=Tcr,
+        q=q,
         **overrides,
     )
     terms = stto_laplace.build_problem(config, device="cpu").terms
@@ -272,7 +273,7 @@ def test_hotspot_shaping_above_q_1_barely_pulls_void_support_in():
     x[:, 40:44] = 0.5
     rows = slice(8, 12)
     _, solid = _shaping_gradient(x)
-    _, own = _shaping_gradient(x, hotspot_shaping_q=3.0)
+    _, own = _shaping_gradient(x, q=3.0)
     assert (own[rows, 40] > 0).all()  # R1 survives
     assert own[rows, 38].abs().max() < 1e-2 * solid[rows, 38].abs().min()
 
@@ -322,3 +323,27 @@ def test_an_l_bracket_runs_on_its_domain_alone():
     problem = stto_laplace.build_problem(config, device="cpu")
     report = stto_laplace.check_design(problem, result.state)
     assert "constraints" in report
+
+
+def test_a_half_plane_plate_keeps_every_element_in_the_hotspot():
+    """With the plate as a substrate, nothing near it is exempt, and a short run's
+    hotspot and gradients stay finite."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", "subsolv", RuntimeWarning)
+        result = stto_laplace.run(_config(hotspot_plate="half_plane"), device="cpu")
+    problem = stto_laplace.build_problem(
+        _config(hotspot_plate="half_plane"), device="cpu"
+    )
+    K = problem.terms.estimated_conductivity(
+        result.xPhys_traj[-1], result.tPhys_traj[-1], NITER
+    )
+    assert torch.isfinite(K).all()
+    for record in result.records:
+        assert math.isfinite(record.tru_max)
+        assert np.isfinite(record.df).all() and np.isfinite(record.dg).all()
+
+
+def test_a_half_plane_plate_needs_the_half_stencil_reference():
+    config = _config(hotspot_plate="half_plane", hotspot_normalization="neighborhood")
+    with pytest.raises(ValueError, match="half_plane"):
+        stto_laplace.build_problem(config, device="cpu")

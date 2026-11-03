@@ -23,7 +23,8 @@ means run records written before the field existed no longer load -- add the fie
 every config file instead. The one exception is a field whose default is the only
 behaviour older records could have had (`SpaceTimeConfig.load_case`,
 `support_length_m`, `hotspot_credit`, `hotspot_tie_credit`, `hotspot_cooling_time`,
-`hotspot_cooling_sharpness`, `hotspot_weight`, `calibration_rate`, `RunConfig.time_init`).
+`hotspot_cooling_sharpness`, `hotspot_plate`, `hotspot_reference`, `hotspot_weight`,
+`calibration_rate`, `RunConfig.time_init`).
 """
 
 import bisect
@@ -277,14 +278,18 @@ class SpaceTimeConfig(_ConfigMixin):
         `hotspot_shielding`.
     :param hotspot_shaping_sharpness: that term's softplus sharpness, per unit severity,
         possibly scheduled.
-    :param hotspot_shaping_q: the shielding exponent that term reads `K_est` at,
-        possibly scheduled. 1, the default, is the severity an element would have once
-        solid; the run's `q` schedule makes it read the constraint's own severity.
     :param hotspot_cooling_time: `cooling`'s cooling time, in `t`, possibly scheduled.
     :param hotspot_cooling_sharpness: `cooling`'s onset sharpness `k`, possibly
         scheduled. A tie gets `1 - 2**(-1/k)`, and a later neighbor is pulled earlier
         only within about `cooling_time / k`, so a schedule from 1 up is a continuation
         like `rouf`'s (`conductivity._cooling_credit`).
+    :param hotspot_plate: a `conductivity.Plate` member value: how the hotspot reads
+        the build plate. `exempt`, the default and the only behaviour before it existed,
+        or `half_plane`, which needs `half_stencil` normalization and a `print_base`
+        along a whole mesh edge.
+    :param hotspot_reference: a `conductivity.Reference` member value: the layered fill
+        `half_stencil` measures against at `hotspot_kappa > 0`. `directed`, the default,
+        is per element; `thin_layer` is one divisor for every element.
     :param rmin_m: density-filter radius.
     :param tool_radius_m: print tool radius, possibly scheduled. Bounds the concave
         curvature of the time field's iso-lines (`timefield.iso_curvature`) to
@@ -349,9 +354,10 @@ class SpaceTimeConfig(_ConfigMixin):
     hotspot_void_exponent: float = 1.0
     hotspot_shaping_weight: Scheduled = 0.0
     hotspot_shaping_sharpness: Scheduled = 100.0
-    hotspot_shaping_q: Scheduled = 1.0
     hotspot_cooling_time: Scheduled = 0.0
     hotspot_cooling_sharpness: Scheduled = 8.0
+    hotspot_plate: str = "exempt"
+    hotspot_reference: str = "directed"
     print_base: str
     rmin_m: float
     tool_radius_m: Scheduled

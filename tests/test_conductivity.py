@@ -1778,6 +1778,33 @@ def test_directed_denominator_tracks_the_lobe_at_nonzero_kappa():
         previous = value
 
 
+@pytest.mark.parametrize("rmin_cond", [3.0, 5.0])
+def test_thin_layer_denominator_is_the_half_stencil_constant_at_kappa_zero(rmin_cond):
+    stencil = conductivity.angular_stencil(rmin_cond, torch.float64, 1.0)
+    assert conductivity.thin_layer_denominator(stencil, 0.0) == pytest.approx(
+        conductivity.half_stencil_weight(rmin_cond)
+    )
+
+
+@pytest.mark.parametrize("angle", [0.0, np.pi / 2, 0.3, 2.0])
+@pytest.mark.parametrize("kappa", [1.0, 2.3666])
+def test_thin_layer_denominator_is_the_directed_one_at_steep_gradients(angle, kappa):
+    """The limit it names; exact on a mesh axis, within lattice ripple off it (a few
+    percent on a stencil this small)."""
+    nelx, nely, rmin_cond = 11, 9, 3.0
+    _, _, _, stencil = _stencil(nelx, nely, rmin_cond)
+    tPhys = _linear_timefield(nelx, nely, angle, 1e5)
+    grad = timefield.central_difference_gradient_vector(tPhys)
+    directed = conductivity.directed_denominator(
+        grad, stencil, kappa, 0.35, ROUF, timefield.unit_length(tPhys)
+    )
+    on_axis = angle in (0.0, np.pi / 2)
+    assert float(directed.mean()) == pytest.approx(
+        conductivity.thin_layer_denominator(stencil, kappa),
+        rel=1e-4 if on_axis else 5e-2,
+    )
+
+
 def test_kappa_zero_leaves_K_est_bit_for_bit_unchanged():
     """The continuation starts from the present behavior, so `kappa = 0` must not
     perturb it at all -- the angular path is skipped, not evaluated to 1."""
@@ -2246,3 +2273,110 @@ def test_capped_ratio_rates_grey_on_solid_support_as_solid():
         _shielded_severity(grey_top, _LAYERED_T, ratio, 1e-6)[:16]
         < _shielded_severity(solid, _LAYERED_T, ratio, 1e-6)[:16] - 0.1
     ).all()
+
+
+SUBSTRATE_PLATES = {
+    # Rotation (k of np.rot90) that takes a bottom plate to this one
+    timefield.TimeField.BOTTOM_EDGE: 0,
+    timefield.TimeField.RIGHT_EDGE: 1,
+    timefield.TimeField.EDGE: -1,
+}
+
+
+@pytest.mark.parametrize("plate", list(SUBSTRATE_PLATES))
+def test_substrate_reads_as_a_solid_half_plane_printed_first(plate):
+    """K_est with a substrate matches the same fields embedded in a larger mesh whose
+    whole half-plane beyond the plate line is solid and printed long before, and whose
+    remainder beyond the mesh is void -- at the plate's ends too, where a pad only as
+    wide as the mesh would fall short."""
+    rmin, n = 3.0, 3  # padding of n >= rmin elements reaches as far as the stencil
+    nely, nelx = 5, 8
+    rng = np.random.default_rng(0)
+    x, t = rng.uniform(0.2, 1, (nely, nelx)), rng.uniform(0, 1, (nely, nelx))
+    big_x = np.zeros((nely + n, nelx + 2 * n))
+    big_t = np.full_like(big_x, -1e3)
+    big_x[nely:] = 1.0
+    big_x[:nely, n:-n], big_t[:nely, n:-n] = x, t
+    k = SUBSTRATE_PLATES[plate]
+    x, t, big_x, big_t = (np.rot90(a, k).copy() for a in (x, t, big_x, big_t))
+    denom = conductivity.half_stencil_weight(rmin)
+
+    def K(x, t, substrate=None):
+        e1, e2, w = conductivity.neighbor_weights(x.shape[1], x.shape[0], rmin)
+        return conductivity.estimated_conductivity(
+            tt(x), tt(t), tti(e1), tti(e2), tt(w), Q, ROUF, denom, substrate=substrate
+        ).reshape(x.shape)
+
+    sub = conductivity.substrate(x.shape[1], x.shape[0], rmin, plate, torch.float64)
+    embedded = np.rot90(np.rot90(K(big_x, big_t).numpy(), -k)[:nely, n:-n], k)
+    assert_close(K(x, t, sub).numpy(), embedded)
+
+
+@pytest.mark.parametrize("kappa", [0.0, 2.3666])
+def test_substrate_shields_the_first_layer_like_the_layers_above_it(kappa):
+    """Under a uniform layered fill, an element on the plate is as well shielded as one
+    deep inside the part, with and without the angular weight."""
+    rmin, nely, nelx = 3.0, 12, 13
+    x = torch.ones(nely, nelx, dtype=torch.float64)
+    t = torch.linspace(1, 0, nely, dtype=torch.float64)[:, None].expand(nely, nelx)
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin)
+    K = conductivity.estimated_conductivity(
+        x,
+        t,
+        tti(e1),
+        tti(e2),
+        tt(w),
+        Q,
+        1e4,  # sharp enough that every earlier layer is fully credited
+        conductivity.half_stencil_weight(rmin),
+        stencil=conductivity.angular_stencil(rmin, torch.float64, kappa),
+        kappa=kappa,
+        substrate=conductivity.substrate(
+            nelx, nely, rmin, timefield.TimeField.BOTTOM_EDGE, torch.float64
+        ),
+    ).reshape(nely, nelx)
+    assert_close(K[-1, nelx // 2], K[nely // 2, nelx // 2])
+
+
+@pytest.mark.parametrize(
+    "plate", [timefield.TimeField.CORNER, timefield.TimeField.OPPOSITE_CORNER]
+)
+def test_substrate_needs_a_plate_along_an_edge(plate):
+    with pytest.raises(ValueError, match="starts from a corner"):
+        conductivity.substrate(NELX, NELY, RMIN_COND, plate, torch.float64)
+
+
+@pytest.mark.parametrize("shielding", list(conductivity.Shielding))
+def test_substrate_sensitivity_matches_finite_differences(shielding):
+    """The substrate term's gradient, through the angular weight's time field and the
+    relative shieldings' own density."""
+    nelx, nely, rmin = 6, 5, 2.5
+    rng = np.random.default_rng(3)
+    x = tt(rng.uniform(0.3, 1.0, (nely, nelx))).requires_grad_(True)
+    t = _linear_timefield(nelx, nely, 0.4, 1.0) + tt(rng.uniform(0, 0.05, (nely, nelx)))
+    t = t.detach().requires_grad_(True)
+    e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin)
+    sub = conductivity.substrate(
+        nelx, nely, rmin, timefield.TimeField.EDGE, torch.float64
+    )
+
+    def K(x, t):
+        return conductivity.estimated_conductivity(
+            x,
+            t,
+            tti(e1),
+            tti(e2),
+            tt(w),
+            Q,
+            ROUF,
+            conductivity.half_stencil_weight(rmin),
+            stencil=conductivity.angular_stencil(rmin, torch.float64, 1.0),
+            kappa=2.3666,
+            g0=0.35,
+            credit=conductivity.PrintOrderCredit.COOLING,
+            cooling_time=0.05,
+            shielding=shielding,
+            substrate=sub,
+        )
+
+    assert torch.autograd.gradcheck(K, (x, t))

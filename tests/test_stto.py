@@ -1131,3 +1131,11 @@ def test_a_domain_short_of_the_mesh_refuses_what_assumes_the_whole_mesh(
     )
     with pytest.raises(ValueError, match=match):
         stto.build_problem(default_run_config(**(config | overrides)))
+
+
+@pytest.mark.parametrize(
+    "tfield", [timefield.TimeField.CORNER, timefield.TimeField.OPPOSITE_CORNER]
+)
+def test_a_half_plane_plate_needs_a_plate_along_an_edge(tfield):
+    with pytest.raises(ValueError, match="starts from a corner"):
+        _problem(tfield=tfield, config_overrides={"hotspot_plate": "half_plane"})
