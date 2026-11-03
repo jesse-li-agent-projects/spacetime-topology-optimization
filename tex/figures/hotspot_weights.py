@@ -80,12 +80,17 @@ def lambda_figure(path: Path) -> None:
     ax = fig.add_axes([0.08, 0.17, 0.5, 0.76])
     polar = fig.add_axes([0.64, 0.08, 0.34, 0.86], projection="polar")
     theta = np.linspace(0, np.pi, 361)
+    # Polar: the print direction points up, so the lobe hangs below the element.
+    phi = np.concatenate([-np.pi / 2 + theta, -np.pi / 2 - theta[::-1]])
     for kappa, color in zip(KAPPAS, RAMP):
         lam = angular_weight(theta, kappa)
         ax.plot(np.degrees(theta), lam, color=color, label=rf"$\kappa = {kappa:g}$")
-        # Polar: the print direction points up, so the lobe hangs below the element.
-        phi = np.concatenate([-np.pi / 2 + theta, -np.pi / 2 - theta[::-1]])
         polar.plot(phi, np.concatenate([lam, lam[::-1]]), color=color)
+    # Das2023 Eq. (3.5): linear in the angle over the semicircle behind the front.
+    linear = np.clip(1 - theta / (np.pi / 2), 0, None)
+    style = dict(color="#1a1a19", ls="--", lw=1.1)
+    ax.plot(np.degrees(theta), linear, label="Das (2023)", **style)
+    polar.plot(phi, np.concatenate([linear, linear[::-1]]), **style)
     ax.set_xlim(0, 180)
     ax.set_ylim(0, 1.05)
     ax.set_xticks([0, 45, 90, 135, 180])
@@ -103,7 +108,7 @@ def lambda_figure(path: Path) -> None:
             color="#52514e",
         )
     ax.grid(True)
-    ax.legend(loc="upper right", bbox_to_anchor=(1.0, 0.93))
+    ax.legend(loc="upper right", bbox_to_anchor=(1.0, 0.95), borderaxespad=0.2)
     polar.set_ylim(0, 1.05)
     polar.set_yticks([0.5, 1.0])
     polar.set_yticklabels(["0.5", "1"], fontsize=7)
