@@ -286,14 +286,13 @@ def infinite_base(
 
 
 class Substrate(NamedTuple):
-    """The build plate as a solid half-plane beyond the plate line, printed before
-    anything else: every stencil offset from an element that lands in it, built by
-    `substrate`.
+    """The build plate as a solid half-plane, printed before anything else, as the
+    stencil offsets from each element that land in it (see `substrate`).
 
     An alternative to `infinite_base`'s exemption that keeps the elements near the
-    plate in the hotspot measure. It has to be the whole half-plane, not a pad the width
+    plate in the hotspot measure. It must be the whole half-plane, not a pad the width
     of the mesh, or an element at the end of the plate reads as less shielded than one
-    mid-plate: the substrate does not stop where the mesh is cut off (PR #230).
+    mid-plate (PR #230).
     """
 
     e: Int[Tensor, " npairs"]  # the element each offset is taken from
