@@ -9,25 +9,29 @@ are on that schedule.
 
 | Iterations | Phase | What moves |
 |---|---|---|
-| 0-450 | layout forms | `hotspot_kappa`, `penal`, `beta_t` ramp linearly; cooling sharpness `k` 1 -> 8 (geometric); `Tcr` 1 -> target over 0-150; `beta_d` held at 2, `q` held at 2 |
-| 450-550 | sharpen | `beta_d` 2 -> 8 (geometric) and `q` 2 -> 3, together |
+| 0-450 | layout forms | `hotspot_kappa`, `penal`, `beta_t` ramp linearly; cooling sharpness `k` 1 -> 8 (geometric); `Tcr` 1 -> target over 0-150; `beta_d` held at 2 |
+| 450-550 | sharpen | `beta_d` 2 -> 8 (geometric) |
 | 550-750 | settle | nothing ramps |
 
-The move limits are fixed: 0.02 on the density, 0.002 on the time-field variables.
+The move limits are fixed: 0.02 on the density, 0.002 on the time-field variables. `q`
+is 2 throughout.
 
 ## Why
 
-- **`q` follows `beta_d`.** The hotspot credits a grey neighbour `(x_b / x_a)^q`; on a
-  binary design that is 0 or 1, so `q` only shapes the grey. Held at 1 to the end, it
-  lets a grey design pass that fails once binarized (C1 0.3 by +0.04). Raising it to 3
-  while `beta_d` sharpens makes the reading of grey support as strict as binarizing
-  would be. Since the design still ends 6-13% grey, `q` matters to the end.
-- **`q` starts at 2, not 1.** At 1 the hotspot reads a grey strut as cooler than both
-  its void and its solid version, and the shaping term holds it grey: C1 0.5 Tcr 0.4
-  kept one to the end (batch 55, on CPU and on GPU). From 2 the strut resolves, and all
-  eight cells pass with compliance within 0.008x of `q` from 1 and the same or less final
-  grey (batch 56). On C1, 1.5 removed the strut and 3 left it faint: not monotonic, one
-  run each.
+- **`q` = 2 throughout.** The hotspot credits a grey neighbour `(x_b / x_a)^q`; on a
+  binary design that is 0 or 1, so `q` only shapes the grey, and the design still ends
+  6-13% grey.
+  - Not 1 while the layout forms: there the hotspot reads a grey strut as cooler than
+    both its void and its solid version, and the shaping term holds it grey (C1 0.5 Tcr
+    0.4 kept one to the end, batch 55, on CPU and on GPU). Held at 1 to the end, a grey
+    design also passed that failed once binarized (C1 0.3 by +0.04). Starting at 2
+    resolves the strut; all eight cells pass with compliance within 0.008x of `q` from 1
+    and the same or less final grey (batch 56). On C1, 1.5 removed the strut and 3 left
+    it faint: not monotonic, one run each.
+  - No ramp to 3 while `beta_d` sharpens: holding 2 passes all eight cells at the same or
+    lower compliance (C1 0.3 1.048 against 1.054), with the overshoot of `Tcr` after 450
+    similar or smaller (batch 57). The ramp only read grey support a little more strictly
+    (C1 0.3: binarizing raised the severity by 0.012 with it, 0.029 without).
 - **The shaping term reads the hotspot's own severity**, at `q`, rather than a separate
   reading at `q` = 1. All eight cells pass at unchanged compliance (batches 47 and 49),
   and the formulation loses a second severity.
@@ -82,4 +86,5 @@ Eight cells, two runs each (batches 41 and 42; three on C1 0.5 Tcr 0.4): C1 0.5 
 one run each (batches 44, 47 and 49). This schedule, with the hotspot constraint on and off:
 all eight cells, one run each (batch 52). The plate as a half-plane: all eight cells, one
 run each (batch 54). The thin-layer reference: all eight cells, one run each (batch 55).
-`q` from 2, with it: all eight cells, one run each (batch 56).
+`q` from 2, with it: all eight cells, one run each (batch 56); held at 2 to the end
+(batch 57).
