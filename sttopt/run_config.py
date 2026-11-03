@@ -55,6 +55,9 @@ class _ConfigMixin:
             value = getattr(self, f.name)
             if isinstance(value, dict):
                 setattr(self, f.name, schedule_from_dict(value))
+        # `left_edge` was `edge` until PR #235; saved configs still say so.
+        if self.print_base.lower() == "edge":
+            self.print_base = "left_edge"
 
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)
@@ -441,7 +444,7 @@ class RunConfig(SpaceTimeConfig):
 
 # The print bases a virtual-heat time field supports: a build plate along a whole edge.
 # A near-point base puts a log singularity in the field and has no physical use.
-_PLATE_BASES = ("edge", "bottom_edge", "right_edge")
+_PLATE_BASES = ("left_edge", "bottom_edge", "right_edge")
 
 
 def _check_virtual_heat(config: SpaceTimeConfig, domain_reason: str | None) -> None:

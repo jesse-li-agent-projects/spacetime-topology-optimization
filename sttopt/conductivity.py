@@ -344,7 +344,7 @@ def substrate(
     e = np.arange(nelx * nely)
     i, j = e % nelx, e // nelx
     beyond = {
-        timefield.TimeField.EDGE: lambda di, dj: i + di < 0,
+        timefield.TimeField.LEFT_EDGE: lambda di, dj: i + di < 0,
         timefield.TimeField.RIGHT_EDGE: lambda di, dj: i + di >= nelx,
         timefield.TimeField.BOTTOM_EDGE: lambda di, dj: j + dj >= nely,
     }.get(plate)

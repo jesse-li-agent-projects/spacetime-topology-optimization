@@ -3,14 +3,14 @@ scalar measures of the optimized field.
 
 `tPhys` is initialized to one of these fields before the optimization loop starts,
 encoding a spatial ordering of when each element is expected to be "active" (e.g. a
-solidification or deposition front sweeping the domain). CORNER/EDGE/OPPOSITE_CORNER/
+solidification or deposition front sweeping the domain). CORNER/LEFT_EDGE/OPPOSITE_CORNER/
 BOTTOM_EDGE are normalized Euclidean-distance or linear ramps over the `(nely, nelx)`
 element grid; `init_geodesic_timefield` (below) is the odd one out, since it depends
 on the geometry rather than only on the mesh.
 See `conventions.md` for the grid/array-order convention they follow.
 
 A lone-1 mesh (`nelx == 1` xor `nely == 1`) is well-defined but doesn't necessarily
-span `[0, 1]`: EDGE is constant at 0 when `nelx == 1`, BOTTOM_EDGE is constant at 0
+span `[0, 1]`: LEFT_EDGE is constant at 0 when `nelx == 1`, BOTTOM_EDGE is constant at 0
 when `nely == 1`, and OPPOSITE_CORNER never reaches 0 when `nely == 1`. At
 `nelx == nely == 1` the two distance variants are undefined (a zero max distance to
 normalize by, giving `nan`); rejecting that mesh is `stto.build_problem`'s job, since
@@ -40,7 +40,7 @@ class TimeField(IntEnum):
     """
 
     CORNER = 1  # top-left corner distance
-    EDGE = 2  # left-edge ramp
+    LEFT_EDGE = 2  # left-edge ramp
     OPPOSITE_CORNER = 3  # bottom-left corner distance
     BOTTOM_EDGE = 4  # bottom-to-top ramp
     RIGHT_EDGE = 5  # right-to-left ramp
@@ -78,7 +78,7 @@ def init_timefield(
     Build one of the named time-field initializations.
 
     CORNER and OPPOSITE_CORNER are normalized distances from the top-left (x=0, y=0)
-    and bottom-left (x=0, y=nely) grid corners; EDGE is a left-to-right linear ramp in
+    and bottom-left (x=0, y=nely) grid corners; LEFT_EDGE is a left-to-right linear ramp in
     x, constant down each column, and RIGHT_EDGE its mirror; BOTTOM_EDGE is a
     bottom-to-top ramp (`t=0` on the bottom row, `t=1` on the top), for a build plate at
     the bottom.
@@ -91,7 +91,7 @@ def init_timefield(
     """
     if variant == TimeField.CORNER:
         return _corner_distance_grid(nelx, nely, (0, 0))
-    elif variant == TimeField.EDGE:
+    elif variant == TimeField.LEFT_EDGE:
         return np.tile(np.linspace(0, 1, nelx), (nely, 1))
     elif variant == TimeField.OPPOSITE_CORNER:
         return _corner_distance_grid(nelx, nely, (0, nely))
@@ -113,7 +113,7 @@ def base_elements(nelx: int, nely: int, variant: TimeField) -> Int[np.ndarray, "
     are added.
 
     OPPOSITE_CORNER starts at its corner element alone. The MATLAB source pins the whole
-    left column for it (`Nei=1:nely` for any `tfield` but 1), which made it an EDGE base
+    left column for it (`Nei=1:nely` for any `tfield` but 1), which made it a LEFT_EDGE base
     under a corner-distance seed.
 
     :param nelx: element count in x
@@ -126,7 +126,7 @@ def base_elements(nelx: int, nely: int, variant: TimeField) -> Int[np.ndarray, "
         return np.array([0])
     elif variant == TimeField.OPPOSITE_CORNER:
         return np.array([(nely - 1) * nelx])  # bottom-left corner
-    elif variant == TimeField.EDGE:
+    elif variant == TimeField.LEFT_EDGE:
         return np.arange(nely) * nelx  # column 0
     elif variant == TimeField.BOTTOM_EDGE:
         return (nely - 1) * nelx + np.arange(nelx)  # bottom row

@@ -66,7 +66,7 @@
   },
   "hotspot_plate": "half_plane",
   "hotspot_reference": "thin_layer",
-  "print_base": "edge",
+  "print_base": "left_edge",
   "rmin_m": 0.004,
   "tool_radius_m": 0.0,
   "curvature_beta": {

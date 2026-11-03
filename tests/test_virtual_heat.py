@@ -26,7 +26,7 @@ torch = pytest.importorskip("torch")
 CPU, F64 = torch.device("cpu"), torch.float64
 
 
-def _mesh(nelx, nely, base="edge"):
+def _mesh(nelx, nely, base="left_edge"):
     return vh.ScalarMesh.build(nelx, nely, base, CPU, F64)
 
 
@@ -90,7 +90,7 @@ def test_one_minus_reproduces_wu_fig_2_6e(beta_wu):
 # -- Variant 2: the wall data and the harmonic field ------------------------------------
 
 
-@pytest.mark.parametrize("base", ["edge", "bottom_edge"])
+@pytest.mark.parametrize("base", ["left_edge", "bottom_edge"])
 def test_ramp_init_reproduces_the_ramp(base):
     nelx, nely = 30, 10
     mesh = _mesh(nelx, nely, base)
@@ -105,7 +105,7 @@ def test_ramp_init_reproduces_the_ramp(base):
         config, mesh, xPhys, _full(nelx, nely, 0.5), wall
     ).tPhys
     rows, cols = np.mgrid[:nely, :nelx]
-    distance = cols + 0.5 if base == "edge" else nely - rows - 0.5
+    distance = cols + 0.5 if base == "left_edge" else nely - rows - 0.5
     np.testing.assert_allclose(tPhys.numpy(), distance / distance.max(), atol=1e-12)
 
 
@@ -114,7 +114,7 @@ def test_start_is_judged_on_the_nodes_not_the_element_means():
     element elsewhere; the nodes off the plate are all later than it, so the start
     passes. A node of the part at `t <= 0` fails it."""
     nelx, nely = 30, 10
-    mesh = _mesh(nelx, nely, "edge")
+    mesh = _mesh(nelx, nely, "left_edge")
     config = virtual_heat_config(
         LaplaceRunConfig, nelx=nelx, nely=nely, laplace_cg_rtol=1e-12
     )
@@ -425,10 +425,10 @@ def _streets(nx, ny, s):
 
 
 GEOMETRIES = {
-    "rectangle": (_rectangle, 120, 40, "edge"),
+    "rectangle": (_rectangle, 120, 40, "left_edge"),
     "annulus": (_annulus, 80, 80, "bottom_edge"),
-    "worm": (_worm, 180, 60, "edge"),
-    "streets": (_streets, 180, 60, "edge"),
+    "worm": (_worm, 180, 60, "left_edge"),
+    "streets": (_streets, 180, 60, "left_edge"),
 }
 
 # Measured at DRAIN_BETA (max / mean error over the part, of a field normalized to 1):
@@ -521,7 +521,7 @@ def _rc(nodes, n):
     return np.stack(np.divmod(np.asarray(nodes), n + 1), axis=-1)
 
 
-@pytest.mark.parametrize("base", ["edge", "bottom_edge", "right_edge"])
+@pytest.mark.parametrize("base", ["left_edge", "bottom_edge", "right_edge"])
 def test_wall_arc_walks_a_rectangle_from_one_plate_corner_to_the_other(base):
     nelx, nely = 6, 4
     arc = _rc(vh.wall_arc(nelx, nely, base), nelx)
@@ -554,7 +554,7 @@ def test_boundary_loop_rejects_a_domain_with_a_hole():
     active = np.ones((5, 5), bool)
     active[2, 2] = False
     with pytest.raises(ValueError, match="one simple loop"):
-        vh.wall_arc(5, 5, "edge", active)
+        vh.wall_arc(5, 5, "left_edge", active)
 
 
 def test_distance_wall_goes_around_the_l_brackets_re_entrant_corner():

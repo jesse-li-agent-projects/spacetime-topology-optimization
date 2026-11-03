@@ -41,7 +41,7 @@ def smoke_run():
 
 def test_default_config_loads_with_a_plate_base():
     config = LaplaceRunConfig.from_dict(json.loads(CONFIG_PATH.read_text()))
-    assert config.print_base in ("edge", "bottom_edge")
+    assert config.print_base in ("left_edge", "bottom_edge")
 
 
 def test_the_start_is_the_ramp(smoke_run):

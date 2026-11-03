@@ -111,7 +111,7 @@ def virtual_heat_config(cls, *, nelx=None, nely=None, **overrides):
     mesh = {} if nelx is None else {"nelx": nelx}
     base = default_run_config(nely=nely, **mesh).to_dict()
     shared_fields = {f.name for f in dataclasses.fields(SpaceTimeConfig)}
-    own = dict(chi_contrast=1e3, poisson_cg_rtol=1e-8, print_base="edge")
+    own = dict(chi_contrast=1e3, poisson_cg_rtol=1e-8, print_base="left_edge")
     if cls is HeatRunConfig:
         own |= dict(drain_beta=25.0, time_map="poisson", heat_cg_rtol=1e-8)
     else:
