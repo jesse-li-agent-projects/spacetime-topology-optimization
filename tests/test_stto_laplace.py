@@ -272,7 +272,7 @@ def test_hotspot_shaping_above_q_1_barely_pulls_void_support_in():
     x[:, 40:44] = 0.5
     rows = slice(8, 12)
     _, solid = _shaping_gradient(x)
-    _, own = _shaping_gradient(x, hotspot_shaping_q=3.0)
+    _, own = _shaping_gradient(x, q=3.0)
     assert (own[rows, 40] > 0).all()  # R1 survives
     assert own[rows, 38].abs().max() < 1e-2 * solid[rows, 38].abs().min()
 
