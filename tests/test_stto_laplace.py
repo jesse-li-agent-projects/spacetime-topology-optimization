@@ -231,9 +231,9 @@ def test_time_field_constraints_are_rejected(name):
         _config(**{name: 0.1})
 
 
-def _shaping_gradient(x, Tcr=0.6, **overrides):
+def _shaping_gradient(x, Tcr=0.6, q=1.0, **overrides):
     """`FieldTerms.hotspot_shaping` and its density gradient on a 60x20 mesh printed
-    column by column from the left, under capped-ratio shielding.
+    column by column from the left, under capped-ratio shielding, at a constant `q`.
 
     :param overrides: config fields to set on top of that setup
     """
@@ -246,6 +246,7 @@ def _shaping_gradient(x, Tcr=0.6, **overrides):
         hotspot_shaping_weight=1.0,
         rmin_cond_m=4 * base.element_size_m,
         Tcr=Tcr,
+        q=q,
         **overrides,
     )
     terms = stto_laplace.build_problem(config, device="cpu").terms
