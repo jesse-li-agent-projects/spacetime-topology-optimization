@@ -35,6 +35,19 @@
 \definecolor{light-gray}{gray}{0.95}
 \newcommand{\code}[1]{\colorbox{light-gray}{\texttt{\detokenize{#1}}}}
 
+% For \abs{} and \norm{}, copied from https://tex.stackexchange.com/questions/43008/absolute-value-symbols
+\usepackage{mathtools}
+\DeclarePairedDelimiter\abs{\lvert}{\rvert}%
+\DeclarePairedDelimiter\norm{\lVert}{\rVert}%
+\makeatletter
+\let\oldabs\abs
+\def\abs{\@ifstar{\oldabs}{\oldabs*}}
+%
+\let\oldnorm\norm
+\def\norm{\@ifstar{\oldnorm}{\oldnorm*}}
+\makeatother
+
+
 \usepackage{appendix}
 
 % \usepackage[backend=biber, style=numeric-comp, sorting=none]{biblatex}
@@ -96,9 +109,10 @@ We define the time field $t$ as the solution to the Laplace equation
 \end{equation}
 \label{eqn:time_field_laplace}
 
-where $b(x)$ is a nonhomogenous Dirichlet boundary condition, $\chi = \rho^a \mu(x)$ is a non-uniform diffusivity coefficient, $\rho$ is the design density, and $\mu(x)$ is a density-uncorrected diffusivity coefficient.
-We consider $\mu(x)$ and $b(x)$ to be design variables to optimize for.\footnote{While one can directly optimize over $\chi$ instead of $\mu$, the optimization problem is better behaved if we optimize over $\mu$.}
-$a$ is a constant hyperparameter; we find $a=4$ to work well.
+where $b(x)$ is a nonhomogenous Dirichlet boundary condition, $\chi = \max\left(\rho^a, 10^{-5}\right)C^{\mu(x) - 0.5}$ is a non-uniform diffusivity coefficient, $\rho$ is the design density,  and $\mu(x)$ is a density-uncorrected diffusivity coefficient.
+We consider $\mu(x)$ and $b(x)$ to be design variables to optimize for.
+While one can directly optimize over $\chi$ instead of $\mu$, the optimization problem is better behaved if we optimize over $\mu$; this formulation allows $\chi$ to extend over several orders of magnitude and automatically change with $\rho$ while $\mu \in [0, 1]$ stays order 1.
+$a$ and $C$ are constant hyperparameters; we find $a=4$ and $C=1000$ to work well.
 
 A key property of this formulation is that in the interior of $\Omega$, there are no local minima or maxima.
 \autoref{sec:time_field_generality} provides a derivation that for any sufficiently smooth time field $t$ that has no interior local minim or maxima, $t$ is the solution to \autoref{eqn:time_field_laplace} for some choice of $\chi$ and $b$.
@@ -111,7 +125,7 @@ This formulation does not rule out the existence of local minima on the design s
 To assess the risk of overheating at any given material point, we define a metric $K$ to estimate the heat evacuation capacity\footnote{\cite{das2023thesis} refers to this as \emph{Conductivity Estimation}; to avoid ambiguity with conductivity as a material property we use the term \emph{heat evacuation capacity estimate}.}; a higher $K$ corresponds to a better ability to evacuate heat and reduced risk of overheating.
 We compute $K_e$ for each element $e$ with:
 \[
-    K_e = \frac{1}{D}\sum_{j \in V_e} w_{ej}\,\lambda_{ej}\, F(t_e - t_j)s(x_e, x_j),
+    K_e = \frac{1}{D}\sum_{j \in V_e} w_{ej}\,\lambda_{ej}\, F(t_e - t_j)s(\rho_e, \rho_j),
     \qquad
 \]
 where:
@@ -119,35 +133,77 @@ where:
     \item $V_e$ is the set of elements in a radius $r_K$ circle centered at element $e$
     \item $w_{ej} = (r_K - d_{ej})/r_K$ is a radial weight, where $d_{ej}$ is the Euclidean distance between element $j$ and element $e$
     \item $\lambda_{ej} = \exp\left(-\kappa (\nabla t \cdot \hat d_{ej} + |\nabla t|)/(|\nabla t| + g_0)\right)$ is an angular weight, favouring neighbours behind the print front, with $\hat d_{ej}$ being a unit vector in the direction from element $e$ to element $j$.
-    \item $\kappa$ and $g_0$ are hyperparameters, with the first controlling the anisotropy of the angular weight and the second promoting an isotropic weight when $\nabla t$ is small and therefore the printing direction is uncertain. \todo{add figure plotting kappa}
+    \item $\kappa$ and $g_0$ are hyperparameters, with the first controlling the anisotropy of the angular weight and the second promoting an isotropic weight when $\nabla t$ is small and therefore the printing direction is uncertain. \autoref{fig:angular_weight} shows the effect of $\kappa$ on $\lambda$.
     \item $F$ is a term to ensure only material printed earlier in time contributes to $K$:
           \[
               F(\Delta t) = 1 - \exp\!\Big(-\tfrac{1}{k}\,\mathrm{softplus}\big(k\,\Delta t/\tau\big)\Big), \qquad \tau = 0.01 .
           \]
-          % \item \new{Shielding relative to the element's own density, capped:}
-    \item $s(x_e, x_j)$ is a term ensuring lower density material contributes less to $K$:
+    \item $k$ and $\tau$ are hyperparameters. $k$ controls the sharpness of $F$, with its effect visualized in \autoref{fig:cooling_credit}. $\tau$ controls the time scale used in $F$ and can be tuned so that the material printed in $\delta t = \tau$ is one layer thickness of material.
+    \item $s(\rho_e, \rho_j)$ is a term ensuring lower density material contributes less to $K$:
           \[
-              s(x_e, x_j) = \min\!\left(1,\ \frac{x_j + \varepsilon}{x_e + \varepsilon}\right)^{q}, \qquad \varepsilon = 10^{-3},
+              s(\rho_e, \rho_j) = \min\!\left(1,\ \frac{\rho_j + \varepsilon}{\rho_e + \varepsilon}\right)^{q}, \qquad \varepsilon = 10^{-3},
           \]
 
     \item $D(\kappa)$ is a normalization constant in space, chosen so that an ideal uniform planar-layered print has $K_e = 1$. $D$ can be computed by considering an infinite domain with uniformly increasing time field $t=x$, and computing
           \[
               D = \sum_{j \in V_e} w_{ej}\lambda_{ej} H(t_e-t_j)\qquad H(\Delta t) = \begin{cases}
-                  1   & x > 0  \\
-                  0.5 & x == 0 \\
-                  0   & x < 0  \\
+                  1   & x > 0 \\
+                  0.5 & x = 0 \\
+                  0   & x < 0 \\
               \end{cases}
           \]
           for any element $e$, with $g_0 = 0$. Note that this normalization means $K_e$ can exceed 1 for some elements.
 \end{itemize}
 
-% S_e = (1 - K_e)\frac{x_e}{x_e + \varepsilon},
+\begin{figure}[ht!]
+    \centering
+    \includegraphics[width=\textwidth]{figures/angular_weight_kappa.pdf}
+    \caption{Angular weight $\lambda_{ej}$ for $|\nabla t| \gg g_0$.}
+    \label{fig:angular_weight}
+\end{figure}
+
+\begin{figure}[ht!]
+    \centering
+    \includegraphics[width=0.6\textwidth]{figures/cooling_credit_k.pdf}
+    \caption{$F(\Delta t)$ for several sharpnesses $k$. At $k=1$, $F$ reduces to the sigmoid function, used in \cite{das2025overheating}.}
+    \label{fig:cooling_credit}
+\end{figure}
+
+The hotspot severity $S_e$ for each element is then defined with $S_e = (1 - K_e)\frac{\rho_e}{\rho_e + \varepsilon}$, where the last term is used to ensure the severity of void elements is zero.
+
+We wish to constrain the maximum severity across the entire part. To do this smoothly, we aggregate over the part with the KS function\footnote{We choose the KS function to preserve translation equivariance. Alternatively, $p$-norm aggregation could be used, which would preserve scale equivariance; however, here $S$ is already normalized to be of order 1 so translation equivariance is more important.}:
+\[S = \delta_S + \frac{1}{b} \ln \sum_{j \in \Omega} e^{b S_j} \]
+$\delta_S$ is a calibration term to ensure that $S$ stays approximately equal to the actual maximum without influencing gradients, and is estimated using an exponential moving average.
+Specifically, it follows the update rule
+\[\delta_{S, n} = (1-\alpha) \delta_{S, n-1} + \alpha \left(\max_j S_j - \frac{1}{b} \ln \sum_{j \in \Omega} e^{b S_j}\right)\]
+where $\delta_{S,i}$ is the value of $\delta_S$ on iteration $i$, and $\alpha$ is a constant hyperparameter controlling how quickly $\delta_S$ gets updated; we find $\alpha=0.1$ to work well.
+
+
+\subsection{Optimization problem}
+We optimize over density field $\rho$ and time-field design variables $\mu$ and $b$, solving the optimization problem:
+\[
+    \min_{\rho,\mu,b}\quad
+    \log c(\rho) + w_u U(t; \rho) + w_\Phi \Phi(\rho, t)
+    \quad\text{s.t.}\quad
+    g_H = \frac{S}{T_{cr}} - 1 \le 0, \quad V(\rho) \le \bar V .
+\]
+\begin{itemize}
+    \item $c(x)$ is the compliance. We optimize $\log c(x)$ so that gradients are scale-invariantt and weighting hyperparameters generalize better across different problems.
+    \item $U(t;x)$ is the density-weighted coefficient of variation of $g=\abs{\nabla t}$ and acts as a a layer uniformity regularizer:
+          $$
+              U(t;x) = \frac{\sqrt{\sigma^2 + \varepsilon m^2}}{m},
+              \qquad
+              m = \frac{\sum_j \rho_j g_j}{\sum_j \rho_j},
+              \qquad
+              \sigma^2 = \frac{\sum_j \rho_j(g_j - m)^2}{\sum_j \rho_j}
+          $$
+          The gradient of $\rho$ is detached from $U$ so that $U$ only affects the time field, not the density field.
+    \item $\Phi(\rho, t)$ is a hotspot-constraint objective shaping term.
+\end{itemize}
 
 
 
-
-\todo{Appendix for high-level sensitivities}
-
+\todo{Add table full of hyperparameter settings}
 
 \section{Results}
 (4 pages). Description of execution and findings.
@@ -157,164 +213,109 @@ results to research or design question.
 \section{Reflection}
 (1 page) Discussion and reflection on project execution and own functioning.
 
-\newpage
+% \newpage
 
-\section{Background and Motivation}
+% \section{Background and Motivation}
 
-\[\kappa = \frac{\sum_{j \in S_e} \rho_j w_j \lambda_j }{\sum_{j \in S_e} w_j / 2}\]
+% \[\kappa = \frac{\sum_{j \in S_e} \rho_j w_j \lambda_j }{\sum_{j \in S_e} w_j / 2}\]
 
-\section{Gradient floor and Hessian bound}
+% \section{Density-scale-invariant hotspot severity}
 
-Together, a floor on $|\nabla t|$ and a bound on the Hessian of $t$ leave no interior critical point of $t$ inside any solid element.
+% \subsection*{Current measure}
+% For element $e$ with filtered density $x_e$, stencil weights $w_{ej}$, print-order credit $F_{ej}$ and the constant HALF\_STENCIL denominator $D$:
+% \[
+%     K_e = \frac{1}{D} \sum_{j} w_{ej} F_{ej}\, x_j^{\,q},
+%     \qquad
+%     S_e = (1 - K_e)\, x_e^{\,r}
+% \]
+% Under a global scaling $x \mapsto n x$:
+% \[
+%     K_e \mapsto n^q K_e, \qquad x_e^{\,r} \mapsto n^r x_e^{\,r}
+% \]
+% with $q$ scheduled $2 \to 5$ and $r$ scheduled $0.5 \to 0.05$, so the dependence on scale is mostly in $K_e$.
 
-\subsection*{1. Local quadratic model}
-From central differences, estimate gradient $\mathbf{g}$ and Hessian $\mathbf{H}$:
-\[
-    \mathbf{g} = \begin{pmatrix} t_x \\ t_y \end{pmatrix}, \qquad
-    \mathbf{H} = \begin{pmatrix} t_{xx} & t_{xy} \\ t_{xy} & t_{yy} \end{pmatrix}
-\]
-They define a quadratic model around the element centre $\mathbf{c}$:
-\[
-    t(\mathbf{c} + \mathbf{d}) \approx t(\mathbf{c}) + \mathbf{g}^\top \mathbf{d} + \tfrac{1}{2} \mathbf{d}^\top \mathbf{H} \mathbf{d}
-    \quad \Longrightarrow \quad
-    \nabla t(\mathbf{c} + \mathbf{d}) = \mathbf{g} + \mathbf{H} \mathbf{d}
-\]
+% \paragraph{Sensitivities on a grey bar.}
+% \[
+%     \frac{\partial S_e}{\partial x_e} = r\, x_e^{\,r-1} (1 - K_e) > 0,
+%     \qquad
+%     \frac{\partial S_e}{\partial x_j} = -\frac{q}{D}\, x_e^{\,r}\, w_{ej} F_{ej}\, x_j^{\,q-1}
+% \]
+% The first always pushes an element's own density down ($0.71\,(1-K_e)$ at $r = 0.5$, $x_e = 0.5$). The second, the shielding pull from earlier neighbors, is weak at grey $x_j$ and absent for the element printed first in the bar.
 
-\subsection*{2. The gradient changes little across the element}
-Constraint: Critical point of this model should be outside the element, so:
-\[\left| \nabla t(\mathbf{c} + \mathbf{d}) \right| = \left|\mathbf{g} + \mathbf{H} \mathbf{d}\right|> 0\]
+% \subsection*{A. Shielding relative to the element's own density, capped (recommended)}
+% \[
+%     K_e = \frac{1}{D} \sum_{j} w_{ej} F_{ej}\, c\!\left(\frac{x_j}{x_e + \varepsilon}\right),
+%     \qquad
+%     c(u) = \operatorname{smoothmin}(1, u)^q
+% \]
+% \begin{itemize}
+%     \item Invariant to $x \mapsto n x$ for $x_e \gg \varepsilon$: a neighbor at least as dense as $e$ shields it fully, so grey on equally grey material scores as solid on solid.
+%     \item Identical to the current $K_e$ on binary designs, so $T_{cr}$, calibration and the binarized gate are unchanged.
+%     \item Solid on void or on grey reads as unshielded; void anywhere reads as shielded.
+%     \item Each pair contributes at most $w_{ej} F_{ej} / D$, so it pairs with either aggregation.
+% \end{itemize}
 
-From Pythagoras, $|\mathbf{d}| \le h/\sqrt{2}$. Then:
-\[
-    |\mathbf{H} \mathbf{d}|
-    \le \|\mathbf{H}\|_2 \, |\mathbf{d}|
-    \le \|\mathbf{H}\|_F \, \frac{h}{\sqrt{2}},
-    \qquad
-    \|\mathbf{H}\|_F = \sqrt{t_{xx}^2 + t_{yy}^2 + 2 t_{xy}^2}
-\]
-So, constrain
-\[
-    |\mathbf{g}| > \|\mathbf{H}\|_F \, \frac{h}{\sqrt{2}}
-\]
+% \subsection*{B. Heat in over conduction out, uncapped}
+% \[
+%     K_e = \frac{\sum_{j} w_{ej} F_{ej}\, x_j^{\,q}}{D\, (x_e^{\,q} + \varepsilon)}
+% \]
+% \begin{itemize}
+%     \item Physical motivation: in a SIMP heat equation $x^q c\, \partial_t T = \nabla \cdot (x^q k \nabla T) + x^q Q$, the temperature is exactly invariant to $x \mapsto n x$.
+%     \item Unbounded above, so LogSumExp only; rewards an element being less dense than its support, over-crediting grey on solid.
+% \end{itemize}
 
-\subsection*{4. The two constraints}
-Let $m$ be the median of $|\mathbf{g}|$ over the mesh, held constant in the sensitivities. For a solid element, with floor fraction $f$ and smoothness length $L$:
-\[
-    \text{floor:} \quad |\mathbf{g}| \ge f\, m,
-    \qquad
-    \text{smoothness:} \quad \|\mathbf{H}\|_F \le \frac{m}{L}
-\]
+% \subsection*{C. Fraction of neighboring material printed earlier}
+% \[
+%     K_e = \frac{\sum_{j} w_{ej} F_{ej}\, x_j^{\,q}}{\sum_{j} w_{ej}\, x_j^{\,q} + \varepsilon}
+% \]
+% Void drops out of the denominator, so a free surface or an overhang over void becomes partly invisible --- the boundary blindness of PR \#98. Rejected.
 
-\subsection*{5. Combined}
-A critical point would need
-\[
-    f\, m \le |\mathbf{g}| \le \|\mathbf{H}\|_F \, \frac{h}{\sqrt{2}} \le \frac{m}{L} \, \frac{h}{\sqrt{2}}
-\]
-so none exists in the element if
-\[
-    f > \frac{h}{\sqrt{2}\, L}
-    \quad \Longleftrightarrow \quad
-    L > \frac{h}{\sqrt{2}\, f}
-\]
+% \subsection*{D. Global normalization}
+% \[
+%     K_e = \frac{\sum_{j} w_{ej} F_{ej}\, x_j^{\,q}}{D \cdot \frac{1}{N}\sum_{k} x_k^{\,q}}
+% \]
+% The literal global invariance, but couples every element to every other, and does nothing for one grey bar in an otherwise solid design.
 
-\section{Heat equation}
-\section{Density-scale-invariant hotspot severity}
+% \subsection*{The gate}
+% Exact invariance for all $n$ would make void ($n \to 0$) indistinguishable from solid, so the gate $x_e^{\,r}$ must break it. Its push down $r\,x_e^{\,r-1}(1-K_e)$ remains under A or B, so pair either with
+% \begin{itemize}
+%     \item a small $r$ from iteration 0, or
+%     \item a gate flat above a threshold, e.g.\ $S_e = (1 - K_e)\, H_\beta(x_e; \eta_g)$ with a smoothed Heaviside $H_\beta$ at $\eta_g \approx 0.3$, separating void from material only.
+% \end{itemize}
 
-\subsection*{Current measure}
-For element $e$ with filtered density $x_e$, stencil weights $w_{ej}$, print-order credit $F_{ej}$ and the constant HALF\_STENCIL denominator $D$:
-\[
-    K_e = \frac{1}{D} \sum_{j} w_{ej} F_{ej}\, x_j^{\,q},
-    \qquad
-    S_e = (1 - K_e)\, x_e^{\,r}
-\]
-Under a global scaling $x \mapsto n x$:
-\[
-    K_e \mapsto n^q K_e, \qquad x_e^{\,r} \mapsto n^r x_e^{\,r}
-\]
-with $q$ scheduled $2 \to 5$ and $r$ scheduled $0.5 \to 0.05$, so the dependence on scale is mostly in $K_e$.
+% \subsection*{Targeting $S_e$ directly}
+% The requirement is on $S_e$: $S_e(n\mathbf{x}) = S_e(\mathbf{x})$. By Euler's theorem for degree-0 homogeneous functions, equivalently
+% \[
+%     \sum_j x_j \frac{\partial S_e}{\partial x_j} = 0 \quad \forall e,
+% \]
+% i.e.\ the hotspot exerts no force along the ``scale every density'' direction --- a condition a unit test can check on random $\mathbf{x}$.
 
-\paragraph{Sensitivities on a grey bar.}
-\[
-    \frac{\partial S_e}{\partial x_e} = r\, x_e^{\,r-1} (1 - K_e) > 0,
-    \qquad
-    \frac{\partial S_e}{\partial x_j} = -\frac{q}{D}\, x_e^{\,r}\, w_{ej} F_{ej}\, x_j^{\,q-1}
-\]
-The first always pushes an element's own density down ($0.71\,(1-K_e)$ at $r = 0.5$, $x_e = 0.5$). The second, the shielding pull from earlier neighbors, is weak at grey $x_j$ and absent for the element printed first in the bar.
+% The gate exists because, under the current $K_e$, a void element in a void neighborhood is unshielded and would otherwise force material into the void (Das 2025, Fig.~6a). Option A with a symmetric regularization,
+% \[
+%     K_e = \frac{1}{D} \sum_{j} w_{ej} F_{ej}\, c\!\left(\frac{x_j + \varepsilon}{x_e + \varepsilon}\right),
+% \]
+% already reads void on void as shielded (ratio $\to 1$) and solid on void as unshielded (ratio $\to \varepsilon$). The gate is then redundant, and with $r = 0$:
+% \[
+%     S_e = 1 - K_e
+% \]
+% is invariant for $x \gg \varepsilon$.
 
-\subsection*{A. Shielding relative to the element's own density, capped (recommended)}
-\[
-    K_e = \frac{1}{D} \sum_{j} w_{ej} F_{ej}\, c\!\left(\frac{x_j}{x_e + \varepsilon}\right),
-    \qquad
-    c(u) = \operatorname{smoothmin}(1, u)^q
-\]
-\begin{itemize}
-    \item Invariant to $x \mapsto n x$ for $x_e \gg \varepsilon$: a neighbor at least as dense as $e$ shields it fully, so grey on equally grey material scores as solid on solid.
-    \item Identical to the current $K_e$ on binary designs, so $T_{cr}$, calibration and the binarized gate are unchanged.
-    \item Solid on void or on grey reads as unshielded; void anywhere reads as shielded.
-    \item Each pair contributes at most $w_{ej} F_{ej} / D$, so it pairs with either aggregation.
-\end{itemize}
+% \paragraph{B with $S_e = 1 - K_e$.} Regularized symmetrically,
+% \[
+%     K_e = \frac{1}{D} \sum_{j} w_{ej} F_{ej}\, \frac{x_j^{\,q} + \varepsilon}{x_e^{\,q} + \varepsilon}.
+% \]
+% A and B coincide wherever $x_e \ge x_j$ for every earlier neighbor (the cap is inactive), so on binary designs both equal the current $K_e$. They differ only for an element lighter than its support:
+% \[
+%     x_e = 0.5,\ x_j = 1,\ q = 3: \qquad c_A = 1, \qquad c_B = 8.
+% \]
+% \begin{itemize}
+%     \item B lets one dense neighbor make up for a missing direction, so a grey element on partial support reads as safe, and solidifying it reveals the hotspot --- the same hidden-until-binarized failure, moved elsewhere.
+%     \item A rates such an element exactly as it would be rated with its support solid, so the grey reading predicts the binarized one.
+%     \item B's own-density sensitivity is always active, $\partial \log K_e / \partial \log x_e = -q$; A's is zero while capped.
+%     \item $S_e$ is unbounded below ($\approx -1/\varepsilon$ for void beside earlier solid): fine for LogSumExp, which ignores it, but not for P-mean.
+% \end{itemize}
 
-\subsection*{B. Heat in over conduction out, uncapped}
-\[
-    K_e = \frac{\sum_{j} w_{ej} F_{ej}\, x_j^{\,q}}{D\, (x_e^{\,q} + \varepsilon)}
-\]
-\begin{itemize}
-    \item Physical motivation: in a SIMP heat equation $x^q c\, \partial_t T = \nabla \cdot (x^q k \nabla T) + x^q Q$, the temperature is exactly invariant to $x \mapsto n x$.
-    \item Unbounded above, so LogSumExp only; rewards an element being less dense than its support, over-crediting grey on solid.
-\end{itemize}
-
-\subsection*{C. Fraction of neighboring material printed earlier}
-\[
-    K_e = \frac{\sum_{j} w_{ej} F_{ej}\, x_j^{\,q}}{\sum_{j} w_{ej}\, x_j^{\,q} + \varepsilon}
-\]
-Void drops out of the denominator, so a free surface or an overhang over void becomes partly invisible --- the boundary blindness of PR \#98. Rejected.
-
-\subsection*{D. Global normalization}
-\[
-    K_e = \frac{\sum_{j} w_{ej} F_{ej}\, x_j^{\,q}}{D \cdot \frac{1}{N}\sum_{k} x_k^{\,q}}
-\]
-The literal global invariance, but couples every element to every other, and does nothing for one grey bar in an otherwise solid design.
-
-\subsection*{The gate}
-Exact invariance for all $n$ would make void ($n \to 0$) indistinguishable from solid, so the gate $x_e^{\,r}$ must break it. Its push down $r\,x_e^{\,r-1}(1-K_e)$ remains under A or B, so pair either with
-\begin{itemize}
-    \item a small $r$ from iteration 0, or
-    \item a gate flat above a threshold, e.g.\ $S_e = (1 - K_e)\, H_\beta(x_e; \eta_g)$ with a smoothed Heaviside $H_\beta$ at $\eta_g \approx 0.3$, separating void from material only.
-\end{itemize}
-
-\subsection*{Targeting $S_e$ directly}
-The requirement is on $S_e$: $S_e(n\mathbf{x}) = S_e(\mathbf{x})$. By Euler's theorem for degree-0 homogeneous functions, equivalently
-\[
-    \sum_j x_j \frac{\partial S_e}{\partial x_j} = 0 \quad \forall e,
-\]
-i.e.\ the hotspot exerts no force along the ``scale every density'' direction --- a condition a unit test can check on random $\mathbf{x}$.
-
-The gate exists because, under the current $K_e$, a void element in a void neighborhood is unshielded and would otherwise force material into the void (Das 2025, Fig.~6a). Option A with a symmetric regularization,
-\[
-    K_e = \frac{1}{D} \sum_{j} w_{ej} F_{ej}\, c\!\left(\frac{x_j + \varepsilon}{x_e + \varepsilon}\right),
-\]
-already reads void on void as shielded (ratio $\to 1$) and solid on void as unshielded (ratio $\to \varepsilon$). The gate is then redundant, and with $r = 0$:
-\[
-    S_e = 1 - K_e
-\]
-is invariant for $x \gg \varepsilon$.
-
-\paragraph{B with $S_e = 1 - K_e$.} Regularized symmetrically,
-\[
-    K_e = \frac{1}{D} \sum_{j} w_{ej} F_{ej}\, \frac{x_j^{\,q} + \varepsilon}{x_e^{\,q} + \varepsilon}.
-\]
-A and B coincide wherever $x_e \ge x_j$ for every earlier neighbor (the cap is inactive), so on binary designs both equal the current $K_e$. They differ only for an element lighter than its support:
-\[
-    x_e = 0.5,\ x_j = 1,\ q = 3: \qquad c_A = 1, \qquad c_B = 8.
-\]
-\begin{itemize}
-    \item B lets one dense neighbor make up for a missing direction, so a grey element on partial support reads as safe, and solidifying it reveals the hotspot --- the same hidden-until-binarized failure, moved elsewhere.
-    \item A rates such an element exactly as it would be rated with its support solid, so the grey reading predicts the binarized one.
-    \item B's own-density sensitivity is always active, $\partial \log K_e / \partial \log x_e = -q$; A's is zero while capped.
-    \item $S_e$ is unbounded below ($\approx -1/\varepsilon$ for void beside earlier solid): fine for LogSumExp, which ignores it, but not for P-mean.
-\end{itemize}
-
-Out-of-mesh stencil positions must then count as neighbors of density $0$ rather than be dropped; otherwise void at the mesh edge reads as unshielded and no design change can fix it.
+% Out-of-mesh stencil positions must then count as neighbors of density $0$ rather than be dropped; otherwise void at the mesh edge reads as unshielded and no design change can fix it.
 
 \appendix
 \section{Derivation of generality of time field formulation}
@@ -330,5 +331,8 @@ Let $k(x) = e^{w(x)}$.
 
 \printbibliography
 \todo{Should I be citing the thesis or specific papers when available? If the thesis, should I be separately citing specific chapters?}
+
+
+\todo{Appendix for high-level sensitivities}
 
 \end{document}
