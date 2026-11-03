@@ -37,9 +37,10 @@
 
 \usepackage{appendix}
 
-\usepackage[backend=biber, style=numeric-comp, sorting=none]{biblatex}
+% \usepackage[backend=biber, style=numeric-comp, sorting=none]{biblatex}
+\usepackage{biblatex}
 \addbibresource{references.bib}
-\AtEndDocument{\printbibliography}
+
 
 % Enable links for figure numbers
 \usepackage{hyperref} % note - hyperref likes to be last package
@@ -59,12 +60,95 @@
 \maketitle
 
 \section{Introduction}
-Short description of the assignment, its relevance andthe field. (1 page)
+% Short description of the assignment, its relevance and the field. (1 page)
+Additive manufacturing.
 
+Traditionally, 3-axis AM deposits material in uniform planar layers. However, the restriction in fabrication sequence introduces design constraints, depending on the specific AM technology being used. For example, fused deposition modelling limits the maximum overhang a part can have without separate support material. As another example, wire arc additive manufacturing results in substantial heat load applied to the in-progress part, which risks overheating if there is insufficient nearby material to conduct away heat.
+
+Multi-axis AM offers more flexibility to tackle these challenges, by allowing curved layers and customizable fabrication sequences. With this increased flexibility, however, comes the new design challenge of choosing the fabrication sequence.
+\todo{Mention topology optimization}
+
+Wang et al. \cite{wang2020spacetime} introduce space-time topology optimization (STTO), which simultaneously optimizes a density field (defining the part geometry) and a time field (defining the fabrication sequence), and use it to minimize compliance of intermediate structures as well as the final structure.
+\cite{das2023thesis} introduces a physically-motivated geometric method to efficiently estimate overheating severity, including a simplified approach suitable for STTO, and designs parts subject to a maximum overheating constraint.
+% Note: Manav's approach uses direct time formulation
+
+A key requirement for physically realizable time fields is that they have no interior local minima or maxima.
+A local minimum in the time field corresponds to unsupported material, while a local maximum corresponds to fully surrounded material that cannot be physically accessed for material deposition.
+\cite{wang2020spacetime} and \cite{das2023thesis} address this through an explicit continuity constraint which ensures each internal element has neighours which are larger and smaller than it.
+\cite{Wang2024Regularization} represent time as the solution to a heat equation PDE with a sink term, to avoid local minima by construction; however this formulation still permits local maxima.
+
+This work extends \cite{das2023thesis} and develops a more flexible and robust STTO approach. Our main contributions are:
+\begin{itemize}
+    \item A novel formulation for the time field as the solution to a Laplace equation, which automatically prevents local minima and maxima in the time field (a common challenge in STTO)
+    \item Refinements to the optimization objective, which improves realism  near edges, account for printing direction effects on overheating, promotes layer uniformity, and improves optimization dynamics
+\end{itemize}
 
 \section{Methodology}
 (2 pages). Analysis of the research or engineering challenge and the
-research plan.
+% research plan.
+
+\subsection{Time field formulation}
+Let $\Omega$ denote the design domain over which to optimize, and $\partial \Omega$ be the domain boundary. Let $\partial \Omega_p$ be the boundary corresponding to the build plate. Let $x$ denote the spatial coordinates.
+We define the time field $t$ as the solution to the Laplace equation
+
+\begin{equation}
+    \nabla\cdot\big(\chi\nabla t\big) = 0, \quad t(x) = 0 \ \forall x \in \partial \Omega_p, \quad t(x) = b(x) \ \forall x \in \partial \Omega \backslash \partial \Omega_p
+\end{equation}
+\label{eqn:time_field_laplace}
+
+where $b(x)$ is a nonhomogenous Dirichlet boundary condition, $\chi = \rho^a \mu(x)$ is a non-uniform diffusivity coefficient, $\rho$ is the design density, and $\mu(x)$ is a density-uncorrected diffusivity coefficient.
+We consider $\mu(x)$ and $b(x)$ to be design variables to optimize for.\footnote{While one can directly optimize over $\chi$ instead of $\mu$, the optimization problem is better behaved if we optimize over $\mu$.}
+$a$ is a constant hyperparameter; we find $a=4$ to work well.
+
+A key property of this formulation is that in the interior of $\Omega$, there are no local minima or maxima.
+\autoref{sec:time_field_generality} provides a derivation that for any sufficiently smooth time field $t$ that has no interior local minim or maxima, $t$ is the solution to \autoref{eqn:time_field_laplace} for some choice of $\chi$ and $b$.
+\todo{Equation citation looks like section.number rather than just global equation number}
+
+This formulation does not rule out the existence of local minima on the design space boundary, which are still problematic for physical reasons. However, in practice this rarely occurs, because a local minimum in time also tends to have high hotspot severity, as described later.
+\todo{add math reference}
+
+\subsection{Hotspot severity formulation}
+To assess the risk of overheating at any given material point, we define a metric $K$ to estimate the heat evacuation capacity\footnote{\cite{das2023thesis} refers to this as \emph{Conductivity Estimation}; to avoid ambiguity with conductivity as a material property we use the term \emph{heat evacuation capacity estimate}.}; a higher $K$ corresponds to a better ability to evacuate heat and reduced risk of overheating.
+We compute $K_e$ for each element $e$ with:
+\[
+    K_e = \frac{1}{D}\sum_{j \in V_e} w_{ej}\,\lambda_{ej}\, F(t_e - t_j)s(x_e, x_j),
+    \qquad
+\]
+where:
+\begin{itemize}
+    \item $V_e$ is the set of elements in a radius $r_K$ circle centered at element $e$
+    \item $w_{ej} = (r_K - d_{ej})/r_K$ is a radial weight, where $d_{ej}$ is the Euclidean distance between element $j$ and element $e$
+    \item $\lambda_{ej} = \exp\left(-\kappa (\nabla t \cdot \hat d_{ej} + |\nabla t|)/(|\nabla t| + g_0)\right)$ is an angular weight, favouring neighbours behind the print front, with $\hat d_{ej}$ being a unit vector in the direction from element $e$ to element $j$.
+    \item $\kappa$ and $g_0$ are hyperparameters, with the first controlling the anisotropy of the angular weight and the second promoting an isotropic weight when $\nabla t$ is small and therefore the printing direction is uncertain. \todo{add figure plotting kappa}
+    \item $F$ is a term to ensure only material printed earlier in time contributes to $K$:
+          \[
+              F(\Delta t) = 1 - \exp\!\Big(-\tfrac{1}{k}\,\mathrm{softplus}\big(k\,\Delta t/\tau\big)\Big), \qquad \tau = 0.01 .
+          \]
+          % \item \new{Shielding relative to the element's own density, capped:}
+    \item $s(x_e, x_j)$ is a term ensuring lower density material contributes less to $K$:
+          \[
+              s(x_e, x_j) = \min\!\left(1,\ \frac{x_j + \varepsilon}{x_e + \varepsilon}\right)^{q}, \qquad \varepsilon = 10^{-3},
+          \]
+
+    \item $D(\kappa)$ is a normalization constant in space, chosen so that an ideal uniform planar-layered print has $K_e = 1$. $D$ can be computed by considering an infinite domain with uniformly increasing time field $t=x$, and computing
+          \[
+              D = \sum_{j \in V_e} w_{ej}\lambda_{ej} H(t_e-t_j)\qquad H(\Delta t) = \begin{cases}
+                  1   & x > 0  \\
+                  0.5 & x == 0 \\
+                  0   & x < 0  \\
+              \end{cases}
+          \]
+          for any element $e$, with $g_0 = 0$. Note that this normalization means $K_e$ can exceed 1 for some elements.
+\end{itemize}
+
+% S_e = (1 - K_e)\frac{x_e}{x_e + \varepsilon},
+
+
+
+
+\todo{Appendix for high-level sensitivities}
+
+
 \section{Results}
 (4 pages). Description of execution and findings.
 \section{Discussion and conclusions}
@@ -134,12 +218,6 @@ so none exists in the element if
 \]
 
 \section{Heat equation}
-$$\nabla\cdot\big(k(x)\,\nabla u\big) = 0, \qquad 0 < \lambda \le k(x) \le \Lambda .$$
-
-Let $k(x) = e^{w(x)}$.
-\[0 = \nabla \cdot (k \nabla u) = k \Delta u + \nabla k \cdot \nabla u = e^w \Delta u + e^w \nabla w \cdot \nabla u\]
-\[\nabla u \cdot \nabla w = -\Delta u\]
-
 \section{Density-scale-invariant hotspot severity}
 
 \subsection*{Current measure}
@@ -238,7 +316,19 @@ A and B coincide wherever $x_e \ge x_j$ for every earlier neighbor (the cap is i
 
 Out-of-mesh stencil positions must then count as neighbors of density $0$ rather than be dropped; otherwise void at the mesh edge reads as unshielded and no design change can fix it.
 
-\end{document}
+\appendix
+\section{Derivation of generality of time field formulation}
+\label{sec:time_field_generality}
+\todo{Cite actual math paper}
+$$\nabla\cdot\big(k(x)\,\nabla u\big) = 0, \qquad 0 < \lambda \le k(x) \le \Lambda .$$
 
+Let $k(x) = e^{w(x)}$.
+\[0 = \nabla \cdot (k \nabla u) = k \Delta u + \nabla k \cdot \nabla u = e^w \Delta u + e^w \nabla w \cdot \nabla u\]
+\[\nabla u \cdot \nabla w = -\Delta u\]
+
+
+
+\printbibliography
+\todo{Should I be citing the thesis or specific papers when available? If the thesis, should I be separately citing specific chapters?}
 
 \end{document}
