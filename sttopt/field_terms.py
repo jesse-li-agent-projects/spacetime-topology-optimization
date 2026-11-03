@@ -277,6 +277,7 @@ class FieldTerms:
             conductivity.Shielding(config.hotspot_shielding),
             config.hotspot_shielding_eps,
             self.hotspot_substrate,
+            conductivity.Reference(config.hotspot_reference),
         )
 
     def constraints(

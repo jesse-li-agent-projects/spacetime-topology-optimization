@@ -23,8 +23,8 @@ means run records written before the field existed no longer load -- add the fie
 every config file instead. The one exception is a field whose default is the only
 behaviour older records could have had (`SpaceTimeConfig.load_case`,
 `support_length_m`, `hotspot_credit`, `hotspot_tie_credit`, `hotspot_cooling_time`,
-`hotspot_cooling_sharpness`, `hotspot_plate`, `hotspot_weight`, `calibration_rate`,
-`RunConfig.time_init`).
+`hotspot_cooling_sharpness`, `hotspot_plate`, `hotspot_reference`, `hotspot_weight`,
+`calibration_rate`, `RunConfig.time_init`).
 """
 
 import bisect
@@ -290,6 +290,9 @@ class SpaceTimeConfig(_ConfigMixin):
         the build plate. `exempt`, the default and the only behaviour before it existed,
         or `half_plane`, which needs `half_stencil` normalization and a `print_base`
         along a whole mesh edge.
+    :param hotspot_reference: a `conductivity.Reference` member value: the layered fill
+        `half_stencil` measures against at `hotspot_kappa > 0`. `directed`, the default,
+        is per element; `thin_layer` is one divisor for every element.
     :param rmin_m: density-filter radius.
     :param tool_radius_m: print tool radius, possibly scheduled. Bounds the concave
         curvature of the time field's iso-lines (`timefield.iso_curvature`) to
@@ -358,6 +361,7 @@ class SpaceTimeConfig(_ConfigMixin):
     hotspot_cooling_time: Scheduled = 0.0
     hotspot_cooling_sharpness: Scheduled = 8.0
     hotspot_plate: str = "exempt"
+    hotspot_reference: str = "directed"
     print_base: str
     rmin_m: float
     tool_radius_m: Scheduled
