@@ -55,6 +55,9 @@ class _ConfigMixin:
             value = getattr(self, f.name)
             if isinstance(value, dict):
                 setattr(self, f.name, schedule_from_dict(value))
+        # `left_edge` was `edge` until PR #235; saved configs still say so.
+        if self.print_base.lower() == "edge":
+            self.print_base = "left_edge"
 
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)

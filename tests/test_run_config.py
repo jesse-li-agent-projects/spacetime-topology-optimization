@@ -42,6 +42,17 @@ def test_from_dict_warns_and_drops_unknown_keys(cls, config):
     assert got == config
 
 
+@pytest.mark.parametrize(
+    "config",
+    [default_run_config(), default_seq_run_config()],
+    ids=["RunConfig", "SeqRunConfig"],
+)
+def test_a_saved_edge_print_base_loads_as_left_edge(config):
+    d = config.to_dict()
+    d["print_base"] = "edge"
+    assert type(config).from_dict(d).print_base == "left_edge"
+
+
 def test_cosine_schedule_decays_between_its_endpoints():
     """`decay_iterations` is the number of iterations still decaying, so a 300-iteration
     decay of an 800-iteration run reads as written."""
