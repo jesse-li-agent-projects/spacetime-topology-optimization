@@ -148,7 +148,7 @@ def main():
 
     # -- timefield.npz: all 3 variants -----------------------------------------------
     tfield1 = timefield.init_timefield(NELX, NELY, timefield.TimeField.CORNER)
-    tfield2 = timefield.init_timefield(NELX, NELY, timefield.TimeField.EDGE)
+    tfield2 = timefield.init_timefield(NELX, NELY, timefield.TimeField.LEFT_EDGE)
     tfield3 = timefield.init_timefield(NELX, NELY, timefield.TimeField.OPPOSITE_CORNER)
     np.savez(
         OUT / "timefield.npz",

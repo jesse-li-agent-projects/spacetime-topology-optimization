@@ -35,7 +35,7 @@ def smoke_run():
 
 def test_default_config_loads_with_a_plate_base():
     config = HeatRunConfig.from_dict(json.loads(CONFIG_PATH.read_text()))
-    assert config.print_base in ("edge", "bottom_edge")
+    assert config.print_base in ("left_edge", "bottom_edge")
 
 
 def test_smoke_run_stays_finite(smoke_run):

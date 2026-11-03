@@ -2279,7 +2279,7 @@ SUBSTRATE_PLATES = {
     # Rotation (k of np.rot90) that takes a bottom plate to this one
     timefield.TimeField.BOTTOM_EDGE: 0,
     timefield.TimeField.RIGHT_EDGE: 1,
-    timefield.TimeField.EDGE: -1,
+    timefield.TimeField.LEFT_EDGE: -1,
 }
 
 
@@ -2357,7 +2357,7 @@ def test_substrate_sensitivity_matches_finite_differences(shielding):
     t = t.detach().requires_grad_(True)
     e1, e2, w = conductivity.neighbor_weights(nelx, nely, rmin)
     sub = conductivity.substrate(
-        nelx, nely, rmin, timefield.TimeField.EDGE, torch.float64
+        nelx, nely, rmin, timefield.TimeField.LEFT_EDGE, torch.float64
     )
 
     def K(x, t):

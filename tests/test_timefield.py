@@ -17,7 +17,7 @@ from conftest import assert_close, load_fixture_npz
 
 _VARIANTS = [
     (timefield.TimeField.CORNER, "tfield1"),
-    (timefield.TimeField.EDGE, "tfield2"),
+    (timefield.TimeField.LEFT_EDGE, "tfield2"),
     (timefield.TimeField.OPPOSITE_CORNER, "tfield3"),
 ]
 
@@ -51,7 +51,7 @@ def test_timefield_variants_span_0_to_1(nelx, nely):
     non-square grids alike, since `_corner_distance_grid`'s docstring warns non-square
     grids change the field's shape, not just its scale."""
     tfield_corner = timefield.init_timefield(nelx, nely, timefield.TimeField.CORNER)
-    tfield_edge = timefield.init_timefield(nelx, nely, timefield.TimeField.EDGE)
+    tfield_edge = timefield.init_timefield(nelx, nely, timefield.TimeField.LEFT_EDGE)
     tfield_opposite = timefield.init_timefield(
         nelx, nely, timefield.TimeField.OPPOSITE_CORNER
     )
@@ -301,7 +301,7 @@ def test_right_edge_range_and_orientation():
     "variant,expected",
     [
         (timefield.TimeField.CORNER, np.array([0])),
-        (timefield.TimeField.EDGE, np.arange(5) * 7),
+        (timefield.TimeField.LEFT_EDGE, np.arange(5) * 7),
         (timefield.TimeField.OPPOSITE_CORNER, np.array([4 * 7])),
         (timefield.TimeField.BOTTOM_EDGE, 4 * 7 + np.arange(7)),
         (timefield.TimeField.RIGHT_EDGE, np.arange(5) * 7 + 6),

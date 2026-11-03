@@ -86,14 +86,14 @@ def plate_nodes(
 ) -> Bool[np.ndarray, " nnodes"]:
     """The build plate's nodes: those of the print-base edge on the design domain.
 
-    :param print_base: `edge` (the left edge), `bottom_edge` or `right_edge`
+    :param print_base: `left_edge`, `bottom_edge` or `right_edge`
     :param active: the design domain (`load_cases.active_mask`); the whole mesh if `None`
     :return: a mask over the nodes
     :raises ValueError: for any other print base
     """
     plate = np.zeros((nely + 1, nelx + 1), bool)
     base = print_base.lower()
-    if base == "edge":
+    if base == "left_edge":
         plate[:, 0] = True
     elif base == "bottom_edge":
         plate[-1, :] = True
@@ -101,7 +101,7 @@ def plate_nodes(
         plate[:, -1] = True
     else:
         raise ValueError(
-            f"a virtual-heat time field needs a plate print base (edge, bottom_edge or right_edge), got {print_base!r}"
+            f"a virtual-heat time field needs a plate print base (left_edge, bottom_edge or right_edge), got {print_base!r}"
         )
     active = _whole(nelx, nely) if active is None else active
     return (plate & domain_nodes(active)).ravel()
