@@ -35,6 +35,10 @@ is 2 throughout.
 - **The shaping term reads the hotspot's own severity**, at `q`, rather than a separate
   reading at `q` = 1. All eight cells pass at unchanged compliance (batches 47 and 49),
   and the formulation loses a second severity.
+  - `S_e`, void switch included, not `1 - K_e`: the term lets go of an emptying element
+    a little sooner. All eight cells pass; seven are within noise, and C1 0.5 Tcr 0.4 may
+    cost a little, three runs each: compliance about +0.3%, binarized severity - `Tcr`
+    +0.012 -> +0.020 (batch 58).
 - **`beta_d` ends at 8, not 128.** Branched from 300 on the four hardest cells: -> 8
   passes all of them with about the same compliance (C1 0.3 1.066 against 1.074 at
   128) and smooth 0.5 contours; -> 4 and held at 2 fail on C1. Ending grey means gating
@@ -87,4 +91,5 @@ one run each (batches 44, 47 and 49). This schedule, with the hotspot constraint
 all eight cells, one run each (batch 52). The plate as a half-plane: all eight cells, one
 run each (batch 54). The thin-layer reference: all eight cells, one run each (batch 55).
 `q` from 2, with it: all eight cells, one run each (batch 56); held at 2 to the end
-(batch 57).
+(batch 57). The shaping term on `S_e`: all eight cells, one run each, three on C1 0.5 Tcr
+0.4 (batch 58).
