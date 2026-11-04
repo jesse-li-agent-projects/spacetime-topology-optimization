@@ -134,7 +134,7 @@ class FieldTerms:
             run_config.identically_zero(config.hotspot_shaping_weight)
         ):
             raise ValueError(
-                "hotspot_shaping_weight needs a relative hotspot_shielding: under 'absolute' shielding, 1 - K_est is not the severity an element would have once solid"
+                "hotspot_shaping_weight needs a relative hotspot_shielding: under 'absolute' shielding, the severity is not what an element would have once solid"
             )
         rmin_cond = units.in_elements(config.rmin_cond_m, config.element_size_m)
         normalization = conductivity.Normalization(config.hotspot_normalization)
@@ -386,9 +386,9 @@ class FieldTerms:
         loop: int,
     ) -> Float[Tensor, ""]:
         """A pressure on would-be hotspots, for the objective: the mean over elements of
-        `softplus(S1 - Tcr) * xPhys`, where `S1 = 1 - K_est` is the hotspot's own severity,
-        at the run's `q`. At `q = 1`, `S1` is the severity an element would have once it
-        and its support were solid.
+        `softplus(S - Tcr) * xPhys`, where `S` is the hotspot's own severity, at the run's
+        `q`. At `q = 1`, `S` above void is the severity an element would have once it and
+        its support were solid.
 
         The relative shieldings read that severity honestly in the hotspot constraint,
         but its gradient barely moves a bar's overall density or its void support. This
@@ -409,9 +409,10 @@ class FieldTerms:
         # An exempt print base's infinite `K_est` is no hotspot: select it out, as in
         # `conductivity.LogSumExp`, so its `inf` never reaches the backward pass.
         finite = torch.isfinite(K_est)
-        excess = torch.where(finite, 1 - K_est, Tcr) - Tcr
-        pressure = torch.nn.functional.softplus(excess, beta=sharpness)
-        return torch.where(finite, pressure * xPhys.flatten(), 0).mean()
+        x = xPhys.flatten()
+        S = torch.where(finite, 1 - K_est, 0) * self.hotspot.void_switch(x)
+        pressure = torch.nn.functional.softplus(S - Tcr, beta=sharpness)
+        return torch.where(finite, pressure * x, 0).mean()
 
     def add_time_only_hotspot(
         self,
