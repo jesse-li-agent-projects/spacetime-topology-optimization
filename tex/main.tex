@@ -172,10 +172,10 @@ where:
 The hotspot severity $S_e$ for each element is then defined with $S_e = (1 - K_e)\frac{\rho_e}{\rho_e + \varepsilon}$, where the last term is used to ensure the severity of void elements is zero.
 
 We wish to constrain the maximum severity across the entire part. To do this smoothly, we aggregate over the part with the KS function\footnote{We choose the KS function to preserve translation equivariance. Alternatively, $p$-norm aggregation could be used, which would preserve scale equivariance; however, here $S$ is already normalized to be of order 1 so translation equivariance is more important.}:
-\[S = \delta_S + \frac{1}{b} \ln \sum_{j \in \Omega} e^{b S_j} \]
-$\delta_S$ is a calibration term to ensure that $S$ stays approximately equal to the actual maximum without influencing gradients, and is estimated using an exponential moving average.
+\[S = \delta_S + \frac{1}{\beta_S} \ln \sum_{j \in \Omega} e^{\beta_S S_j} \]
+$\delta_S$ is a calibration term to ensure that $S$ stays approximately equal to the actual maximum without influencing gradients, as otherwise $S$ would overestimate the true average. $\delta_S$ is estimated using an exponential moving average.
 Specifically, it follows the update rule
-\[\delta_{S, n} = (1-\alpha) \delta_{S, n-1} + \alpha \left(\max_j S_j - \frac{1}{b} \ln \sum_{j \in \Omega} e^{b S_j}\right)\]
+\[\delta_{S, n} = (1-\alpha) \delta_{S, n-1} + \alpha \left(\max_j S_j - \frac{1}{\beta_S} \ln \sum_{j \in \Omega} e^{\beta_S S_j}\right)\]
 where $\delta_{S,i}$ is the value of $\delta_S$ on iteration $i$, and $\alpha$ is a constant hyperparameter controlling how quickly $\delta_S$ gets updated; we find $\alpha=0.1$ to work well.
 
 
@@ -183,30 +183,43 @@ where $\delta_{S,i}$ is the value of $\delta_S$ on iteration $i$, and $\alpha$ i
 We optimize over density field $\rho$ and time-field design variables $\mu$ and $b$, solving the optimization problem:
 \[
     \min_{\rho,\mu,b}\quad
-    \log c(\rho) + w_u U(t; \rho) + w_\Phi \Phi(\rho, t)
+    \log c(\rho) + w_u U(\rho, t)
+    + w_\Phi \Phi(\rho, t)
+    + w_S S\big(\operatorname{sg}[\rho], \mu, b\big)
     \quad\text{s.t.}\quad
-    g_H = \frac{S}{T_{cr}} - 1 \le 0, \quad V(\rho) \le \bar V .
-\]
+    \]
+    g_V = \frac{V(\rho)}{\bar V} - 1 \le 0 .
 \begin{itemize}
-    \item $c(x)$ is the compliance. We optimize $\log c(x)$ so that gradients are scale-invariantt and weighting hyperparameters generalize better across different problems.
-    \item $U(t;x)$ is the density-weighted coefficient of variation of $g=\abs{\nabla t}$ and acts as a a layer uniformity regularizer:
+    \item $c(\rho)$ is the compliance. We optimize $\log c(\rho)$ so that gradients are scale-invariant and weighting hyperparameters generalize better across different problems.
+    \item $U(\rho, t)$ is the density-weighted coefficient of variation of $g=\abs{\nabla t}$ and acts as a layer uniformity regularizer:
           $$
-              U(t;x) = \frac{\sqrt{\sigma^2 + \varepsilon m^2}}{m},
+              U(\rho, t) = \frac{\sqrt{\sigma^2 + \varepsilon m^2}}{m},
               \qquad
               m = \frac{\sum_j \rho_j g_j}{\sum_j \rho_j},
               \qquad
               \sigma^2 = \frac{\sum_j \rho_j(g_j - m)^2}{\sum_j \rho_j}
           $$
-          The gradient of $\rho$ is detached from $U$ so that $U$ only affects the time field, not the density field.
-    \item $\Phi(\rho, t)$ is a hotspot-constraint objective shaping term.
+    \item $\Phi(\rho, t)$ is a hotspot constraint penalty term, penalizing elements whose severity exceeds the maximum acceptable severity $T_{cr}$:
+          \[
+              \Phi(\rho, t) = \frac{1}{N_e} \sum_{e} \rho_e \frac{1}{\beta_\Phi} \mathrm{softplus}\big(\beta_\Phi (S_e - T_{cr})\big), \qquad \mathrm{softplus}(x) = \ln \left(1 + e^x\right)
+          \]
+          where $N_e$ is the number of elements and $\beta_\Phi$ controls the sharpness of softplus.
+          \todo{$N_e$ can probably be introduced earlier}. This penalty formulation uses gradient pressure to removing density wherever an element has severity $S_e$ exceeding $T_{cr}$, while applying near zero pressure wherever $S_e < T_{cr}$, so it shapes the optimization dynamics with little effect on the optimum.
+    \item $S(\operatorname{sg}[\rho], \mu, b)$ is the hotspot severity and its addition to the optimization objective pressures the time field to minimize the hotspot severity even when $S_e \leq T_{cr}$. $\operatorname{sg}[\cdot]$ denotes a stop-gradient (detaching $\rho$'s gradients); this includes the dependence of $t$ on $\rho$ through $\chi$. The purpose of this term is to optimize the time field first to reduce $S_e$, and only have the hotspot severity constraint influence $\rho$ if modifying the time field is insufficient to avoid overheating.
+    \item $g_V$ is the volume constraint, with $V(\rho) = \frac{1}{N_e} \sum_{e} \rho_e$ and $\bar V$ the maximum volume fraction.
+          \todo{inline V(\rho)}
+    \item $w_u$, $w_\Phi$, and $w_S$ are weighting hyperparameters controlling the relative strengths of their associated terms.
+
 \end{itemize}
 
 
-
-\todo{Add table full of hyperparameter settings}
-
 \section{Results}
-(4 pages). Description of execution and findings.
+% (4 pages). Description of execution and findings.
+\todo{Add table full of hyperparameter settings. Make sure each $\varepsilon$ is given a unique subscript}
+
+\todo{Comparison between sequential and simultaneous optimization; this should include a mention of compute time}
+\todo{Comparison between sequential optimization with PDE formulation and direct formulation with continuity}
+
 \section{Discussion and conclusions}
 (2 page). Discussion of the results and Conclusions connecting
 results to research or design question.
