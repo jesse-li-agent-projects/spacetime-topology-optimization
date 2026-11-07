@@ -289,6 +289,19 @@ def test_hotspot_shaping_is_quiet_on_a_bar_whose_solid_version_passes():
     assert quiet[rows, 36:44].abs().max() < 1e-3 * loud[rows, 40].abs().min()
 
 
+def test_hotspot_shaping_reads_the_void_switch():
+    """A density where the switch takes `S` below `Tcr` while `1 - K_est` is above it,
+    so the term lets go of the bar: lower density still, `K_est` rises and neither pushes.
+    """
+    x = torch.zeros(20, 60, dtype=torch.float64)
+    x[:, 40:44] = 0.5
+    _, grey = _shaping_gradient(x)
+    x[:, 40:44] = 0.01
+    _, emptying = _shaping_gradient(x)
+    rows = slice(8, 12)
+    assert emptying[rows, 40].abs().max() < 0.1 * grey[rows, 40].abs().min()
+
+
 def test_hotspot_shaping_needs_a_relative_shielding():
     with pytest.raises(ValueError, match="hotspot_shaping_weight"):
         stto_laplace.build_problem(
