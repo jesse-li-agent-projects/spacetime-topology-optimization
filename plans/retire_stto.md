@@ -33,8 +33,7 @@ Before deleting, untangle what `stto_laplace` and `seqopt` still borrow:
 - The package docstring, `conventions.md` and `conductivity_estimation_2d/structure.md`
   describe `stto` as the main problem.
 
-Open plans that are `stto`'s: `nucleation.md` and `length_scale_options.md`. Ask the user
-whether to archive them as closed.
+`stto`'s open plans (`nucleation.md`, `length_scale_options.md`) are archived as closed.
 
 ## 2. Pin `stto_laplace` to the settled reading
 
@@ -49,12 +48,13 @@ moved.
 
 `seqopt` today uses the exemption and, with its angular weight on (`hotspot_kappa`
 2.37), the per-element divisor. Give it the substrate and the thin-layer divisor, then
-drop its `hotspot_normalization`. Reading the hotspot the same way changes its results,
-so rerun what Variant 2's sequential reference relies on (`variant2_next_studies.md`).
+drop its `hotspot_normalization`.
 
-Ask the user whether to also align the rest of `seqopt`'s hotspot with Laplace's
-(`q` 3 against 2, `sigmoid` credit against `cooling`, `absolute` shielding against
-`capped_ratio`, no shaping term), or keep this step to the reference and plate.
+Match the rest of its hotspot to `laplace_default.json` too, for now (user, 2026-11-03):
+`q` 2 (not 3), `cooling` credit (not `sigmoid`), `capped_ratio` shielding (not
+`absolute`), and the shaping term. `seqopt` has no fields for the last three yet.
+Reading the hotspot this way changes its results, so rerun what Variant 2's sequential
+reference relies on (`variant2_next_studies.md`).
 
 ## Order
 
