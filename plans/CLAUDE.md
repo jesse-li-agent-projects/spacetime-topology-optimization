@@ -6,10 +6,10 @@ This directory contains plans for agents.
       KEEP this entry even once every plan below is finished/archived and this
       list is otherwise empty -- it's the format documentation, not a stale
       leftover.
-- retire_stto.md
-    - Agreed, not started: retire `stto` and `stto_heat`, and pin `stto_laplace` and
-      `seqopt` to the constant thin-layer reference and the half-plane plate, dropping the
-      options that chose otherwise.
+- fold_stto_into_laplace.md
+    - Agreed, partly done: keep `stto` and `stto_heat` only as time-formulation variants of
+      `stto_laplace`, and pin `stto_laplace` and `seqopt` to the constant thin-layer
+      reference and the half-plane plate, dropping the options that chose otherwise.
 - variant2_next_studies.md
     - Start here for Variant 2: the studies to run next on the settled default (plain-TO
       gap, a fair sequential reference, virtual vs direct time field, C1 at 2x).
