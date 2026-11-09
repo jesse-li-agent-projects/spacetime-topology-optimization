@@ -7,3 +7,9 @@
 !.gitignore
 !continuation.md
 !laplace_continuation.md
+!time_formulations/
+!time_formulations/*.json
+!time_formulations/README.md
+!seq_vs_sim/
+!seq_vs_sim/*.json
+!seq_vs_sim/README.md
