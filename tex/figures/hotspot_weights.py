@@ -22,37 +22,17 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-import matplotlib
-
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
 import sttopt.conductivity as conductivity
+from tex.figures.style import TEXT_WIDTH_IN
 
 # One blue ramp, light -> dark along each parameter's schedule.
 RAMP = ["#86b6ef", "#3987e5", "#1c5cab", "#0d366b"]
 KAPPAS = [0.0, 0.5, 1.0, 2.37]
 SHARPNESSES = [1.0, 2.0, 4.0, 8.0]
-TEXT_WIDTH_IN = 6.3  # a4paper, 2.5 cm margins
-
-plt.rcParams.update(
-    {
-        "font.family": "serif",
-        "mathtext.fontset": "cm",
-        "font.size": 9,
-        "axes.linewidth": 0.6,
-        "axes.edgecolor": "#52514e",
-        "axes.labelcolor": "#1a1a19",
-        "xtick.color": "#52514e",
-        "ytick.color": "#52514e",
-        "grid.color": "#e4e3df",
-        "grid.linewidth": 0.6,
-        "legend.frameon": False,
-        "lines.linewidth": 1.6,
-    }
-)
 
 
 def angular_weight(
@@ -146,7 +126,11 @@ def credit_figure(path: Path) -> None:
     plt.close(fig)
 
 
+def build(out_dir: Path) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    lambda_figure(out_dir / "angular_weight_kappa.pdf")
+    credit_figure(out_dir / "cooling_credit_k.pdf")
+
+
 if __name__ == "__main__":
-    args.out.mkdir(parents=True, exist_ok=True)
-    lambda_figure(args.out / "angular_weight_kappa.pdf")
-    credit_figure(args.out / "cooling_credit_k.pdf")
+    build(args.out)
