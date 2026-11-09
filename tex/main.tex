@@ -62,6 +62,9 @@
     linkcolor=blue,
 }
 
+% equal by definition
+\newcommand{\defeq}{\mathrel{\mathop:}=}
+
 \title{Internal Research Project: Space-time topology optimization for overheating prevention in metal additive manufacturing}
 
 \author{Jesse Li (6399053)}
@@ -74,31 +77,51 @@
 
 \section{Introduction}
 % Short description of the assignment, its relevance and the field. (1 page)
-Additive manufacturing.
+Additive manufacturing (AM), where material is incrementally deposited, and topology optimization, where a computer algorithm automatically designs a part's toppology and geometry in response to design objectives such as compliance, are two synergistic techniques. Topology optimization often results in complex part geometry, which often can only be manufactured with AM techniques.
 
 Traditionally, 3-axis AM deposits material in uniform planar layers. However, the restriction in fabrication sequence introduces design constraints, depending on the specific AM technology being used. For example, fused deposition modelling limits the maximum overhang a part can have without separate support material. As another example, wire arc additive manufacturing results in substantial heat load applied to the in-progress part, which risks overheating if there is insufficient nearby material to conduct away heat.
 
-Multi-axis AM offers more flexibility to tackle these challenges, by allowing curved layers and customizable fabrication sequences. With this increased flexibility, however, comes the new design challenge of choosing the fabrication sequence.
-\todo{Mention topology optimization}
+Multi-axis AM offers more flexibility to tackle these challenges, by allowing curved layers and customizable fabrication sequences. With this increased flexibility comes the new design challenge and opportunity of choosing the fabrication sequence, to improve performance.
+Moreover, by using a topology optimization formulation that is aware of the fabrication sequence, the resulting design can potentially perform better than sequential optimization of part topology and fabrication sequence.
 
 Wang et al. \cite{wang2020spacetime} introduce space-time topology optimization (STTO), which simultaneously optimizes a density field (defining the part geometry) and a time field (defining the fabrication sequence), and use it to minimize compliance of intermediate structures as well as the final structure.
-\cite{das2023thesis} introduces a physically-motivated geometric method to efficiently estimate overheating severity, including a simplified approach suitable for STTO, and designs parts subject to a maximum overheating constraint.
+\cite{das2025overheating} introduces a physically-motivated geometric method to efficiently estimate overheating severity, including a simplified approach suitable for STTO, and designs parts subject to a maximum overheating constraint.
 % Note: Manav's approach uses direct time formulation
 
 A key requirement for physically realizable time fields is that they have no interior local minima or maxima.
 A local minimum in the time field corresponds to unsupported material, while a local maximum corresponds to fully surrounded material that cannot be physically accessed for material deposition.
-\cite{wang2020spacetime} and \cite{das2023thesis} address this through an explicit continuity constraint which ensures each internal element has neighours which are larger and smaller than it.
+\cite{wang2020spacetime} and \cite{das2025overheating} address this through an explicit continuity constraint which ensures each internal element has neighours which are larger and smaller than it.
 \cite{Wang2024Regularization} represent time as the solution to a heat equation PDE with a sink term, to avoid local minima by construction; however this formulation still permits local maxima.
+
+\todo{Should I be citing Manav's thesis, which already has an early STTO formulation?}
 
 This work extends \cite{das2023thesis} and develops a more flexible and robust STTO approach. Our main contributions are:
 \begin{itemize}
-    \item A novel formulation for the time field as the solution to a Laplace equation, which automatically prevents local minima and maxima in the time field (a common challenge in STTO)
     \item Refinements to the optimization objective, which improves realism  near edges, account for printing direction effects on overheating, promotes layer uniformity, and improves optimization dynamics
+    \item A novel formulation for the time field as the solution to a Laplace equation, which automatically prevents local minima and maxima in the time field (a common challenge in STTO)
 \end{itemize}
 
 \section{Methodology}
-(2 pages). Analysis of the research or engineering challenge and the
+% (2 pages). Analysis of the research or engineering challenge and the
 % research plan.
+
+\subsection{Topology formulation}
+We use a standard density-based formulation of topology optimization, utilizing solid isotropic material with penalization (SIMP) \cite{Bendsoe1989SimpFoundation} \cite{Zhou1991SimpFoundation}, density filtering \cite{BRUNS20013443DensityFilter}, and projection \cite{Guest2004DensityProjection}, and consider a linear elastic compliance minimization problem.
+
+Beginning with the density design variable $\rho_d$, defined for each element $i$ as $\rho_{d,i}$, we apply filtering to get filtered density $\rho_f$, to avoid checkerboardingn and introduce a minimum length scale:
+\[\rho_{f,i} =  \frac{\sum_j w (\mathbf{x_i} - \mathbf{x_j}) \rho_{d,j}}{\sum_j w (\mathbf{x_i} - \mathbf{x_j})} \qquad w(\mathbf{x_i} - \mathbf{x_j}) = \max \left(0, 1-\frac{\norm{\mathbf{x_i} - \mathbf{x_j}}}{r_{f}}\right)\]
+We apply Heaviside projection to promote binarization and get physical density $\rho$:
+\[\rho_i = 1 - e^{-\beta \rho_{f,i}} + \rho{f,i}e^{-\beta} \]
+$r_f$ is the filter radius, and $\beta$ is the projection sharpness.
+
+Each element has an elastic modulus $E_i$, interpolated with SIMP, with
+\[E_i(\rho_i) =  E_{min} + \rho_i^p (E_0 - E_{min})\]
+where $E_0 = 1$ is the elastic modulus of a solid element and $E_{min} = 10^{-9}$ is a small non-zero value to avoid numerical singularities in void elements.
+
+We consider the compliance $c$, given by
+\[c(\rho) = \mathbf{U}^T \mathbf{KU} = \sum^{N_e}_{i=1} E_j(\rho)_i \mathbf{u}_i^T \mathbf{k}_0 \mathbf{u}_i\]
+\[\mathbf{KU} = \mathbf{f}\]
+where $N_e$ is the number of elements, $\mathbf{U}$ and $\mathbf{K}$ are the global displacement vector and stiffness matrix respectively, $\mathbf{u_j}$ is the element displacement vector for element $j$, $\mathbf{k_0}$ is the element stiffness matrix for an element with unit elastic modulus, and $\mathbf{f}$ is the global nodal force vector.
 
 \subsection{Time field formulation}
 Let $\Omega$ denote the design domain over which to optimize, and $\partial \Omega$ be the domain boundary. Let $\partial \Omega_p$ be the boundary corresponding to the build plate. Let $x$ denote the spatial coordinates.
@@ -116,7 +139,7 @@ $a$ and $C$ are constant hyperparameters; we find $a=4$ and $C=1000$ to work wel
 
 A key property of this formulation is that in the interior of $\Omega$, there are no local minima or maxima.
 \autoref{sec:time_field_generality} provides a derivation that for any sufficiently smooth time field $t$ that has no interior local minim or maxima, $t$ is the solution to \autoref{eqn:time_field_laplace} for some choice of $\chi$ and $b$.
-\todo{Equation citation looks like section.number rather than just global equation number}
+\todo{Equation citation looks like section.number rather than just global equation number @Claude}
 
 This formulation does not rule out the existence of local minima on the design space boundary, which are still problematic for physical reasons. However, in practice this rarely occurs, because a local minimum in time also tends to have high hotspot severity, as described later.
 \todo{add math reference}
@@ -133,16 +156,21 @@ where:
     \item $V_e$ is the set of elements in a radius $r_K$ circle centered at element $e$
     \item $w_{ej} = (r_K - d_{ej})/r_K$ is a radial weight, where $d_{ej}$ is the Euclidean distance between element $j$ and element $e$
     \item $\lambda_{ej} = \exp\left(-\kappa (\nabla t \cdot \hat d_{ej} + |\nabla t|)/(|\nabla t| + g_0)\right)$ is an angular weight, favouring neighbours behind the print front, with $\hat d_{ej}$ being a unit vector in the direction from element $e$ to element $j$.
-    \item $\kappa$ and $g_0$ are hyperparameters, with the first controlling the anisotropy of the angular weight and the second promoting an isotropic weight when $\nabla t$ is small and therefore the printing direction is uncertain. \autoref{fig:angular_weight} shows the effect of $\kappa$ on $\lambda$.
+
+          $\kappa$ and $g_0$ are hyperparameters, with the first controlling the anisotropy of the angular weight and the second promoting an isotropic weight when $\nabla t$ is small and therefore the printing direction is uncertain. \autoref{fig:angular_weight} shows the effect of $\kappa$ on $\lambda$.
     \item $F$ is a term to ensure only material printed earlier in time contributes to $K$:
           \[
-              F(\Delta t) = 1 - \exp\!\Big(-\tfrac{1}{k}\,\mathrm{softplus}\big(k\,\Delta t/\tau\big)\Big), \qquad \tau = 0.01 .
+              F(\Delta t) = 1 - \exp\!\Big(-\tfrac{1}{k}\,\mathrm{softplus}\big(k\,\Delta t/\tau\big)\Big), \qquad \tau = 0.01, \qquad \mathrm{softplus}(x) \defeq \ln \left(1 + e^x\right) .
           \]
-    \item $k$ and $\tau$ are hyperparameters. $k$ controls the sharpness of $F$, with its effect visualized in \autoref{fig:cooling_credit}. $\tau$ controls the time scale used in $F$ and can be tuned so that the material printed in $\delta t = \tau$ is one layer thickness of material.
+          $k$ and $\tau$ are hyperparameters. $k$ controls the sharpness of $F$, with its effect visualized in \autoref{fig:cooling_credit}. $\tau$ controls the time scale used in $F$ and can be tuned so that the material printed in $\delta t = \tau$ is one layer thickness of material.
+
+          At $k=1$, $F$ reduces to the sigmoid function $\sigma(t/\tau) = \frac{1}{1 + e^{-t/\tau}}$, often used in prior work as a soft mask for material printed before a given time. However, the sigmoid function has the property that $F(0;\  k=1) = \sigma(0) = 0.5$, which means that a constant (trivial) time field can easily achieve a high $K$.
+
     \item $s(\rho_e, \rho_j)$ is a term ensuring lower density material contributes less to $K$:
           \[
               s(\rho_e, \rho_j) = \min\!\left(1,\ \frac{\rho_j + \varepsilon}{\rho_e + \varepsilon}\right)^{q}, \qquad \varepsilon = 10^{-3},
           \]
+          $q$ is a constant hyperparameter.
 
     \item $D(\kappa)$ is a normalization constant in space, chosen so that an ideal uniform planar-layered print has $K_e = 1$. $D$ can be computed by considering an infinite domain with uniformly increasing time field $t=x$, and computing
           \[
@@ -158,14 +186,14 @@ where:
 \begin{figure}[ht!]
     \centering
     \includegraphics[width=\textwidth]{figures/angular_weight_kappa.pdf}
-    \caption{Angular weight $\lambda_{ej}$ for $|\nabla t| \gg g_0$.}
+    \caption{Angular weight $\lambda_{ej}$ for $|\nabla t| \gg g_0$. $\kappa=2.37$ minimizes the least-squares difference between our definition of $\lambda_{ej}$ and the angular weight term definition in \cite{das2025overheating}.}
     \label{fig:angular_weight}
 \end{figure}
 
 \begin{figure}[ht!]
     \centering
     \includegraphics[width=0.6\textwidth]{figures/cooling_credit_k.pdf}
-    \caption{$F(\Delta t)$ for several sharpnesses $k$. At $k=1$, $F$ reduces to the sigmoid function, used in \cite{das2025overheating}.}
+    \caption{$F(\Delta t)$ for several sharpnesses $k$. At $k=1$, $F$ reduces to the sigmoid function.}
     \label{fig:cooling_credit}
 \end{figure}
 
@@ -176,7 +204,7 @@ We wish to constrain the maximum severity across the entire part. To do this smo
 $\delta_S$ is a calibration term to ensure that $S$ stays approximately equal to the actual maximum without influencing gradients, as otherwise $S$ would overestimate the true average. $\delta_S$ is estimated using an exponential moving average.
 Specifically, it follows the update rule
 \[\delta_{S, n} = (1-\alpha) \delta_{S, n-1} + \alpha \left(\max_j S_j - \frac{1}{\beta_S} \ln \sum_{j \in \Omega} e^{\beta_S S_j}\right)\]
-where $\delta_{S,i}$ is the value of $\delta_S$ on iteration $i$, and $\alpha$ is a constant hyperparameter controlling how quickly $\delta_S$ gets updated; we find $\alpha=0.1$ to work well.
+where $\delta_{S,i}$ is the value of $\delta_S$ on iteration $i$, and $\alpha$ is a constant hyperparameter controlling how quickly $\delta_S$ gets updated; we find $\alpha=0.1$ to work well. Alternatively, one can update $\delta_S$ periodically (for example, every $N$ iterations); however, updating too frequently can cause the optimizer to go in cycles from each jump while updating too rarely leads to an out-of-date aggregation.
 
 
 \subsection{Optimization problem}
@@ -187,44 +215,52 @@ We optimize over density field $\rho$ and time-field design variables $\mu$ and 
     + w_\Phi \Phi(\rho, t)
     + w_S S\big(\operatorname{sg}[\rho], \mu, b\big)
     \quad\text{s.t.}\quad
-    \]
-    g_V = \frac{V(\rho)}{\bar V} - 1 \le 0 .
+    g_V = \frac{V(\rho)}{\bar V} - 1 \le 0.
+\]
 \begin{itemize}
     \item $c(\rho)$ is the compliance. We optimize $\log c(\rho)$ so that gradients are scale-invariant and weighting hyperparameters generalize better across different problems.
-    \item $U(\rho, t)$ is the density-weighted coefficient of variation of $g=\abs{\nabla t}$ and acts as a layer uniformity regularizer:
-          $$
+    \item $U(\rho, t)$ is the density-weighted coefficient of variation of the time gradient $g=\abs{\nabla t}$ and acts as a layer uniformity regularizer:
+          \[
               U(\rho, t) = \frac{\sqrt{\sigma^2 + \varepsilon m^2}}{m},
               \qquad
               m = \frac{\sum_j \rho_j g_j}{\sum_j \rho_j},
               \qquad
               \sigma^2 = \frac{\sum_j \rho_j(g_j - m)^2}{\sum_j \rho_j}
-          $$
+          \]
     \item $\Phi(\rho, t)$ is a hotspot constraint penalty term, penalizing elements whose severity exceeds the maximum acceptable severity $T_{cr}$:
           \[
               \Phi(\rho, t) = \frac{1}{N_e} \sum_{e} \rho_e \frac{1}{\beta_\Phi} \mathrm{softplus}\big(\beta_\Phi (S_e - T_{cr})\big), \qquad \mathrm{softplus}(x) = \ln \left(1 + e^x\right)
           \]
           where $N_e$ is the number of elements and $\beta_\Phi$ controls the sharpness of softplus.
-          \todo{$N_e$ can probably be introduced earlier}. This penalty formulation uses gradient pressure to removing density wherever an element has severity $S_e$ exceeding $T_{cr}$, while applying near zero pressure wherever $S_e < T_{cr}$, so it shapes the optimization dynamics with little effect on the optimum.
+          \todo{$N_e$ can probably be introduced earlier @Claude}. This penalty formulation uses gradient pressure to removing density wherever an element has severity $S_e$ exceeding $T_{cr}$, while applying near zero pressure wherever $S_e < T_{cr}$, so it shapes the optimization dynamics with little effect on the optimum.
     \item $S(\operatorname{sg}[\rho], \mu, b)$ is the hotspot severity and its addition to the optimization objective pressures the time field to minimize the hotspot severity even when $S_e \leq T_{cr}$. $\operatorname{sg}[\cdot]$ denotes a stop-gradient (detaching $\rho$'s gradients); this includes the dependence of $t$ on $\rho$ through $\chi$. The purpose of this term is to optimize the time field first to reduce $S_e$, and only have the hotspot severity constraint influence $\rho$ if modifying the time field is insufficient to avoid overheating.
-    \item $g_V$ is the volume constraint, with $V(\rho) = \frac{1}{N_e} \sum_{e} \rho_e$ and $\bar V$ the maximum volume fraction.
-          \todo{inline V(\rho)}
+    \item $g_V$ is the volume fraction constraint, with $V(\rho) = \frac{1}{N_e} \sum_{e} \rho_e$ and $\bar V$ the maximum volume fraction.
+          \todo{inline V(\rho) @Claude}
     \item $w_u$, $w_\Phi$, and $w_S$ are weighting hyperparameters controlling the relative strengths of their associated terms.
-
 \end{itemize}
 
+$\Phi$ encodes the intuition that if a feature cannot be solidified without leading to overheating (e.g. thin members), it should be removed.
+The penalty term $\Phi$ is used instead of a hard constraint on severity $S$ because the choice of $s$ makes the hotspot severity largely invariant to uniform changes in density, and so a hard constraint would provide negligible gradient pressure on a gray (i.e. partially solid) feature.
+
+It is ineffective to encode this intuition as a hard constraint with a different formulation for $S$, because to do so would require a positive gradient of $S$ with respect to uniform changes in density, and therefore imply that a uniform reduction in density can be used to reduce $S$. However, this tends to cause thin members to become gray (at the point just before $S$ exceeds $T_{cr}$), rather than fully disappearing.
 
 \section{Results}
 % (4 pages). Description of execution and findings.
-\todo{Add table full of hyperparameter settings. Make sure each $\varepsilon$ is given a unique subscript}
+\todo{Add table full of hyperparameter settings. Make sure each $\varepsilon$ is given a unique subscript, which requires going back thru earlier steps. @Claude}
 
+\subsection{Simultaneous optimizaion ensures features are thick enough to avoid overheating}
 \todo{Comparison between sequential and simultaneous optimization; this should include a mention of compute time}
+\autoref{fig:seq_vs_simultaneous} contrasts simultaneous and sequential optimization of the density and time fields. In \autoref{fig:seq_vs_simulatneous:seq}, becauuse the density optimizer is unaware of the overheating, it forms thin members which are prone to overheating. \autoref{fig:seq_vs_simulatneous:sim}, in contrast, forms thick enough members to stay within the hotspot severity constraint.
+
+\subsection{Our time field formulation robustly avoids local minima and maxima in time}
+
 \todo{Comparison between sequential optimization with PDE formulation and direct formulation with continuity}
 
 \section{Discussion and conclusions}
-(2 page). Discussion of the results and Conclusions connecting
-results to research or design question.
+% (2 page). Discussion of the results and Conclusions connecting results to research or design question.
+
 \section{Reflection}
-(1 page) Discussion and reflection on project execution and own functioning.
+% (1 page) Discussion and reflection on project execution and own functioning.
 
 % \newpage
 
@@ -341,6 +377,9 @@ Let $k(x) = e^{w(x)}$.
 \[\nabla u \cdot \nabla w = -\Delta u\]
 
 
+\appendix
+\section{AI Usage Acknowledgement}
+The LLM-based coding agent Claude Code was used to assist in development of the source code. Claude Opus 5.5 derived the results in \autoref{sec:time_field_generality}. \todo{or not; it's possibly cited?}
 
 \printbibliography
 \todo{Should I be citing the thesis or specific papers when available? If the thesis, should I be separately citing specific chapters?}
