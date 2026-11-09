@@ -38,6 +38,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="save the design and log the time-field counts every this many iterations (default: 50)",
     )
     parser.add_argument(
+        "--fixed-density",
+        type=Path,
+        metavar="RUN_DIR",
+        help="hold the final density of the run in this output/<tag> directory fixed, "
+        "optimizing only the time field on it (see sttopt/fixed_density.py)",
+    )
+    parser.add_argument(
         "--device",
         default=None,
         help="torch device, e.g. 'cpu' or 'cuda:0' (default: CUDA if available)",
@@ -56,6 +63,7 @@ def main(args: argparse.Namespace) -> None:
 
     import sttopt
     import sttopt.checks as checks
+    import sttopt.fixed_density as fixed_density
     import sttopt.stto_heat as stto_heat
     import sttopt.torch_util as torch_util
     from sttopt.run_config import HeatRunConfig
@@ -64,6 +72,10 @@ def main(args: argparse.Namespace) -> None:
     if args.nloop is not None:
         config = dataclasses.replace(config, nloop=args.nloop)
     assert config.nloop > 0, "Number of iterations must be positive"
+    fixed = None
+    if args.fixed_density is not None:
+        fixed = fixed_density.FixedDensity.load(args.fixed_density)
+        config = fixed.pin(config)
 
     output_dir = Path("output") / args.tag
     if output_dir.exists():
@@ -78,6 +90,8 @@ def main(args: argparse.Namespace) -> None:
 
     problem = stto_heat.build_problem(config, device=args.device)
     state = stto_heat.init_state(problem)
+    if fixed is not None:
+        state = fixed.hold(state)
     base = torch_util.to_numpy(problem.Nei)
     start = time.perf_counter()
 
@@ -106,10 +120,14 @@ def main(args: argparse.Namespace) -> None:
     with (output_dir / "iterations.jsonl").open("w") as log:
         for it in range(config.nloop):
             state, record = stto_heat.step(problem, state)
+            if fixed is not None:
+                state = fixed.hold(state)
             with torch.no_grad():
                 xPhys, heat = stto_heat.physical_fields(
                     problem, state.x, state.mu, state.beta_d, state.loop, state.heat
                 )
+            if fixed is not None and it == 0:
+                fixed.check(torch_util.to_numpy(xPhys))
             diag = record.diagnostics
             print(
                 f"It.: {it:4d} Obj.: {record.f:10.4f} Vol.: {float(xPhys.mean()):6.3f} "
