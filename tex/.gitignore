@@ -11,3 +11,4 @@
 *.blg
 *.run.xml
 *.bcf-SAVE-ERROR
+*.synctex(busy)

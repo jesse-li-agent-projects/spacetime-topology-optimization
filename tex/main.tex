@@ -127,6 +127,7 @@ where $N_e$ is the number of elements, $\mathbf{U}$ and $\mathbf{K}$ are the glo
 Let $\Omega$ denote the design domain over which to optimize, and $\partial \Omega$ be the domain boundary. Let $\partial \Omega_p$ be the boundary corresponding to the build plate. Let $x$ denote the spatial coordinates.
 We define the time field $t$ as the solution to the Laplace equation
 
+\todo{@Claude x in the below equation is position, which I think we've been using \mathbf{} to denote}
 \begin{equation}
     \nabla\cdot\big(\chi\nabla t\big) = 0, \quad t(x) = 0 \ \forall x \in \partial \Omega_p, \quad t(x) = b(x) \ \forall x \in \partial \Omega \backslash \partial \Omega_p
     \label{eqn:time_field_laplace}
@@ -142,6 +143,9 @@ A key property of this formulation is that in the interior of $\Omega$, there ar
 
 This formulation does not rule out the existence of local minima on the design space boundary, which are still problematic for physical reasons. However, in practice this rarely occurs, because a local minimum in time also tends to have high hotspot severity, as described later.
 \todo{add math reference}
+
+\todo{initialization and normalization}
+The time field wall data ($b$) is initialized by taking the geodesic distance across the design domain from the build plate\footnote{For implementation simplicity, the geodesic distance is approximated by building a discrete graph with 8-connected edges and using shortest-path algorithms on the graph.}. $\mu$ is initialized to a uniform constant (0.5).
 
 \subsection{Hotspot severity formulation}
 To assess the risk of overheating at any given material point, we define a metric $K$ to estimate the heat evacuation capacity\footnote{\cite{das2023thesis} refers to this as \emph{Conductivity Estimation}; to avoid ambiguity with conductivity as a material property we use the term \emph{heat evacuation capacity estimate}.}; a higher $K$ corresponds to a better ability to evacuate heat and reduced risk of overheating.
@@ -247,47 +251,49 @@ It is ineffective to encode this intuition as a hard constraint with a different
 
 \begin{table}[ht!]
     \centering
-    \caption{Hyperparameter settings (\texttt{configs/laplace\_default.json}), for $n_\mathrm{loop} = 750$ iterations and $\bar V = 0.5$.}
+    \caption{Common hyperparameter settings}
     \label{tab:hyperparameters}
     \begin{tabular}{llll}
         \toprule
-        Symbol            & Description                             & Value                                    & Schedule                                \\
+        Symbol            & Description                          & Value                  & Schedule                  \\
         \midrule
-        $p$               & SIMP penalization                       & $2 \to 5$                                & iterations 0--450                       \\
-        $\beta$           & Heaviside projection sharpness          & $2 \to 8$                                & iterations 450--550 (log)               \\
-        $r_f$             & density filter radius                   & \SI{4}{mm}                               &                                         \\
-        $a$               & diffusivity density exponent            & 4                                        &                                         \\
-        $C$               & diffusivity contrast                    & 1000                                     &                                         \\
-        $r_K$             & heat evacuation neighbourhood radius    & \SI{12}{mm}                              &                                         \\
-        $\kappa$          & angular weight anisotropy               & $0 \to 2.37$                             & iterations 0--450                       \\
-        $g_0$             & angular weight isotropy scale           & \SI{0.674}{\per\metre}                   &                                         \\
-        $k$               & cooling credit sharpness                & $1 \to 8$                                & iterations 0--450 (log)                 \\
-        $\tau$            & cooling credit time scale               & 0.01                                     &                                         \\
-        $q$               & shielding exponent                      & 2                                        &                                         \\
-        $\varepsilon_s$   & shielding ratio regularization          & $10^{-3}$                                &                                         \\
-        $\varepsilon_S$   & void severity mask threshold            & $10^{-3}$                                &                                         \\
-        $\varepsilon_U$   & uniformity regularization               & $10^{-12}$                               &                                         \\
-        $\beta_S$         & severity aggregation sharpness          & 100                                      &                                         \\
-        $\alpha$          & calibration moving-average rate         & 0.1                                      &                                         \\
-        $T_{cr}$          & maximum acceptable severity             & $1 \to 0.4$                              & iterations 0--150                       \\
-        $\beta_\Phi$      & hotspot penalty sharpness               & 100                                      &                                         \\
-        $w_u$             & layer uniformity weight                 & 0.1                                      &                                         \\
-        $w_\Phi$          & hotspot penalty weight                  & 100                                      &                                         \\
-        $w_S$             & hotspot severity weight                 & 0.3                                      &                                         \\
+        $n_\mathrm{loop}$ & Number of iterations                 & 750                    &                           \\
+        $p$               & SIMP penalization                    & $2 \to 5$              & iterations 0--450         \\
+        $\beta$           & Heaviside projection sharpness       & $2 \to 8$              & iterations 450--550 (log) \\
+        $r_f$             & density filter radius                & \SI{4}{mm}             &                           \\
+        $a$               & diffusivity density exponent         & 4                      &                           \\
+        $C$               & diffusivity contrast                 & 1000                   &                           \\
+        $r_K$             & heat evacuation neighbourhood radius & \SI{12}{mm}            &                           \\
+        $\kappa$          & angular weight anisotropy            & $0 \to 2.37$           & iterations 0--450         \\
+        $g_0$             & angular weight isotropy scale        & \SI{0.674}{\per\metre} &                           \\
+        $k$               & cooling credit sharpness             & $1 \to 8$              & iterations 0--450 (log)   \\
+        $\tau$            & cooling credit time scale            & 0.01                   &                           \\
+        $q$               & shielding exponent                   & 2                      &                           \\
+        $\varepsilon_s$   & shielding ratio regularization       & $10^{-3}$              &                           \\
+        $\varepsilon_S$   & void severity mask threshold         & $10^{-3}$              &                           \\
+        $\varepsilon_U$   & uniformity regularization            & $10^{-12}$             &                           \\
+        $\beta_S$         & severity aggregation sharpness       & 100                    &                           \\
+        $\alpha$          & calibration moving-average rate      & 0.1                    &                           \\
+        $\beta_\Phi$      & hotspot penalty sharpness            & 100                    &                           \\
+        $w_u$             & layer uniformity weight              & 0.1                    &                           \\
+        $w_\Phi$          & hotspot penalty weight               & 100                    &                           \\
+        $w_S$             & hotspot severity weight              & 0.3                    &                           \\
         \bottomrule
     \end{tabular}
 \end{table}
 
 \subsection{Simultaneous optimizaion ensures features are thick enough to avoid overheating}
 \todo{Comparison between sequential and simultaneous optimization; this should include a mention of compute time}
-\autoref{fig:seq_vs_simultaneous} contrasts simultaneous and sequential optimization of the density and time fields. In the sequential design (left), because the density optimizer is unaware of the overheating, it forms thin members which are prone to overheating. The simultaneous design (right), in contrast, forms thick enough members to stay within the hotspot severity constraint.
+\todo{Include diagram of loads, print plate, etc.}
 
 \begin{figure}[ht!]
     \centering
     \includegraphics[width=\textwidth]{figures/seq_vs_sim.pdf}
-    \caption{Sequential (left) and simultaneous (right) optimization of the density and the time field, for a cantilever with $\bar V = 0.5$ and $T_{cr} = 0.4$. Rows: density, time field with the void shaded gray, and excess severity $S_e - T_{cr}$ (void gray), all read on the density as optimized. The sequential design is a compliance-only topology optimization followed by optimization of the time field alone on its fixed density.}
+    \caption{Comparison of optimization results with sequential and simultaneous optimization of denesity and time fields, on the MBB beam. Volume fraction $\bar{V}= 0.5$; maximum acceptible severity $T_{cr}=0.4$. Because a penalty function is used instead of a hard constraint, a slight violation of the constraint is expected.}
     \label{fig:seq_vs_simultaneous}
 \end{figure}
+
+\autoref{fig:seq_vs_simultaneous} contrasts simultaneous and sequential optimization of the density and time fields. When sequentially optimizing the density then the time field, the density optimizer is unaware of the overheating, and forms thin members which are prone to overheating. Simultaneous optimization, in contrast, forms thick enough members to mostly satisfy the hotspot severity constraint.
 
 \subsection{Our time field formulation robustly avoids local minima and maxima in time}
 
@@ -305,110 +311,6 @@ It is ineffective to encode this intuition as a hard constraint with a different
 
 \section{Reflection}
 % (1 page) Discussion and reflection on project execution and own functioning.
-
-% \newpage
-
-% \section{Background and Motivation}
-
-% \[\kappa = \frac{\sum_{j \in S_e} \rho_j w_j \lambda_j }{\sum_{j \in S_e} w_j / 2}\]
-
-% \section{Density-scale-invariant hotspot severity}
-
-% \subsection*{Current measure}
-% For element $e$ with filtered density $x_e$, stencil weights $w_{ej}$, print-order credit $F_{ej}$ and the constant HALF\_STENCIL denominator $D$:
-% \[
-%     K_e = \frac{1}{D} \sum_{j} w_{ej} F_{ej}\, x_j^{\,q},
-%     \qquad
-%     S_e = (1 - K_e)\, x_e^{\,r}
-% \]
-% Under a global scaling $x \mapsto n x$:
-% \[
-%     K_e \mapsto n^q K_e, \qquad x_e^{\,r} \mapsto n^r x_e^{\,r}
-% \]
-% with $q$ scheduled $2 \to 5$ and $r$ scheduled $0.5 \to 0.05$, so the dependence on scale is mostly in $K_e$.
-
-% \paragraph{Sensitivities on a grey bar.}
-% \[
-%     \frac{\partial S_e}{\partial x_e} = r\, x_e^{\,r-1} (1 - K_e) > 0,
-%     \qquad
-%     \frac{\partial S_e}{\partial x_j} = -\frac{q}{D}\, x_e^{\,r}\, w_{ej} F_{ej}\, x_j^{\,q-1}
-% \]
-% The first always pushes an element's own density down ($0.71\,(1-K_e)$ at $r = 0.5$, $x_e = 0.5$). The second, the shielding pull from earlier neighbors, is weak at grey $x_j$ and absent for the element printed first in the bar.
-
-% \subsection*{A. Shielding relative to the element's own density, capped (recommended)}
-% \[
-%     K_e = \frac{1}{D} \sum_{j} w_{ej} F_{ej}\, c\!\left(\frac{x_j}{x_e + \varepsilon}\right),
-%     \qquad
-%     c(u) = \operatorname{smoothmin}(1, u)^q
-% \]
-% \begin{itemize}
-%     \item Invariant to $x \mapsto n x$ for $x_e \gg \varepsilon$: a neighbor at least as dense as $e$ shields it fully, so grey on equally grey material scores as solid on solid.
-%     \item Identical to the current $K_e$ on binary designs, so $T_{cr}$, calibration and the binarized gate are unchanged.
-%     \item Solid on void or on grey reads as unshielded; void anywhere reads as shielded.
-%     \item Each pair contributes at most $w_{ej} F_{ej} / D$, so it pairs with either aggregation.
-% \end{itemize}
-
-% \subsection*{B. Heat in over conduction out, uncapped}
-% \[
-%     K_e = \frac{\sum_{j} w_{ej} F_{ej}\, x_j^{\,q}}{D\, (x_e^{\,q} + \varepsilon)}
-% \]
-% \begin{itemize}
-%     \item Physical motivation: in a SIMP heat equation $x^q c\, \partial_t T = \nabla \cdot (x^q k \nabla T) + x^q Q$, the temperature is exactly invariant to $x \mapsto n x$.
-%     \item Unbounded above, so LogSumExp only; rewards an element being less dense than its support, over-crediting grey on solid.
-% \end{itemize}
-
-% \subsection*{C. Fraction of neighboring material printed earlier}
-% \[
-%     K_e = \frac{\sum_{j} w_{ej} F_{ej}\, x_j^{\,q}}{\sum_{j} w_{ej}\, x_j^{\,q} + \varepsilon}
-% \]
-% Void drops out of the denominator, so a free surface or an overhang over void becomes partly invisible --- the boundary blindness of PR \#98. Rejected.
-
-% \subsection*{D. Global normalization}
-% \[
-%     K_e = \frac{\sum_{j} w_{ej} F_{ej}\, x_j^{\,q}}{D \cdot \frac{1}{N}\sum_{k} x_k^{\,q}}
-% \]
-% The literal global invariance, but couples every element to every other, and does nothing for one grey bar in an otherwise solid design.
-
-% \subsection*{The gate}
-% Exact invariance for all $n$ would make void ($n \to 0$) indistinguishable from solid, so the gate $x_e^{\,r}$ must break it. Its push down $r\,x_e^{\,r-1}(1-K_e)$ remains under A or B, so pair either with
-% \begin{itemize}
-%     \item a small $r$ from iteration 0, or
-%     \item a gate flat above a threshold, e.g.\ $S_e = (1 - K_e)\, H_\beta(x_e; \eta_g)$ with a smoothed Heaviside $H_\beta$ at $\eta_g \approx 0.3$, separating void from material only.
-% \end{itemize}
-
-% \subsection*{Targeting $S_e$ directly}
-% The requirement is on $S_e$: $S_e(n\mathbf{x}) = S_e(\mathbf{x})$. By Euler's theorem for degree-0 homogeneous functions, equivalently
-% \[
-%     \sum_j x_j \frac{\partial S_e}{\partial x_j} = 0 \quad \forall e,
-% \]
-% i.e.\ the hotspot exerts no force along the ``scale every density'' direction --- a condition a unit test can check on random $\mathbf{x}$.
-
-% The gate exists because, under the current $K_e$, a void element in a void neighborhood is unshielded and would otherwise force material into the void (Das 2025, Fig.~6a). Option A with a symmetric regularization,
-% \[
-%     K_e = \frac{1}{D} \sum_{j} w_{ej} F_{ej}\, c\!\left(\frac{x_j + \varepsilon}{x_e + \varepsilon}\right),
-% \]
-% already reads void on void as shielded (ratio $\to 1$) and solid on void as unshielded (ratio $\to \varepsilon$). The gate is then redundant, and with $r = 0$:
-% \[
-%     S_e = 1 - K_e
-% \]
-% is invariant for $x \gg \varepsilon$.
-
-% \paragraph{B with $S_e = 1 - K_e$.} Regularized symmetrically,
-% \[
-%     K_e = \frac{1}{D} \sum_{j} w_{ej} F_{ej}\, \frac{x_j^{\,q} + \varepsilon}{x_e^{\,q} + \varepsilon}.
-% \]
-% A and B coincide wherever $x_e \ge x_j$ for every earlier neighbor (the cap is inactive), so on binary designs both equal the current $K_e$. They differ only for an element lighter than its support:
-% \[
-%     x_e = 0.5,\ x_j = 1,\ q = 3: \qquad c_A = 1, \qquad c_B = 8.
-% \]
-% \begin{itemize}
-%     \item B lets one dense neighbor make up for a missing direction, so a grey element on partial support reads as safe, and solidifying it reveals the hotspot --- the same hidden-until-binarized failure, moved elsewhere.
-%     \item A rates such an element exactly as it would be rated with its support solid, so the grey reading predicts the binarized one.
-%     \item B's own-density sensitivity is always active, $\partial \log K_e / \partial \log x_e = -q$; A's is zero while capped.
-%     \item $S_e$ is unbounded below ($\approx -1/\varepsilon$ for void beside earlier solid): fine for LogSumExp, which ignores it, but not for P-mean.
-% \end{itemize}
-
-% Out-of-mesh stencil positions must then count as neighbors of density $0$ rather than be dropped; otherwise void at the mesh edge reads as unshielded and no design change can fix it.
 
 \appendix
 \section{Derivation of generality of time field formulation}
