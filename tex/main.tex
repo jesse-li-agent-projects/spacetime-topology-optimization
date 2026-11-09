@@ -119,9 +119,9 @@ Each element has an elastic modulus $E_i$, interpolated with SIMP, with
 where $E_0 = 1$ is the elastic modulus of a solid element and $E_{min} = 10^{-9}$ is a small non-zero value to avoid numerical singularities in void elements.
 
 We consider the compliance $c$, given by
-\[c(\rho) = \mathbf{U}^T \mathbf{KU} = \sum^{N_e}_{i=1} E_j(\rho)_i \mathbf{u}_i^T \mathbf{k}_0 \mathbf{u}_i\]
+\[c(\rho) = \mathbf{U}^T \mathbf{KU} = \sum^{N_e}_{i=1} E_i(\rho_i) \mathbf{u}_i^T \mathbf{k}_0 \mathbf{u}_i\]
 \[\mathbf{KU} = \mathbf{f}\]
-where $N_e$ is the number of elements, $\mathbf{U}$ and $\mathbf{K}$ are the global displacement vector and stiffness matrix respectively, $\mathbf{u_j}$ is the element displacement vector for element $j$, $\mathbf{k_0}$ is the element stiffness matrix for an element with unit elastic modulus, and $\mathbf{f}$ is the global nodal force vector.
+where $N_e$ is the number of elements, $\mathbf{U}$ and $\mathbf{K}$ are the global displacement vector and stiffness matrix respectively, $\mathbf{u}_i$ is the element displacement vector for element $i$, $\mathbf{k_0}$ is the element stiffness matrix for an element with unit elastic modulus, and $\mathbf{f}$ is the global nodal force vector.
 
 \subsection{Time field formulation}
 Let $\Omega$ denote the design domain over which to optimize, and $\partial \Omega$ be the domain boundary. Let $\partial \Omega_p$ be the boundary corresponding to the build plate. Let $x$ denote the spatial coordinates.
@@ -129,8 +129,8 @@ We define the time field $t$ as the solution to the Laplace equation
 
 \begin{equation}
     \nabla\cdot\big(\chi\nabla t\big) = 0, \quad t(x) = 0 \ \forall x \in \partial \Omega_p, \quad t(x) = b(x) \ \forall x \in \partial \Omega \backslash \partial \Omega_p
+    \label{eqn:time_field_laplace}
 \end{equation}
-\label{eqn:time_field_laplace}
 
 where $b(x)$ is a nonhomogenous Dirichlet boundary condition, $\chi = \max\left(\rho^a, 10^{-5}\right)C^{\mu(x) - 0.5}$ is a non-uniform diffusivity coefficient, $\rho$ is the design density,  and $\mu(x)$ is a density-uncorrected diffusivity coefficient.
 We consider $\mu(x)$ and $b(x)$ to be design variables to optimize for.
@@ -138,8 +138,7 @@ While one can directly optimize over $\chi$ instead of $\mu$, the optimization p
 $a$ and $C$ are constant hyperparameters; we find $a=4$ and $C=1000$ to work well.
 
 A key property of this formulation is that in the interior of $\Omega$, there are no local minima or maxima.
-\autoref{sec:time_field_generality} provides a derivation that for any sufficiently smooth time field $t$ that has no interior local minim or maxima, $t$ is the solution to \autoref{eqn:time_field_laplace} for some choice of $\chi$ and $b$.
-\todo{Equation citation looks like section.number rather than just global equation number @Claude}
+\autoref{sec:time_field_generality} provides a derivation that for any sufficiently smooth time field $t$ that has no interior local minima or maxima, $t$ is the solution to \autoref{eqn:time_field_laplace} for some choice of $\chi$ and $b$.
 
 This formulation does not rule out the existence of local minima on the design space boundary, which are still problematic for physical reasons. However, in practice this rarely occurs, because a local minimum in time also tends to have high hotspot severity, as described later.
 \todo{add math reference}
@@ -168,7 +167,7 @@ where:
 
     \item $s(\rho_e, \rho_j)$ is a term ensuring lower density material contributes less to $K$:
           \[
-              s(\rho_e, \rho_j) = \min\!\left(1,\ \frac{\rho_j + \varepsilon}{\rho_e + \varepsilon}\right)^{q}, \qquad \varepsilon = 10^{-3},
+              s(\rho_e, \rho_j) = \min\!\left(1,\ \frac{\rho_j + \varepsilon_s}{\rho_e + \varepsilon_s}\right)^{q}, \qquad \varepsilon_s = 10^{-3},
           \]
           $q$ is a constant hyperparameter.
 
@@ -197,7 +196,7 @@ where:
     \label{fig:cooling_credit}
 \end{figure}
 
-The hotspot severity $S_e$ for each element is then defined with $S_e = (1 - K_e)\frac{\rho_e}{\rho_e + \varepsilon}$, where the last term is used to ensure the severity of void elements is zero.
+The hotspot severity $S_e$ for each element is then defined with $S_e = (1 - K_e)\frac{\rho_e}{\rho_e + \varepsilon_S}$, where the last term is used to ensure the severity of void elements is zero.
 
 We wish to constrain the maximum severity across the entire part. To do this smoothly, we aggregate over the part with the KS function\footnote{We choose the KS function to preserve translation equivariance. Alternatively, $p$-norm aggregation could be used, which would preserve scale equivariance; however, here $S$ is already normalized to be of order 1 so translation equivariance is more important.}:
 \[S = \delta_S + \frac{1}{\beta_S} \ln \sum_{j \in \Omega} e^{\beta_S S_j} \]
@@ -215,13 +214,13 @@ We optimize over density field $\rho$ and time-field design variables $\mu$ and 
     + w_\Phi \Phi(\rho, t)
     + w_S S\big(\operatorname{sg}[\rho], \mu, b\big)
     \quad\text{s.t.}\quad
-    g_V = \frac{V(\rho)}{\bar V} - 1 \le 0.
+    g_V = \frac{1}{N_e \bar V}\sum_e \rho_e - 1 \le 0.
 \]
 \begin{itemize}
     \item $c(\rho)$ is the compliance. We optimize $\log c(\rho)$ so that gradients are scale-invariant and weighting hyperparameters generalize better across different problems.
     \item $U(\rho, t)$ is the density-weighted coefficient of variation of the time gradient $g=\abs{\nabla t}$ and acts as a layer uniformity regularizer:
           \[
-              U(\rho, t) = \frac{\sqrt{\sigma^2 + \varepsilon m^2}}{m},
+              U(\rho, t) = \frac{\sqrt{\sigma^2 + \varepsilon_U m^2}}{m},
               \qquad
               m = \frac{\sum_j \rho_j g_j}{\sum_j \rho_j},
               \qquad
@@ -231,11 +230,9 @@ We optimize over density field $\rho$ and time-field design variables $\mu$ and 
           \[
               \Phi(\rho, t) = \frac{1}{N_e} \sum_{e} \rho_e \frac{1}{\beta_\Phi} \mathrm{softplus}\big(\beta_\Phi (S_e - T_{cr})\big), \qquad \mathrm{softplus}(x) = \ln \left(1 + e^x\right)
           \]
-          where $N_e$ is the number of elements and $\beta_\Phi$ controls the sharpness of softplus.
-          \todo{$N_e$ can probably be introduced earlier @Claude}. This penalty formulation uses gradient pressure to removing density wherever an element has severity $S_e$ exceeding $T_{cr}$, while applying near zero pressure wherever $S_e < T_{cr}$, so it shapes the optimization dynamics with little effect on the optimum.
+          where $\beta_\Phi$ controls the sharpness of softplus. This penalty formulation uses gradient pressure to remove density wherever an element has severity $S_e$ exceeding $T_{cr}$, while applying near zero pressure wherever $S_e < T_{cr}$, so it shapes the optimization dynamics with little effect on the optimum.
     \item $S(\operatorname{sg}[\rho], \mu, b)$ is the hotspot severity and its addition to the optimization objective pressures the time field to minimize the hotspot severity even when $S_e \leq T_{cr}$. $\operatorname{sg}[\cdot]$ denotes a stop-gradient (detaching $\rho$'s gradients); this includes the dependence of $t$ on $\rho$ through $\chi$. The purpose of this term is to optimize the time field first to reduce $S_e$, and only have the hotspot severity constraint influence $\rho$ if modifying the time field is insufficient to avoid overheating.
-    \item $g_V$ is the volume fraction constraint, with $V(\rho) = \frac{1}{N_e} \sum_{e} \rho_e$ and $\bar V$ the maximum volume fraction.
-          \todo{inline V(\rho) @Claude}
+    \item $g_V$ is the volume fraction constraint, with $\bar V$ the maximum volume fraction.
     \item $w_u$, $w_\Phi$, and $w_S$ are weighting hyperparameters controlling the relative strengths of their associated terms.
 \end{itemize}
 
@@ -246,7 +243,40 @@ It is ineffective to encode this intuition as a hard constraint with a different
 
 \section{Results}
 % (4 pages). Description of execution and findings.
-\todo{Add table full of hyperparameter settings. Make sure each $\varepsilon$ is given a unique subscript, which requires going back thru earlier steps. @Claude}
+\autoref{tab:hyperparameters} lists the hyperparameter settings used for all results. Scheduled parameters are interpolated linearly (or logarithmically, where noted) between the listed iterations.
+
+\begin{table}[ht!]
+    \centering
+    \caption{Hyperparameter settings (\texttt{configs/laplace\_default.json}), for $n_\mathrm{loop} = 750$ iterations and $\bar V = 0.5$.}
+    \label{tab:hyperparameters}
+    \begin{tabular}{llll}
+        \toprule
+        Symbol            & Description                             & Value                                    & Schedule                                \\
+        \midrule
+        $p$               & SIMP penalization                       & $2 \to 5$                                & iterations 0--450                       \\
+        $\beta$           & Heaviside projection sharpness          & $2 \to 8$                                & iterations 450--550 (log)               \\
+        $r_f$             & density filter radius                   & \SI{4}{mm}                               &                                         \\
+        $a$               & diffusivity density exponent            & 4                                        &                                         \\
+        $C$               & diffusivity contrast                    & 1000                                     &                                         \\
+        $r_K$             & heat evacuation neighbourhood radius    & \SI{12}{mm}                              &                                         \\
+        $\kappa$          & angular weight anisotropy               & $0 \to 2.37$                             & iterations 0--450                       \\
+        $g_0$             & angular weight isotropy scale           & \SI{0.674}{\per\metre}                   &                                         \\
+        $k$               & cooling credit sharpness                & $1 \to 8$                                & iterations 0--450 (log)                 \\
+        $\tau$            & cooling credit time scale               & 0.01                                     &                                         \\
+        $q$               & shielding exponent                      & 2                                        &                                         \\
+        $\varepsilon_s$   & shielding ratio regularization          & $10^{-3}$                                &                                         \\
+        $\varepsilon_S$   & void severity mask threshold            & $10^{-3}$                                &                                         \\
+        $\varepsilon_U$   & uniformity regularization               & $10^{-12}$                               &                                         \\
+        $\beta_S$         & severity aggregation sharpness          & 100                                      &                                         \\
+        $\alpha$          & calibration moving-average rate         & 0.1                                      &                                         \\
+        $T_{cr}$          & maximum acceptable severity             & $1 \to 0.4$                              & iterations 0--150                       \\
+        $\beta_\Phi$      & hotspot penalty sharpness               & 100                                      &                                         \\
+        $w_u$             & layer uniformity weight                 & 0.1                                      &                                         \\
+        $w_\Phi$          & hotspot penalty weight                  & 100                                      &                                         \\
+        $w_S$             & hotspot severity weight                 & 0.3                                      &                                         \\
+        \bottomrule
+    \end{tabular}
+\end{table}
 
 \subsection{Simultaneous optimizaion ensures features are thick enough to avoid overheating}
 \todo{Comparison between sequential and simultaneous optimization; this should include a mention of compute time}
