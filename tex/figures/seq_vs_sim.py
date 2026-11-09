@@ -193,10 +193,10 @@ def figure(path: Path, device: str | None) -> None:
         (sim, _title("Simultaneous", sim, seq)),
     )
 
-    # Red above Tcr, blue below, white at it; the low side clips, as the high side is the
+    # Excess severity: red above Tcr, blue below, white at it; the low side clips, as the high side is the
     # quantity of interest
-    top = max(seq["max_severity"], sim["max_severity"])
-    sev_norm = TwoSlopeNorm(vcenter=Tcr, vmin=Tcr - (top - Tcr), vmax=top)
+    top = max(seq["max_severity"], sim["max_severity"]) - Tcr
+    sev_norm = TwoSlopeNorm(vcenter=0, vmin=-top, vmax=top)
     sev_cmap = matplotlib.colormaps["RdBu_r"].with_extremes(bad=VOID_GRAY)
 
     nely, nelx = seq["xPhys"].shape
@@ -213,7 +213,9 @@ def figure(path: Path, device: str | None) -> None:
             res["xPhys"], res["tPhys"], 20, show_void=True, colorbar=False, ax=time
         )
         severity.imshow(
-            np.where(shown & np.isfinite(res["severity"]), res["severity"], np.nan),
+            np.where(
+                shown & np.isfinite(res["severity"]), res["severity"] - Tcr, np.nan
+            ),
             cmap=sev_cmap,
             norm=sev_norm,
             extent=(0, nelx, -nely, 0),
@@ -233,7 +235,7 @@ def figure(path: Path, device: str | None) -> None:
             ),
             "time field",
         ),
-        (2, ScalarMappable(sev_norm, sev_cmap), "hotspot severity"),
+        (2, ScalarMappable(sev_norm, sev_cmap), "excess severity\n$S_e - T_{cr}$"),
     ):
         fig.colorbar(
             mappable,
