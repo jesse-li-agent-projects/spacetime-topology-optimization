@@ -280,7 +280,14 @@ It is ineffective to encode this intuition as a hard constraint with a different
 
 \subsection{Simultaneous optimizaion ensures features are thick enough to avoid overheating}
 \todo{Comparison between sequential and simultaneous optimization; this should include a mention of compute time}
-\autoref{fig:seq_vs_simultaneous} contrasts simultaneous and sequential optimization of the density and time fields. In \autoref{fig:seq_vs_simulatneous:seq}, becauuse the density optimizer is unaware of the overheating, it forms thin members which are prone to overheating. \autoref{fig:seq_vs_simulatneous:sim}, in contrast, forms thick enough members to stay within the hotspot severity constraint.
+\autoref{fig:seq_vs_simultaneous} contrasts simultaneous and sequential optimization of the density and time fields. In the sequential design (left), because the density optimizer is unaware of the overheating, it forms thin members which are prone to overheating. The simultaneous design (right), in contrast, forms thick enough members to stay within the hotspot severity constraint.
+
+\begin{figure}[ht!]
+    \centering
+    \includegraphics[width=\textwidth]{figures/seq_vs_sim.pdf}
+    \caption{Sequential (left) and simultaneous (right) optimization of the density and the time field, for a cantilever with $\bar V = 0.5$ and $T_{cr} = 0.4$. Rows: density, time field with the void shaded gray, and excess severity $S_e - T_{cr}$ (void gray), all read on the density as optimized. The sequential design is a compliance-only topology optimization followed by optimization of the time field alone on its fixed density.}
+    \label{fig:seq_vs_simultaneous}
+\end{figure}
 
 \subsection{Our time field formulation robustly avoids local minima and maxima in time}
 
