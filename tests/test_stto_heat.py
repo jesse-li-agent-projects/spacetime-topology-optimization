@@ -165,3 +165,25 @@ def test_a_half_plane_plate_leaves_nothing_exempt():
         torch.rand(10, 30, dtype=torch.float64),
     )
     assert torch.isfinite(K).all()
+
+
+@pytest.mark.filterwarnings("ignore:subsolv:RuntimeWarning")
+def test_the_hotspot_row_can_stay_out_of_the_constraint_stack():
+    """Still measured: the time-only objective reads its sensitivity either way."""
+    kept = stto_heat.run(_config(nloop=1), device="cpu").records[0]
+    left_out = stto_heat.run(
+        _config(nloop=1, hotspot_constraint=False), device="cpu"
+    ).records[0]
+    assert len(left_out.g) == len(kept.g) - 1
+    assert len(left_out.dg) == len(left_out.g)
+    assert np.allclose(left_out.df, kept.df)
+
+
+@pytest.mark.filterwarnings("ignore:subsolv:RuntimeWarning")
+def test_the_diffusivity_has_its_own_move_limit():
+    config = _config(nloop=1, move=0.02, field_move=0.002)
+    result = stto_heat.run(config, device="cpu")
+    start = stto_heat.init_state(stto_heat.build_problem(config, device="cpu"))
+    step_mu = (result.state.mu - start.mu).abs().max()
+    step_x = (result.state.x - start.x).abs().max()
+    assert step_mu <= 0.002 + 1e-12 < step_x <= 0.02 + 1e-12

@@ -218,6 +218,8 @@ def test_the_shared_base_leaves_stto_only_the_fields_the_pde_replaces():
         "lrmin_m",
         "tmove",
         "time_init",
+        "hotspot_constraint",  # `stto_laplace` has no hotspot row to opt out of
+        "log_compliance",  # `stto_heat` and `stto_laplace` always take it
     }
 
 

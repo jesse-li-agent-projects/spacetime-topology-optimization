@@ -1139,3 +1139,32 @@ def test_a_domain_short_of_the_mesh_refuses_what_assumes_the_whole_mesh(
 def test_a_half_plane_plate_needs_a_plate_along_an_edge(tfield):
     with pytest.raises(ValueError, match="starts from a corner"):
         _problem(tfield=tfield, config_overrides={"hotspot_plate": "half_plane"})
+
+
+@pytest.mark.filterwarnings("ignore:subsolv:RuntimeWarning")
+def test_the_hotspot_row_can_stay_out_of_the_constraint_stack():
+    """Still measured: the time-only objective reads its sensitivity either way."""
+    config = default_run_config(nelx=30, nely=10, nloop=1)
+    kept = stto.run(config, device="cpu").records[0]
+    left_out = stto.run(
+        dataclasses.replace(config, hotspot_constraint=False), device="cpu"
+    ).records[0]
+    assert len(left_out.g) == len(kept.g) - 1
+    assert len(left_out.dg) == len(left_out.g)
+    assert np.allclose(left_out.df, kept.df)
+
+
+@pytest.mark.filterwarnings("ignore:subsolv:RuntimeWarning")
+def test_the_objective_can_take_the_log_of_the_compliance():
+    config = default_run_config(
+        nelx=30,
+        nely=10,
+        nloop=1,
+        nStage=0,
+        Theta=0.0,
+        uniformity_weight=0.0,
+        roughness_weight=0.0,
+        log_compliance=True,
+    )
+    record = stto.run(config, device="cpu").records[0]
+    assert record.f == pytest.approx(np.log(record.obj))
