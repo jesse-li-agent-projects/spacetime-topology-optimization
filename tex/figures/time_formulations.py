@@ -59,8 +59,9 @@ def _save(fig: plt.Figure, path: Path) -> None:
 
 
 def _draw_setup(ax: Axes, problem) -> None:
-    """The domain, its clamped nodes, the loads, the build plate and gravity, read from
-    `problem` rather than restated, so the panel follows the load case."""
+    """The domain, its clamped nodes, the loads, the build plate and, where the objective
+    has gravity stages, gravity, read from `problem` rather than restated, so the panel
+    follows the load case."""
     nelx, nely = problem.config.nelx, problem.config.nely
     grid = (nely + 1, nelx + 1)
     # Node (row, col) sits at (col, -row), as `designs` draws elements
@@ -118,17 +119,18 @@ def _draw_setup(ax: Axes, problem) -> None:
             annotation_clip=False,
             arrowprops=dict(arrowstyle="-|>", color=MARK, lw=1.0, mutation_scale=7),
         )
-    gx = nelx * 1.2
-    ax.annotate(
-        "$g$",
-        xy=(gx, -0.75 * nely),
-        xytext=(gx, -0.45 * nely),
-        ha="center",
-        va="bottom",
-        fontsize=7,
-        annotation_clip=False,
-        arrowprops=dict(arrowstyle="-|>", color=INK, lw=0.8, mutation_scale=6),
-    )
+    if problem.config.nStage > 0:
+        gx = nelx * 1.2
+        ax.annotate(
+            "$g$",
+            xy=(gx, -0.75 * nely),
+            xytext=(gx, -0.45 * nely),
+            ha="center",
+            va="bottom",
+            fontsize=7,
+            annotation_clip=False,
+            arrowprops=dict(arrowstyle="-|>", color=INK, lw=0.8, mutation_scale=6),
+        )
     ax.set_xlim(0, nelx)
     ax.set_ylim(-nely, 0)
     ax.set_aspect("equal")
