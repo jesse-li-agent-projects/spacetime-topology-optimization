@@ -301,8 +301,22 @@ It is ineffective to encode this intuition as a hard constraint with a different
 
 \begin{figure}[ht!]
     \centering
-    \includegraphics[width=\textwidth]{figures/time_formulations.pdf}
-    \caption{Three time field formulations (harmonic, drained heat, and directly optimized) on the corner-loads problem with $\bar V = 0.3$ and $T_{cr} = 0.6$, with all else on the same schedule. Left: density and time field optimized together. Right: only the time field optimized, on the density of the harmonic design. Rows: density, time field with the void shaded gray, and excess severity $S_e - T_{cr}$ (void gray), read on the density as optimized. Below each design: compliance $c$ relative to the harmonic design, its highest severity, and the number of local minima and saddles of the time field over the part.}
+    \begin{subfigure}[b]{0.32\textwidth}
+        \includegraphics[width=\textwidth]{figures/tf_setup.pdf}
+        \caption{Loads, supports and build plate}
+        \label{fig:tf_setup}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \includegraphics[width=\textwidth]{figures/tf_direct.pdf}
+        \caption{Direct, with continuity}
+        \label{fig:tf_direct}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \includegraphics[width=\textwidth]{figures/tf_laplace.pdf}
+        \caption{Laplace}
+        \label{fig:tf_laplace}
+    \end{subfigure}
+    \caption{Time fields optimized on a fixed density (the corner-loads problem, $\bar V = 0.3$, $T_{cr} = 0.6$), with the void shaded gray. Circles mark local minima of the time field over the part, and crosses its saddles.}
     \label{fig:time_formulations}
 \end{figure}
 
