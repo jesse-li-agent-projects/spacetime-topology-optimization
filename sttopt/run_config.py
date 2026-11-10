@@ -413,6 +413,13 @@ class RunConfig(SpaceTimeConfig):
     Hyperparameters of a `stto` run, where the time field is a design variable of its
     own, mirroring `stto.build_problem`'s parameters.
 
+    :param hotspot_constraint: whether the hotspot row is in the MMA constraint stack.
+        The hotspot is measured either way, for the time-only objective and the
+        diagnostics; `False` leaves it to the shaping term and that objective, as
+        `stto_laplace` does.
+    :param log_compliance: whether the objective takes the log of the compliance terms,
+        as `stto_heat` and `stto_laplace` always do, so the time-field weights act
+        relative to the compliance (PR #189) and carry over between the problems.
     :param enable_stage_volume: whether the per-stage volume bounds
         (`constraints.stage_volume_bounds`) are in the MMA constraint stack at all.
         `nStage` still sets the `Theta`-weighted stage compliances either way. Keep it
@@ -440,6 +447,8 @@ class RunConfig(SpaceTimeConfig):
     lrmin_m: float
     tmove: Scheduled
     time_init: str = "ramp"
+    hotspot_constraint: bool = True
+    log_compliance: bool = False
 
 
 # The print bases a virtual-heat time field supports: a build plate along a whole edge.
@@ -498,6 +507,9 @@ class HeatRunConfig(SpaceTimeConfig):
     :param chi_contrast: the diffusivity range, `chi(mu) = chi_contrast**(mu - 1/2)` for
         a design variable `mu` on `[0, 1]`.
     :param time_map: a `HeatTimeMap` member value.
+    :param field_move: MMA trust-region half-width on `mu`, possibly scheduled, as in
+        `LaplaceRunConfig`. `None` uses `move`, the density's.
+    :param hotspot_constraint: as in `RunConfig`.
     :param heat_cg_rtol: relative-residual tolerance of the heat solve.
     :param poisson_cg_rtol: relative-residual tolerance of the Poisson solve of the
         `poisson` time map.
@@ -509,6 +521,8 @@ class HeatRunConfig(SpaceTimeConfig):
     heat_cg_rtol: float
     poisson_cg_rtol: float
     penalize_conduction: bool = False
+    field_move: Scheduled | None = None
+    hotspot_constraint: bool = True
 
     def __post_init__(self) -> None:
         super().__post_init__()

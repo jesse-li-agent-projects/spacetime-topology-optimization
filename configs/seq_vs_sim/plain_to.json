@@ -1,0 +1,173 @@
+{
+  "nloop": 750,
+  "width_m": 0.18,
+  "height_m": 0.06,
+  "nelx": 180,
+  "load_length_m": 0.001,
+  "load_case": "cantilever",
+  "support_length_m": 0.004,
+  "volfrac": 0.5,
+  "nStage": 0,
+  "Theta": 0.0,
+  "uniformity_metric": "gradient_cv",
+  "uniformity_weight": 0.0,
+  "roughness_weight": 0.0,
+  "Tcr": {
+    "points": [
+      [
+        0,
+        1.0
+      ],
+      [
+        150,
+        0.4
+      ]
+    ],
+    "mode": "linear"
+  },
+  "hotspot_normalization": "half_stencil",
+  "hotspot_aggregation": "logsumexp",
+  "hotspot_beta": 100.0,
+  "hotspot_kappa": {
+    "points": [
+      [
+        0,
+        0.0
+      ],
+      [
+        450,
+        2.3666
+      ]
+    ],
+    "mode": "linear"
+  },
+  "hotspot_g0_per_m": 0.6736,
+  "hotspot_weight": 0.0,
+  "calibration_rate": 0.1,
+  "hotspot_credit": "cooling",
+  "hotspot_tie_credit": 0.5,
+  "hotspot_shielding": "capped_ratio",
+  "hotspot_shielding_eps": 0.001,
+  "hotspot_shaping_weight": 0.0,
+  "hotspot_shaping_sharpness": 100.0,
+  "hotspot_cooling_time": 0.01,
+  "hotspot_cooling_sharpness": {
+    "points": [
+      [
+        0,
+        1.0
+      ],
+      [
+        450,
+        8.0
+      ]
+    ],
+    "mode": "log"
+  },
+  "hotspot_plate": "half_plane",
+  "hotspot_reference": "thin_layer",
+  "print_base": "left_edge",
+  "rmin_m": 0.004,
+  "tool_radius_m": 0.0,
+  "curvature_beta": {
+    "points": [
+      [
+        0,
+        10.0
+      ]
+    ],
+    "mode": "linear"
+  },
+  "min_gradient_fraction": 0.0,
+  "min_gradient_beta": 20.0,
+  "gradient_smoothness_m": 0.0,
+  "gradient_smoothness_beta": 20.0,
+  "rmin_cond_m": 0.012,
+  "Emin": 1e-09,
+  "Emax": 1.0,
+  "nu": 0.3,
+  "penal": {
+    "points": [
+      [
+        0,
+        2.0
+      ],
+      [
+        450,
+        5.0
+      ]
+    ],
+    "mode": "linear"
+  },
+  "eta": 0.5,
+  "p": 25.0,
+  "q": 2.0,
+  "r": {
+    "points": [
+      [
+        0,
+        0.5
+      ]
+    ],
+    "mode": "linear"
+  },
+  "rouf": 100.0,
+  "a0": 1.0,
+  "mma_c": 2500.0,
+  "raa0_total": 0.216,
+  "move": {
+    "points": [
+      [
+        0,
+        0.02
+      ]
+    ],
+    "mode": "linear"
+  },
+  "beta_d_schedule": {
+    "points": [
+      [
+        0,
+        2.0
+      ],
+      [
+        450,
+        2.0
+      ],
+      [
+        550,
+        8.0
+      ]
+    ],
+    "mode": "log"
+  },
+  "beta_t_schedule": {
+    "points": [
+      [
+        0,
+        10.0
+      ],
+      [
+        450,
+        50.0
+      ]
+    ],
+    "mode": "linear"
+  },
+  "chi_contrast": 1000.0,
+  "time_map": "identity",
+  "laplace_cg_rtol": 1e-08,
+  "poisson_cg_rtol": 1e-08,
+  "wall_filter_rmin_m": 0.004,
+  "field_move": 0.002,
+  "chi_density_exponent": {
+    "points": [
+      [
+        0,
+        4.0
+      ]
+    ],
+    "mode": "linear"
+  },
+  "chi_density_floor": 1e-05
+}

@@ -54,6 +54,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "iterations (default: 50)",
     )
     parser.add_argument(
+        "--fixed-density",
+        type=Path,
+        metavar="RUN_DIR",
+        help="hold the final density of the run in this output/<tag> directory fixed, "
+        "optimizing only the time field on it (see sttopt/fixed_density.py)",
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="continue the run in output/<tag> from its last checkpoint, with that "
@@ -94,6 +101,7 @@ def main(args: argparse.Namespace) -> None:
     import numpy as np
 
     import sttopt.checks as checks
+    import sttopt.fixed_density as fixed_density
     import sttopt.stto as stto
     import sttopt.torch_util as torch_util
 
@@ -109,6 +117,14 @@ def main(args: argparse.Namespace) -> None:
             raise SystemExit(f"[error] {checkpoint_path} does not exist.")
         args.config = output_dir / "config.json"
     config = resolve_config(args)
+    fixed = None
+    if args.fixed_density is not None:
+        if args.resume:
+            raise SystemExit(
+                "[error] --fixed-density cannot be combined with --resume."
+            )
+        fixed = fixed_density.FixedDensity.load(args.fixed_density)
+        config = fixed.pin(config)
 
     assert config.nloop > 0, "Number of iterations must be positive"
 
@@ -136,6 +152,8 @@ def main(args: argparse.Namespace) -> None:
         log_path.write_text("".join(line + "\n" for line in entries))
     else:
         state = stto.init_state(problem)
+        if fixed is not None:
+            state = fixed.hold(state)
         elapsed_before = 0.0
         log_path.write_text("")
 
@@ -143,7 +161,11 @@ def main(args: argparse.Namespace) -> None:
     with log_path.open("a") as log:
         for it in range(state.loop, config.nloop):
             state, record = stto.step(problem, state)
+            if fixed is not None:
+                state = fixed.hold(state)
             xPhys, tPhys = stto.physical_fields(problem, state.x, state.t, state.beta_d)
+            if fixed is not None and it == 0:
+                fixed.check(torch_util.to_numpy(xPhys))
             diag = record.diagnostics
             vol = float(xPhys[problem.active].mean())
             print(

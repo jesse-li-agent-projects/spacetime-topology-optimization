@@ -545,7 +545,9 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
         f_val_t = f_val_t + config.Theta * cg_t
     stage_obj = config.Theta * sum(float(cg_t.detach()) for cg_t in stage_cs)
 
-    objective = problem.terms.objective(f_val_t, xPhys, tPhys, loop)
+    objective = problem.terms.objective(
+        torch.log(f_val_t) if config.log_compliance else f_val_t, xPhys, tPhys, loop
+    )
     f_val_t = objective.value
 
     f_val = float(f_val_t.detach())
@@ -569,11 +571,14 @@ def step(problem: Problem, state: State) -> tuple[State, IterationRecord]:
     tru_max = (float(g_hotspot_t.detach()) + 1) * Tcr
     tool_radius_m = run_config.weight_at(config.tool_radius_m, loop)
 
-    g_all = torch.cat(list(g_parts.values()))
     # Per part, not on `g_all`: a row of the stack would also backpropagate zeros
     # through every other part's graph, the hotspot's included (~35% slower per step, PR #173).
     g_rows = {name: _sensitivity_rows(g, x, t) for name, g in g_parts.items()}
-    dg_dx = torch.cat(list(g_rows.values()), dim=0)
+    # The hotspot is measured either way, for the time-only objective; the option is
+    # whether MMA also sees it as a constraint row.
+    stacked = [n for n in g_parts if config.hotspot_constraint or n != "hotspot"]
+    g_all = torch.cat([g_parts[n] for n in stacked])
+    dg_dx = torch.cat([g_rows[n] for n in stacked], dim=0)
     hotspot_weight = problem.terms.add_time_only_hotspot(
         df_dx, g_rows["hotspot"][0], nel, loop
     )

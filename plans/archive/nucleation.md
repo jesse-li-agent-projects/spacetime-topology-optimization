@@ -1,6 +1,6 @@
 # Nucleation: material grown as "artificial support" for a hot spot
 
-**Closed, unsolved (user, 2026-11-03):** `stto` is retired (`retire_stto.md`).
+**Closed, unsolved (user, 2026-11-03):** `stto` is folded into `stto_laplace`'s variants (`fold_stto_into_laplace.md`).
 
 Status and handoff as of 2026-10-18. No code change is agreed yet. Ask the user before
 any design decision this plan does not make. The user is open to radical changes, e.g.
