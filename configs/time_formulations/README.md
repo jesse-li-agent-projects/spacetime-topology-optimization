@@ -26,3 +26,9 @@ python -m sttopt.stto_laplace_cli --config configs/time_formulations/laplace.jso
 python -m sttopt.stto_heat_cli    --config configs/time_formulations/heat.json    --tag tf_S03bT06_heat_fixed    --fixed-density output/tf_S03bT06_laplace
 python -m sttopt.stto_cli         --config configs/time_formulations/direct.json  --tag tf_S03bT06_direct_fixed  --fixed-density output/tf_S03bT06_laplace
 ```
+
+`direct_continuity.json` is `direct.json` with the MATLAB source's time-field continuity constraint (`enable_continuity`, at its tolerance), as the direct formulation is usually stated; the figure's direct panel is this run:
+
+```
+python -m sttopt.stto_cli --config configs/time_formulations/direct_continuity.json --tag tf_S03bT06_direct_continuity_fixed --fixed-density output/tf_S03bT06_laplace
+```
