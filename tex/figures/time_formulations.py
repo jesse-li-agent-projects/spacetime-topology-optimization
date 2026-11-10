@@ -1,7 +1,7 @@
 """The time-field formulations on S03bT06, as three subfigure panels: the problem setup,
 then the time field of the direct and of the Laplace formulation, each optimized on the
-Laplace run's grayscale density. Local minima and saddles of the time field over the
-part are marked.
+Laplace run's grayscale density. Local minima of the time field over the part, the
+elements printed without support, are circled.
 
 Reads `output/tf_S03bT06_*`, made as in `configs/time_formulations/README.md`. Every
 panel has one page size and plot box, so they line up side by side in `main.tex`; the
@@ -137,18 +137,23 @@ def _draw_setup(ax: Axes, problem) -> None:
     ax.set_axis_off()
 
 
-def _mark_defects(ax: Axes, d: designs.Design, problem) -> None:
-    """Local minima (circles) and saddles (crosses) of the time field over the part,
-    as `designs.evaluate` counts them."""
+def _mark_minima(ax: Axes, d: designs.Design, problem) -> None:
+    """Circles the local minima of the time field over the part, as `designs.evaluate`
+    counts them."""
     solid = d.xPhys > problem.config.eta
     base = torch_util.to_numpy(problem.Nei)
-    style = dict(s=14, linewidths=0.8, zorder=10, clip_on=False)
     r, c = np.nonzero(checks.unsupported(solid, d.tPhys, base))
     ax.scatter(
-        c + 0.5, -r - 0.5, marker="o", facecolors="none", edgecolors=MARK, **style
+        c + 0.5,
+        -r - 0.5,
+        marker="o",
+        s=30,
+        facecolors="none",
+        edgecolors=MARK,
+        linewidths=1.0,
+        zorder=10,
+        clip_on=False,
     )
-    r, c = np.nonzero(checks.saddles(d.tPhys, solid, solid))
-    ax.scatter(c + 0.5, -r - 0.5, marker="x", c=MARK, **style)
 
 
 def build(out_dir: Path, *, device: str | None = None) -> None:
@@ -164,7 +169,7 @@ def build(out_dir: Path, *, device: str | None = None) -> None:
         fig, ax = _panel()
         # `t` is 1 at its maximum over the part; the void can run later, shown as 1
         designs.draw_time(ax, dataclasses.replace(d, tPhys=np.minimum(d.tPhys, 1)))
-        _mark_defects(ax, d, problem)
+        _mark_minima(ax, d, problem)
         if name == PANELS[-1][0]:
             w, h = FIGSIZE_IN
             x = (MARGIN_IN[0] + BOX_IN + 0.06) / w
