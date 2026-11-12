@@ -31,6 +31,7 @@ def _clamped_nodes(freedofs, ndof):
         (LoadCase.CANTILEVER, (0.0, -1.0)),
         (LoadCase.CORNER_LOADS, (0.0, -np.sqrt(2))),
         (LoadCase.EDGE_TRACTION, (1.0, 0.0)),
+        (LoadCase.MBB, (0.0, -1.0)),
         (LoadCase.L_BRACKET_CORNER, (1.0, 0.0)),
         (LoadCase.L_BRACKET_MIDDLE, (1.0, 0.0)),
     ],
@@ -57,6 +58,46 @@ def test_left_edge_cases_clamp_the_whole_left_edge(case):
     F, freedofs = load_cases.load_case(case, nelx, nely, 0.0, 0.0, 1.0)
     np.testing.assert_array_equal(
         _clamped_nodes(freedofs, len(F)), np.sort(fem.node_grid(nelx, nely)[:, 0])
+    )
+
+
+def test_mbb_holds_the_left_edge_in_x_and_rolls_on_its_bottom_right_patch():
+    nelx, nely = 6, 4
+    F, freedofs = load_cases.load_case(LoadCase.MBB, nelx, nely, 0.0, 2.0, 1.0)
+    nodes = fem.node_grid(nelx, nely)
+    fixed = np.setdiff1d(np.arange(len(F)), freedofs)
+    expected = np.concatenate([2 * nodes[:, 0], 2 * nodes[-1, -3:] + 1])
+    np.testing.assert_array_equal(fixed, np.sort(expected))
+    assert np.flatnonzero(F) == [2 * nodes[0, 0] + 1]
+
+
+def _solid_compliance(nelx, nely, F, freedofs):
+    edof = fem.element_dof_map(nelx, nely)
+    KE = fem.plane_stress_KE(0.3)
+    K = np.zeros((len(F), len(F)))
+    for e in edof:
+        K[np.ix_(e, e)] += KE
+    f = freedofs
+    U = np.linalg.solve(K[np.ix_(f, f)], F[f])
+    return F[f] @ U
+
+
+def test_mbb_is_half_of_a_simply_supported_beam():
+    """The full beam, pinned and on a roller at its bottom corners and loaded at the
+    top of mid-span by twice the half's load, is two mirrored halves, so twice the
+    half's compliance."""
+    nelx, nely = 8, 4
+    F, freedofs = load_cases.load_case(LoadCase.MBB, nelx, nely, 0.0, 0.0, 1.0)
+    nodes = fem.node_grid(2 * nelx, nely)
+    F_full = np.zeros(2 * nodes.size)
+    F_full[2 * nodes[0, nelx] + 1] = -2.0
+    pin, roller = nodes[-1, 0], nodes[-1, -1]
+    fixed = [2 * pin, 2 * pin + 1, 2 * roller + 1]
+    free_full = np.setdiff1d(np.arange(len(F_full)), fixed)
+    np.testing.assert_allclose(
+        _solid_compliance(2 * nelx, nely, F_full, free_full),
+        2 * _solid_compliance(nelx, nely, F, freedofs),
+        rtol=1e-10,
     )
 
 
@@ -95,8 +136,8 @@ def test_run_config_defaults_to_cantilever_for_records_without_a_load_case():
 
 
 def test_run_config_rejects_an_unknown_load_case():
-    with pytest.raises(ValueError, match="mbb"):
-        dataclasses.replace(default_run_config(), load_case="mbb")
+    with pytest.raises(ValueError, match="bridge"):
+        dataclasses.replace(default_run_config(), load_case="bridge")
 
 
 @pytest.mark.parametrize(

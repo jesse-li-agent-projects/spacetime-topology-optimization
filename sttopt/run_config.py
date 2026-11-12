@@ -220,10 +220,10 @@ class SpaceTimeConfig(_ConfigMixin):
     :param height_m: design domain height; must be a whole number of elements.
     :param nelx: element count across `width_m`, the mesh resolution.
     :param load_length_m: span of each corner load of `load_case`, a uniform traction
-        of unit total force along the right edge from its corner. `0` is a point load on
+        of unit total force along its edge from its corner. `0` is a point load on
         the corner node, whose compliance grows as `log(1 / h)` under refinement.
     :param load_case: a `load_cases.LoadCase` member value.
-    :param support_length_m: span of each clamped patch, for a `load_case` that has
+    :param support_length_m: span of each support patch, for a `load_case` that has
         patches.
     :param print_base: 3D-printing base/start location, naming a
         `timefield.TimeField` member (case-insensitively) for JSON.
