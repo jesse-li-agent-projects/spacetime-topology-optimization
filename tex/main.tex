@@ -3,6 +3,7 @@
 \usepackage{amsmath, amssymb}
 \usepackage{amsthm}
 \newtheorem{proposition}{Proposition}
+\providecommand*{\propositionautorefname}{Proposition}
 \usepackage{multirow, makecell}
 
 \usepackage{textcomp} % for copyright/registered symbols
@@ -188,8 +189,14 @@ where:
           \]
           for any element $e$, with $g_0 = 0$. Note that this normalization means $K_e$ can exceed 1 for some elements.
 \end{itemize}
-\todo{@Claude create a visualization to show how material outside the design domain is treated - specifically, half-plane below build plate is treated as solid material printed at t=-infinity, space elsewhere treated as void. Below paragraph should reference figure}
-To ensure the formulation of $K_e$ is sensible at the design domain boundaries, we consider the space below the build plate to be an infinite half-plane of solid material, and all other volume outside the design volume to be void, both printed at $t=-\infty$.
+To ensure the formulation of $K_e$ is sensible at the design domain boundaries, we consider the space below the build plate to be an infinite half-plane of solid material, and all other volume outside the design volume to be void, both printed at $t=-\infty$, as shown in \autoref{fig:outside_domain}.
+
+\begin{figure}[ht!]
+    \centering
+    \includegraphics[width=0.6\textwidth]{figures/outside_domain.pdf}
+    \caption{Placeholder caption: treatment of space outside the design domain when computing $K_e$, for an element $e$ whose neighbourhood $V_e$ extends past the domain boundary.}
+    \label{fig:outside_domain}
+\end{figure}
 
 \begin{figure}[ht!]
     \centering
@@ -291,7 +298,12 @@ It is ineffective to encode this intuition as a hard constraint with a different
 \label{sec:sim_vs_seq}
 As a test problem, we consider a cantilever beam with a tip load, with a mesh size of 180 by 60, shown in \autoref{fig:c1_load}. The build plate is on the left edge where the cantilever is fixed. This load case is similar to the standard half-MBB problem, but modified slightly to make the print direction sensible (otherwise, the symmetric boundary condition in a typical MBB problem would imply building the material starting from the middle of the beam).
 
-\todo{@Claude Add a diagram of loads, print plate, etc. for the cantilever beam problem}
+\begin{figure}[ht!]
+    \centering
+    \includegraphics{figures/cantilever_setup.pdf}
+    \caption{Placeholder caption: the cantilever beam load case, with the build plate along the clamped left edge and a downward tip load at the bottom-right corner.}
+    \label{fig:c1_load}
+\end{figure}
 
 \begin{figure}[ht!]
     \centering
@@ -321,7 +333,6 @@ We compare three different formulations for the time field:
 All time fields are initialized as linear ramps from the bottom of the design volume to the top (\autoref{fig:tf_time_init}), to make the results more comparable to a full STTO run where the geometry is not known a-priori.
 
 
-\todo{@Claude center figures with respect to captions; 2nd figure circle should be 2x larger. Actually, I think I'd like this to be a 6 subfigure plot: (a) as it is, (b) showing the pure TO design, (c) showing initial time field, (d), (e) (f) in a second row showing respectively direct, stto_heat, stto_laplace results. Use dummy captions/don't change the ones I've written; I already have in mind what to write for the captions.}
 \begin{figure}[ht!]
     \centering
     \begin{subfigure}[b]{0.32\textwidth}
@@ -332,9 +343,28 @@ All time fields are initialized as linear ramps from the bottom of the design vo
     \end{subfigure}\hfill
     \begin{subfigure}[b]{0.32\textwidth}
         \centering
+        \includegraphics[width=\textwidth]{figures/tf_pure_to.pdf}
+        \caption{Placeholder: plain TO design}
+        \label{fig:tf_pure_to}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/tf_time_init.pdf}
+        \caption{Placeholder: initial time field}
+        \label{fig:tf_time_init}
+    \end{subfigure}
+
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
         \includegraphics[width=\textwidth]{figures/tf_direct.pdf}
         \caption{Direct time formulation}
         \label{fig:tf_direct}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/tf_heat.pdf}
+        \caption{Placeholder: heat equation formulation}
+        \label{fig:tf_heat}
     \end{subfigure}\hfill
     \begin{subfigure}[b]{0.32\textwidth}
         \centering
@@ -355,7 +385,12 @@ In contrast, \autoref{fig:tf_laplace} results in the print fronts naturally merg
 Given that this formulation treats overheating as a constraint, we expect that the part topology should change relative to an unconstrained design only if changing the time field is insufficient to satisfy the constraint. In practice, because the layer thickness uniformity regularizer includes density,the exact converged design is different. However, we find no compliance penalty in our experiments.
 To evaluate this, we consider the cantilever beam from \autoref{sec:sim_vs_seq} and sweep $T_{cr}$.
 
-\todo{@Claude add figure, showing Tcr of 0.45, 0.5, 0.55, 0.6, 0.7, plus plain TO/sequential optimization for reference. Only include the plot of hotspot severity, on an absolute scale, same colour scale for all subplots, masking out void elements.}
+\begin{figure}[ht!]
+    \centering
+    \includegraphics[width=\textwidth]{figures/tcr_sweep.pdf}
+    \caption{Placeholder caption: hotspot severity of designs optimized with several values of $T_{cr}$ on the cantilever beam, with sequential optimization for reference; compliance changes are relative to the sequential design. Void elements are shown in gray.}
+    \label{fig:tcr_sweep}
+\end{figure}
 
 \section{Discussion and conclusions}
 % (2 page). Discussion of the results and Conclusions connecting results to research or design question.
