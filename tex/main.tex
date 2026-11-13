@@ -1,6 +1,9 @@
 \documentclass{article}
 \usepackage{graphicx} % Required for inserting images
 \usepackage{amsmath, amssymb}
+\usepackage{amsthm}
+\newtheorem{proposition}{Proposition}
+\providecommand*{\propositionautorefname}{Proposition}
 \usepackage{multirow, makecell}
 
 \usepackage{textcomp} % for copyright/registered symbols
@@ -91,6 +94,7 @@ Wang et al. \cite{wang2020spacetime} introduce space-time topology optimization 
 A key requirement for physically realizable time fields is that they have no interior local minima or maxima.
 A local minimum in the time field corresponds to unsupported material, while a local maximum corresponds to fully surrounded material that cannot be physically accessed for material deposition.
 \cite{wang2020spacetime} and \cite{das2025overheating} address this through an explicit continuity constraint which ensures each internal element has neighours which are larger and smaller than it.
+check multi-file quirk.
 \cite{Wang2024Regularization} represent time as the solution to a heat equation PDE with a sink term, to avoid local minima by construction; however this formulation still permits local maxima.
 
 \todo{Should I be citing Manav's thesis, which already has an early STTO formulation?}
@@ -98,7 +102,7 @@ A local minimum in the time field corresponds to unsupported material, while a l
 This work extends \cite{das2023thesis} and develops a more flexible and robust STTO approach. Our main contributions are:
 \begin{itemize}
     \item Refinements to the optimization objective, which improves realism  near edges, account for printing direction effects on overheating, promotes layer uniformity, and improves optimization dynamics
-    \item A novel formulation for the time field as the solution to a Laplace equation, which automatically prevents local minima and maxima in the time field (a common challenge in STTO)
+    \item A novel formulation for the time field as the solution to a steady-state diffusion equation, which automatically prevents local minima and maxima in the time field (a common challenge in STTO)
 \end{itemize}
 
 \section{Methodology}
@@ -111,7 +115,7 @@ We use a standard density-based formulation of topology optimization, utilizing 
 Beginning with the density design variable $\rho_d$, defined for each element $i$ as $\rho_{d,i}$, we apply filtering to get filtered density $\rho_f$, to avoid checkerboardingn and introduce a minimum length scale:
 \[\rho_{f,i} =  \frac{\sum_j w (\mathbf{x_i} - \mathbf{x_j}) \rho_{d,j}}{\sum_j w (\mathbf{x_i} - \mathbf{x_j})} \qquad w(\mathbf{x_i} - \mathbf{x_j}) = \max \left(0, 1-\frac{\norm{\mathbf{x_i} - \mathbf{x_j}}}{r_{f}}\right)\]
 We apply Heaviside projection to promote binarization and get physical density $\rho$:
-\[\rho_i = 1 - e^{-\beta \rho_{f,i}} + \rho{f,i}e^{-\beta} \]
+\[\rho_i = 1 - e^{-\beta \rho_{f,i}} + \rho_{f,i}e^{-\beta} \]
 $r_f$ is the filter radius, and $\beta$ is the projection sharpness.
 
 Each element has an elastic modulus $E_i$, interpolated with SIMP, with
@@ -119,33 +123,28 @@ Each element has an elastic modulus $E_i$, interpolated with SIMP, with
 where $E_0 = 1$ is the elastic modulus of a solid element and $E_{min} = 10^{-9}$ is a small non-zero value to avoid numerical singularities in void elements.
 
 We consider the compliance $c$, given by
-\[c(\rho) = \mathbf{U}^T \mathbf{KU} = \sum^{N_e}_{i=1} E_i(\rho_i) \mathbf{u}_i^T \mathbf{k}_0 \mathbf{u}_i\]
-\[\mathbf{KU} = \mathbf{f}\]
+\[c(\rho) = \mathbf{U}^T \mathbf{KU} = \sum^{N_e}_{i=1} E_i(\rho_i) \mathbf{u}_i^T \mathbf{k}_0 \mathbf{u}_i \qquad \mathbf{KU} = \mathbf{f}\]
 where $N_e$ is the number of elements, $\mathbf{U}$ and $\mathbf{K}$ are the global displacement vector and stiffness matrix respectively, $\mathbf{u}_i$ is the element displacement vector for element $i$, $\mathbf{k_0}$ is the element stiffness matrix for an element with unit elastic modulus, and $\mathbf{f}$ is the global nodal force vector.
 
 \subsection{Time field formulation}
-Let $\Omega$ denote the design domain over which to optimize, and $\partial \Omega$ be the domain boundary. Let $\partial \Omega_p$ be the boundary corresponding to the build plate. Let $x$ denote the spatial coordinates.
-We define the time field $t$ as the solution to the Laplace equation
+Let $\Omega$ denote the design domain over which to optimize, and $\partial \Omega$ be the domain boundary. Let $\partial \Omega_p$ be the boundary corresponding to the build plate. Let $\mathbf{x}$ denote the spatial coordinates.
+We define the time field $t$ as the solution to the steady state diffusion equation
 
-\todo{@Claude x in the below equation is position, which I think we've been using \mathbf{} to denote}
 \begin{equation}
-    \nabla\cdot\big(\chi\nabla t\big) = 0, \quad t(x) = 0 \ \forall x \in \partial \Omega_p, \quad t(x) = b(x) \ \forall x \in \partial \Omega \backslash \partial \Omega_p
+    \nabla\cdot\big(\chi\nabla t\big) = 0, \quad t(\mathbf{x}) = 0 \ \forall \mathbf{x} \in \partial \Omega_p, \quad t(\mathbf{x}) = b(\mathbf{x}) \ \forall \mathbf{x} \in \partial \Omega \backslash \partial \Omega_p
     \label{eqn:time_field_laplace}
 \end{equation}
 
-where $b(x)$ is a nonhomogenous Dirichlet boundary condition, $\chi = \max\left(\rho^a, 10^{-5}\right)C^{\mu(x) - 0.5}$ is a non-uniform diffusivity coefficient, $\rho$ is the design density,  and $\mu(x)$ is a density-uncorrected diffusivity coefficient.
-We consider $\mu(x)$ and $b(x)$ to be design variables to optimize for.
+where $b(\mathbf{x})$ is a nonhomogenous Dirichlet boundary condition, $\chi = \max\left(\rho^a, 10^{-5}\right)C^{\mu(\mathbf{x}) - 0.5}$ is a non-uniform diffusivity coefficient, $\rho$ is the design density,  and $\mu(\mathbf{x})$ is a density-uncorrected diffusivity coefficient.
+We consider $\mu(\mathbf{x})$ and $b(\mathbf{x})$ to be design variables to optimize for.
 While one can directly optimize over $\chi$ instead of $\mu$, the optimization problem is better behaved if we optimize over $\mu$; this formulation allows $\chi$ to extend over several orders of magnitude and automatically change with $\rho$ while $\mu \in [0, 1]$ stays order 1.
 $a$ and $C$ are constant hyperparameters; we find $a=4$ and $C=1000$ to work well.
 
 A key property of this formulation is that in the interior of $\Omega$, there are no local minima or maxima.
-\autoref{sec:time_field_generality} provides a derivation that for any sufficiently smooth time field $t$ that has no interior local minima or maxima, $t$ is the solution to \autoref{eqn:time_field_laplace} for some choice of $\chi$ and $b$.
+Moreover, \autoref{sec:time_field_generality} shows that any sufficiently smooth time field $t$ that is zero on the build plate and has no critical points (and thus strictly positive layer thickness everywhere) is the solution to \autoref{eqn:time_field_laplace} for some choice of $\chi$ and $b$. Thus, this formulation does not restrict the design space of valid time fields.
 
 This formulation does not rule out the existence of local minima on the design space boundary, which are still problematic for physical reasons. However, in practice this rarely occurs, because a local minimum in time also tends to have high hotspot severity, as defined in \autoref{sec:hotspot_formulation}, because it has no supporting material.
 
-\todo{add math reference}
-
-\todo{initialization and normalization}
 The time field wall data ($b$) is initialized by taking the geodesic distance across the design domain from the build plate\footnote{For implementation simplicity, the geodesic distance is approximated by building a discrete graph with 8-connected edges and using shortest-path algorithms on the graph.}. $\mu$ is initialized to a uniform constant (0.5).
 
 \subsection{Hotspot severity formulation}
@@ -187,8 +186,14 @@ where:
           \]
           for any element $e$, with $g_0 = 0$. Note that this normalization means $K_e$ can exceed 1 for some elements.
 \end{itemize}
-\todo{@Claude create a visualization to show how material outside the design domain is treated - specifically, half-plane below build plate is treated as solid material printed at t=-infinity, space elsewhere treated as void. Below paragraph should reference figure}
-To ensure the formulation of $K_e$ is sensible at the design domain boundaries, we consider the space below the build plate to be an infinite half-plane of solid material, and all other volume outside the design volume to be void, both printed at $t=-\infty$.
+To ensure the formulation of $K_e$ is sensible at the design domain boundaries, we consider the space below the build plate to be an infinite half-plane of solid material, and all other volume outside the design volume to be void, both printed at $t=-\infty$, as shown in \autoref{fig:outside_domain}.
+
+\begin{figure}[ht!]
+    \centering
+    \includegraphics[width=0.6\textwidth]{figures/outside_domain.pdf}
+    \caption{Treatment of space outside the design domain when computing $K_e$, for an element $e$ whose neighbourhood $V_e$ extends past the domain boundary.}
+    \label{fig:outside_domain}
+\end{figure}
 
 \begin{figure}[ht!]
     \centering
@@ -290,7 +295,12 @@ It is ineffective to encode this intuition as a hard constraint with a different
 \label{sec:sim_vs_seq}
 As a test problem, we consider a cantilever beam with a tip load, with a mesh size of 180 by 60, shown in \autoref{fig:c1_load}. The build plate is on the left edge where the cantilever is fixed. This load case is similar to the standard half-MBB problem, but modified slightly to make the print direction sensible (otherwise, the symmetric boundary condition in a typical MBB problem would imply building the material starting from the middle of the beam).
 
-\todo{@Claude Add a diagram of loads, print plate, etc. for the cantilever beam problem}
+\begin{figure}[ht!]
+    \centering
+    \includegraphics{figures/cantilever_setup.pdf}
+    \caption{Cantilever beam load case. The left edge is clamped and where the build plate is. A unit downward point load is present at the bottom-right corner.}
+    \label{fig:c1_load}
+\end{figure}
 
 \begin{figure}[ht!]
     \centering
@@ -320,7 +330,7 @@ We compare three different formulations for the time field:
 All time fields are initialized as linear ramps from the bottom of the design volume to the top (\autoref{fig:tf_time_init}), to make the results more comparable to a full STTO run where the geometry is not known a-priori.
 
 
-\todo{@Claude center figures with respect to captions; 2nd figure circle should be 2x larger. Actually, I think I'd like this to be a 6 subfigure plot: (a) as it is, (b) showing the pure TO design, (c) showing initial time field, (d), (e) (f) in a second row showing respectively direct, stto_heat, stto_laplace results. Use dummy captions/don't change the ones I've written; I already have in mind what to write for the captions.}
+\todo{@Claude have captions align vertically along their top edge, so that the images are aligned vertically}
 \begin{figure}[ht!]
     \centering
     \begin{subfigure}[b]{0.32\textwidth}
@@ -331,9 +341,28 @@ All time fields are initialized as linear ramps from the bottom of the design vo
     \end{subfigure}\hfill
     \begin{subfigure}[b]{0.32\textwidth}
         \centering
+        \includegraphics[width=\textwidth]{figures/tf_pure_to.pdf}
+        \caption{Compliance-minization only design}
+        \label{fig:tf_pure_to}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/tf_time_init.pdf}
+        \caption{Initial time field}
+        \label{fig:tf_time_init}
+    \end{subfigure}
+
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
         \includegraphics[width=\textwidth]{figures/tf_direct.pdf}
         \caption{Direct time formulation}
         \label{fig:tf_direct}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/tf_heat.pdf}
+        \caption{Heat equation with sink term formulation}
+        \label{fig:tf_heat}
     \end{subfigure}\hfill
     \begin{subfigure}[b]{0.32\textwidth}
         \centering
@@ -351,10 +380,19 @@ All time fields are initialized as linear ramps from the bottom of the design vo
 In contrast, \autoref{fig:tf_laplace} results in the print fronts naturally merging where the bottom two members join in the middle.
 
 \subsection{Loose values of $T_{cr}$ result in a design without a compliance penalty}
-Given that this formulation treats overheating as a constraint, we expect that the part topology should change relative to an unconstrained design only if changing the time field is insufficient to satisfy the constraint. In practice, because the layer thickness uniformity regularizer includes density,the exact converged design is different. However, we find no compliance penalty in our experiments.
+Given that this formulation treats overheating as a constraint, we expect that the part topology should change relative to an unconstrained design only if changing the time field is insufficient to satisfy the constraint.
+Thus, for large enough values for $T_{cr}$, we should expect to see an identical design.
+In practice, because the layer thickness uniformity regularizer includes density, optimization dynamics result in different converged design.
+However, we find no compliance penalty in our experiments for large values of $T_{cr}$.
 To evaluate this, we consider the cantilever beam from \autoref{sec:sim_vs_seq} and sweep $T_{cr}$.
+A compliance penalty is only present for $T_{cr} \leq 0.5$.
 
-\todo{@Claude add figure, showing Tcr of 0.45, 0.5, 0.55, 0.6, 0.7, plus plain TO/sequential optimization for reference. Only include the plot of hotspot severity, on an absolute scale, same colour scale for all subplots, masking out void elements.}
+\begin{figure}[ht!]
+    \centering
+    \includegraphics[width=\textwidth]{figures/tcr_sweep.pdf}
+    \caption{Hotspot severity of designs optimized with several values of $T_{cr}$ on the cantilever beam problem in \autoref{fig:c1_load}. Also shown is sequential optimziation of the density and time fields in the top left.}
+    \label{fig:tcr_sweep}
+\end{figure}
 
 \section{Discussion and conclusions}
 % (2 page). Discussion of the results and Conclusions connecting results to research or design question.
@@ -362,25 +400,65 @@ To evaluate this, we consider the cantilever beam from \autoref{sec:sim_vs_seq} 
 \section{Reflection}
 % (1 page) Discussion and reflection on project execution and own functioning.
 
+\clearpage
+
 \appendix
 \section{Derivation of generality of time field formulation}
 \label{sec:time_field_generality}
 
-\todo{@Claude finish the writeup/derivation in this appendix. If this is a well known problem (or a variant of one), use web search tools to find & cite math work}
+This appendix shows that \autoref{eqn:time_field_laplace} can represent any smooth time field that is zero on the build plate and has no critical points (points where $\nabla t = 0$).
+The argument follows \cite{richter1981inverse}, who used it to recover a diffusion coefficient from a measured solution, and holds in any number of spatial dimensions.
 
-Consider a scalar field $u(\mathbf{x})$ (corresponding to the time field), defined over a domain $\Omega$, which has no local minima or maxima.
-We show that there exists a scalar field $k(\mathbf{x})$ defined on $\Omega$ and a Dirichlet boundary condition $b(\mathbf{x})$ defined on $\partial \Omega$
+\begin{proposition}
+    \label{prop:generality}
+    Let $t$ be a twice continuously differentiable time field on a bounded domain $\Omega$, with $t = 0$ on the build plate $\partial\Omega_p$ and $\abs{\nabla t} \geq m > 0$ everywhere.
+    Then there is a diffusivity $\chi$ with $e^{-Q} \leq \chi \leq e^{Q}$, where
+    \[
+        Q = \frac{\left(\max t - \min t\right) \max \abs{\Delta t}}{m^2},
+    \]
+    for which $t$ is the solution of \autoref{eqn:time_field_laplace} with $b = t$ on $\partial\Omega \backslash \partial\Omega_p$.
+\end{proposition}
 
-$$\nabla\cdot\big(k(x)\,\nabla u\big) = 0, \qquad 0 < \lambda \le k(x) \le \Lambda .$$
+\begin{proof}
+    \emph{Step 1: an equation for $\chi$.}
+    Writing $\chi = e^{w}$,
+    \[
+        \nabla \cdot \left(\chi \nabla t\right) = e^{w} \left(\Delta t + \nabla w \cdot \nabla t\right),
+    \]
+    so \autoref{eqn:time_field_laplace} holds if and only if
+    \begin{equation}
+        \nabla t \cdot \nabla w = -\Delta t.
+        \label{eqn:transport}
+    \end{equation}
+    Here $t$ is known and $w$ is unknown.
 
-    Let $k(x) = e^{w(x)}$.
-    \[0 = \nabla \cdot (k \nabla u) = k \Delta u + \nabla k \cdot \nabla u = e^w \Delta u + e^w \nabla w \cdot \nabla u\]
-\[\nabla u \cdot \nabla w = -\Delta u\]
+    \emph{Step 2: solve along streamlines.}
+    The left side of \autoref{eqn:transport} is the rate of change of $w$ along $\nabla t$, so it can be solved one streamline of $\nabla t$ at a time: the curves everywhere tangent to $\nabla t$, crossing the layers perpendicularly. As $\chi \nabla t$ points the same way, these are also the streamlines of the flux\footnote{In the language of partial differential equations, these streamlines are the \emph{characteristics} of \autoref{eqn:transport}.}.
+    Measuring progress along a streamline by the print time $t$ itself, \autoref{eqn:transport} becomes an ordinary differential equation along each streamline:
+    \[
+        \frac{\mathrm{d}w}{\mathrm{d}t} = -\frac{\Delta t}{\abs{\nabla t}^2}.
+    \]
+    Since $\nabla t$ never vanishes, $t$ increases steadily along every streamline, so each streamline starts and ends on the domain boundary and covers a time range of at most $\max t - \min t$.
+    Setting $w = 0$ where each streamline starts and integrating gives $\abs{w} \leq Q$, hence the bounds on $\chi$\footnote{Neighbouring streamlines can start on different parts of the boundary, so $\chi$ can jump between them. This is harmless: the jump runs along streamlines of the flux, which no flux crosses, and \autoref{eqn:time_field_laplace} still holds in its usual integral (weak) form.}.
 
-This is then an ODE along the streamlines of $u$.
+    \emph{Step 3: $t$ is the solution.}
+    With $b = t$ on $\partial\Omega \backslash \partial\Omega_p$, and $t = 0$ on $\partial\Omega_p$ by assumption, $t$ satisfies both the equation and the boundary conditions of \autoref{eqn:time_field_laplace}.
+    Like steady heat conduction with a positive, bounded conductivity and fixed boundary temperatures, \autoref{eqn:time_field_laplace} has exactly one solution \cite[Section 8.2]{gilbarg2001elliptic}, so the optimizer's solve returns $t$.
+\end{proof}
 
+\paragraph{The build plate.}
+The plate value $t = 0$ is fixed by the formulation rather than designed, so a representable time field must satisfy it; it does not restrict the choice of $\chi$.
+$\chi$ is also not unique: other starting values of $w$ in Step 2, or scaling $\chi$ by a constant, represent the same $t$.
 
-\appendix
+\paragraph{Critical points.}
+Requiring $\nabla t \neq 0$ everywhere is stronger than having no interior local minima or maxima: it also excludes saddle points, which is where two print fronts merge.
+It cannot simply be dropped: at a point where $\nabla t = 0$, \autoref{eqn:time_field_laplace} with a smooth $\chi$ reduces to $\chi \Delta t = 0$, so only saddles with $\Delta t = 0$ there (e.g.\ $t = x_1^2 - x_2^2$ with $\chi = 1$) are representable.
+Saddles are treated in \cite{alessandrini1986identification}, but only in two dimensions, so we do not rely on it here.
+
+\paragraph{Range of $\chi$.}
+In solid material ($\rho = 1$), the implementation restricts $\chi = C^{\mu - 0.5}$ with $\mu \in [0, 1]$ to a window spanning a factor $C$.
+As scaling $\chi$ by a constant does not change $t$, \autoref{prop:generality} shows that a time field over a fully solid domain is representable within this window whenever $e^{2Q} \leq C$; this is a sufficient, generally conservative, condition.
+
 \section{AI Usage Acknowledgement}
 The LLM-based coding agent Claude Code was used to assist in development of the source code. Claude Opus 5.5 derived the results in \autoref{sec:time_field_generality}. \todo{or not; it's possibly cited?}
 

@@ -27,8 +27,19 @@ python -m sttopt.stto_heat_cli    --config configs/time_formulations/heat.json  
 python -m sttopt.stto_cli         --config configs/time_formulations/direct.json  --tag tf_S03bT06_direct_fixed  --fixed-density output/tf_S03bT06_laplace
 ```
 
-`direct_continuity.json` is `direct.json` with the MATLAB source's time-field continuity constraint (`enable_continuity`, at its tolerance), as the direct formulation is usually stated; the figure's direct panel is this run:
+`direct_continuity.json` is `direct.json` with the MATLAB source's time-field continuity constraint (`enable_continuity`, at its tolerance), as the direct formulation is usually stated:
 
 ```
 python -m sttopt.stto_cli --config configs/time_formulations/direct_continuity.json --tag tf_S03bT06_direct_continuity_fixed --fixed-density output/tf_S03bT06_laplace
+```
+
+The figure itself is sequential: a compliance-only plain TO (`plain_to.json`: `laplace.json` with
+the hotspot, shaping and uniformity weights at 0), then each formulation's time field on its
+grayscale density, the direct one with the continuity constraint:
+
+```
+python -m sttopt.stto_laplace_cli --config configs/time_formulations/plain_to.json          --tag tf_S03bT06_plain_to
+python -m sttopt.stto_laplace_cli --config configs/time_formulations/laplace.json           --tag tf_S03bT06_laplace_seq           --fixed-density output/tf_S03bT06_plain_to
+python -m sttopt.stto_heat_cli    --config configs/time_formulations/heat.json              --tag tf_S03bT06_heat_seq              --fixed-density output/tf_S03bT06_plain_to
+python -m sttopt.stto_cli         --config configs/time_formulations/direct_continuity.json --tag tf_S03bT06_direct_continuity_seq --fixed-density output/tf_S03bT06_plain_to
 ```
