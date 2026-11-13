@@ -20,7 +20,7 @@ def build(out_dir: Path, *, device: str | None = None) -> None:
     problem = designs.evaluator(config, device)
     nelx, nely = config.nelx, config.nely
     # Margins around the plot box, in inches, left and right equal so the box centres
-    # under the caption; they hold the plate and clamp on the left and the tip load below
+    # under the caption; they hold the clamp on the left and the tip load below
     side, bottom, top = 0.3, 0.25, 0.03
     box_w = 0.5 * TEXT_WIDTH_IN
     box_h = box_w * nely / nelx

@@ -22,7 +22,7 @@
   "hotspot_aggregation": "logsumexp",
   "hotspot_beta": 100.0,
   "hotspot_kappa": 2.3666,
-  "hotspot_g0_per_m": 0.6736,
+  "hotspot_g0_per_m": 0.3,
   "hotspot_credit": "cooling",
   "hotspot_tie_credit": 0.5,
   "hotspot_cooling_time": 0.01,
