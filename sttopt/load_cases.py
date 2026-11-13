@@ -23,6 +23,9 @@ class LoadCase(StrEnum):
     the top and down-left at the bottom.
     EDGE_TRACTION: three clamped patches (two on the left edge, one on the bottom), a
     unit +x traction over the whole right edge.
+    MBB: the half MBB beam, mirror-symmetric about its left edge (no x displacement
+    there), on a roller (no y displacement) over a patch from the bottom-right corner
+    along the bottom edge, with a unit downward load at the top-left corner.
     L_BRACKET_CORNER, L_BRACKET_MIDDLE: an L, the domain without its top-right quarter,
     clamped along the right edge of its bottom half. A unit +x load down the left edge
     from the top-left corner (CORNER), or down the arm's right edge from its top
@@ -32,6 +35,7 @@ class LoadCase(StrEnum):
     CANTILEVER = "cantilever"
     CORNER_LOADS = "corner_loads"
     EDGE_TRACTION = "edge_traction"
+    MBB = "mbb"
     L_BRACKET_CORNER = "l_bracket_corner"
     L_BRACKET_MIDDLE = "l_bracket_middle"
 
@@ -78,8 +82,8 @@ def load_case(
     """The force vector and free dofs of `case` on a `nelx` x `nely` mesh.
 
     :param load_length_m: span of each corner load, a uniform traction from its corner
-        along the right edge
-    :param support_length_m: span of each clamped patch, where the case has patches
+        along the edge it sits on (the right edge, or the top for `MBB`)
+    :param support_length_m: span of each support patch, where the case has patches
     :return: `(F, freedofs)`
     """
     nodes = fem.node_grid(nelx, nely)
@@ -109,6 +113,11 @@ def load_case(
             _patch_nodes(nodes[-1, :], 0.30 * nelx, support_length),
         ]
         fixed = _clamp(np.concatenate(patches))
+    elif case == LoadCase.MBB:
+        F[2 * nodes[0, :] + 1] = -fem.edge_load_shares(nelx + 1, load_length)
+        support_length = units.in_elements(support_length_m, element_size_m)
+        roller = _patch_nodes(nodes[-1, ::-1], support_length / 2, support_length)
+        fixed = np.concatenate([2 * left_up, 2 * roller + 1])
     elif case in _L_BRACKETS:
         _check_halves(nelx, nely)
         col = 0 if case == LoadCase.L_BRACKET_CORNER else nelx // 2

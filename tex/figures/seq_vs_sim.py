@@ -2,7 +2,7 @@
 `tex/main.tex`: density, time field and hotspot severity of each design, severity read on
 the grayscale design as optimized.
 
-Reads the runs in `output/tex_seq_vs_sim_{plain_to,sequential,simultaneous}`, made as in
+Reads the runs in `output/tex_mbb_{plain_to,sequential,simultaneous}`, made as in
 `configs/seq_vs_sim/README.md`. Run from the repo root, via `python -m tex.make_figures`.
 """
 
@@ -18,11 +18,11 @@ from sttopt.run_config import LaplaceRunConfig
 from tex.figures import designs
 from tex.figures.style import TEXT_WIDTH_IN
 
-CONFIG = Path("configs/laplace_default.json")
+CONFIG = Path("configs/mbb_default.json")
 README = "configs/seq_vs_sim/README.md"
 TAGS = {
-    "sequential": "tex_seq_vs_sim_sequential",
-    "simultaneous": "tex_seq_vs_sim_simultaneous",
+    "sequential": "tex_mbb_sequential",
+    "simultaneous": "tex_mbb_simultaneous",
 }
 
 

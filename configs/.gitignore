@@ -4,6 +4,7 @@
 !seq_default.json
 !heat_default.json
 !laplace_default.json
+!mbb_default.json
 !.gitignore
 !continuation.md
 !laplace_continuation.md
