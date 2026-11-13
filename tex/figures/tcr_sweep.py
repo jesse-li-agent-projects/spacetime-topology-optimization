@@ -23,7 +23,7 @@ CONFIG = Path("configs/laplace_default.json")
 README = "configs/tcr_sweep/README.md"
 REFERENCE = "tcr_C105_sequential"
 # Loosest first, so the designs depart from the sequential one in order
-TCRS = (0.7, 0.6, 0.55, 0.5, 0.45, 0.25, 0.2)
+TCRS = (0.7, 0.6, 0.55, 0.5, 0.45)
 # Magnitude, so one hue light to dark; void in the neutral gray the other figures use
 CMAP = matplotlib.colormaps["Reds"].with_extremes(bad=designs.VOID_GRAY)
 
