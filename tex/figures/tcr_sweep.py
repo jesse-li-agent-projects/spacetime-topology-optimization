@@ -22,7 +22,8 @@ from tex.figures.style import TEXT_WIDTH_IN
 CONFIG = Path("configs/laplace_default.json")
 README = "configs/tcr_sweep/README.md"
 REFERENCE = "tcr_C105_sequential"
-TCRS = (0.45, 0.5, 0.55, 0.6, 0.7)
+# Loosest first, so the designs depart from the sequential one in order
+TCRS = (0.7, 0.6, 0.55, 0.5, 0.45, 0.25, 0.2)
 # Magnitude, so one hue light to dark; void in the neutral gray the other figures use
 CMAP = matplotlib.colormaps["Reds"].with_extremes(bad=designs.VOID_GRAY)
 
@@ -56,8 +57,12 @@ def build(out_dir: Path, *, device: str | None = None) -> None:
         )
     norm = Normalize(0, max(d.max_severity for _, d in panels))
 
+    rows = -(-len(panels) // 2)
     fig, axes = plt.subplots(
-        3, 2, figsize=(TEXT_WIDTH_IN, TEXT_WIDTH_IN * 0.62), layout="constrained"
+        rows,
+        2,
+        figsize=(TEXT_WIDTH_IN, TEXT_WIDTH_IN * 0.21 * rows),
+        layout="constrained",
     )
     for ax, (title, d) in zip(axes.flat, panels):
         _draw(ax, d, norm)
