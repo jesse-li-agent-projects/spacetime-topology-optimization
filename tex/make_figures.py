@@ -10,9 +10,21 @@ them are in the `configs/` README each figure module names. Nothing here optimiz
 import argparse
 from pathlib import Path
 
-FIGURES = ("hotspot_weights", "seq_vs_sim", "time_formulations")
+FIGURES = (
+    "cantilever_setup",
+    "hotspot_weights",
+    "outside_domain",
+    "seq_vs_sim",
+    "tcr_sweep",
+    "time_formulations",
+)
 # Options each figure's `build` accepts, besides `out_dir`
-OPTIONS = {"seq_vs_sim": ("device",), "time_formulations": ("device",)}
+OPTIONS = {
+    "cantilever_setup": ("device",),
+    "seq_vs_sim": ("device",),
+    "tcr_sweep": ("device",),
+    "time_formulations": ("device",),
+}
 
 
 def parse_args():
