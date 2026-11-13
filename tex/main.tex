@@ -94,6 +94,7 @@ Wang et al. \cite{wang2020spacetime} introduce space-time topology optimization 
 A key requirement for physically realizable time fields is that they have no interior local minima or maxima.
 A local minimum in the time field corresponds to unsupported material, while a local maximum corresponds to fully surrounded material that cannot be physically accessed for material deposition.
 \cite{wang2020spacetime} and \cite{das2025overheating} address this through an explicit continuity constraint which ensures each internal element has neighours which are larger and smaller than it.
+check multi-file quirk.
 \cite{Wang2024Regularization} represent time as the solution to a heat equation PDE with a sink term, to avoid local minima by construction; however this formulation still permits local maxima.
 
 \todo{Should I be citing Manav's thesis, which already has an early STTO formulation?}
@@ -101,7 +102,7 @@ A local minimum in the time field corresponds to unsupported material, while a l
 This work extends \cite{das2023thesis} and develops a more flexible and robust STTO approach. Our main contributions are:
 \begin{itemize}
     \item Refinements to the optimization objective, which improves realism  near edges, account for printing direction effects on overheating, promotes layer uniformity, and improves optimization dynamics
-    \item A novel formulation for the time field as the solution to a Laplace equation, which automatically prevents local minima and maxima in the time field (a common challenge in STTO)
+    \item A novel formulation for the time field as the solution to a steady-state diffusion equation, which automatically prevents local minima and maxima in the time field (a common challenge in STTO)
 \end{itemize}
 
 \section{Methodology}
@@ -114,7 +115,7 @@ We use a standard density-based formulation of topology optimization, utilizing 
 Beginning with the density design variable $\rho_d$, defined for each element $i$ as $\rho_{d,i}$, we apply filtering to get filtered density $\rho_f$, to avoid checkerboardingn and introduce a minimum length scale:
 \[\rho_{f,i} =  \frac{\sum_j w (\mathbf{x_i} - \mathbf{x_j}) \rho_{d,j}}{\sum_j w (\mathbf{x_i} - \mathbf{x_j})} \qquad w(\mathbf{x_i} - \mathbf{x_j}) = \max \left(0, 1-\frac{\norm{\mathbf{x_i} - \mathbf{x_j}}}{r_{f}}\right)\]
 We apply Heaviside projection to promote binarization and get physical density $\rho$:
-\[\rho_i = 1 - e^{-\beta \rho_{f,i}} + \rho{f,i}e^{-\beta} \]
+\[\rho_i = 1 - e^{-\beta \rho_{f,i}} + \rho_{f,i}e^{-\beta} \]
 $r_f$ is the filter radius, and $\beta$ is the projection sharpness.
 
 Each element has an elastic modulus $E_i$, interpolated with SIMP, with
@@ -122,13 +123,12 @@ Each element has an elastic modulus $E_i$, interpolated with SIMP, with
 where $E_0 = 1$ is the elastic modulus of a solid element and $E_{min} = 10^{-9}$ is a small non-zero value to avoid numerical singularities in void elements.
 
 We consider the compliance $c$, given by
-\[c(\rho) = \mathbf{U}^T \mathbf{KU} = \sum^{N_e}_{i=1} E_i(\rho_i) \mathbf{u}_i^T \mathbf{k}_0 \mathbf{u}_i\]
-\[\mathbf{KU} = \mathbf{f}\]
+\[c(\rho) = \mathbf{U}^T \mathbf{KU} = \sum^{N_e}_{i=1} E_i(\rho_i) \mathbf{u}_i^T \mathbf{k}_0 \mathbf{u}_i \qquad \mathbf{KU} = \mathbf{f}\]
 where $N_e$ is the number of elements, $\mathbf{U}$ and $\mathbf{K}$ are the global displacement vector and stiffness matrix respectively, $\mathbf{u}_i$ is the element displacement vector for element $i$, $\mathbf{k_0}$ is the element stiffness matrix for an element with unit elastic modulus, and $\mathbf{f}$ is the global nodal force vector.
 
 \subsection{Time field formulation}
 Let $\Omega$ denote the design domain over which to optimize, and $\partial \Omega$ be the domain boundary. Let $\partial \Omega_p$ be the boundary corresponding to the build plate. Let $\mathbf{x}$ denote the spatial coordinates.
-We define the time field $t$ as the solution to the Laplace equation
+We define the time field $t$ as the solution to the steady state diffusion equation
 
 \begin{equation}
     \nabla\cdot\big(\chi\nabla t\big) = 0, \quad t(\mathbf{x}) = 0 \ \forall \mathbf{x} \in \partial \Omega_p, \quad t(\mathbf{x}) = b(\mathbf{x}) \ \forall \mathbf{x} \in \partial \Omega \backslash \partial \Omega_p
@@ -141,13 +141,10 @@ While one can directly optimize over $\chi$ instead of $\mu$, the optimization p
 $a$ and $C$ are constant hyperparameters; we find $a=4$ and $C=1000$ to work well.
 
 A key property of this formulation is that in the interior of $\Omega$, there are no local minima or maxima.
-Conversely, \autoref{sec:time_field_generality} shows that any sufficiently smooth time field $t$ that is zero on the build plate and has no critical points (in particular, no local minima or maxima) is the solution to \autoref{eqn:time_field_laplace} for some choice of $\chi$ and $b$.
+Moreover, \autoref{sec:time_field_generality} shows that any sufficiently smooth time field $t$ that is zero on the build plate and has no critical points (and thus strictly positive layer thickness everywhere) is the solution to \autoref{eqn:time_field_laplace} for some choice of $\chi$ and $b$. Thus, this formulation does not restrict the design space of valid time fields.
 
 This formulation does not rule out the existence of local minima on the design space boundary, which are still problematic for physical reasons. However, in practice this rarely occurs, because a local minimum in time also tends to have high hotspot severity, as defined in \autoref{sec:hotspot_formulation}, because it has no supporting material.
 
-\todo{add math reference}
-
-\todo{initialization and normalization}
 The time field wall data ($b$) is initialized by taking the geodesic distance across the design domain from the build plate\footnote{For implementation simplicity, the geodesic distance is approximated by building a discrete graph with 8-connected edges and using shortest-path algorithms on the graph.}. $\mu$ is initialized to a uniform constant (0.5).
 
 \subsection{Hotspot severity formulation}
@@ -194,7 +191,7 @@ To ensure the formulation of $K_e$ is sensible at the design domain boundaries, 
 \begin{figure}[ht!]
     \centering
     \includegraphics[width=0.6\textwidth]{figures/outside_domain.pdf}
-    \caption{Placeholder caption: treatment of space outside the design domain when computing $K_e$, for an element $e$ whose neighbourhood $V_e$ extends past the domain boundary.}
+    \caption{Treatment of space outside the design domain when computing $K_e$, for an element $e$ whose neighbourhood $V_e$ extends past the domain boundary.}
     \label{fig:outside_domain}
 \end{figure}
 
@@ -301,7 +298,7 @@ As a test problem, we consider a cantilever beam with a tip load, with a mesh si
 \begin{figure}[ht!]
     \centering
     \includegraphics{figures/cantilever_setup.pdf}
-    \caption{Placeholder caption: the cantilever beam load case, with the build plate along the clamped left edge and a downward tip load at the bottom-right corner.}
+    \caption{Cantilever beam load case. The left edge is clamped and where the build plate is. A unit downward point load is present at the bottom-right corner.}
     \label{fig:c1_load}
 \end{figure}
 
@@ -333,6 +330,7 @@ We compare three different formulations for the time field:
 All time fields are initialized as linear ramps from the bottom of the design volume to the top (\autoref{fig:tf_time_init}), to make the results more comparable to a full STTO run where the geometry is not known a-priori.
 
 
+\todo{@Claude have captions align vertically along their top edge, so that the images are aligned vertically}
 \begin{figure}[ht!]
     \centering
     \begin{subfigure}[b]{0.32\textwidth}
@@ -344,13 +342,13 @@ All time fields are initialized as linear ramps from the bottom of the design vo
     \begin{subfigure}[b]{0.32\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_pure_to.pdf}
-        \caption{Placeholder: plain TO design}
+        \caption{Compliance-minization only design}
         \label{fig:tf_pure_to}
     \end{subfigure}\hfill
     \begin{subfigure}[b]{0.32\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_time_init.pdf}
-        \caption{Placeholder: initial time field}
+        \caption{Initial time field}
         \label{fig:tf_time_init}
     \end{subfigure}
 
@@ -363,7 +361,7 @@ All time fields are initialized as linear ramps from the bottom of the design vo
     \begin{subfigure}[b]{0.32\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_heat.pdf}
-        \caption{Placeholder: heat equation formulation}
+        \caption{Heat equation with sink term formulation}
         \label{fig:tf_heat}
     \end{subfigure}\hfill
     \begin{subfigure}[b]{0.32\textwidth}
@@ -382,13 +380,17 @@ All time fields are initialized as linear ramps from the bottom of the design vo
 In contrast, \autoref{fig:tf_laplace} results in the print fronts naturally merging where the bottom two members join in the middle.
 
 \subsection{Loose values of $T_{cr}$ result in a design without a compliance penalty}
-Given that this formulation treats overheating as a constraint, we expect that the part topology should change relative to an unconstrained design only if changing the time field is insufficient to satisfy the constraint. In practice, because the layer thickness uniformity regularizer includes density,the exact converged design is different. However, we find no compliance penalty in our experiments.
+Given that this formulation treats overheating as a constraint, we expect that the part topology should change relative to an unconstrained design only if changing the time field is insufficient to satisfy the constraint.
+Thus, for large enough values for $T_{cr}$, we should expect to see an identical design.
+In practice, because the layer thickness uniformity regularizer includes density, optimization dynamics result in different converged design.
+However, we find no compliance penalty in our experiments for large values of $T_{cr}$.
 To evaluate this, we consider the cantilever beam from \autoref{sec:sim_vs_seq} and sweep $T_{cr}$.
+A compliance penalty is only present for $T_{cr} \leq 0.5$.
 
 \begin{figure}[ht!]
     \centering
     \includegraphics[width=\textwidth]{figures/tcr_sweep.pdf}
-    \caption{Placeholder caption: hotspot severity of designs optimized with several values of $T_{cr}$ on the cantilever beam, with sequential optimization for reference; compliance changes are relative to the sequential design. Void elements are shown in gray.}
+    \caption{Hotspot severity of designs optimized with several values of $T_{cr}$ on the cantilever beam problem in \autoref{fig:c1_load}. Also shown is sequential optimziation of the density and time fields in the top left.}
     \label{fig:tcr_sweep}
 \end{figure}
 
@@ -397,6 +399,8 @@ To evaluate this, we consider the cantilever beam from \autoref{sec:sim_vs_seq} 
 
 \section{Reflection}
 % (1 page) Discussion and reflection on project execution and own functioning.
+
+\clearpage
 
 \appendix
 \section{Derivation of generality of time field formulation}
@@ -455,8 +459,6 @@ Saddles are treated in \cite{alessandrini1986identification}, but only in two di
 In solid material ($\rho = 1$), the implementation restricts $\chi = C^{\mu - 0.5}$ with $\mu \in [0, 1]$ to a window spanning a factor $C$.
 As scaling $\chi$ by a constant does not change $t$, \autoref{prop:generality} shows that a time field over a fully solid domain is representable within this window whenever $e^{2Q} \leq C$; this is a sufficient, generally conservative, condition.
 
-
-\appendix
 \section{AI Usage Acknowledgement}
 The LLM-based coding agent Claude Code was used to assist in development of the source code. Claude Opus 5.5 derived the results in \autoref{sec:time_field_generality}. \todo{or not; it's possibly cited?}
 
