@@ -141,13 +141,15 @@ $a$ and $C$ are constant hyperparameters; we find $a=4$ and $C=1000$ to work wel
 A key property of this formulation is that in the interior of $\Omega$, there are no local minima or maxima.
 \autoref{sec:time_field_generality} provides a derivation that for any sufficiently smooth time field $t$ that has no interior local minima or maxima, $t$ is the solution to \autoref{eqn:time_field_laplace} for some choice of $\chi$ and $b$.
 
-This formulation does not rule out the existence of local minima on the design space boundary, which are still problematic for physical reasons. However, in practice this rarely occurs, because a local minimum in time also tends to have high hotspot severity, as described later.
+This formulation does not rule out the existence of local minima on the design space boundary, which are still problematic for physical reasons. However, in practice this rarely occurs, because a local minimum in time also tends to have high hotspot severity, as defined in \autoref{sec:hotspot_formulation}, because it has no supporting material.
+
 \todo{add math reference}
 
 \todo{initialization and normalization}
 The time field wall data ($b$) is initialized by taking the geodesic distance across the design domain from the build plate\footnote{For implementation simplicity, the geodesic distance is approximated by building a discrete graph with 8-connected edges and using shortest-path algorithms on the graph.}. $\mu$ is initialized to a uniform constant (0.5).
 
 \subsection{Hotspot severity formulation}
+\label{sec:hotspot_formulation}
 To assess the risk of overheating at any given material point, we define a metric $K$ to estimate the heat evacuation capacity\footnote{\cite{das2023thesis} refers to this as \emph{Conductivity Estimation}; to avoid ambiguity with conductivity as a material property we use the term \emph{heat evacuation capacity estimate}.}; a higher $K$ corresponds to a better ability to evacuate heat and reduced risk of overheating.
 We compute $K_e$ for each element $e$ with:
 \[
@@ -285,13 +287,15 @@ It is ineffective to encode this intuition as a hard constraint with a different
 \end{table}
 
 \subsection{Simultaneous optimizaion ensures features are thick enough to avoid overheating}
-\todo{Comparison between sequential and simultaneous optimization; this should include a mention of compute time}
-\todo{Include diagram of loads, print plate, etc.}
+\label{sec:sim_vs_seq}
+As a test problem, we consider a cantilever beam with a tip load, with a mesh size of 180 by 60, shown in \autoref{fig:c1_load}. The build plate is on the left edge where the cantilever is fixed. This load case is similar to the standard half-MBB problem, but modified slightly to make the print direction sensible (otherwise, the symmetric boundary condition in a typical MBB problem would imply building the material starting from the middle of the beam).
+
+\todo{@Claude Add a diagram of loads, print plate, etc. for the cantilever beam problem}
 
 \begin{figure}[ht!]
     \centering
     \includegraphics[width=\textwidth]{figures/seq_vs_sim.pdf}
-    \caption{Comparison of optimization results with sequential and simultaneous optimization of denesity and time fields, on the MBB beam. Volume fraction $\bar{V}= 0.5$; maximum acceptible severity $T_{cr}=0.4$. Because a penalty function is used instead of a hard constraint, a slight violation of the constraint is expected.}
+    \caption{Comparison of optimization results with sequential and simultaneous optimization of denesity and time fields, on the cantilever beam. Volume fraction $\bar{V}= 0.5$; maximum acceptible severity $T_{cr}=0.4$. Because a penalty function is used instead of a hard constraint, a slight violation of the constraint is expected.}
     \label{fig:seq_vs_simultaneous}
 \end{figure}
 
@@ -308,15 +312,12 @@ We compare three different formulations for the time field:
 \begin{itemize}
     \item Directly optimizing the time field
     \item Having the time field be the solution of a heat equation with a sink term, as done in \cite{Wang2024Regularization}:
-          \[\nabla \cdot (\kappa \nabla \tau) - \alpha_T \tau \qquad t=1-\tau\]
-          Here, $\tau$ represents a virtual temperature field which decreases monotonically from the print bed, $\kappa$ is the design variable, and $\alpha_T \tau$ is a drain term to ensure the solution is non-trivial. This PDE has boundary conditions $\tau=1$ on the print bed and zero-flux elsewhere, and represents steady-state heat diffusion.
-          \todo{explain formulation}
+          \[\nabla \cdot (\kappa \nabla \tau) - \alpha_T \tau = 0 \qquad t=1-\tau\]
+          Here, $\tau$ represents a virtual temperature field which decreases monotonically from the print bed, $\kappa$ is the design variable, and $\alpha_T \tau$ is a drain term to ensure the solution is not constant. This PDE has boundary conditions $\tau=1$ on the print bed and zero-flux elsewhere, and represents steady-state heat diffusion.
     \item Our PDE formulation of time, in \autoref{eqn:time_field_laplace}
           \todo{Come up with a better name for this approach}
 \end{itemize}
 All time fields are initialized as linear ramps from the bottom of the design volume to the top (\autoref{fig:tf_time_init}), to make the results more comparable to a full STTO run where the geometry is not known a-priori.
-
-\todo{Comparison between sequential optimization with PDE formulation and direct formulation with continuity}
 
 
 \todo{@Claude center figures with respect to captions; 2nd figure circle should be 2x larger. Actually, I think I'd like this to be a 6 subfigure plot: (a) as it is, (b) showing the pure TO design, (c) showing initial time field, (d), (e) (f) in a second row showing respectively direct, stto_heat, stto_laplace results. Use dummy captions/don't change the ones I've written; I already have in mind what to write for the captions.}
@@ -349,10 +350,11 @@ All time fields are initialized as linear ramps from the bottom of the design vo
 \autoref{fig:tf_heat} does not face this issue, but along the bottom half of the part, the print fronts merge in the middle of the lower left member, which is physically challenging or impossible to print.
 In contrast, \autoref{fig:tf_laplace} results in the print fronts naturally merging where the bottom two members join in the middle.
 
-\subsection{Loose values of $T_{cr}$ result in a density field identical to that obtained with plain TO}
-Given that this formulation treats overheating as a constraint, we expect that the part topology should change relative to an unconstrained design only if changing the time field is insufficient to satisfy the constraint. To evaluate this, we consider the MBB beam and sweep $T_{cr}$.
+\subsection{Loose values of $T_{cr}$ result in a design without a compliance penalty}
+Given that this formulation treats overheating as a constraint, we expect that the part topology should change relative to an unconstrained design only if changing the time field is insufficient to satisfy the constraint. In practice, because the layer thickness uniformity regularizer includes density,the exact converged design is different. However, we find no compliance penalty in our experiments.
+To evaluate this, we consider the cantilever beam from \autoref{sec:sim_vs_seq} and sweep $T_{cr}$.
 
-\todo{@Claude add figure}
+\todo{@Claude add figure, showing Tcr of 0.45, 0.5, 0.55, 0.6, 0.7, plus plain TO/sequential optimization for reference. Only include the plot of hotspot severity, on an absolute scale, same colour scale for all subplots, masking out void elements.}
 
 \section{Discussion and conclusions}
 % (2 page). Discussion of the results and Conclusions connecting results to research or design question.
@@ -363,12 +365,19 @@ Given that this formulation treats overheating as a constraint, we expect that t
 \appendix
 \section{Derivation of generality of time field formulation}
 \label{sec:time_field_generality}
-\todo{Cite actual math paper}
+
+\todo{@Claude finish the writeup/derivation in this appendix. If this is a well known problem (or a variant of one), use web search tools to find & cite math work}
+
+Consider a scalar field $u(\mathbf{x})$ (corresponding to the time field), defined over a domain $\Omega$, which has no local minima or maxima.
+We show that there exists a scalar field $k(\mathbf{x})$ defined on $\Omega$ and a Dirichlet boundary condition $b(\mathbf{x})$ defined on $\partial \Omega$
+
 $$\nabla\cdot\big(k(x)\,\nabla u\big) = 0, \qquad 0 < \lambda \le k(x) \le \Lambda .$$
 
-Let $k(x) = e^{w(x)}$.
-\[0 = \nabla \cdot (k \nabla u) = k \Delta u + \nabla k \cdot \nabla u = e^w \Delta u + e^w \nabla w \cdot \nabla u\]
+    Let $k(x) = e^{w(x)}$.
+    \[0 = \nabla \cdot (k \nabla u) = k \Delta u + \nabla k \cdot \nabla u = e^w \Delta u + e^w \nabla w \cdot \nabla u\]
 \[\nabla u \cdot \nabla w = -\Delta u\]
+
+This is then an ODE along the streamlines of $u$.
 
 
 \appendix
