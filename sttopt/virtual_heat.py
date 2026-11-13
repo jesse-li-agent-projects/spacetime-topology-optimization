@@ -8,8 +8,9 @@ without local minima, i.e. without material that prints before everything around
   subharmonic, so it has no interior maximum, and a decreasing map `T -> t` has no
   interior minimum over the part.
 - `laplace_time_field`: `div(chi grad t) = 0`, `t = 0` on the plate and optimized
-  nonnegative data on the other walls, `chi = chi(mu)` over the whole domain. The
-  maximum principle leaves no interior extremum over the domain; a dip in the wall
+  nonnegative data on the other walls, `chi = max(density**e, floor) * chi(mu)` over
+  the whole domain (`e = 0` drops the density). The maximum principle, which holds for
+  any `chi` bounded away from 0, leaves no interior extremum over the domain; a dip in the wall
   data is a local minimum on the wall, and two peaks give an interior saddle between
   them.
 
