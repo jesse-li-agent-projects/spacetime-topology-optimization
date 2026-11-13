@@ -14,3 +14,5 @@
 !seq_vs_sim/
 !seq_vs_sim/*.json
 !seq_vs_sim/README.md
+!tcr_sweep/
+!tcr_sweep/README.md
