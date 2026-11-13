@@ -172,19 +172,25 @@ def draw_setup(ax: Axes, problem) -> None:
         cols[clamped], -rows[clamped], color=INK, lw=1.4, solid_capstyle="butt", **out
     )
 
+    # A label inside the domain, pointing at the plate's midpoint: a bar along the edge
+    # would sit on top of the clamp where the two share an edge
     plate = torch_util.to_numpy(problem.mesh.plate).reshape(grid)
-    depth = 0.07 * unit
-    r0, r1 = rows[plate].min(), rows[plate].max()
-    c0, c1 = cols[plate].min(), cols[plate].max()
-    label = dict(ha="center", va="center", fontsize=5.5, color="white")
-    if r0 == r1:  # along the bottom or top edge
-        y = -r0 - depth if r0 == nely else -r0
-        ax.add_patch(Rectangle((c0, y), c1 - c0, depth, facecolor="0.45", lw=0, **out))
-        ax.text((c0 + c1) / 2, y + depth / 2, "build plate", **label)
-    else:  # along the left or right edge, clear of the clamp's hatching
-        x = c0 - hatch - depth if c0 == 0 else c0 + hatch
-        ax.add_patch(Rectangle((x, -r1), depth, r1 - r0, facecolor="0.45", lw=0, **out))
-        ax.text(x + depth / 2, -(r0 + r1) / 2, "build plate", rotation=90, **label)
+    mid = np.array([cols[plate].mean(), -rows[plate].mean()])
+    inward = np.array([nelx / 2, -nely / 2]) - mid
+    if rows[plate].min() == rows[plate].max():  # along the bottom or top edge
+        inward[0] = 0
+    else:
+        inward[1] = 0
+    ax.annotate(
+        "build plate",
+        xy=mid,
+        xytext=mid + 0.12 * unit * inward / np.hypot(*inward),
+        ha="left" if inward[0] > 0 else "right" if inward[0] < 0 else "center",
+        va="bottom" if inward[1] > 0 else "top" if inward[1] < 0 else "center",
+        fontsize=6.5,
+        color=INK,
+        arrowprops=dict(arrowstyle="-|>", color=INK, lw=0.6, mutation_scale=5),
+    )
 
     F = torch_util.to_numpy(problem.F).reshape(*grid, 2)
     loaded = (F != 0).any(axis=-1)
