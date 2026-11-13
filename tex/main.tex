@@ -155,6 +155,7 @@ We compute $K_e$ for each element $e$ with:
     K_e = \frac{1}{D}\sum_{j \in V_e} w_{ej}\,\lambda_{ej}\, F(t_e - t_j)s(\rho_e, \rho_j),
     \qquad
 \]
+\todo{Consider renaming w and lambda?}
 where:
 \begin{itemize}
     \item $V_e$ is the set of elements in a radius $r_K$ circle centered at element $e$
@@ -325,7 +326,6 @@ We compare three different formulations for the time field:
           \[\nabla \cdot (\kappa \nabla \tau) - \alpha_T \tau = 0 \qquad t=1-\tau\]
           Here, $\tau$ represents a virtual temperature field which decreases monotonically from the print bed, $\kappa$ is the design variable, and $\alpha_T \tau$ is a drain term to ensure the solution is not constant. This PDE has boundary conditions $\tau=1$ on the print bed and zero-flux elsewhere, and represents steady-state heat diffusion.
     \item Our PDE formulation of time, in \autoref{eqn:time_field_laplace}
-          \todo{Come up with a better name for this approach}
 \end{itemize}
 All time fields are initialized as linear ramps from the bottom of the design volume to the top (\autoref{fig:tf_time_init}), to make the results more comparable to a full STTO run where the geometry is not known a-priori.
 
@@ -396,6 +396,27 @@ A compliance penalty is only present for $T_{cr} \leq 0.5$.
 
 \section{Discussion and conclusions}
 % (2 page). Discussion of the results and Conclusions connecting results to research or design question.
+
+The presented approach represents a framework for addressing overheating; however, hyperparameters such as $r_K$ and the ideal shape of the radial and angular weights aren't optimized to represent a specific manufacturing process. While the exact choices for these hyperparameters likely do not impact the final design substantially, higher accuracy of predicted overheating risk can be achieved by calibrating these settings to match experimental data or higher-fidelity transient thermal simulations.
+
+Theoretically, local minima (corresponding to unsupported material) on the final part design are still possible, because the mathematical guarantee againts internal local minima applies to the entire design volume, including void elements.
+Therefore, elements on the boundary between solid and void could still have local minima when considering only the time field within the part.
+In practice, this rarely happens, because the material would likely violate the hotspot severity constraint, since there would be no surrounding material printed earlier in time and $F(\Delta t) \approx 0$ (as defined in \autoref{sec:hotspot_formulation}).
+This suggests that this approach, or a simple variant, could be used in other STTO formulations as a measure against local minima in time rather than for reducing overheating risk.
+
+A limitation of the time field formulation is that saddle points are not ruled out in the time field.
+Physically, saddle points are difficult or impossible to manufacture, since they have a zero radius of curvature as well as requiring material deposition from multiple sides.
+This could be addressed by applying a maximum curvature constraint.
+
+Some optimized designs include small holes which are smaller than the radius $r_K$ used to compute hotspot severity.
+As noted by \cite{das2025overheating}, this can result in an underestimate of the hotspot severity, since material beyond the gap contributes to the estimate of heat evacuation capacity $K$ while not actually contributing.
+\cite{das2025overheating} suggests using the robust formulation of topology optimization as introduced by \cite{Wang2011RobustProjection}.
+Alternatively, a smaller value of $r_K$ could be used.
+To re-incorporate longer-range effects, the heat evacuation capacity could be computed recursively, with elements weighted based on their heat evacuation capacity in the previous iteration.
+
+Despite these limitations, the developed approach provides a promising framework to harness the flexibility of multi-axis AM to improve manufacturing outcomes.
+The presented time field formulation provides a flexible yet resiliant parameterization, suitable for future development of space-time topology optimization techniques.
+By simultaneously optimizing the fabrication sequence and topology, manufacturing constraints can influence the part design without being stricter than necessary, maximizing performance.
 
 \section{Reflection}
 % (1 page) Discussion and reflection on project execution and own functioning.
