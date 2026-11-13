@@ -274,7 +274,7 @@ It is ineffective to encode this intuition as a hard constraint with a different
         $C$               & diffusivity contrast                 & 1000                   &                           \\
         $r_K$             & heat evacuation neighbourhood radius & \SI{12}{mm}            &                           \\
         $\kappa$          & angular weight anisotropy            & $0 \to 2.37$           & iterations 0--450         \\
-        $g_0$             & angular weight isotropy scale        & \SI{0.674}{\per\metre} &                           \\
+        $g_0$             & angular weight isotropy scale        & \SI{0.5}{\per\metre} &                           \\
         $k$               & cooling credit sharpness             & $1 \to 8$              & iterations 0--450 (log)   \\
         $\tau$            & cooling credit time scale            & 0.01                   &                           \\
         $q$               & shielding exponent                   & 2                      &                           \\
@@ -330,41 +330,40 @@ We compare three different formulations for the time field:
 All time fields are initialized as linear ramps from the bottom of the design volume to the top (\autoref{fig:tf_time_init}), to make the results more comparable to a full STTO run where the geometry is not known a-priori.
 
 
-\todo{@Claude have captions align vertically along their top edge, so that the images are aligned vertically}
 \begin{figure}[ht!]
     \centering
-    \begin{subfigure}[b]{0.32\textwidth}
+    \begin{subfigure}[t]{0.32\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_setup.pdf}
         \caption{Problem definition}
         \label{fig:tf_setup}
     \end{subfigure}\hfill
-    \begin{subfigure}[b]{0.32\textwidth}
+    \begin{subfigure}[t]{0.32\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_pure_to.pdf}
         \caption{Compliance-minization only design}
         \label{fig:tf_pure_to}
     \end{subfigure}\hfill
-    \begin{subfigure}[b]{0.32\textwidth}
+    \begin{subfigure}[t]{0.32\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_time_init.pdf}
         \caption{Initial time field}
         \label{fig:tf_time_init}
     \end{subfigure}
 
-    \begin{subfigure}[b]{0.32\textwidth}
+    \begin{subfigure}[t]{0.32\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_direct.pdf}
         \caption{Direct time formulation}
         \label{fig:tf_direct}
     \end{subfigure}\hfill
-    \begin{subfigure}[b]{0.32\textwidth}
+    \begin{subfigure}[t]{0.32\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_heat.pdf}
         \caption{Heat equation with sink term formulation}
         \label{fig:tf_heat}
     \end{subfigure}\hfill
-    \begin{subfigure}[b]{0.32\textwidth}
+    \begin{subfigure}[t]{0.32\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_laplace.pdf}
         \caption{\autoref{eqn:time_field_laplace} formulation}
