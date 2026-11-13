@@ -41,7 +41,7 @@
     ],
     "mode": "linear"
   },
-  "hotspot_g0_per_m": 0.6736,
+  "hotspot_g0_per_m": 0.5,
   "hotspot_weight": 0.3,
   "calibration_rate": 0.1,
   "hotspot_credit": "cooling",
