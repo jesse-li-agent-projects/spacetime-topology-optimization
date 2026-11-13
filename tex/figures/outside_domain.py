@@ -65,5 +65,8 @@ def build(out_dir: Path) -> None:
     ax.text(ELEMENT[0] + R_K / 2, ELEMENT[1] + 0.07, "$r_K$", color=MARK, **text)
     ax.text(ELEMENT[0] - 0.07, ELEMENT[1] + 0.09, "$e$", color=MARK, **text)
     # The whole page, not a tight box, which would pad the plate away from the edges
-    fig.savefig(out_dir / "outside_domain.pdf", bbox_inches=Bbox.from_bounds(0, 0, *fig.get_size_inches()))
+    fig.savefig(
+        out_dir / "outside_domain.pdf",
+        bbox_inches=Bbox.from_bounds(0, 0, *fig.get_size_inches()),
+    )
     plt.close(fig)
