@@ -378,7 +378,7 @@ All time fields are initialized as linear ramps from the bottom of the design vo
 \autoref{fig:tf_heat} does not face this issue, but along the bottom half of the part, the print fronts merge in the middle of the lower left member, which is physically challenging or impossible to print.
 In contrast, \autoref{fig:tf_laplace} results in the print fronts naturally merging where the bottom two members join in the middle.
 
-\subsection{Loose values of $T_{cr}$ result in a design without a compliance penalty}
+\subsection{Loose values of \texorpdfstring{$T_{cr}$}{Tcr} result in a design without a compliance penalty}
 Given that this formulation treats overheating as a constraint, we expect that the part topology should change relative to an unconstrained design only if changing the time field is insufficient to satisfy the constraint.
 Thus, for large enough values for $T_{cr}$, we should expect to see an identical design.
 In practice, because the layer thickness uniformity regularizer includes density, optimization dynamics result in different converged design.
