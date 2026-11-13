@@ -428,14 +428,14 @@ The argument follows \cite{richter1981inverse}, who used it to recover a diffusi
     \end{equation}
     Here $t$ is known and $w$ is unknown.
 
-    \emph{Step 2: solve along print paths.}
-    The left side of \autoref{eqn:transport} is the rate of change of $w$ along $\nabla t$, so it can be solved one path at a time, following paths that run along $\nabla t$, perpendicular to the layers\footnote{In the language of partial differential equations, these paths are the \emph{characteristics} of \autoref{eqn:transport}.}.
-    Measuring progress along a path by the print time $t$ itself, \autoref{eqn:transport} becomes an ordinary differential equation along each path:
+    \emph{Step 2: solve along streamlines.}
+    The left side of \autoref{eqn:transport} is the rate of change of $w$ along $\nabla t$, so it can be solved one streamline of $\nabla t$ at a time: the curves everywhere tangent to $\nabla t$, crossing the layers perpendicularly. As $\chi \nabla t$ points the same way, these are also the streamlines of the flux\footnote{In the language of partial differential equations, these streamlines are the \emph{characteristics} of \autoref{eqn:transport}.}.
+    Measuring progress along a streamline by the print time $t$ itself, \autoref{eqn:transport} becomes an ordinary differential equation along each streamline:
     \[
         \frac{\mathrm{d}w}{\mathrm{d}t} = -\frac{\Delta t}{\abs{\nabla t}^2}.
     \]
-    Since $\nabla t$ never vanishes, $t$ increases steadily along every path, so each path starts and ends on the domain boundary and covers a time range of at most $\max t - \min t$.
-    Setting $w = 0$ where each path starts and integrating gives $\abs{w} \leq Q$, hence the bounds on $\chi$\footnote{Neighbouring paths can start on different parts of the boundary, so $\chi$ can jump between paths. This is harmless: the jump runs along the paths, parallel to the flux $\chi \nabla t$, so no flux crosses it and \autoref{eqn:time_field_laplace} still holds in its usual integral (weak) form.}.
+    Since $\nabla t$ never vanishes, $t$ increases steadily along every streamline, so each streamline starts and ends on the domain boundary and covers a time range of at most $\max t - \min t$.
+    Setting $w = 0$ where each streamline starts and integrating gives $\abs{w} \leq Q$, hence the bounds on $\chi$\footnote{Neighbouring streamlines can start on different parts of the boundary, so $\chi$ can jump between them. This is harmless: the jump runs along streamlines of the flux, which no flux crosses, and \autoref{eqn:time_field_laplace} still holds in its usual integral (weak) form.}.
 
     \emph{Step 3: $t$ is the solution.}
     With $b = t$ on $\partial\Omega \backslash \partial\Omega_p$, and $t = 0$ on $\partial\Omega_p$ by assumption, $t$ satisfies both the equation and the boundary conditions of \autoref{eqn:time_field_laplace}.
