@@ -80,7 +80,7 @@
 
 \section{Introduction}
 % Short description of the assignment, its relevance and the field. (1 page)
-Additive manufacturing (AM), where material is incrementally deposited, and topology optimization, where a computer algorithm automatically designs a part's toppology and geometry in response to design objectives such as compliance, are two synergistic techniques. Topology optimization often results in complex part geometry, which often can only be manufactured with AM techniques.
+Additive manufacturing (AM), where material is incrementally deposited, and topology optimization, where a computer algorithm automatically designs a part's toppology and geometry in response to design objectives such as compliance, are two synergistic techniques. Topology optimization often results in complex part geometry, which AM techniques generally excel at manufacturing.
 
 Traditionally, 3-axis AM deposits material in uniform planar layers. However, the restriction in fabrication sequence introduces design constraints, depending on the specific AM technology being used. For example, fused deposition modelling limits the maximum overhang a part can have without separate support material. As another example, wire arc additive manufacturing results in substantial heat load applied to the in-progress part, which risks overheating if there is insufficient nearby material to conduct away heat.
 
@@ -88,31 +88,30 @@ Multi-axis AM offers more flexibility to tackle these challenges, by allowing cu
 Moreover, by using a topology optimization formulation that is aware of the fabrication sequence, the resulting design can potentially perform better than sequential optimization of part topology and fabrication sequence.
 
 Wang et al. \cite{wang2020spacetime} introduce space-time topology optimization (STTO), which simultaneously optimizes a density field (defining the part geometry) and a time field (defining the fabrication sequence), and use it to minimize compliance of intermediate structures as well as the final structure.
-\cite{das2025overheating} introduces a physically-motivated geometric method to efficiently estimate overheating severity, including a simplified approach suitable for STTO, and designs parts subject to a maximum overheating constraint.
+\cite{das2023thesis} introduces a physically-motivated geometric method to efficiently estimate overheating severity, including a simplified approach suitable for STTO, and designs parts subject to a maximum overheating constraint.
 % Note: Manav's approach uses direct time formulation
+\todo{Should I be citing Manav's thesis, which already has an early STTO formulation? Or Manav's paper, which just focuses on TO with planar fabrication?}
 
 A key requirement for physically realizable time fields is that they have no interior local minima or maxima.
 A local minimum in the time field corresponds to unsupported material, while a local maximum corresponds to fully surrounded material that cannot be physically accessed for material deposition.
-\cite{wang2020spacetime} and \cite{das2025overheating} address this through an explicit continuity constraint which ensures each internal element has neighours which are larger and smaller than it.
-check multi-file quirk.
+\cite{wang2020spacetime} and \cite{das2023thesis} address this through an explicit continuity constraint which ensures each internal element has neighours which are larger and smaller than it.
 \cite{Wang2024Regularization} represent time as the solution to a heat equation PDE with a sink term, to avoid local minima by construction; however this formulation still permits local maxima.
-
-\todo{Should I be citing Manav's thesis, which already has an early STTO formulation?}
 
 This work extends \cite{das2023thesis} and develops a more flexible and robust STTO approach. Our main contributions are:
 \begin{itemize}
-    \item Refinements to the optimization objective, which improves realism  near edges, account for printing direction effects on overheating, promotes layer uniformity, and improves optimization dynamics
+    \item Refinements to the optimization objective, which improve realism near edges, account for printing direction effects on overheating, promotes layer uniformity, and improves optimization dynamics
     \item A novel formulation for the time field as the solution to a steady-state diffusion equation, which automatically prevents local minima and maxima in the time field (a common challenge in STTO)
 \end{itemize}
 
 \section{Methodology}
 % (2 pages). Analysis of the research or engineering challenge and the
 % research plan.
+\todo{Define carefully what the elements are}
 
 \subsection{Topology formulation}
 We use a standard density-based formulation of topology optimization, utilizing solid isotropic material with penalization (SIMP) \cite{Bendsoe1989SimpFoundation} \cite{Zhou1991SimpFoundation}, density filtering \cite{BRUNS20013443DensityFilter}, and projection \cite{Guest2004DensityProjection}, and consider a linear elastic compliance minimization problem.
 
-Beginning with the density design variable $\rho_d$, defined for each element $i$ as $\rho_{d,i}$, we apply filtering to get filtered density $\rho_f$, to avoid checkerboardingn and introduce a minimum length scale:
+Beginning with the density design variable $\rho_d$, defined for each element $i$ as $\rho_{d,i}$, we apply filtering to get filtered density $\rho_f$, to avoid checkerboarding and introduce a minimum length scale:
 \[\rho_{f,i} =  \frac{\sum_j w (\mathbf{x_i} - \mathbf{x_j}) \rho_{d,j}}{\sum_j w (\mathbf{x_i} - \mathbf{x_j})} \qquad w(\mathbf{x_i} - \mathbf{x_j}) = \max \left(0, 1-\frac{\norm{\mathbf{x_i} - \mathbf{x_j}}}{r_{f}}\right)\]
 We apply Heaviside projection to promote binarization and get physical density $\rho$:
 \[\rho_i = 1 - e^{-\beta \rho_{f,i}} + \rho_{f,i}e^{-\beta} \]
@@ -265,29 +264,29 @@ It is ineffective to encode this intuition as a hard constraint with a different
     \label{tab:hyperparameters}
     \begin{tabular}{llll}
         \toprule
-        Symbol            & Description                          & Value                  & Schedule                  \\
+        Symbol            & Description                          & Value                & Schedule                  \\
         \midrule
-        $n_\mathrm{loop}$ & Number of iterations                 & 750                    &                           \\
-        $p$               & SIMP penalization                    & $2 \to 5$              & iterations 0--450         \\
-        $\beta$           & Heaviside projection sharpness       & $2 \to 8$              & iterations 450--550 (log) \\
-        $r_f$             & density filter radius                & \SI{4}{mm}             &                           \\
-        $a$               & diffusivity density exponent         & 4                      &                           \\
-        $C$               & diffusivity contrast                 & 1000                   &                           \\
-        $r_K$             & heat evacuation neighbourhood radius & \SI{12}{mm}            &                           \\
-        $\kappa$          & angular weight anisotropy            & $0 \to 2.37$           & iterations 0--450         \\
+        $n_\mathrm{loop}$ & Number of iterations                 & 750                  &                           \\
+        $p$               & SIMP penalization                    & $2 \to 5$            & iterations 0--450         \\
+        $\beta$           & Heaviside projection sharpness       & $2 \to 8$            & iterations 450--550 (log) \\
+        $r_f$             & density filter radius                & \SI{4}{mm}           &                           \\
+        $a$               & diffusivity density exponent         & 4                    &                           \\
+        $C$               & diffusivity contrast                 & 1000                 &                           \\
+        $r_K$             & heat evacuation neighbourhood radius & \SI{12}{mm}          &                           \\
+        $\kappa$          & angular weight anisotropy            & $0 \to 2.37$         & iterations 0--450         \\
         $g_0$             & angular weight isotropy scale        & \SI{0.3}{\per\metre} &                           \\
-        $k$               & cooling credit sharpness             & $1 \to 8$              & iterations 0--450 (log)   \\
-        $\tau$            & cooling credit time scale            & 0.01                   &                           \\
-        $q$               & shielding exponent                   & 2                      &                           \\
-        $\varepsilon_s$   & shielding ratio regularization       & $10^{-3}$              &                           \\
-        $\varepsilon_S$   & void severity mask threshold         & $10^{-3}$              &                           \\
-        $\varepsilon_U$   & uniformity regularization            & $10^{-12}$             &                           \\
-        $\beta_S$         & severity aggregation sharpness       & 100                    &                           \\
-        $\alpha$          & calibration moving-average rate      & 0.1                    &                           \\
-        $\beta_\Phi$      & hotspot penalty sharpness            & 100                    &                           \\
-        $w_u$             & layer uniformity weight              & 0.1                    &                           \\
-        $w_\Phi$          & hotspot penalty weight               & 100                    &                           \\
-        $w_S$             & hotspot severity weight              & 0.3                    &                           \\
+        $k$               & cooling credit sharpness             & $1 \to 8$            & iterations 0--450 (log)   \\
+        $\tau$            & cooling credit time scale            & 0.01                 &                           \\
+        $q$               & shielding exponent                   & 2                    &                           \\
+        $\varepsilon_s$   & shielding ratio regularization       & $10^{-3}$            &                           \\
+        $\varepsilon_S$   & void severity mask threshold         & $10^{-3}$            &                           \\
+        $\varepsilon_U$   & uniformity regularization            & $10^{-12}$           &                           \\
+        $\beta_S$         & severity aggregation sharpness       & 100                  &                           \\
+        $\alpha$          & calibration moving-average rate      & 0.1                  &                           \\
+        $\beta_\Phi$      & hotspot penalty sharpness            & 100                  &                           \\
+        $w_u$             & layer uniformity weight              & 0.1                  &                           \\
+        $w_\Phi$          & hotspot penalty weight               & 100                  &                           \\
+        $w_S$             & hotspot severity weight              & 0.3                  &                           \\
         \bottomrule
     \end{tabular}
 \end{table}
@@ -419,6 +418,14 @@ By simultaneously optimizing the fabrication sequence and topology, manufacturin
 
 \section{Reflection}
 % (1 page) Discussion and reflection on project execution and own functioning.
+The project execution was ultimately successful. There were a few choices made early on which helped to reduce iteration time and improve the chances of success:
+\begin{itemize}
+    \item The research code was implemented in Python using PyTorch, enabling automatic differentiation (autograd) and GPU acceleration. Autograd substantially reduced the effort needed to try new formulations and the likelihood of bugs from incorrect sensitivity derivations. GPU acceleration tightened the iteration loop of developing a new formulation and seeing the effects.
+    \item Coding agents were used to accelerate implementation, review, and testing.
+    \item Initial efforts were done on the simplified problem of sequence-only optimization on a fixed geometry, which helped to isolate and identify flaws in the hotspot severity and time optimization formulations, before they got coupled with variable topology.
+\end{itemize}
+
+Additionally, the approximately weekly reporting provided a good regular opportunity to reflect upon progress and ensure the project was staying on track.
 
 \clearpage
 
