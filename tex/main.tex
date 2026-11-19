@@ -96,11 +96,12 @@ A key requirement for physically realizable time fields is that they have no int
 A local minimum in the time field corresponds to unsupported material, while a local maximum corresponds to fully surrounded material that cannot be physically accessed for material deposition.
 \cite{wang2020spacetime} and \cite{das2023thesis} address this through an explicit continuity constraint which ensures each internal element has neighours which are larger and smaller than it.
 \cite{Wang2024Regularization} represent time as the solution to a heat equation PDE with a sink term, to avoid local minima by construction; however this formulation still permits local maxima.
+\cite{Xu2025CurvedLayerSlicing} derive the fabrication sequence for multi-axis AM from a steady-state heat conduction problem with a design-dependent conductivity, then fit a field to the normalized temperature gradient by solving a Poisson equation, following the heat method for geodesic distance \cite{crane2013geodesics}, to obtain near-uniform layer thickness. The Poisson fit does not satisfy a maximum principle, so local extrema are no longer ruled out by construction.
 
 This work extends \cite{das2023thesis} and develops a more flexible and robust STTO approach. Our main contributions are:
 \begin{itemize}
     \item Refinements to the optimization objective, which improve realism near edges, account for printing direction effects on overheating, promotes layer uniformity, and improves optimization dynamics
-    \item A novel formulation for the time field as the solution to a steady-state diffusion equation, which automatically prevents local minima and maxima in the time field (a common challenge in STTO)
+    \item A formulation for the time field as the solution to a steady-state diffusion equation with designable boundary data, used directly as the time field rather than as an input to a Poisson fit as in \cite{Xu2025CurvedLayerSlicing}, which automatically prevents local minima and maxima in the time field (a common challenge in STTO)
 \end{itemize}
 
 \section{Methodology}
@@ -109,11 +110,11 @@ This work extends \cite{das2023thesis} and develops a more flexible and robust S
 \todo{Define carefully what the elements are}
 
 \subsection{Topology formulation}
-We use a standard density-based formulation of topology optimization, utilizing solid isotropic material with penalization (SIMP) \cite{Bendsoe1989SimpFoundation} \cite{Zhou1991SimpFoundation}, density filtering \cite{BRUNS20013443DensityFilter}, and projection \cite{Guest2004DensityProjection}, and consider a linear elastic compliance minimization problem.
+We use a standard density-based formulation of topology optimization, utilizing solid isotropic material with penalization (SIMP) \cite{Bendsoe1989SimpFoundation} \cite{Zhou1991SimpFoundation}, density filtering \cite{BRUNS20013443DensityFilter}, and projection \cite{Guest2004DensityProjection, Wang2011RobustProjection}, and consider a linear elastic compliance minimization problem.
 
 Beginning with the density design variable $\rho_d$, defined for each element $i$ as $\rho_{d,i}$, we apply filtering to get filtered density $\rho_f$, to avoid checkerboarding and introduce a minimum length scale:
 \[\rho_{f,i} =  \frac{\sum_j w (\mathbf{x_i} - \mathbf{x_j}) \rho_{d,j}}{\sum_j w (\mathbf{x_i} - \mathbf{x_j})} \qquad w(\mathbf{x_i} - \mathbf{x_j}) = \max \left(0, 1-\frac{\norm{\mathbf{x_i} - \mathbf{x_j}}}{r_{f}}\right)\]
-We apply hyperbolic tangent projection to promote binarization and get physical density $\rho$:
+We apply hyperbolic tangent projection \cite{Wang2011RobustProjection} to promote binarization and get physical density $\rho$:
 \[\rho_i = \frac{\tanh(\beta \nu) + \tanh\left(\beta (\rho_{f,i} - \nu)\right)}{\tanh(\beta \nu) + \tanh\left(\beta (1 - \nu)\right)}\]
 $r_f$ is the filter radius, $\beta$ is the projection sharpness, and $\nu$ is the projection threshold.
 
@@ -342,8 +343,12 @@ We compare three different formulations for the time field:
     \item Having the time field be the solution of a heat equation with a sink term, as done in \cite{Wang2024Regularization}:
           \[\nabla \cdot (\kappa \nabla \tau) - \alpha_T \tau = 0 \qquad t=1-\tau\]
           Here, $\tau$ represents a virtual temperature field which decreases monotonically from the print bed, $\kappa$ is the design variable, and $\alpha_T \tau$ is a drain term to ensure the solution is not constant. This PDE has boundary conditions $\tau=1$ on the print bed and zero-flux elsewhere, and represents steady-state heat diffusion.
+    \item The same heat equation, followed by a Poisson fit to the direction of $-\nabla \tau$, as done in \cite{Xu2025CurvedLayerSlicing}:
+          \[\nabla \cdot (\rho \nabla t) = \nabla \cdot \left(\rho \mathbf{X}\right) \qquad \mathbf{X} = -\frac{\nabla \tau}{\abs{\nabla \tau}}\]
+          with $t = 0$ on the print bed and zero flux of $\rho (\nabla t - \mathbf{X})$ elsewhere. This is the least-squares fit of $\nabla t$ to the unit vector field $\mathbf{X}$, so $\abs{\nabla t} \approx 1$ and layers are close to uniform thickness, at the cost of the maximum principle. \cite{Xu2025CurvedLayerSlicing} use a heat equation without a sink term and an unweighted fit; we keep the sink term so the two heat formulations differ only in how $t$ is obtained from $\tau$, and weight the fit by density $\rho$ so it follows the material.
     \item Our PDE formulation of time, in \autoref{eqn:time_field_laplace}
 \end{itemize}
+We use sink strength $\alpha_T = 25 / A$ for the Poisson variant, with $A$ the design domain area, and $\alpha_T = 1 / A$ for $t = 1 - \tau$, which gave the lowest hotspot severity in a sweep over $0.3 / A$ to $25 / A$; at $25 / A$, $\tau$ decays so quickly that $t = 1 - \tau$ saturates near 1 over the upper half of the part.
 All time fields are initialized as linear ramps from the bottom of the design volume to the top (\autoref{fig:tf_time_init}), to make the results more comparable to a full STTO run where the geometry is not known a-priori.
 
 
@@ -368,19 +373,25 @@ All time fields are initialized as linear ramps from the bottom of the design vo
         \label{fig:tf_time_init}
     \end{subfigure}
 
-    \begin{subfigure}[t]{0.32\textwidth}
+    \begin{subfigure}[t]{0.24\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_direct.pdf}
         \caption{Direct time formulation}
         \label{fig:tf_direct}
     \end{subfigure}\hfill
-    \begin{subfigure}[t]{0.32\textwidth}
+    \begin{subfigure}[t]{0.24\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_heat.pdf}
-        \caption{Heat equation with sink term formulation}
+        \caption{Heat equation with sink term, $t = 1 - \tau$}
         \label{fig:tf_heat}
     \end{subfigure}\hfill
-    \begin{subfigure}[t]{0.32\textwidth}
+    \begin{subfigure}[t]{0.24\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/tf_heat_poisson.pdf}
+        \caption{Heat equation with sink term and Poisson fit}
+        \label{fig:tf_heat_poisson}
+    \end{subfigure}\hfill
+    \begin{subfigure}[t]{0.24\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_laplace.pdf}
         \caption{\autoref{eqn:time_field_laplace} formulation}
@@ -392,7 +403,8 @@ All time fields are initialized as linear ramps from the bottom of the design vo
 \end{figure}
 
 \autoref{fig:tf_direct} results in two local maxima and an unsupported local minima on the top member, which is an physically unrealizable design. It is challenging for a gradient-based direct time field optimizer to escape such a failure because doing so requires a global change in the time-field configuration, and this design is effectively a local minimum in the design space.
-\autoref{fig:tf_heat} does not face this issue, but along the bottom half of the part, the print fronts merge in the middle of the lower left member, which is physically challenging or impossible to print.
+\autoref{fig:tf_heat} does not face this issue, but the print fronts climbing the two diagonal members merge in the middle of the top member, which is printed last with little earlier material nearby, so the hotspot severity stays well above $T_{cr}$ (0.76 against 0.6). No sink strength in the sweep avoids this: a strong sink term saturates $t$, while a weak one leaves $\tau$ nearly flat along members fed from both ends, since only the sink term drives a gradient along them.
+\autoref{fig:tf_heat_poisson} recovers near-uniform layers, but along the bottom half of the part, the print fronts merge in the middle of the lower left member, which is physically challenging or impossible to print. Unlike \autoref{fig:tf_laplace}, both heat formulations also contain saddle points in the time field over the part.
 In contrast, \autoref{fig:tf_laplace} results in the print fronts naturally merging where the bottom two members join in the middle.
 
 \subsection{Loose values of \texorpdfstring{$T_{cr}$}{Tcr} result in a design without a compliance penalty}
