@@ -193,6 +193,11 @@ def normalize(
 
     (`max(xPhys * t)` would scale a grey start at `xPhys = 0.5` up to about 2.)
     """
+    # Known flaw, left unfixed: the scale is a hard drop. Its gradient is discarded, yet it
+    # is recomputed each iteration and jumps when the arg-max element leaves `part_mask`,
+    # so every `t` rescales between MMA steps without the optimizer having seen it; this
+    # possibly damages the optimization dynamics. A candidate fix is to track the scale
+    # with an exponential moving average, as `smooth_max.CalibratedLogSumExp` does.
     return t / t[part_mask(xPhys)].max().detach()
 
 
