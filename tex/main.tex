@@ -113,7 +113,8 @@ We use a standard density-based formulation of topology optimization, utilizing 
 
 Beginning with the density design variable $\rho_d$, defined for each element $i$ as $\rho_{d,i}$, we apply filtering to get filtered density $\rho_f$, to avoid checkerboarding and introduce a minimum length scale:
 \[\rho_{f,i} =  \frac{\sum_j w (\mathbf{x_i} - \mathbf{x_j}) \rho_{d,j}}{\sum_j w (\mathbf{x_i} - \mathbf{x_j})} \qquad w(\mathbf{x_i} - \mathbf{x_j}) = \max \left(0, 1-\frac{\norm{\mathbf{x_i} - \mathbf{x_j}}}{r_{f}}\right)\]
-We apply Heaviside projection to promote binarization and get physical density $\rho$:
+We apply hyperbolic tangent projection to promote binarization and get physical density $\rho$:
+\todo{@Claude replace below projection formula with correct tanh projection as used in the implementation, and make sure to include the \nu in the hyperparameter table later}
 \[\rho_i = 1 - e^{-\beta \rho_{f,i}} + \rho_{f,i}e^{-\beta} \]
 $r_f$ is the filter radius, and $\beta$ is the projection sharpness.
 
@@ -127,28 +128,36 @@ where $N_e$ is the number of elements, $\mathbf{U}$ and $\mathbf{K}$ are the glo
 
 \subsection{Time field formulation}
 Let $\Omega$ denote the design domain over which to optimize, and $\partial \Omega$ be the domain boundary. Let $\partial \Omega_p$ be the boundary corresponding to the build plate. Let $\mathbf{x}$ denote the spatial coordinates.
-We define the time field $t$ as the solution to the steady state diffusion equation
+We define the raw time field $t_r$ as the solution to the steady state diffusion equation
 
 \begin{equation}
-    \nabla\cdot\big(\chi\nabla t\big) = 0, \quad t(\mathbf{x}) = 0 \ \forall \mathbf{x} \in \partial \Omega_p, \quad t(\mathbf{x}) = b(\mathbf{x}) \ \forall \mathbf{x} \in \partial \Omega \backslash \partial \Omega_p
+    \nabla\cdot\big(\chi\nabla t_r\big) = 0, \quad t_r(\mathbf{x}) = 0 \ \forall \mathbf{x} \in \partial \Omega_p, \quad t_r(\mathbf{x}) = b(\mathbf{x}) \ \forall \mathbf{x} \in \partial \Omega \backslash \partial \Omega_p
     \label{eqn:time_field_laplace}
 \end{equation}
 
-where $b(\mathbf{x})$ is a nonhomogenous Dirichlet boundary condition, $\chi = \max\left(\rho^a, 10^{-5}\right)C^{\mu(\mathbf{x}) - 0.5}$ is a non-uniform diffusivity coefficient, $\rho$ is the design density,  and $\mu(\mathbf{x})$ is a density-uncorrected diffusivity coefficient.
-We consider $\mu(\mathbf{x})$ and $b(\mathbf{x})$ to be design variables to optimize for.
-While one can directly optimize over $\chi$ instead of $\mu$, the optimization problem is better behaved if we optimize over $\mu$; this formulation allows $\chi$ to extend over several orders of magnitude and automatically change with $\rho$ while $\mu \in [0, 1]$ stays order 1.
-$a$ and $C$ are constant hyperparameters; we find $a=4$ and $C=1000$ to work well.
+where $b(\mathbf{x})$ is a nonhomogenous Dirichlet boundary condition, $\chi = \max\left(\rho^a, 10^{-5}\right)C^{\mu(\mathbf{x}) - 0.5}$ is a non-uniform diffusivity coefficient, $\rho$ is the density, and $\mu(\mathbf{x})$ is a density-uncorrected diffusivity coefficient.
+
+We compute $b$ as a filtered version of the raw wall boundary condition $b_r$, computed with
+\[b\]
+\todo{@Claude fill in above equation}
+
+We consider $\mu(\mathbf{x})$ and $b_r(\mathbf{x})$ to be design variables to optimize for.
+While one can directly optimize over $\chi$ instead of $\mu$, the optimization problem is better behaved if we optimize over $\mu$; this formulation allows $\chi$ to extend over several orders of magnitude and automatically change with $\rho$ while $0 \leq \mu \leq 1$ stays order 1.
+$a$ and $C$ are constant hyperparameters; we find $a=4$ and $C=1000$ to work well. $b_r$ is constrained to satisfy $0 \leq b_r \leq 1$.
 
 A key property of this formulation is that in the interior of $\Omega$, there are no local minima or maxima.
-Moreover, \autoref{sec:time_field_generality} shows that any sufficiently smooth time field $t$ that is zero on the build plate and has no critical points (and thus strictly positive layer thickness everywhere) is the solution to \autoref{eqn:time_field_laplace} for some choice of $\chi$ and $b$. Thus, this formulation does not restrict the design space of valid time fields.
+Moreover, \autoref{sec:time_field_generality} shows that any sufficiently smooth time field $t_r$ that is zero on the build plate and has no critical points (and thus strictly positive layer thickness everywhere) is the solution to \autoref{eqn:time_field_laplace} for some choice of $\chi$ and $b$. Thus, this formulation does not restrict the design space of valid time fields.
 
 This formulation does not rule out the existence of local minima on the design space boundary, which are still problematic for physical reasons. However, in practice this rarely occurs, because a local minimum in time also tends to have high hotspot severity, as defined in \autoref{sec:hotspot_formulation}, because it has no supporting material.
 
 The time field wall data ($b$) is initialized by taking the geodesic distance across the design domain from the build plate\footnote{For implementation simplicity, the geodesic distance is approximated by building a discrete graph with 8-connected edges and using shortest-path algorithms on the graph.}. $\mu$ is initialized to a uniform constant (0.5).
 
+We scale the time variable to be from 0 to 1 across the part, by dividing by the maximum time in material that would binarize to solid. Specifically, we compute $t_{max}$ as the largest time over elements where $\rho_i > \max \rho / 2$. We compute the binarization threshold relative to the maximum density rather than using 0.5, because initializing the design space uniformly in density with volume fraction less than 0.5 would then result in no elements satisfying the threshold. We then compute the (actual) time field with $t = t_r / t_{max}$.
+
 \subsection{Hotspot severity formulation}
 \label{sec:hotspot_formulation}
-To assess the risk of overheating at any given material point, we define a metric $K$ to estimate the heat evacuation capacity\footnote{\cite{das2023thesis} refers to this as \emph{Conductivity Estimation}; to avoid ambiguity with conductivity as a material property we use the term \emph{heat evacuation capacity estimate}.}; a higher $K$ corresponds to a better ability to evacuate heat and reduced risk of overheating.
+To assess the risk of overheating at any given material point, we define a metric $K$ on each element to estimate the heat evacuation capacity\footnote{\cite{das2023thesis} refers to this as \emph{Conductivity Estimation}; to avoid ambiguity with conductivity as a material property we use the term \emph{heat evacuation capacity estimate}.}; a higher $K$ corresponds to a better ability to evacuate heat and reduced risk of overheating. Since $K$ is computed on a per-element basis and requires element print time as an input, we use the mean print time for that element, which for Q4 bilinear elements, is equal to the time at the geometric center and the mean of the time at the four nodes.
+
 We compute $K_e$ for each element $e$ with:
 \[
     K_e = \frac{1}{D}\sum_{j \in V_e} w_{ej}\,\lambda_{ej}\, F(t_e - t_j)s(\rho_e, \rho_j),
@@ -239,7 +248,7 @@ We optimize over density field $\rho$ and time-field design variables $\mu$ and 
               \qquad
               \sigma^2 = \frac{\sum_j \rho_j(g_j - m)^2}{\sum_j \rho_j}
           \]
-    \item $\Phi(\rho, t)$ is a hotspot constraint penalty term, penalizing elements whose severity exceeds the maximum acceptable severity $T_{cr}$:
+    \item $\Phi(\rho, t)$ is a hotspot constraint penalty term, penalizing elements whose severity exceeds a critical severity $T_{cr}$:
           \[
               \Phi(\rho, t) = \frac{1}{N_e} \sum_{e} \rho_e \frac{1}{\beta_\Phi} \mathrm{softplus}\big(\beta_\Phi (S_e - T_{cr})\big), \qquad \mathrm{softplus}(x) = \ln \left(1 + e^x\right)
           \]
@@ -256,7 +265,7 @@ It is ineffective to encode this intuition as a hard constraint with a different
 
 \section{Results}
 % (4 pages). Description of execution and findings.
-\autoref{tab:hyperparameters} lists the hyperparameter settings used for all results. Scheduled parameters are interpolated linearly (or logarithmically, where noted) between the listed iterations.
+\autoref{tab:hyperparameters} lists the hyperparameter settings used for all results. Scheduled parameters are interpolated linearly (or logarithmically, where noted) between the listed iterations. Displacement and time fields are both solved using Q4 bilinear elements.
 
 \begin{table}[ht!]
     \centering
@@ -268,7 +277,7 @@ It is ineffective to encode this intuition as a hard constraint with a different
         \midrule
         $n_\mathrm{loop}$ & Number of iterations                 & 750                  &                           \\
         $p$               & SIMP penalization                    & $2 \to 5$            & iterations 0--450         \\
-        $\beta$           & Heaviside projection sharpness       & $2 \to 8$            & iterations 450--550 (log) \\
+        $\beta$           & projection sharpness       & $2 \to 8$            & iterations 450--550 (log) \\
         $r_f$             & density filter radius                & \SI{4}{mm}           &                           \\
         $a$               & diffusivity density exponent         & 4                    &                           \\
         $C$               & diffusivity contrast                 & 1000                 &                           \\
@@ -290,6 +299,8 @@ It is ineffective to encode this intuition as a hard constraint with a different
         \bottomrule
     \end{tabular}
 \end{table}
+
+In addition, the critical severity $T_{cr}$ is linearly ramped from 1 to its final value over the first 150 iterations. The continuation schedule roughly falls into two phases; the first phase (lasting 450 iterations) lays out the design, while the second phase (iteration 450 onward) binarizes the design, primarily by increasing projection sharpness $\beta$. 
 
 \subsection{Simultaneous optimizaion ensures features are thick enough to avoid overheating}
 \label{sec:sim_vs_seq}
