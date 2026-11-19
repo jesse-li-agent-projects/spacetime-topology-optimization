@@ -114,9 +114,8 @@ We use a standard density-based formulation of topology optimization, utilizing 
 Beginning with the density design variable $\rho_d$, defined for each element $i$ as $\rho_{d,i}$, we apply filtering to get filtered density $\rho_f$, to avoid checkerboarding and introduce a minimum length scale:
 \[\rho_{f,i} =  \frac{\sum_j w (\mathbf{x_i} - \mathbf{x_j}) \rho_{d,j}}{\sum_j w (\mathbf{x_i} - \mathbf{x_j})} \qquad w(\mathbf{x_i} - \mathbf{x_j}) = \max \left(0, 1-\frac{\norm{\mathbf{x_i} - \mathbf{x_j}}}{r_{f}}\right)\]
 We apply hyperbolic tangent projection to promote binarization and get physical density $\rho$:
-\todo{@Claude replace below projection formula with correct tanh projection as used in the implementation, and make sure to include the \nu in the hyperparameter table later}
-\[\rho_i = 1 - e^{-\beta \rho_{f,i}} + \rho_{f,i}e^{-\beta} \]
-$r_f$ is the filter radius, and $\beta$ is the projection sharpness.
+\[\rho_i = \frac{\tanh(\beta \nu) + \tanh\left(\beta (\rho_{f,i} - \nu)\right)}{\tanh(\beta \nu) + \tanh\left(\beta (1 - \nu)\right)}\]
+$r_f$ is the filter radius, $\beta$ is the projection sharpness, and $\nu$ is the projection threshold.
 
 Each element has an elastic modulus $E_i$, interpolated with SIMP, with
 \[E_i(\rho_i) =  E_{min} + \rho_i^p (E_0 - E_{min})\]
@@ -138,8 +137,14 @@ We define the raw time field $t_r$ as the solution to the steady state diffusion
 where $b(\mathbf{x})$ is a nonhomogenous Dirichlet boundary condition, $\chi = \max\left(\rho^a, 10^{-5}\right)C^{\mu(\mathbf{x}) - 0.5}$ is a non-uniform diffusivity coefficient, $\rho$ is the density, and $\mu(\mathbf{x})$ is a density-uncorrected diffusivity coefficient.
 
 We compute $b$ as a filtered version of the raw wall boundary condition $b_r$, computed with
-\[b\]
-\todo{@Claude fill in above equation}
+\begin{gather*}
+    b(s_k) = \frac{2 d_{max}}{W} \sum_j \left(w_b(s_k - s_j) - w_b(s_k + s_j) - w_b(2L - s_k - s_j)\right) b_r(s_j), \\
+    w_b(d) = \max\left(0, 1 - \frac{\abs{d}}{r_b}\right),
+    \qquad W = \sum_{m \in \mathbb{Z}} w_b(m h)
+\end{gather*}
+where $s$ is the arc length along the wall $\partial \Omega \backslash \partial \Omega_p$, running from $0$ to $L$ between the two points where it meets the build plate, $s_j$ are the positions of the boundary nodes, $h$ is the element size, $r_b$ is the wall filter radius, and $d_{max}$ is the largest geodesic distance from the build plate to the wall.
+The second and third terms in the sum reflect $b_r$ with its sign flipped across each end of the wall, as the wall continues into the build plate where $t_r = 0$: a linear ramp rising from the build plate passes through the filter unchanged, and $b \geq 0$ whenever $b_r \geq 0$.
+The factor $2 d_{max}$ scales $b_r$ so that the geodesic distance initialization (below) has $b_r \leq 1/2$, leaving room for $b$ to rise above it anywhere.
 
 We consider $\mu(\mathbf{x})$ and $b_r(\mathbf{x})$ to be design variables to optimize for.
 While one can directly optimize over $\chi$ instead of $\mu$, the optimization problem is better behaved if we optimize over $\mu$; this formulation allows $\chi$ to extend over several orders of magnitude and automatically change with $\rho$ while $0 \leq \mu \leq 1$ stays order 1.
@@ -278,7 +283,9 @@ It is ineffective to encode this intuition as a hard constraint with a different
         $n_\mathrm{loop}$ & Number of iterations                 & 750                  &                           \\
         $p$               & SIMP penalization                    & $2 \to 5$            & iterations 0--450         \\
         $\beta$           & projection sharpness       & $2 \to 8$            & iterations 450--550 (log) \\
+        $\nu$             & projection threshold                 & 0.5                  &                           \\
         $r_f$             & density filter radius                & \SI{4}{mm}           &                           \\
+        $r_b$             & wall data filter radius              & \SI{4}{mm}           &                           \\
         $a$               & diffusivity density exponent         & 4                    &                           \\
         $C$               & diffusivity contrast                 & 1000                 &                           \\
         $r_K$             & heat evacuation neighbourhood radius & \SI{12}{mm}          &                           \\
