@@ -1,6 +1,7 @@
 """The time-field formulations on S03bT06, as six subfigure panels: the problem setup, the
 plain TO design, and the initial time field, then the time field of the direct, the heat
-and the Laplace formulation, each optimized on the plain TO's grayscale density. Local
+(with the drain-term map `t = 1 - T`, and with the Poisson fit) and the Laplace
+formulation, each optimized on the plain TO's grayscale density. Local
 minima of the time field over the part, the elements printed without support, are
 circled.
 
@@ -35,7 +36,8 @@ PLAIN_TO = "tf_S03bT06_plain_to"
 INITIAL = "tf_S03bT06_direct_continuity_seq"
 PANELS = (
     ("tf_direct", "tf_S03bT06_direct_continuity_seq"),
-    ("tf_heat", "tf_S03bT06_heat_seq"),
+    ("tf_heat", "tf_S03bT06_heat_one_minus_seq"),
+    ("tf_heat_poisson", "tf_S03bT06_heat_seq"),
     ("tf_laplace", "tf_S03bT06_laplace_seq"),
 )
 # The panels closing each row of the figure carry the time field's colorbar
