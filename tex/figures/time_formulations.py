@@ -8,8 +8,9 @@ circled.
 Reads `output/tf_S03bT06_*`, made as in `configs/time_formulations/README.md`. Every
 panel has one page size and plot box, centred with equal side margins, so they line up
 in a grid in `main.tex` and each sits centred over its caption; the margins hold the
-setup's supports, loads and plate, and the colorbars. Run from the repo root, via
-`python -m tex.make_figures`.
+setup's supports, loads and plate. The time field's colorbar is a separate strip of the
+same height, closing each row, so the panels need no room for it. Run from the repo
+root, via `python -m tex.make_figures`.
 """
 
 import dataclasses
@@ -40,13 +41,12 @@ PANELS = (
     ("tf_heat_poisson", "tf_S03bT06_heat_db1_seq"),
     ("tf_laplace", "tf_S03bT06_laplace_seq"),
 )
-# The panels closing each row of the figure carry the time field's colorbar
-COLORBAR = ("tf_time_init", "tf_laplace")
-
 # Margins around the square plot box, in inches: side (both), bottom, top
-SIDE_IN, BOTTOM_IN, TOP_IN = 0.5, 0.14, 0.24
+SIDE_IN, BOTTOM_IN, TOP_IN = 0.2, 0.14, 0.24
 BOX_IN = 1.3
 FIGSIZE_IN = (2 * SIDE_IN + BOX_IN, BOTTOM_IN + BOX_IN + TOP_IN)
+# Width of the colorbar strip, which shares the panels' height and plot box rows
+COLORBAR_IN = 0.5
 
 
 def _panel() -> tuple[plt.Figure, Axes]:
@@ -58,17 +58,18 @@ def _panel() -> tuple[plt.Figure, Axes]:
 
 def _save(fig: plt.Figure, path: Path) -> None:
     # The whole page, not `viz`'s tight bbox, so every panel keeps the same box
-    fig.savefig(path, bbox_inches=Bbox.from_bounds(0, 0, *FIGSIZE_IN))
+    fig.savefig(path, bbox_inches=Bbox.from_bounds(0, 0, *fig.get_size_inches()))
     plt.close(fig)
 
 
-def _colorbar(fig: plt.Figure) -> None:
-    w, h = FIGSIZE_IN
-    x = (SIDE_IN + BOX_IN + 0.06) / w
-    cax = fig.add_axes((x, BOTTOM_IN / h, 0.07 / w, BOX_IN / h))
+def _colorbar() -> plt.Figure:
+    w, h = COLORBAR_IN, FIGSIZE_IN[1]
+    fig = plt.figure(figsize=(w, h))
+    cax = fig.add_axes((0.02 / w, BOTTOM_IN / h, 0.07 / w, BOX_IN / h))
     fig.colorbar(ScalarMappable(Normalize(0, 1), "viridis"), cax=cax, extend="max")
     cax.tick_params(labelsize=6)
     cax.set_ylabel("print time $t$", fontsize=7)
+    return fig
 
 
 def _mark_minima(ax: Axes, d: designs.Design, problem) -> None:
@@ -113,14 +114,12 @@ def build(out_dir: Path, *, device: str | None = None) -> None:
         t0 = data["tPhys"]
     fig, ax = _panel()
     _draw_time(ax, dataclasses.replace(plain, tPhys=t0))
-    _colorbar(fig)
     _save(fig, out_dir / "tf_time_init.pdf")
+    _save(_colorbar(), out_dir / "tf_colorbar.pdf")
 
     for name, tag in PANELS:
         d = designs.evaluate(problem, designs.run_dir(tag, README))
         fig, ax = _panel()
         _draw_time(ax, d)
         _mark_minima(ax, d, problem)
-        if name in COLORBAR:
-            _colorbar(fig)
         _save(fig, out_dir / f"{name}.pdf")
