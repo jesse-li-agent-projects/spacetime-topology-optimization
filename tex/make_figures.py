@@ -16,6 +16,7 @@ FIGURES = (
     "outside_domain",
     "seq_vs_sim",
     "tcr_sweep",
+    "time_field_steps",
     "time_formulations",
 )
 # Options each figure's `build` accepts, besides `out_dir`
