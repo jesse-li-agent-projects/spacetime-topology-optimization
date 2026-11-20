@@ -13,6 +13,9 @@ only where the time field forces it:
   well at 1 as at 25.
 - **`heat_one_minus.json`**: `heat.json` with Wu's map `t = 1 - T` (`one_minus`) in place of the
   Poisson fit, for comparing the two maps.
+- **`heat_unweighted.json`, `heat_one_minus_unweighted.json`**: the two with `density_weighted`
+  off, so `chi = chi(mu)` and the fit is unweighted, as in Xu2025. The time field can then bridge
+  void, e.g. a Poisson-fit local minimum on the top member; not in the figure.
 - **`direct.json`** (`stto`): `t` optimized directly, with log compliance (`log_compliance`) like the other two,
   the start-point constraint, the time filter, `tmove` and a roughness term. Layer uniformity alone
   rewards a sawtooth in `t`, which the harmonic parameterizations cannot form, so this is the
@@ -47,4 +50,11 @@ python -m sttopt.stto_laplace_cli --config configs/time_formulations/laplace.jso
 python -m sttopt.stto_heat_cli    --config configs/time_formulations/heat.json              --tag tf_S03bT06_heat_db1_seq          --fixed-density output/tf_S03bT06_plain_to
 python -m sttopt.stto_heat_cli    --config configs/time_formulations/heat_one_minus.json    --tag tf_S03bT06_heat_one_minus_db1_seq --fixed-density output/tf_S03bT06_plain_to
 python -m sttopt.stto_cli         --config configs/time_formulations/direct_continuity.json --tag tf_S03bT06_direct_continuity_seq --fixed-density output/tf_S03bT06_plain_to
+```
+
+Without density weighting, on the same density:
+
+```
+python -m sttopt.stto_heat_cli --config configs/time_formulations/heat_unweighted.json           --tag tf_S03bT06_heat_unweighted_db1_seq       --fixed-density output/tf_S03bT06_plain_to
+python -m sttopt.stto_heat_cli --config configs/time_formulations/heat_one_minus_unweighted.json --tag tf_S03bT06_heat_one_minus_unweighted_seq --fixed-density output/tf_S03bT06_plain_to
 ```
