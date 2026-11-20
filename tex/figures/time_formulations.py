@@ -36,7 +36,7 @@ PLAIN_TO = "tf_S03bT06_plain_to"
 INITIAL = "tf_S03bT06_direct_continuity_seq"
 PANELS = (
     ("tf_direct", "tf_S03bT06_direct_continuity_seq"),
-    ("tf_heat", "tf_S03bT06_heat_one_minus_seq"),
+    ("tf_heat", "tf_S03bT06_heat_one_minus_db1_seq"),
     ("tf_heat_poisson", "tf_S03bT06_heat_seq"),
     ("tf_laplace", "tf_S03bT06_laplace_seq"),
 )

@@ -10,7 +10,8 @@ only where the time field forces it:
   diffusivity's own move limit (`field_move` 0.002), no wall data and no density factor in the
   diffusivity.
 - **`heat_one_minus.json`**: `heat.json` with Wu's map `t = 1 - T` (`one_minus`) in place of the
-  Poisson fit, for comparing the two maps; `drain_beta` stays at the value tuned for `poisson`.
+  Poisson fit, for comparing the two maps, and `drain_beta` 1: the lowest max severity of a sweep
+  over 0.3-25 (25 saturates `1 - T` far from the plate).
 - **`direct.json`** (`stto`): `t` optimized directly, with log compliance (`log_compliance`) like the other two,
   the start-point constraint, the time filter, `tmove` and a roughness term. Layer uniformity alone
   rewards a sawtooth in `t`, which the harmonic parameterizations cannot form, so this is the
@@ -43,6 +44,6 @@ grayscale density, the direct one with the continuity constraint:
 python -m sttopt.stto_laplace_cli --config configs/time_formulations/plain_to.json          --tag tf_S03bT06_plain_to
 python -m sttopt.stto_laplace_cli --config configs/time_formulations/laplace.json           --tag tf_S03bT06_laplace_seq           --fixed-density output/tf_S03bT06_plain_to
 python -m sttopt.stto_heat_cli    --config configs/time_formulations/heat.json              --tag tf_S03bT06_heat_seq              --fixed-density output/tf_S03bT06_plain_to
-python -m sttopt.stto_heat_cli    --config configs/time_formulations/heat_one_minus.json    --tag tf_S03bT06_heat_one_minus_seq    --fixed-density output/tf_S03bT06_plain_to
+python -m sttopt.stto_heat_cli    --config configs/time_formulations/heat_one_minus.json    --tag tf_S03bT06_heat_one_minus_db1_seq --fixed-density output/tf_S03bT06_plain_to
 python -m sttopt.stto_cli         --config configs/time_formulations/direct_continuity.json --tag tf_S03bT06_direct_continuity_seq --fixed-density output/tf_S03bT06_plain_to
 ```
