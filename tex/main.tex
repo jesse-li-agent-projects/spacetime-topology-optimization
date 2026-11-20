@@ -357,7 +357,7 @@ We compare four different formulations for the time field:
           with $t = 0$ on the print bed and zero flux of $\rho (\nabla t - \mathbf{X})$ elsewhere. This is the least-squares fit of $\nabla t$ to the unit vector field $\mathbf{X}$, so $\abs{\nabla t} \approx 1$ and layers have nearly uniform thickness. \cite{Xu2025CurvedLayerSlicing} use manually-specified non-homogeneous Dirichlet boundary conditions to generate a non-trivial time solution; we use a sink term to avoid needing to manually specify the boundary conditions.
     \item \code{optimized_bc}: Our PDE formulation of time, in \autoref{eqn:time_field_laplace}
 \end{itemize}
-We use sink strength $\alpha_T = 1 / A$ for both heat formulations, with $A$ the design domain area, which gave the lowest hotspot severity for \code{sink_term} in a sweep over $0.3 / A$ to $25 / A$; at $25 / A$, $\tau$ decays so quickly that $t = 1 - \tau$ saturates near 1 over the upper half of the part.
+We use sink strength $\alpha_T = 1/A$ for \code{sink_term}, with $A$ the design domain area, which gave the lowest hotspot severity in a sweep over $0.3/A$ to $25/A$, and $\alpha_T = 25/A$ for \code{poisson}, whose hotspot severity is insensitive to $\alpha_T$ over that range.
 All time fields are initialized as linear ramps from the bottom of the design volume to the top (\autoref{fig:tf_time_init}), to make the results more comparable to a full STTO run where the geometry is not known a-priori.
 
 
