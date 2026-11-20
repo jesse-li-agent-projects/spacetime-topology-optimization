@@ -8,12 +8,12 @@ only where the time field forces it:
 - **Both:** no hotspot row in the constraint stack (`hotspot_constraint`), as `stto_laplace` has none.
 - **`heat.json`** (`stto_heat`): the drained heat equation (`poisson` time map), the
   diffusivity's own move limit (`field_move` 0.002), no wall data, and the density linear in the
-  diffusivity and weighting the Poisson fit. `drain_beta` 1: the lowest max severity of a sweep over
-  0.3-25 for `one_minus` (25 saturates `1 - T` far from the plate); the Poisson fit does about as
-  well at 1 as at 25.
+  diffusivity and weighting the Poisson fit. `drain_beta` 25; the Poisson fit's max severity is
+  about the same over a sweep of 0.3-25.
 - **`heat_one_minus.json`**: `heat.json` with Wu's map `t = 1 - T` (`one_minus`) in place of the
-  Poisson fit, for comparing the two maps.
-- **`heat_unweighted.json`, `heat_one_minus_unweighted.json`**: the two with `density_weighted`
+  Poisson fit, for comparing the two maps, and `drain_beta` 1: the lowest max severity of that
+  sweep for `one_minus` (25 saturates `1 - T` far from the plate).
+- **`heat_unweighted.json`, `heat_one_minus_unweighted.json`**: the two at `drain_beta` 1 with `density_weighted`
   off, so `chi = chi(mu)` and the fit is unweighted, as in Xu2025. The time field can then bridge
   void, e.g. a Poisson-fit local minimum on the top member; not in the figure.
 - **`direct.json`** (`stto`): `t` optimized directly, with log compliance (`log_compliance`) like the other two,
@@ -47,7 +47,7 @@ grayscale density, the direct one with the continuity constraint:
 ```
 python -m sttopt.stto_laplace_cli --config configs/time_formulations/plain_to.json          --tag tf_S03bT06_plain_to
 python -m sttopt.stto_laplace_cli --config configs/time_formulations/laplace.json           --tag tf_S03bT06_laplace_seq           --fixed-density output/tf_S03bT06_plain_to
-python -m sttopt.stto_heat_cli    --config configs/time_formulations/heat.json              --tag tf_S03bT06_heat_db1_seq          --fixed-density output/tf_S03bT06_plain_to
+python -m sttopt.stto_heat_cli    --config configs/time_formulations/heat.json              --tag tf_S03bT06_heat_seq              --fixed-density output/tf_S03bT06_plain_to
 python -m sttopt.stto_heat_cli    --config configs/time_formulations/heat_one_minus.json    --tag tf_S03bT06_heat_one_minus_db1_seq --fixed-density output/tf_S03bT06_plain_to
 python -m sttopt.stto_cli         --config configs/time_formulations/direct_continuity.json --tag tf_S03bT06_direct_continuity_seq --fixed-density output/tf_S03bT06_plain_to
 ```

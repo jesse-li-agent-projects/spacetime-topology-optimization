@@ -357,60 +357,66 @@ We compare four different formulations for the time field:
           with $t = 0$ on the print bed and zero flux of $\rho (\nabla t - \mathbf{X})$ elsewhere. This is the least-squares fit of $\nabla t$ to the unit vector field $\mathbf{X}$, so $\abs{\nabla t} \approx 1$ and layers have nearly uniform thickness. \cite{Xu2025CurvedLayerSlicing} use manually-specified non-homogeneous Dirichlet boundary conditions to generate a non-trivial time solution; we use a sink term to avoid needing to manually specify the boundary conditions.
     \item \code{optimized_bc}: Our PDE formulation of time, in \autoref{eqn:time_field_laplace}
 \end{itemize}
-We use sink strength $\alpha_T = 1 / A$ for both heat formulations, with $A$ the design domain area, which gave the lowest hotspot severity for \code{sink_term} in a sweep over $0.3 / A$ to $25 / A$; at $25 / A$, $\tau$ decays so quickly that $t = 1 - \tau$ saturates near 1 over the upper half of the part.
+We use sink strength $\alpha_T = 1/A$ for \code{sink_term}, with $A$ the design domain area, which gave the lowest hotspot severity in a sweep over $0.3/A$ to $25/A$, and $\alpha_T = 25/A$ for \code{poisson}, whose hotspot severity is insensitive to $\alpha_T$ over that range.
 All time fields are initialized as linear ramps from the bottom of the design volume to the top (\autoref{fig:tf_time_init}), to make the results more comparable to a full STTO run where the geometry is not known a-priori.
 
 
 \begin{figure}[ht!]
     \centering
-    \begin{subfigure}[t]{0.32\textwidth}
+    \captionsetup[subfigure]{justification=centering}
+    \begin{subfigure}[t]{0.225\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_setup.pdf}
         \caption{Problem definition}
         \label{fig:tf_setup}
     \end{subfigure}\hfill
-    \begin{subfigure}[t]{0.32\textwidth}
+    \begin{subfigure}[t]{0.225\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_pure_to.pdf}
         \caption{Compliance-minization only design}
         \label{fig:tf_pure_to}
     \end{subfigure}\hfill
-    \begin{subfigure}[t]{0.32\textwidth}
+    \begin{subfigure}[t]{0.225\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_time_init.pdf}
         \caption{Initial time field}
         \label{fig:tf_time_init}
+    \end{subfigure}%
+    \begin{subfigure}[t]{0.066\textwidth}
+        \includegraphics[width=\textwidth]{figures/tf_colorbar.pdf}
     \end{subfigure}
 
-    \begin{subfigure}[t]{0.24\textwidth}
+    \begin{subfigure}[t]{0.225\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_direct.pdf}
         \caption{\code{direct}}
         \label{fig:tf_direct}
     \end{subfigure}\hfill
-    \begin{subfigure}[t]{0.24\textwidth}
+    \begin{subfigure}[t]{0.225\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_heat.pdf}
         \caption{\code{sink_term}}
         \label{fig:tf_heat}
     \end{subfigure}\hfill
-    \begin{subfigure}[t]{0.24\textwidth}
+    \begin{subfigure}[t]{0.225\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_heat_poisson.pdf}
         \caption{\code{poisson}}
         \label{fig:tf_heat_poisson}
     \end{subfigure}\hfill
-    \begin{subfigure}[t]{0.24\textwidth}
+    \begin{subfigure}[t]{0.225\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_laplace.pdf}
         \caption{\code{optimized_bc}}
         \label{fig:tf_laplace}
+    \end{subfigure}%
+    \begin{subfigure}[t]{0.066\textwidth}
+        \includegraphics[width=\textwidth]{figures/tf_colorbar.pdf}
     \end{subfigure}
     \caption{Time fields optimized to minimize hotspot severity on a fixed density with different time field formulations. Red circles mark local minima of the time field over the part, corresponding to elements printed without support.
     }
     \label{fig:time_formulations}
 \end{figure}
-\todo{@Claude second row of figures above are smaller. Can we reduce horizontal white space between figures, so that the top & bottom figures are the same size?}
 
 \autoref{fig:tf_direct} results in two local maxima and an unsupported local minima on the top member, which is an physically unrealizable design. It is challenging for a gradient-based direct time field optimizer to escape such a failure because doing so requires a global change in the time-field configuration, and this design is effectively a local minimum in the design space.
 \autoref{fig:tf_heat} does not face this issue, but results in less uniform layers, especially near $t \approx 1$ by the nature of the sink term behaviour. This is counteracted somewhat by our choice of a weak sink term, but too weak of a sink term results in numerical challenges.
