@@ -224,7 +224,7 @@ def physical_fields(
         problem.mesh,
         xPhys,
         mu,
-        problem.wall_filter @ wall,
+        wall_data(problem, wall),
         previous,
         density_exponent=run_config.weight_at(config.chi_density_exponent, loop),
     )
@@ -235,7 +235,7 @@ def wall_data(
     problem: Problem, wall: Float[Tensor, " n_arc"]
 ) -> Float[Tensor, " n_arc"]:
     """The Dirichlet data `b` on the wall arc that `physical_fields` solves with."""
-    return problem.wall_filter @ wall * virtual_heat.wall_scale(problem.mesh)
+    return problem.wall_filter @ wall
 
 
 def init_state(problem: Problem) -> State:

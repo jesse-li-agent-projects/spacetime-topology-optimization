@@ -408,18 +408,24 @@ def heat_time_field(
     mu: Float[Tensor, "nely nelx"],
     previous: TimeFieldSolution | None = None,
     conduction_penal: float = 1.0,
+    density_weighted: bool = True,
 ) -> TimeFieldSolution:
     """Variant 1: the time field from the drained heat equation through the material.
 
-    :param xPhys: physical densities
+    :param xPhys: physical densities; they always set the normalization
     :param mu: diffusivity design field
     :param conduction_penal: the exponent on the density in `chi`
+    :param density_weighted: whether the density is a factor in `chi` and the weight of
+        the Poisson fit; if not, both are 1
     :param previous: the last iteration's solution, the warm start
     :return: `tPhys` and the nodal solutions
     """
     shape = xPhys.shape
-    density = torch.clamp(xPhys.flatten(), min=DENSITY_FLOOR)
-    penalized = torch.clamp(xPhys.flatten() ** conduction_penal, min=DENSITY_FLOOR)
+    if density_weighted:
+        density = torch.clamp(xPhys.flatten(), min=DENSITY_FLOOR)
+        penalized = torch.clamp(xPhys.flatten() ** conduction_penal, min=DENSITY_FLOOR)
+    else:
+        density = penalized = torch.ones_like(xPhys.flatten())
     chi = penalized * diffusivity(mu.flatten(), config.chi_contrast)
     alpha = config.drain_beta / mesh.unit_length**2
     T = mesh.solve(
@@ -502,16 +508,16 @@ def _plate_distance(mesh: ScalarMesh) -> Float[Tensor, " n_arc"]:
     )
 
 
-def wall_scale(mesh: ScalarMesh) -> float:
-    """The wall data at `wall = 1`: twice the walls' largest distance to the plate, so
-    `distance_wall` sits at `wall <= 1/2` and the data can rise above it anywhere."""
-    return 2 * float(_plate_distance(mesh).max())
-
-
 def distance_wall(mesh: ScalarMesh) -> Float[Tensor, " n_arc"]:
     """The wall design of the distance to the plate through the domain: on a rectangle
-    with uniform `chi`, `t` is then the linear ramp away from the plate."""
-    return _plate_distance(mesh) / wall_scale(mesh)
+    with uniform `chi`, `t` is then the linear ramp away from the plate, up to the wall
+    filter rounding the ramp's bends at the corners off the plate (by about `rmin / 6`).
+
+    Scaled to a largest value of 1/2, the middle of the design's box: `t` does not change
+    with the scale of the wall data, so the scale only places the design for MMA.
+    """
+    distance = _plate_distance(mesh)
+    return distance / (2 * distance.max())
 
 
 def wall_filter(n_arc: int, rmin: float) -> Float[np.ndarray, "n_arc n_arc"]:
@@ -542,7 +548,7 @@ def laplace_time_field(
     mesh: ScalarMesh,
     xPhys: Float[Tensor, "nely nelx"],
     mu: Float[Tensor, "nely nelx"],
-    wall: Float[Tensor, " n_arc"],
+    b: Float[Tensor, " n_arc"],
     previous: TimeFieldSolution | None = None,
     density_exponent: float = 0.0,
 ) -> TimeFieldSolution:
@@ -555,7 +561,7 @@ def laplace_time_field(
     :param xPhys: physical densities; they set the normalization, and `chi` through
         `density_exponent`
     :param mu: diffusivity design field
-    :param wall: wall design on `[0, 1]`; the wall data is `wall * wall_scale(mesh)`
+    :param b: the Dirichlet data on the wall arc
     :param previous: the last iteration's solution, the warm start
     :param density_exponent: `e` in `chi = max(xPhys**e, config.chi_density_floor) *
         chi(mu)`; 0 leaves `chi` independent of the density
@@ -569,7 +575,6 @@ def laplace_time_field(
             rho.flatten() ** density_exponent, min=config.chi_density_floor
         )
     chi = torch.where(mesh.active, chi, 1.0)
-    b = wall * wall_scale(mesh)
 
     g = torch.zeros(mesh.ndof, device=chi.device, dtype=chi.dtype).index_put(
         (mesh.arc,), b

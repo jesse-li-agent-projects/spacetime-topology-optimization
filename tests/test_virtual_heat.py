@@ -314,6 +314,32 @@ def test_conduction_penal_stops_the_leak_through_grey_near_void():
     assert float(T(grey, 3.0)[far]) < 1e-3 * float(T(grey, 1.0)[far])
 
 
+def test_unweighted_time_field_ignores_the_density():
+    """Without density weighting, `T` and the Poisson fit depend on `mu` alone."""
+    nelx, nely = 20, 12
+    mesh = _mesh(nelx, nely)
+    rng = np.random.default_rng(0)
+    mu = torch.tensor(rng.uniform(0.2, 0.8, (nely, nelx)))
+    config = virtual_heat_config(
+        HeatRunConfig,
+        nelx=nelx,
+        nely=nely,
+        heat_cg_rtol=1e-13,
+        poisson_cg_rtol=1e-13,
+        time_map=HeatTimeMap.POISSON.value,
+    )
+
+    def solve(x, weighted):
+        return vh.heat_time_field(config, mesh, x, mu, density_weighted=weighted)
+
+    a, b = (torch.tensor(rng.uniform(0.01, 1, (nely, nelx))) for _ in range(2))
+    for field in ("primary", "poisson"):
+        torch.testing.assert_close(
+            getattr(solve(a, False), field), getattr(solve(b, False), field)
+        )
+    assert not torch.allclose(solve(a, True).poisson, solve(b, True).poisson)
+
+
 @pytest.mark.parametrize("cls,time_map", OPTIONS)
 def test_gradient_matches_finite_differences(cls, time_map, monkeypatch):
     """The scales that are treated as constants by design (the normalization, the

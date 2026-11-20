@@ -219,6 +219,7 @@ def physical_fields(
         mu,
         previous,
         conduction_penal=penal if config.penalize_conduction else 1.0,
+        density_weighted=config.density_weighted,
     )
     return xPhys, solution
 
