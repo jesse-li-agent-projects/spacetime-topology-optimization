@@ -178,7 +178,6 @@ We compute $K_e$ for each element $e$ with:
     K_e = \frac{1}{D}\sum_{j \in V_e} w_{ej}\,\lambda_{ej}\, F(t_e - t_j)s(\rho_e, \rho_j),
     \qquad
 \]
-\todo{Consider renaming w and lambda?}
 where:
 \begin{itemize}
     \item $V_e$ is the set of elements in a radius $r_K$ circle centered at element $e$
@@ -356,8 +355,6 @@ We compare four different formulations for the time field:
     \item \code{poisson}: The same heat equation, followed by a Poisson fit to the direction of $-\nabla \tau$, similar to \cite{Xu2025CurvedLayerSlicing}:
           \[\nabla \cdot (\rho \nabla t) = \nabla \cdot \left(\rho \mathbf{X}\right) \qquad \mathbf{X} = -\frac{\nabla \tau}{\abs{\nabla \tau}}\]
           with $t = 0$ on the print bed and zero flux of $\rho (\nabla t - \mathbf{X})$ elsewhere. This is the least-squares fit of $\nabla t$ to the unit vector field $\mathbf{X}$, so $\abs{\nabla t} \approx 1$ and layers have nearly uniform thickness. \cite{Xu2025CurvedLayerSlicing} use manually-specified non-homogeneous Dirichlet boundary conditions to generate a non-trivial time solution; we use a sink term to avoid needing to manually specify the boundary conditions.
-          %   so the two heat formulations differ only in how $t$ is obtained from $\tau$, and weight the fit by density $\rho$ so it follows the material.
-          \todo{Hopefully we can do this without a fit}
     \item \code{optimized_bc}: Our PDE formulation of time, in \autoref{eqn:time_field_laplace}
 \end{itemize}
 We use sink strength $\alpha_T = 1 / A$ for both heat formulations, with $A$ the design domain area, which gave the lowest hotspot severity for \code{sink_term} in a sweep over $0.3 / A$ to $25 / A$; at $25 / A$, $\tau$ decays so quickly that $t = 1 - \tau$ saturates near 1 over the upper half of the part.
