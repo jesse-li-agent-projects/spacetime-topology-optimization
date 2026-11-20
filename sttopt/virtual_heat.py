@@ -510,7 +510,9 @@ def wall_scale(mesh: ScalarMesh) -> float:
 
 def distance_wall(mesh: ScalarMesh) -> Float[Tensor, " n_arc"]:
     """The wall design of the distance to the plate through the domain: on a rectangle
-    with uniform `chi`, `t` is then the linear ramp away from the plate."""
+    with uniform `chi`, `t` is then the linear ramp away from the plate, up to the wall
+    filter rounding the ramp's bends at the corners off the plate (by about `rmin / 6`).
+    """
     return _plate_distance(mesh) / wall_scale(mesh)
 
 
