@@ -502,18 +502,16 @@ def _plate_distance(mesh: ScalarMesh) -> Float[Tensor, " n_arc"]:
     )
 
 
-def wall_scale(mesh: ScalarMesh) -> float:
-    """The wall data at `wall = 1`: twice the walls' largest distance to the plate, so
-    `distance_wall` sits at `wall <= 1/2` and the data can rise above it anywhere."""
-    return 2 * float(_plate_distance(mesh).max())
-
-
 def distance_wall(mesh: ScalarMesh) -> Float[Tensor, " n_arc"]:
     """The wall design of the distance to the plate through the domain: on a rectangle
     with uniform `chi`, `t` is then the linear ramp away from the plate, up to the wall
     filter rounding the ramp's bends at the corners off the plate (by about `rmin / 6`).
+
+    Scaled to a largest value of 1/2, the middle of the design's box: `t` does not change
+    with the scale of the wall data, so the scale only places the design for MMA.
     """
-    return _plate_distance(mesh) / wall_scale(mesh)
+    distance = _plate_distance(mesh)
+    return distance / (2 * distance.max())
 
 
 def wall_filter(n_arc: int, rmin: float) -> Float[np.ndarray, "n_arc n_arc"]:
@@ -544,7 +542,7 @@ def laplace_time_field(
     mesh: ScalarMesh,
     xPhys: Float[Tensor, "nely nelx"],
     mu: Float[Tensor, "nely nelx"],
-    wall: Float[Tensor, " n_arc"],
+    b: Float[Tensor, " n_arc"],
     previous: TimeFieldSolution | None = None,
     density_exponent: float = 0.0,
 ) -> TimeFieldSolution:
@@ -557,7 +555,7 @@ def laplace_time_field(
     :param xPhys: physical densities; they set the normalization, and `chi` through
         `density_exponent`
     :param mu: diffusivity design field
-    :param wall: wall design on `[0, 1]`; the wall data is `wall * wall_scale(mesh)`
+    :param b: the Dirichlet data on the wall arc
     :param previous: the last iteration's solution, the warm start
     :param density_exponent: `e` in `chi = max(xPhys**e, config.chi_density_floor) *
         chi(mu)`; 0 leaves `chi` independent of the density
@@ -571,7 +569,6 @@ def laplace_time_field(
             rho.flatten() ** density_exponent, min=config.chi_density_floor
         )
     chi = torch.where(mesh.active, chi, 1.0)
-    b = wall * wall_scale(mesh)
 
     g = torch.zeros(mesh.ndof, device=chi.device, dtype=chi.dtype).index_put(
         (mesh.arc,), b
