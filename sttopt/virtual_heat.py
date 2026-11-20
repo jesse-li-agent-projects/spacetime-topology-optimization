@@ -408,18 +408,24 @@ def heat_time_field(
     mu: Float[Tensor, "nely nelx"],
     previous: TimeFieldSolution | None = None,
     conduction_penal: float = 1.0,
+    density_weighted: bool = True,
 ) -> TimeFieldSolution:
     """Variant 1: the time field from the drained heat equation through the material.
 
-    :param xPhys: physical densities
+    :param xPhys: physical densities; they always set the normalization
     :param mu: diffusivity design field
     :param conduction_penal: the exponent on the density in `chi`
+    :param density_weighted: whether the density is a factor in `chi` and the weight of
+        the Poisson fit; if not, both are 1
     :param previous: the last iteration's solution, the warm start
     :return: `tPhys` and the nodal solutions
     """
     shape = xPhys.shape
-    density = torch.clamp(xPhys.flatten(), min=DENSITY_FLOOR)
-    penalized = torch.clamp(xPhys.flatten() ** conduction_penal, min=DENSITY_FLOOR)
+    if density_weighted:
+        density = torch.clamp(xPhys.flatten(), min=DENSITY_FLOOR)
+        penalized = torch.clamp(xPhys.flatten() ** conduction_penal, min=DENSITY_FLOOR)
+    else:
+        density = penalized = torch.ones_like(xPhys.flatten())
     chi = penalized * diffusivity(mu.flatten(), config.chi_contrast)
     alpha = config.drain_beta / mesh.unit_length**2
     T = mesh.solve(
