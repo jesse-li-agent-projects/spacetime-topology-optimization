@@ -126,7 +126,7 @@ def draw_time(ax: Axes, d: Design, contours: int = 20) -> None:
 
 
 def draw_severity(ax: Axes, d: Design, Tcr: float, norm: Normalize) -> None:
-    """Excess severity `S_e - T_cr` over the solid part (`xPhys >= 0.5`), void gray."""
+    """Excess severity `S_e - S_cr` over the solid part (`xPhys >= 0.5`), void gray."""
     nely, nelx = d.xPhys.shape
     shown = (d.xPhys >= 0.5) & np.isfinite(d.severity)
     ax.imshow(

@@ -1,4 +1,4 @@
-"""Hotspot severity across a sweep of the maximum acceptable severity `T_cr` on the
+"""Hotspot severity across a sweep of the maximum acceptable severity `S_cr` (`Tcr` in the code) on the
 cantilever, for `tex/main.tex`, with the sequential design for reference: one panel per
 design, all on one absolute colour scale, void gray.
 
@@ -53,7 +53,7 @@ def build(out_dir: Path, *, device: str | None = None) -> None:
         # Rounded first, so a change that rounds to zero does not print as -0.0
         change = round(100 * (d.compliance / reference.compliance - 1), 1) + 0.0
         panels.append(
-            (f"$T_{{cr}} = {Tcr:g}$, compliance {d.compliance:.1f} ({change:+.1f}%)", d)
+            (f"$S_{{cr}} = {Tcr:g}$, compliance {d.compliance:.1f} ({change:+.1f}%)", d)
         )
     norm = Normalize(0, max(d.max_severity for _, d in panels))
 

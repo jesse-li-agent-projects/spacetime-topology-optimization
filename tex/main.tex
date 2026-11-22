@@ -259,13 +259,12 @@ where the bounds hold for every element (or designed boundary node, for $b_r$), 
               \qquad
               \sigma^2 = \frac{\sum_j \rho_j(g_j - m)^2}{\sum_j \rho_j}
           \]
-    \item $\Phi(\rho, t)$ is a hotspot constraint penalty term, penalizing elements whose severity exceeds a critical severity $T_{cr}$:
+    \item $\Phi(\rho, t)$ is a hotspot constraint penalty term, penalizing elements whose severity exceeds a critical severity $S_{cr}$:
           \[
-              \Phi(\rho, t) = \frac{1}{N_e} \sum_{e} \rho_e \frac{1}{\beta_\Phi} \mathrm{softplus}\big(\beta_\Phi (S_e - T_{cr})\big)
+              \Phi(\rho, t) = \frac{1}{N_e} \sum_{e} \rho_e \frac{1}{\beta_\Phi} \mathrm{softplus}\big(\beta_\Phi (S_e - S_{cr})\big)
           \]
-          where $\beta_\Phi$ controls the sharpness of softplus. This penalty formulation uses gradient pressure to remove density wherever an element has severity $S_e$ exceeding $T_{cr}$, while applying near zero pressure wherever $S_e < T_{cr}$, so it shapes the optimization dynamics with little effect on the optimum.
-          \todo{@Claude can we safely rename T_cr -> S_cr ? Might be more meaningful as a name}
-    \item $S(\operatorname{sg}[\rho], \mu, b_r)$ is the hotspot severity and its addition to the optimization objective pressures the time field to minimize the hotspot severity even when $S_e \leq T_{cr}$. $\operatorname{sg}[\cdot]$ denotes a stop-gradient (detaching $\rho$'s gradients); this includes the dependence of $t$ on $\rho$ through $\chi$. The purpose of this term is to optimize the time field first to reduce $S_e$, and only have the hotspot severity constraint influence $\rho$ if modifying the time field is insufficient to avoid overheating.
+          where $\beta_\Phi$ controls the sharpness of softplus. This penalty formulation uses gradient pressure to remove density wherever an element has severity $S_e$ exceeding $S_{cr}$, while applying near zero pressure wherever $S_e < S_{cr}$, so it shapes the optimization dynamics with little effect on the optimum.
+              \item $S(\operatorname{sg}[\rho], \mu, b_r)$ is the hotspot severity and its addition to the optimization objective pressures the time field to minimize the hotspot severity even when $S_e \leq S_{cr}$. $\operatorname{sg}[\cdot]$ denotes a stop-gradient (detaching $\rho$'s gradients); this includes the dependence of $t$ on $\rho$ through $\chi$. The purpose of this term is to optimize the time field first to reduce $S_e$, and only have the hotspot severity constraint influence $\rho$ if modifying the time field is insufficient to avoid overheating.
     \item $g_V$ is the volume fraction constraint, with $\bar V$ the maximum volume fraction.
     \item $w_u$, $w_\Phi$, and $w_S$ are weighting hyperparameters controlling the relative strengths of their associated terms.
 \end{itemize}
@@ -273,7 +272,7 @@ where the bounds hold for every element (or designed boundary node, for $b_r$), 
 $\Phi$ encodes the intuition that if a feature cannot be solidified without leading to overheating (e.g. thin members), it should be removed.
 The penalty term $\Phi$ is used instead of a hard constraint on severity $S$ because the choice of $s$ makes the hotspot severity largely invariant to uniform changes in density, and so a hard constraint would provide negligible gradient pressure on a gray (i.e. partially solid) feature.
 
-It is ineffective to encode this intuition as a hard constraint with a different formulation for $S$, because to do so would require a positive gradient of $S$ with respect to uniform changes in density, and therefore imply that a uniform reduction in density can be used to reduce $S$. However, this tends to cause thin members to become gray (at the point just before $S$ exceeds $T_{cr}$), rather than fully disappearing.
+It is ineffective to encode this intuition as a hard constraint with a different formulation for $S$, because to do so would require a positive gradient of $S$ with respect to uniform changes in density, and therefore imply that a uniform reduction in density can be used to reduce $S$. However, this tends to cause thin members to become gray (at the point just before $S$ exceeds $S_{cr}$), rather than fully disappearing.
 
 \section{Results}
 % (4 pages). Description of execution and findings.
@@ -315,7 +314,7 @@ Displacement and time fields are both solved using Q4 bilinear elements.
     \end{tabular}
 \end{table}
 
-In addition, the critical severity $T_{cr}$ is linearly ramped from 1 to its final value over the first 150 iterations. The continuation schedule roughly falls into two phases; the first phase (lasting 450 iterations) lays out the design, while the second phase (iteration 450 onward) binarizes the design, primarily by increasing projection sharpness $\beta$.
+In addition, the critical severity $S_{cr}$ is linearly ramped from 1 to its final value over the first 150 iterations. The continuation schedule roughly falls into two phases; the first phase (lasting 450 iterations) lays out the design, while the second phase (iteration 450 onward) binarizes the design, primarily by increasing projection sharpness $\beta$.
 
 \subsection{Simultaneous optimization ensures features are thick enough to avoid overheating}
 \label{sec:sim_vs_seq}
@@ -331,7 +330,7 @@ As a test problem, we consider a cantilever beam with a tip load, with a mesh si
 \begin{figure}[ht!]
     \centering
     \includegraphics[width=\textwidth]{figures/seq_vs_sim.pdf}
-    \caption{Comparison of optimization results with sequential and simultaneous optimization of density and time fields, on the cantilever beam. Volume fraction $\bar{V}= 0.5$; maximum acceptable severity $T_{cr}=0.4$. Because a penalty function is used instead of a hard constraint, a slight violation of the constraint is expected.}
+    \caption{Comparison of optimization results with sequential and simultaneous optimization of density and time fields, on the cantilever beam. Volume fraction $\bar{V}= 0.5$; maximum acceptable severity $S_{cr}=0.4$. Because a penalty function is used instead of a hard constraint, a slight violation of the constraint is expected.}
     \label{fig:seq_vs_simultaneous}
 \end{figure}
 
@@ -419,18 +418,18 @@ All time fields are initialized as linear ramps from the bottom of the design vo
 \autoref{fig:tf_heat_poisson} recovers near-uniform layers, but along the bottom half of the part, the print fronts merge in the middle of the lower left member, which is physically challenging or impossible to print. Moreover, unlike \autoref{fig:tf_laplace}, both \autoref{fig:tf_heat} and \autoref{fig:tf_heat_poisson} contain saddle points in the time field over the part.
 In contrast, \autoref{fig:tf_laplace} results in the print fronts naturally merging where the bottom two members join in the middle.
 
-\subsection{Loose values of \texorpdfstring{$T_{cr}$}{Tcr} result in a design without a compliance penalty}
+\subsection{Loose values of \texorpdfstring{$S_{cr}$}{Scr} result in a design without a compliance penalty}
 Given that this formulation treats overheating as a constraint, we expect that the part topology should change relative to an unconstrained design only if changing the time field is insufficient to satisfy the constraint.
-Thus, for large enough values of $T_{cr}$, we should expect to see a design identical to the unconstrained one.
+Thus, for large enough values of $S_{cr}$, we should expect to see a design identical to the unconstrained one.
 In practice, because the layer thickness uniformity regularizer includes density, optimization dynamics result in a different converged design.
-However, we find no compliance penalty in our experiments for large values of $T_{cr}$.
-To evaluate this, we consider the cantilever beam from \autoref{sec:sim_vs_seq} and sweep $T_{cr}$.
-A compliance penalty is only present for $T_{cr} \leq 0.5$.
+However, we find no compliance penalty in our experiments for large values of $S_{cr}$.
+To evaluate this, we consider the cantilever beam from \autoref{sec:sim_vs_seq} and sweep $S_{cr}$.
+A compliance penalty is only present for $S_{cr} \leq 0.5$.
 
 \begin{figure}[ht!]
     \centering
     \includegraphics[width=\textwidth]{figures/tcr_sweep.pdf}
-    \caption{Hotspot severity of designs optimized with several values of $T_{cr}$ on the cantilever beam problem in \autoref{fig:c1_load}. Also shown is sequential optimization of the density and time fields in the top left.}
+    \caption{Hotspot severity of designs optimized with several values of $S_{cr}$ on the cantilever beam problem in \autoref{fig:c1_load}. Also shown is sequential optimization of the density and time fields in the top left.}
     \label{fig:tcr_sweep}
 \end{figure}
 
