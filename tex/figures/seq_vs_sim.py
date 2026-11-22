@@ -62,7 +62,7 @@ def build(out_dir: Path, *, device: str | None = None) -> None:
         (
             2,
             ScalarMappable(norm, designs.SEVERITY_CMAP),
-            "excess severity\n$S_e - T_{cr}$",
+            "excess severity\n$S_e - S_{cr}$",
         ),
     ):
         fig.colorbar(
