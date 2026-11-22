@@ -153,7 +153,8 @@ $a$ and $C$ are constant hyperparameters; we find $a=4$ and $C=1000$ to work wel
 A key property of this formulation is that in the interior of $\Omega$, there are no local minima or maxima.
 Moreover, \autoref{sec:time_field_generality} shows that any sufficiently smooth time field $t_r$ that is zero on the build plate and has no critical points (and thus strictly positive layer thickness everywhere) is the solution to \autoref{eqn:time_field_laplace} for some choice of $\chi$ and $b$. Thus, this formulation does not restrict the design space of valid time fields.
 
-This formulation does not rule out the existence of local minima on the design space boundary, which are still problematic for physical reasons. However, in practice this rarely occurs, because a local minimum in time has no supporting material and so tends to have high hotspot severity, as defined in \autoref{sec:hotspot_formulation}.
+This formulation does not rule out the existence of local minima on the design space boundary or the part boundary (between solid and void), which are still problematic for physical reasons. However, in practice this rarely occurs, because a local minimum in time has no supporting material and so tends to have high hotspot severity, as defined in \autoref{sec:hotspot_formulation}.
+
 
 We scale the time variable to be from 0 to 1 across the part, by dividing by the maximum time in material that would binarize to solid. Specifically, we compute $t_{max}$ as the largest time over elements where $\rho_i > \max \rho / 2$. We compute the binarization threshold relative to the maximum density rather than using 0.5, because initializing the design space uniformly in density with volume fraction less than 0.5 would then result in no elements satisfying the threshold. We then compute the (actual) time field with $t = t_r / t_{max}$.
 
@@ -245,7 +246,7 @@ where $\delta_{S,n}$ is the value of $\delta_S$ on iteration $n$, and $\alpha$ i
 We optimize over the density design variable $\rho_d$ and the time-field design variables $\mu$ and $b_r$, solving the optimization problem:
 \begin{align*}
     \min_{\rho_d,\mu,b_r}\quad & \log c(\rho) + w_u U(\rho, t) + w_\Phi \Phi(\rho, t) + w_S S\left(\operatorname{sg}[\rho], \mu, b_r\right) \\
-    \text{s.t.}\quad           & g_V = \frac{1}{N_e \bar V}\sum_e \rho_e - 1 \le 0,                                                     \\
+    \text{s.t.}\quad           & g_V = \frac{1}{N_e \bar V}\sum_e \rho_e - 1 \le 0,                                                         \\
                                & 0 \le \rho_d \le 1, \quad 0 \le \mu \le 1, \quad 0 \le b_r \le 1,
 \end{align*}
 where the bounds hold for every element (or designed boundary node, for $b_r$), and $\rho$ and $t$ are computed from the design variables as described above.
@@ -264,7 +265,7 @@ where the bounds hold for every element (or designed boundary node, for $b_r$), 
               \Phi(\rho, t) = \frac{1}{N_e} \sum_{e} \rho_e \frac{1}{\beta_\Phi} \mathrm{softplus}\big(\beta_\Phi (S_e - S_{cr})\big)
           \]
           where $\beta_\Phi$ controls the sharpness of softplus. This penalty formulation uses gradient pressure to remove density wherever an element has severity $S_e$ exceeding $S_{cr}$, while applying near zero pressure wherever $S_e < S_{cr}$, so it shapes the optimization dynamics with little effect on the optimum.
-              \item $S(\operatorname{sg}[\rho], \mu, b_r)$ is the hotspot severity and its addition to the optimization objective pressures the time field to minimize the hotspot severity even when $S_e \leq S_{cr}$. $\operatorname{sg}[\cdot]$ denotes a stop-gradient (detaching $\rho$'s gradients); this includes the dependence of $t$ on $\rho$ through $\chi$. The purpose of this term is to optimize the time field first to reduce $S_e$, and only have the hotspot severity constraint influence $\rho$ if modifying the time field is insufficient to avoid overheating.
+    \item $S(\operatorname{sg}[\rho], \mu, b_r)$ is the hotspot severity and its addition to the optimization objective pressures the time field to minimize the hotspot severity even when $S_e \leq S_{cr}$. $\operatorname{sg}[\cdot]$ denotes a stop-gradient (detaching $\rho$'s gradients); this includes the dependence of $t$ on $\rho$ through $\chi$. The purpose of this term is to optimize the time field first to reduce $S_e$, and only have the hotspot severity constraint influence $\rho$ if modifying the time field is insufficient to avoid overheating.
     \item $g_V$ is the volume fraction constraint, with $\bar V$ the maximum volume fraction.
     \item $w_u$, $w_\Phi$, and $w_S$ are weighting hyperparameters controlling the relative strengths of their associated terms.
 \end{itemize}
