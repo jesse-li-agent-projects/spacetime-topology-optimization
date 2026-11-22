@@ -16,7 +16,7 @@
 \usepackage{booktabs}
 \usepackage{placeins} % for \FloatBarrier
 
-\usepackage{float} % better image postioning wrt to txt
+\usepackage{float} % better image positioning wrt to txt
 
 \usepackage{todonotes} % for TODOs
 \let\oldtodo\todo % make \todo default to use inline
@@ -94,14 +94,14 @@ Wang et al. \cite{wang2020spacetime} introduce space-time topology optimization 
 
 A key requirement for physically realizable time fields is that they have no interior local minima or maxima.
 A local minimum in the time field corresponds to unsupported material, while a local maximum corresponds to fully surrounded material that cannot be physically accessed for material deposition.
-\cite{wang2020spacetime} and \cite{das2023thesis} address this through an explicit continuity constraint which ensures each internal element has neighours which are larger and smaller than it.
-\cite{Wang2024Regularization} represent time as the solution to a heat equation PDE with a sink term, to avoid local minima by construction; however this formulation still permits local maxima.
-\cite{Xu2025CurvedLayerSlicing} also represent time as the solution to a heat equation PDE, but use manually-specified non-homogenous Dirichlet boundary conditions rather than a sink term.
+\cite{wang2020spacetime} and \cite{das2023thesis} address this through an explicit continuity constraint which ensures each internal element has neighbours with both larger and smaller times.
+\cite{Wang2024Regularization} represent time as the solution to a heat equation PDE with a sink term, to avoid local minima by construction; however, this formulation still permits local maxima.
+\cite{Xu2025CurvedLayerSlicing} also represent time as the solution to a heat equation PDE, but use manually-specified non-homogeneous Dirichlet boundary conditions rather than a sink term.
 They additionally use a second step of fitting a field to the normalized temperature gradient by solving a Poisson equation, to obtain near-uniform layer thickness.
 
 This work extends \cite{das2023thesis} and develops a more flexible and robust STTO approach. Our main contributions are:
 \begin{itemize}
-    \item Refinements to the optimization objective, which improve realism near edges, account for printing direction effects on overheating, promotes layer uniformity, and improves optimization dynamics.
+    \item Refinements to the optimization objective, which improve realism near edges, account for printing direction effects on overheating, promote layer uniformity, and improve optimization dynamics.
     \item A formulation for the time field as the solution to a steady-state diffusion equation with optimizer-chosen boundary conditions, used directly as the time field rather than as an input to a Poisson fit as in \cite{Xu2025CurvedLayerSlicing}, which automatically prevents local minima and maxima in the time field (a common challenge in STTO).
 \end{itemize}
 
@@ -109,7 +109,7 @@ This work extends \cite{das2023thesis} and develops a more flexible and robust S
 % (2 pages). Analysis of the research or engineering challenge and the
 % research plan.
 \subsection{Topology formulation}
-We use a standard density-based formulation of topology optimization, utilizing solid isotropic material with penalization (SIMP) \cite{Bendsoe1989SimpFoundation} \cite{Zhou1991SimpFoundation}, density filtering \cite{BRUNS20013443DensityFilter}, and projection \cite{Guest2004DensityProjection, Wang2011RobustProjection}, and consider a linear elastic compliance minimization problem.
+We use a standard density-based formulation of topology optimization, utilizing solid isotropic material with penalization (SIMP) \cite{Bendsoe1989SimpFoundation, Zhou1991SimpFoundation}, density filtering \cite{BRUNS20013443DensityFilter}, and projection \cite{Guest2004DensityProjection, Wang2011RobustProjection}, and consider a linear elastic compliance minimization problem.
 We use a uniform 2D grid of $N_x \times N_y$ square Q4 bilinear elements, with each element having constant density.
 
 Beginning with the density design variable $\rho_d$, defined for each element $i$ as $\rho_{d,i}$, we apply filtering to get filtered density $\rho_f$, to avoid checkerboarding and introduce a minimum length scale:
@@ -124,7 +124,7 @@ where $E_0 = 1$ is the elastic modulus of a solid element and $E_{min} = 10^{-9}
 
 We consider the compliance $c$, given by
 \[c(\rho) = \mathbf{U}^T \mathbf{KU} = \sum^{N_e}_{i=1} E_i(\rho_i) \mathbf{u}_i^T \mathbf{k}_0 \mathbf{u}_i \qquad \mathbf{KU} = \mathbf{f}\]
-where $N_e$ is the number of elements, $\mathbf{U}$ and $\mathbf{K}$ are the global displacement vector and stiffness matrix respectively, $\mathbf{u}_i$ is the element displacement vector for element $i$, $\mathbf{k_0}$ is the element stiffness matrix for an element with unit elastic modulus, and $\mathbf{f}$ is the global nodal force vector.
+where $N_e$ is the number of elements, $\mathbf{U}$ and $\mathbf{K}$ are the global displacement vector and stiffness matrix respectively, $\mathbf{u}_i$ is the element displacement vector for element $i$, $\mathbf{k}_0$ is the element stiffness matrix for an element with unit elastic modulus, and $\mathbf{f}$ is the global nodal force vector.
 
 \subsection{Time field formulation}
 Let $\Omega$ denote the design domain over which to optimize, and $\partial \Omega$ be the domain boundary. Let $\partial \Omega_p$ be the boundary corresponding to the build plate. Let $\mathbf{x}$ denote the spatial coordinates.
@@ -135,15 +135,15 @@ We define the raw time field $t_r$ as the solution to the steady state diffusion
     \label{eqn:time_field_laplace}
 \end{equation}
 
-where $b(\mathbf{x})$ is a nonhomogenous Dirichlet boundary condition, $\chi = \max\left(\rho^a, 10^{-5}\right)C^{\mu(\mathbf{x}) - 0.5}$ is a non-uniform diffusivity coefficient, $\rho$ is the density, and $\mu(\mathbf{x})$ is a density-uncorrected diffusivity coefficient.
+where $b(\mathbf{x})$ is a non-homogeneous Dirichlet boundary condition, $\chi = \max\left(\rho^a, 10^{-5}\right)C^{\mu(\mathbf{x}) - 0.5}$ is a non-uniform diffusivity coefficient, $\rho$ is the density, and $\mu(\mathbf{x})$ is a density-uncorrected diffusivity coefficient.
 
-Numerically, this PDE is solved over the same mesh and elements as the displacment field. $b$ is defined at the boundary mesh nodes and linearly interpolated within an element.
-The boundary condition $b$ is meant to be optimized, but we find smoother results are achived by having $b$ be a filtered version of a raw boundary condition design variable $b_r$:
+Numerically, this PDE is solved over the same mesh and elements as the displacement field. $b$ is defined at the boundary mesh nodes and linearly interpolated within an element.
+The boundary condition $b$ is meant to be optimized, but we find smoother results are achieved by having $b$ be a filtered version of a raw boundary condition design variable $b_r$:
 \[b(s_k) = \frac{\sum_j w_b(s_k - s_j) \tilde{b}_r(s_j)}{\sum_j w_b(s_k - s_j)} \qquad w_b(d) = \max\left(0, 1 - \frac{\abs{d}}{r_b}\right)\]
 where $s$ is the arc length along the boundary $\partial \Omega \backslash \partial \Omega_p$, $s_j$ are the positions of the nodes, and $r_b$ is the wall filter radius.
 
 Near the build plate corners where the designed boundary condition ends, the filter would average over nodes on one side only, and $b$ would suddenly jump above zero right next to the build plate, where $t_r = 0$.
-To avoid this discontinuity, we instead filter $\tilde{b}_r$, which virtually extends $b_r$ past each end by reflecting it with its sign flipped, $\tilde{b}_r(-s) = \tilde{b}_r(2L - s) = -b_r(s)$, where $L$ is the length of the designed boundary condition with $\tilde{b}_r = 0$ at the ends themselves; the sums in the filter run over the nodes of this extended wall.
+To avoid this discontinuity, we instead filter $\tilde{b}_r$, which virtually extends $b_r$ past each end by reflecting it with its sign flipped, $\tilde{b}_r(-s) = \tilde{b}_r(2L - s) = -b_r(s)$, where $L$ is the length of the designed boundary, and $\tilde{b}_r = 0$ at the ends themselves; the sums in the filter run over the nodes of this extended wall.
 This ensures $b$ goes to zero where the wall meets the build plate.
 
 We consider $\mu(\mathbf{x})$ and $b_r(\mathbf{x})$ to be design variables to optimize for.
@@ -153,11 +153,11 @@ $a$ and $C$ are constant hyperparameters; we find $a=4$ and $C=1000$ to work wel
 A key property of this formulation is that in the interior of $\Omega$, there are no local minima or maxima.
 Moreover, \autoref{sec:time_field_generality} shows that any sufficiently smooth time field $t_r$ that is zero on the build plate and has no critical points (and thus strictly positive layer thickness everywhere) is the solution to \autoref{eqn:time_field_laplace} for some choice of $\chi$ and $b$. Thus, this formulation does not restrict the design space of valid time fields.
 
-This formulation does not rule out the existence of local minima on the design space boundary, which are still problematic for physical reasons. However, in practice this rarely occurs, because a local minimum in time also tends to have high hotspot severity, as defined in \autoref{sec:hotspot_formulation}, because it has no supporting material.
+This formulation does not rule out the existence of local minima on the design space boundary, which are still problematic for physical reasons. However, in practice this rarely occurs, because a local minimum in time has no supporting material and so tends to have high hotspot severity, as defined in \autoref{sec:hotspot_formulation}.
 
 We scale the time variable to be from 0 to 1 across the part, by dividing by the maximum time in material that would binarize to solid. Specifically, we compute $t_{max}$ as the largest time over elements where $\rho_i > \max \rho / 2$. We compute the binarization threshold relative to the maximum density rather than using 0.5, because initializing the design space uniformly in density with volume fraction less than 0.5 would then result in no elements satisfying the threshold. We then compute the (actual) time field with $t = t_r / t_{max}$.
 
-The wall design variable $b_r$ is initialized to the geodesic distance across the design domain from the build plate\footnote{For implementation simplicity, the geodesic distance is approximated by building a discrete graph with 8-connected edges and using shortest-path algorithms on the graph.}, divided by $2 d_{max}$, where $d_{max}$ is the largest such distance on the wall. $t$ is invariant to scaling $b_r$ because of the rescaling to ensure $0 \leq t \leq 1$ over the part; the normalization constant $2 d_{max}$ is thus only to ensure $b_r$ is of order 1 and unconstrained above on initialization.  Since $t$ does not change when $b$ is scaled, this scaling does not restrict the time field; it only places $b_r$ in the middle of its bounds for the optimizer. $\mu$ is initialized to a uniform constant (0.5).
+The wall design variable $b_r$ is initialized to the geodesic distance across the design domain from the build plate\footnote{For implementation simplicity, the geodesic distance is approximated by building a discrete graph with 8-connected edges and using shortest-path algorithms on the graph.}, divided by $2 d_{max}$, where $d_{max}$ is the largest such distance on the wall. Because $t$ is rescaled to $0 \leq t \leq 1$ over the part, it is invariant to scaling $b_r$, so the normalization constant $2 d_{max}$ does not restrict the time field; it only places $b_r$ well inside its bounds for the optimizer. $\mu$ is initialized to a uniform constant (0.5).
 
 \autoref{fig:tf_steps} summarizes how the time field is computed.
 
@@ -170,12 +170,11 @@ The wall design variable $b_r$ is initialized to the geodesic distance across th
 
 \subsection{Hotspot severity formulation}
 \label{sec:hotspot_formulation}
-To assess the risk of overheating at any given material point, we define a metric $K$ on each element to estimate the heat evacuation capacity\footnote{\cite{das2023thesis} refers to this as \emph{Conductivity Estimation}; to avoid ambiguity with conductivity as a material property we use the term \emph{heat evacuation capacity estimate}.}; a higher $K$ corresponds to a better ability to evacuate heat and reduced risk of overheating. Since $K$ is computed on a per-element basis and requires element print time as an input, we use the mean print time for that element, which for Q4 bilinear elements, is equal to the time at the geometric center and the mean of the time at the four nodes.
+To assess the risk of overheating at any given material point, we define a metric $K$ on each element to estimate the heat evacuation capacity\footnote{\cite{das2023thesis} refers to this as \emph{Conductivity Estimation}; to avoid ambiguity with conductivity as a material property we use the term \emph{heat evacuation capacity estimate}.}; a higher $K$ corresponds to a better ability to evacuate heat and reduced risk of overheating. Since $K$ is computed on a per-element basis and requires element print time as an input, we use the mean print time for that element, which, for Q4 bilinear elements, equals both the time at the geometric center and the mean of the times at the four nodes.
 
 We compute $K_e$ for each element $e$ with:
 \[
     K_e = \frac{1}{D}\sum_{j \in V_e} w_{ej}\,\lambda_{ej}\, F(t_e - t_j)s(\rho_e, \rho_j),
-    \qquad
 \]
 where:
 \begin{itemize}
@@ -188,9 +187,9 @@ where:
           \[
               F(\Delta t) = 1 - \exp\!\Big(-\tfrac{1}{k}\,\mathrm{softplus}\big(k\,\Delta t/\tau\big)\Big), \qquad \tau = 0.01, \qquad \mathrm{softplus}(x) \defeq \ln \left(1 + e^x\right) .
           \]
-          $k$ and $\tau$ are hyperparameters. $k$ controls the sharpness of $F$, with its effect visualized in \autoref{fig:cooling_credit}. $\tau$ controls the time scale used in $F$ and can be tuned so that the material printed in $\delta t = \tau$ is one layer thickness of material.
+          $k$ and $\tau$ are hyperparameters. $k$ controls the sharpness of $F$, with its effect visualized in \autoref{fig:cooling_credit}. $\tau$ controls the time scale used in $F$ and can be tuned so that the material printed in a time interval $\tau$ is one layer thickness of material.
 
-          At $k=1$, $F$ reduces to the sigmoid function $\sigma(t/\tau) = \frac{1}{1 + e^{-t/\tau}}$, often used in prior work as a soft mask for material printed before a given time. However, the sigmoid function has the property that $F(0;\  k=1) = \sigma(0) = 0.5$, which means that a constant (trivial) time field can easily achieve a high $K$.
+          At $k=1$, $F$ reduces to the sigmoid function $\sigma(\Delta t/\tau) = \frac{1}{1 + e^{-\Delta t/\tau}}$, often used in prior work as a soft mask for material printed before a given time. However, the sigmoid function has the property that $F(0;\  k=1) = \sigma(0) = 0.5$, which means that a constant (trivial) time field can easily achieve a high $K$.
 
     \item $s(\rho_e, \rho_j)$ is a term ensuring lower density material contributes less to $K$:
           \[
@@ -201,9 +200,9 @@ where:
     \item $D(\kappa)$ is a normalization constant in space, chosen so that an ideal uniform planar-layered print has $K_e = 1$. $D$ can be computed by considering an infinite domain with uniformly increasing time field $t=x$, and computing
           \[
               D = \sum_{j \in V_e} w_{ej}\lambda_{ej} H(t_e-t_j)\qquad H(\Delta t) = \begin{cases}
-                  1   & x > 0 \\
-                  0.5 & x = 0 \\
-                  0   & x < 0 \\
+                  1   & \Delta t > 0 \\
+                  0.5 & \Delta t = 0 \\
+                  0   & \Delta t < 0 \\
               \end{cases}
           \]
           for any element $e$, with $g_0 = 0$. Note that this normalization means $K_e$ can exceed 1 for some elements.
@@ -231,19 +230,19 @@ To ensure the formulation of $K_e$ is sensible at the design domain boundaries, 
     \label{fig:cooling_credit}
 \end{figure}
 
-The hotspot severity $S_e$ for each element is then defined with $S_e = (1 - K_e)\frac{\rho_e}{\rho_e + \varepsilon_S}$, where the last term is used to ensure the severity of void elements is zero.
+The hotspot severity $S_e$ for each element is then defined as $S_e = (1 - K_e)\frac{\rho_e}{\rho_e + \varepsilon_S}$, where the last term is used to ensure the severity of void elements is zero.
 
 We wish to constrain the maximum severity across the entire part. To do this smoothly, we aggregate over the part with the KS function\footnote{We choose the KS function to preserve translation equivariance. Alternatively, $p$-norm aggregation could be used, which would preserve scale equivariance; however, here $S$ is already normalized to be of order 1 so translation equivariance is more useful.}:
 \[S = \delta_S + \frac{1}{\beta_S} \ln \sum_{j \in \Omega} e^{\beta_S S_j} \]
-$\delta_S$ is a calibration term to ensure that $S$ stays approximately equal to the actual maximum without influencing gradients, as otherwise $S$ would overestimate the true average. $\delta_S$ is estimated using an exponential moving average.
+$\delta_S$ is a calibration term to ensure that $S$ stays approximately equal to the actual maximum without influencing gradients, as otherwise $S$ would overestimate the true maximum. $\delta_S$ is estimated using an exponential moving average.
 Specifically, it follows the update rule
 \[\delta_{S, n} = (1-\alpha) \delta_{S, n-1} + \alpha \left(\max_j S_j - \frac{1}{\beta_S} \ln \sum_{j \in \Omega} e^{\beta_S S_j}\right)\]
-where $\delta_{S,i}$ is the value of $\delta_S$ on iteration $i$, and $\alpha$ is a constant hyperparameter controlling how quickly $\delta_S$ gets updated; we find $\alpha=0.1$ to work well. Alternatively, one can update $\delta_S$ periodically (for example, every $N$ iterations); however, updating too frequently can cause the optimizer to go in cycles from each jump while updating too rarely leads to an out-of-date aggregation.
+where $\delta_{S,n}$ is the value of $\delta_S$ on iteration $n$, and $\alpha$ is a constant hyperparameter controlling how quickly $\delta_S$ gets updated; we find $\alpha=0.1$ to work well. Alternatively, one can update $\delta_S$ periodically (for example, every $N$ iterations); however, updating too frequently can cause the optimizer to go in cycles from each jump while updating too rarely leads to an out-of-date aggregation.
 
 
 
 \subsection{Optimization problem}
-We optimize over density field $\rho$ and time-field design variables $\mu$ and $b$, solving the optimization problem:
+We optimize over the density field $\rho$ and the time-field design variables $\mu$ and $b_r$, solving the optimization problem:
 \todo{@Claude below formulation might also need variable maximum/minimum constraints of 0 and 1 for the relevant variables}
 \[
     \min_{\rho,\mu,b_r}\quad
@@ -265,11 +264,11 @@ We optimize over density field $\rho$ and time-field design variables $\mu$ and 
           \]
     \item $\Phi(\rho, t)$ is a hotspot constraint penalty term, penalizing elements whose severity exceeds a critical severity $T_{cr}$:
           \[
-              \Phi(\rho, t) = \frac{1}{N_e} \sum_{e} \rho_e \frac{1}{\beta_\Phi} \mathrm{softplus}\big(\beta_\Phi (S_e - T_{cr})\big), \qquad \mathrm{softplus}(x) = \ln \left(1 + e^x\right)
+              \Phi(\rho, t) = \frac{1}{N_e} \sum_{e} \rho_e \frac{1}{\beta_\Phi} \mathrm{softplus}\big(\beta_\Phi (S_e - T_{cr})\big)
           \]
           where $\beta_\Phi$ controls the sharpness of softplus. This penalty formulation uses gradient pressure to remove density wherever an element has severity $S_e$ exceeding $T_{cr}$, while applying near zero pressure wherever $S_e < T_{cr}$, so it shapes the optimization dynamics with little effect on the optimum.
           \todo{@Claude can we safely rename T_cr -> S_cr ? Might be more meaningful as a name}
-    \item $S(\operatorname{sg}[\rho], \mu, b)$ is the hotspot severity and its addition to the optimization objective pressures the time field to minimize the hotspot severity even when $S_e \leq T_{cr}$. $\operatorname{sg}[\cdot]$ denotes a stop-gradient (detaching $\rho$'s gradients); this includes the dependence of $t$ on $\rho$ through $\chi$. The purpose of this term is to optimize the time field first to reduce $S_e$, and only have the hotspot severity constraint influence $\rho$ if modifying the time field is insufficient to avoid overheating.
+    \item $S(\operatorname{sg}[\rho], \mu, b_r)$ is the hotspot severity and its addition to the optimization objective pressures the time field to minimize the hotspot severity even when $S_e \leq T_{cr}$. $\operatorname{sg}[\cdot]$ denotes a stop-gradient (detaching $\rho$'s gradients); this includes the dependence of $t$ on $\rho$ through $\chi$. The purpose of this term is to optimize the time field first to reduce $S_e$, and only have the hotspot severity constraint influence $\rho$ if modifying the time field is insufficient to avoid overheating.
     \item $g_V$ is the volume fraction constraint, with $\bar V$ the maximum volume fraction.
     \item $w_u$, $w_\Phi$, and $w_S$ are weighting hyperparameters controlling the relative strengths of their associated terms.
 \end{itemize}
@@ -297,7 +296,7 @@ Displacement and time fields are both solved using Q4 bilinear elements.
         $\beta$           & projection sharpness                 & $2 \to 8$            & iterations 450--550 (log) \\
         $\nu$             & projection threshold                 & 0.5                  &                           \\
         $r_f$             & density filter radius                & \SI{4}{mm}           &                           \\
-        $r_b$             & wall data filter radius              & \SI{4}{mm}           &                           \\
+        $r_b$             & wall filter radius                   & \SI{4}{mm}           &                           \\
         $a$               & diffusivity density exponent         & 4                    &                           \\
         $C$               & diffusivity contrast                 & 1000                 &                           \\
         $r_K$             & heat evacuation neighbourhood radius & \SI{12}{mm}          &                           \\
@@ -321,44 +320,44 @@ Displacement and time fields are both solved using Q4 bilinear elements.
 
 In addition, the critical severity $T_{cr}$ is linearly ramped from 1 to its final value over the first 150 iterations. The continuation schedule roughly falls into two phases; the first phase (lasting 450 iterations) lays out the design, while the second phase (iteration 450 onward) binarizes the design, primarily by increasing projection sharpness $\beta$.
 
-\subsection{Simultaneous optimizaion ensures features are thick enough to avoid overheating}
+\subsection{Simultaneous optimization ensures features are thick enough to avoid overheating}
 \label{sec:sim_vs_seq}
 As a test problem, we consider a cantilever beam with a tip load, with a mesh size of 180 by 60, shown in \autoref{fig:c1_load}. The build plate is on the left edge where the cantilever is fixed. This load case is similar to the standard half-MBB problem, but modified slightly to make the print direction sensible (otherwise, the symmetric boundary condition in a typical MBB problem would imply building the material starting from the middle of the beam).
 
 \begin{figure}[ht!]
     \centering
     \includegraphics{figures/cantilever_setup.pdf}
-    \caption{Cantilever beam load case. The left edge is clamped and where the build plate is. A unit downward point load is present at the bottom-right corner.}
+    \caption{Cantilever beam load case. The left edge is clamped and serves as the build plate. A unit downward point load is present at the bottom-right corner.}
     \label{fig:c1_load}
 \end{figure}
 
 \begin{figure}[ht!]
     \centering
     \includegraphics[width=\textwidth]{figures/seq_vs_sim.pdf}
-    \caption{Comparison of optimization results with sequential and simultaneous optimization of denesity and time fields, on the cantilever beam. Volume fraction $\bar{V}= 0.5$; maximum acceptible severity $T_{cr}=0.4$. Because a penalty function is used instead of a hard constraint, a slight violation of the constraint is expected.}
+    \caption{Comparison of optimization results with sequential and simultaneous optimization of density and time fields, on the cantilever beam. Volume fraction $\bar{V}= 0.5$; maximum acceptable severity $T_{cr}=0.4$. Because a penalty function is used instead of a hard constraint, a slight violation of the constraint is expected.}
     \label{fig:seq_vs_simultaneous}
 \end{figure}
 
-\autoref{fig:seq_vs_simultaneous} contrasts simultaneous and sequential optimization of the density and time fields. When sequentially optimizing the density then the time field, the density optimizer is unaware of the overheating, and forms thin members which are prone to overheating. Simultaneous optimization, in contrast, forms thick enough members to mostly satisfy the hotspot severity constraint.
+\autoref{fig:seq_vs_simultaneous} contrasts simultaneous and sequential optimization of the density and time fields. When sequentially optimizing the density and then the time field, the density optimizer is unaware of the overheating, and forms thin members which are prone to overheating. Simultaneous optimization, in contrast, forms thick enough members to mostly satisfy the hotspot severity constraint.
 
 \subsection{Our time field formulation robustly avoids local minima and maxima in time}
 
 We consider the load case in \autoref{fig:tf_setup}: a square design domain, with fixed supports along the left edge, two equal point loads on the right corners at 45 degrees, and a build plate along the bottom.
-To demonstrate the differences between different time formulations, we focus on fabrication sequence optimization, by first separately optimizing only the density field, then optimizing the time field to minimize hotspot severity with different formulations holding the density field fixed.
+To demonstrate the differences between time field formulations, we focus on fabrication sequence optimization: we first optimize only the density field, then, holding the density field fixed, optimize the time field to minimize hotspot severity with each formulation.
 The resulting part geometry is shown in \autoref{fig:tf_pure_to}, which is a challenging case for optimizers because of the large flat member at the top of the domain.
 We compare four different formulations for the time field:
 \begin{itemize}
     \item \code{direct}: Directly optimizing the time field
     \item \code{sink_term}: Defining the time field as the solution of a heat equation with a sink term, as done in \cite{Wang2024Regularization}:
           \[\nabla \cdot (\rho \kappa \nabla \tau) - \alpha_T \tau = 0 \qquad t=1-\tau\]
-          Here, $\tau$ represents a virtual temperature field which decreases monotonically from the print bed, $\kappa$ is the design variable, and $\alpha_T \tau$ is a drain term to ensure the solution is not constant. Scaling the diffusivity by the density $\rho$ prevents the time field from bridging across void regions to form local minima. This PDE has boundary conditions $\tau=1$ on the print bed and zero-flux elsewhere, and represents steady-state heat diffusion.
+          Here, $\tau$ represents a virtual temperature field which decreases monotonically from the print bed, $\kappa$ is the design variable, and $\alpha_T \tau$ is a sink term to ensure the solution is not constant. Scaling the diffusivity by the density $\rho$ prevents the time field from bridging across void regions to form local minima. This PDE has boundary conditions $\tau=1$ on the build plate and zero-flux elsewhere, and represents steady-state heat diffusion.
     \item \code{poisson}: The same heat equation, followed by a Poisson fit to the direction of $-\nabla \tau$, similar to \cite{Xu2025CurvedLayerSlicing}:
           \[\nabla \cdot (\rho \nabla t) = \nabla \cdot \left(\rho \mathbf{X}\right) \qquad \mathbf{X} = -\frac{\nabla \tau}{\abs{\nabla \tau}}\]
-          with $t = 0$ on the print bed and zero flux of $\rho (\nabla t - \mathbf{X})$ elsewhere. This is the least-squares fit of $\nabla t$ to the unit vector field $\mathbf{X}$, so $\abs{\nabla t} \approx 1$ and layers have nearly uniform thickness. \cite{Xu2025CurvedLayerSlicing} use manually-specified non-homogeneous Dirichlet boundary conditions to generate a non-trivial time solution; we use a sink term to avoid needing to manually specify the boundary conditions.
+          with $t = 0$ on the build plate and zero flux of $\rho (\nabla t - \mathbf{X})$ elsewhere. This is the least-squares fit of $\nabla t$ to the unit vector field $\mathbf{X}$, so $\abs{\nabla t} \approx 1$ and layers have nearly uniform thickness. \cite{Xu2025CurvedLayerSlicing} use manually-specified non-homogeneous Dirichlet boundary conditions to generate a non-trivial time solution; we use a sink term to avoid needing to manually specify the boundary conditions.
     \item \code{optimized_bc}: Our PDE formulation of time, in \autoref{eqn:time_field_laplace}
 \end{itemize}
 We use sink strength $\alpha_T = 1/A$ for \code{sink_term}, with $A$ the design domain area, which gave the lowest hotspot severity in a sweep over $0.3/A$ to $25/A$, and $\alpha_T = 25/A$ for \code{poisson}, whose hotspot severity is insensitive to $\alpha_T$ over that range.
-All time fields are initialized as linear ramps from the bottom of the design volume to the top (\autoref{fig:tf_time_init}), to make the results more comparable to a full STTO run where the geometry is not known a-priori.
+All time fields are initialized as linear ramps from the bottom of the design volume to the top (\autoref{fig:tf_time_init}), to make the results more comparable to a full STTO run where the geometry is not known a priori.
 
 \todo{@Claude figure (b) caption below is 3 lines tall but there's white space on either side; can we make the caption space wider while keeping the figure size, so (b) caption is only 2 lines tall}
 \begin{figure}[ht!]
@@ -373,7 +372,7 @@ All time fields are initialized as linear ramps from the bottom of the design vo
     \begin{subfigure}[t]{0.225\textwidth}
         \centering
         \includegraphics[width=\textwidth]{figures/tf_pure_to.pdf}
-        \caption{Design with compliance minization objective}
+        \caption{Design with compliance minimization objective}
         \label{fig:tf_pure_to}
     \end{subfigure}\hfill
     \begin{subfigure}[t]{0.225\textwidth}
@@ -418,15 +417,15 @@ All time fields are initialized as linear ramps from the bottom of the design vo
     \label{fig:time_formulations}
 \end{figure}
 
-\autoref{fig:tf_direct} results in two local maxima and an unsupported local minima on the top member, which is an physically unrealizable design. It is challenging for a gradient-based direct time field optimizer to escape such a failure because doing so requires a global change in the time-field configuration, and this design is effectively a local minimum in the design space.
-\autoref{fig:tf_heat} does not face this issue, but results in less uniform layers near $t \approx 1$ by the nature of the sink term behaviour. This is counteracted somewhat by our choice of a weak sink term, but too weak of a sink term results in numerical challenges.
+\autoref{fig:tf_direct} results in two local maxima and an unsupported local minimum on the top member, which is a physically unrealizable design. It is challenging for a gradient-based direct time field optimizer to escape such a failure because doing so requires a global change in the time-field configuration, and this design is effectively a local minimum in the design space.
+\autoref{fig:tf_heat} does not face this issue, but results in less uniform layers near $t \approx 1$, due to the nature of the sink term. This is counteracted somewhat by our choice of a weak sink term, but too weak a sink term results in numerical challenges.
 \autoref{fig:tf_heat_poisson} recovers near-uniform layers, but along the bottom half of the part, the print fronts merge in the middle of the lower left member, which is physically challenging or impossible to print. Moreover, unlike \autoref{fig:tf_laplace}, both \autoref{fig:tf_heat} and \autoref{fig:tf_heat_poisson} contain saddle points in the time field over the part.
 In contrast, \autoref{fig:tf_laplace} results in the print fronts naturally merging where the bottom two members join in the middle.
 
 \subsection{Loose values of \texorpdfstring{$T_{cr}$}{Tcr} result in a design without a compliance penalty}
 Given that this formulation treats overheating as a constraint, we expect that the part topology should change relative to an unconstrained design only if changing the time field is insufficient to satisfy the constraint.
-Thus, for large enough values for $T_{cr}$, we should expect to see an identical design.
-In practice, because the layer thickness uniformity regularizer includes density, optimization dynamics result in different converged design.
+Thus, for large enough values of $T_{cr}$, we should expect to see a design identical to the unconstrained one.
+In practice, because the layer thickness uniformity regularizer includes density, optimization dynamics result in a different converged design.
 However, we find no compliance penalty in our experiments for large values of $T_{cr}$.
 To evaluate this, we consider the cantilever beam from \autoref{sec:sim_vs_seq} and sweep $T_{cr}$.
 A compliance penalty is only present for $T_{cr} \leq 0.5$.
@@ -434,16 +433,16 @@ A compliance penalty is only present for $T_{cr} \leq 0.5$.
 \begin{figure}[ht!]
     \centering
     \includegraphics[width=\textwidth]{figures/tcr_sweep.pdf}
-    \caption{Hotspot severity of designs optimized with several values of $T_{cr}$ on the cantilever beam problem in \autoref{fig:c1_load}. Also shown is sequential optimziation of the density and time fields in the top left.}
+    \caption{Hotspot severity of designs optimized with several values of $T_{cr}$ on the cantilever beam problem in \autoref{fig:c1_load}. Also shown is sequential optimization of the density and time fields in the top left.}
     \label{fig:tcr_sweep}
 \end{figure}
 
 \section{Discussion and conclusions}
 % (2 page). Discussion of the results and Conclusions connecting results to research or design question.
 
-The presented approach represents a framework for addressing overheating; however, hyperparameters such as $r_K$ and the ideal shape of the radial and angular weights aren't optimized to represent a specific manufacturing process. While the exact choices for these hyperparameters likely do not impact the final design substantially, higher accuracy of predicted overheating risk can be achieved by calibrating these settings to match experimental data or higher-fidelity transient thermal simulations.
+The presented approach represents a framework for addressing overheating; however, hyperparameters such as $r_K$ and the ideal shape of the radial and angular weights are not optimized to represent a specific manufacturing process. While the exact choices for these hyperparameters likely do not impact the final design substantially, higher accuracy of predicted overheating risk can be achieved by calibrating these settings to match experimental data or higher-fidelity transient thermal simulations.
 
-Theoretically, local minima (corresponding to unsupported material) on the final part design are still possible, because the mathematical guarantee againts internal local minima applies to the entire design volume, including void elements.
+Theoretically, local minima (corresponding to unsupported material) on the final part design are still possible, because the mathematical guarantee against internal local minima applies to the entire design volume, including void elements.
 Therefore, elements on the boundary between solid and void could still have local minima when considering only the time field within the part.
 In practice, this rarely happens, because the material would likely violate the hotspot severity constraint, since there would be no surrounding material printed earlier in time and $F(\Delta t) \approx 0$ (as defined in \autoref{sec:hotspot_formulation}).
 This suggests that this approach, or a simple variant, could be used in other STTO formulations as a measure against designing unsupported material rather than for reducing overheating risk.
@@ -452,14 +451,14 @@ A limitation of the time field formulation is that saddle points are not ruled o
 Physically, saddle points are difficult or impossible to manufacture, since they have a zero radius of curvature as well as requiring material deposition from multiple sides.
 This could be addressed by applying a maximum curvature constraint.
 
-Some optimized designs include small holes which are smaller than the radius $r_K$ used to compute hotspot severity.
+Some optimized designs include holes smaller than the radius $r_K$ used to compute hotspot severity.
 As noted by \cite{das2025overheating}, this can result in an underestimate of the hotspot severity, since material beyond the gap contributes to the estimate of heat evacuation capacity $K$ while not actually contributing.
 \cite{das2025overheating} suggests using the robust formulation of topology optimization as introduced by \cite{Wang2011RobustProjection}.
 Alternatively, a smaller value of $r_K$ could be used.
 To re-incorporate longer-range effects, the heat evacuation capacity could be computed recursively, with elements weighted based on their heat evacuation capacity in the previous iteration.
 
 Despite these limitations, the developed approach provides a promising framework to harness the flexibility of multi-axis AM to improve manufacturing outcomes.
-The presented time field formulation provides a flexible yet resiliant parameterization, suitable for future development of space-time topology optimization techniques.
+The presented time field formulation provides a flexible yet resilient parameterization, suitable for future development of space-time topology optimization techniques.
 By simultaneously optimizing the fabrication sequence and topology, manufacturing constraints can influence the part design without being stricter than necessary, maximizing performance.
 
 \section{Reflection}
