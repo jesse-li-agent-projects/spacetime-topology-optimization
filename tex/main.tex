@@ -112,19 +112,19 @@ This work extends \cite{das2023thesis} and develops a more flexible and robust S
 We use a standard density-based formulation of topology optimization, utilizing solid isotropic material with penalization (SIMP) \cite{Bendsoe1989SimpFoundation, Zhou1991SimpFoundation}, density filtering \cite{BRUNS20013443DensityFilter}, and projection \cite{Guest2004DensityProjection, Wang2011RobustProjection}, and consider a linear elastic compliance minimization problem.
 We use a uniform 2D grid of $N_x \times N_y$ square Q4 bilinear elements, with each element having constant density.
 
-Beginning with the density design variable $\rho_d$, defined for each element $i$ as $\rho_{d,i}$, we apply filtering to get filtered density $\rho_f$, to avoid checkerboarding and introduce a minimum length scale:
-\[\rho_{f,i} =  \frac{\sum_j w (\mathbf{x_i} - \mathbf{x_j}) \rho_{d,j}}{\sum_j w (\mathbf{x_i} - \mathbf{x_j})} \qquad w(\mathbf{x_i} - \mathbf{x_j}) = \max \left(0, 1-\frac{\norm{\mathbf{x_i} - \mathbf{x_j}}}{r_{f}}\right)\]
+Beginning with the density design variable $\rho_d$, defined for each element $e$ as $\rho_{d,e}$, we apply filtering to get filtered density $\rho_f$, to avoid checkerboarding and introduce a minimum length scale:
+\[\rho_{f,e} =  \frac{\sum_j w (\mathbf{x}_e - \mathbf{x}_j) \rho_{d,j}}{\sum_j w (\mathbf{x}_e - \mathbf{x}_j)} \qquad w(\mathbf{x}_e - \mathbf{x}_j) = \max \left(0, 1-\frac{\norm{\mathbf{x}_e - \mathbf{x}_j}}{r_{f}}\right)\]
 We apply hyperbolic tangent projection \cite{Wang2011RobustProjection} to promote binarization and get physical density $\rho$:
-\[\rho_i = \frac{\tanh(\beta \nu) + \tanh\left(\beta (\rho_{f,i} - \nu)\right)}{\tanh(\beta \nu) + \tanh\left(\beta (1 - \nu)\right)}\]
+\[\rho_e = \frac{\tanh(\beta \nu) + \tanh\left(\beta (\rho_{f,e} - \nu)\right)}{\tanh(\beta \nu) + \tanh\left(\beta (1 - \nu)\right)}\]
 $r_f$ is the filter radius, $\beta$ is the projection sharpness, and $\nu$ is the projection threshold.
 
-Each element has an elastic modulus $E_i$, interpolated with SIMP, with
-\[E_i(\rho_i) =  E_{min} + \rho_i^p (E_0 - E_{min})\]
+Each element has an elastic modulus $E_e$, interpolated with SIMP, with
+\[E_e(\rho_e) =  E_{min} + \rho_e^p (E_0 - E_{min})\]
 where $E_0 = 1$ is the elastic modulus of a solid element and $E_{min} = 10^{-9}$ is a small non-zero value to avoid numerical singularities in void elements.
 
 We consider the compliance $c$, given by
-\[c(\rho) = \mathbf{U}^T \mathbf{KU} = \sum^{N_e}_{i=1} E_i(\rho_i) \mathbf{u}_i^T \mathbf{k}_0 \mathbf{u}_i \qquad \mathbf{KU} = \mathbf{f}\]
-where $N_e$ is the number of elements, $\mathbf{U}$ and $\mathbf{K}$ are the global displacement vector and stiffness matrix respectively, $\mathbf{u}_i$ is the element displacement vector for element $i$, $\mathbf{k}_0$ is the element stiffness matrix for an element with unit elastic modulus, and $\mathbf{f}$ is the global nodal force vector.
+\[c(\rho) = \mathbf{U}^T \mathbf{KU} = \sum^{N_e}_{e=1} E_e(\rho_e) \mathbf{u}_e^T \mathbf{k}_0 \mathbf{u}_e \qquad \mathbf{KU} = \mathbf{f}\]
+where $N_e$ is the number of elements, $\mathbf{U}$ and $\mathbf{K}$ are the global displacement vector and stiffness matrix respectively, $\mathbf{u}_e$ is the element displacement vector for element $e$, $\mathbf{k}_0$ is the element stiffness matrix for an element with unit elastic modulus, and $\mathbf{f}$ is the global nodal force vector.
 
 \subsection{Time field formulation}
 Let $\Omega$ denote the design domain over which to optimize, and $\partial \Omega$ be the domain boundary. Let $\partial \Omega_p$ be the boundary corresponding to the build plate. Let $\mathbf{x}$ denote the spatial coordinates.
@@ -139,11 +139,11 @@ where $b(\mathbf{x})$ is a non-homogeneous Dirichlet boundary condition, $\chi =
 
 Numerically, this PDE is solved over the same mesh and elements as the displacement field. $b$ is defined at the boundary mesh nodes and linearly interpolated within an element.
 The boundary condition $b$ is meant to be optimized, but we find smoother results are achieved by having $b$ be a filtered version of a raw boundary condition design variable $b_r$:
-\[b(s_k) = \frac{\sum_j w_b(s_k - s_j) \tilde{b}_r(s_j)}{\sum_j w_b(s_k - s_j)} \qquad w_b(d) = \max\left(0, 1 - \frac{\abs{d}}{r_b}\right)\]
-where $s$ is the arc length along the boundary $\partial \Omega \backslash \partial \Omega_p$, $s_j$ are the positions of the nodes, and $r_b$ is the wall filter radius.
+\[b(\ell_i) = \frac{\sum_j w_b(\ell_i - \ell_j) \tilde{b}_r(\ell_j)}{\sum_j w_b(\ell_i - \ell_j)} \qquad w_b(d) = \max\left(0, 1 - \frac{\abs{d}}{r_b}\right)\]
+where $\ell$ is the arc length along the boundary $\partial \Omega \backslash \partial \Omega_p$, $\ell_j$ are the positions of the nodes, and $r_b$ is the wall filter radius.
 
 Near the build plate corners where the designed boundary condition ends, the filter would average over nodes on one side only, and $b$ would suddenly jump above zero right next to the build plate, where $t_r = 0$.
-To avoid this discontinuity, we instead filter $\tilde{b}_r$, which virtually extends $b_r$ past each end by reflecting it with its sign flipped, $\tilde{b}_r(-s) = \tilde{b}_r(2L - s) = -b_r(s)$, where $L$ is the length of the designed boundary, and $\tilde{b}_r = 0$ at the ends themselves; the sums in the filter run over the nodes of this extended wall.
+To avoid this discontinuity, we instead filter $\tilde{b}_r$, which virtually extends $b_r$ past each end by reflecting it with its sign flipped, $\tilde{b}_r(-\ell) = \tilde{b}_r(2L - \ell) = -b_r(\ell)$, where $L$ is the length of the designed boundary, and $\tilde{b}_r = 0$ at the ends themselves; the sums in the filter run over the nodes of this extended wall.
 This ensures $b$ goes to zero where the wall meets the build plate.
 
 We consider $\mu(\mathbf{x})$ and $b_r(\mathbf{x})$ to be design variables to optimize for.
@@ -156,7 +156,7 @@ Moreover, \autoref{sec:time_field_generality} shows that any sufficiently smooth
 This formulation does not rule out the existence of local minima on the design space boundary or the part boundary (between solid and void), which are still problematic for physical reasons. However, in practice this rarely occurs, because a local minimum in time has no supporting material and so tends to have high hotspot severity, as defined in \autoref{sec:hotspot_formulation}.
 
 
-We scale the time variable to be from 0 to 1 across the part, by dividing by the maximum time in material that would binarize to solid. Specifically, we compute $t_{max}$ as the largest time over elements where $\rho_i > \max \rho / 2$. We compute the binarization threshold relative to the maximum density rather than using 0.5, because initializing the design space uniformly in density with volume fraction less than 0.5 would then result in no elements satisfying the threshold. We then compute the (actual) time field with $t = t_r / t_{max}$.
+We scale the time variable to be from 0 to 1 across the part, by dividing by the maximum time in material that would binarize to solid. Specifically, we compute $t_{max}$ as the largest time over elements where $\rho_e > \max \rho / 2$. We compute the binarization threshold relative to the maximum density rather than using 0.5, because initializing the design space uniformly in density with volume fraction less than 0.5 would then result in no elements satisfying the threshold. We then compute the (actual) time field with $t = t_r / t_{max}$.
 
 The wall design variable $b_r$ is initialized to the geodesic distance across the design domain from the build plate\footnote{For implementation simplicity, the geodesic distance is approximated by building a discrete graph with 8-connected edges and using shortest-path algorithms on the graph.}, divided by $2 d_{max}$, where $d_{max}$ is the largest such distance on the wall. Because $t$ is rescaled to $0 \leq t \leq 1$ over the part, it is invariant to scaling $b_r$, so the normalization constant $2 d_{max}$ does not restrict the time field; it only places $b_r$ well inside its bounds for the optimizer. $\mu$ is initialized to a uniform constant (0.5).
 
@@ -190,7 +190,7 @@ where:
           \]
           $k$ and $\tau$ are hyperparameters. $k$ controls the sharpness of $F$, with its effect visualized in \autoref{fig:cooling_credit}. $\tau$ controls the time scale used in $F$ and can be tuned so that the material printed in a time interval $\tau$ is one layer thickness of material.
 
-          At $k=1$, $F$ reduces to the sigmoid function $\sigma(\Delta t/\tau) = \frac{1}{1 + e^{-\Delta t/\tau}}$, often used in prior work as a soft mask for material printed before a given time. However, the sigmoid function has the property that $F(0;\  k=1) = \sigma(0) = 0.5$, which means that a constant (trivial) time field can easily achieve a high $K$.
+          At $k=1$, $F$ reduces to the sigmoid function $1/\left(1 + e^{-\Delta t/\tau}\right)$, often used in prior work as a soft mask for material printed before a given time. However, the sigmoid function has the property that $F(0; k=1) = 0.5$, which means that a constant (trivial) time field can easily achieve a high $K$.
 
     \item $s(\rho_e, \rho_j)$ is a term ensuring lower density material contributes less to $K$:
           \[
@@ -346,14 +346,14 @@ We compare four different formulations for the time field:
 \begin{itemize}
     \item \code{direct}: Directly optimizing the time field
     \item \code{sink_term}: Defining the time field as the solution of a heat equation with a sink term, as done in \cite{Wang2024Regularization}:
-          \[\nabla \cdot (\rho \kappa \nabla \tau) - \alpha_T \tau = 0 \qquad t=1-\tau\]
-          Here, $\tau$ represents a virtual temperature field which decreases monotonically from the print bed, $\kappa$ is the design variable, and $\alpha_T \tau$ is a sink term to ensure the solution is not constant. Scaling the diffusivity by the density $\rho$ prevents the time field from bridging across void regions to form local minima. This PDE has boundary conditions $\tau=1$ on the build plate and zero-flux elsewhere, and represents steady-state heat diffusion.
-    \item \code{poisson}: The same heat equation, followed by a Poisson fit to the direction of $-\nabla \tau$, similar to \cite{Xu2025CurvedLayerSlicing}:
-          \[\nabla \cdot (\rho \nabla t) = \nabla \cdot \left(\rho \mathbf{X}\right) \qquad \mathbf{X} = -\frac{\nabla \tau}{\abs{\nabla \tau}}\]
+          \[\nabla \cdot (\rho \chi \nabla \theta) - h \theta = 0 \qquad t=1-\theta\]
+          Here, $\theta$ represents a virtual temperature field which decreases monotonically from the build plate, the diffusivity $\chi$ is the design variable, and $h \theta$ is a sink term with sink strength $h$, to ensure the solution is not constant. Scaling the diffusivity by the density $\rho$ prevents the time field from bridging across void regions to form local minima. This PDE has boundary conditions $\theta=1$ on the build plate and zero-flux elsewhere, and represents steady-state heat diffusion.
+    \item \code{poisson}: The same heat equation, followed by a Poisson fit to the direction of $-\nabla \theta$, similar to \cite{Xu2025CurvedLayerSlicing}:
+          \[\nabla \cdot (\rho \nabla t) = \nabla \cdot \left(\rho \mathbf{X}\right) \qquad \mathbf{X} = -\frac{\nabla \theta}{\abs{\nabla \theta}}\]
           with $t = 0$ on the build plate and zero flux of $\rho (\nabla t - \mathbf{X})$ elsewhere. This is the least-squares fit of $\nabla t$ to the unit vector field $\mathbf{X}$, so $\abs{\nabla t} \approx 1$ and layers have nearly uniform thickness. \cite{Xu2025CurvedLayerSlicing} use manually-specified non-homogeneous Dirichlet boundary conditions to generate a non-trivial time solution; we use a sink term to avoid needing to manually specify the boundary conditions.
     \item \code{optimized_bc}: Our PDE formulation of time, in \autoref{eqn:time_field_laplace}
 \end{itemize}
-We use sink strength $\alpha_T = 1/A$ for \code{sink_term}, with $A$ the design domain area, which gave the lowest hotspot severity in a sweep over $0.3/A$ to $25/A$, and $\alpha_T = 25/A$ for \code{poisson}, whose hotspot severity is insensitive to $\alpha_T$ over that range.
+We use sink strength $h = 1/A$ for \code{sink_term}, with $A$ the design domain area, which gave the lowest hotspot severity in a sweep over $0.3/A$ to $25/A$, and $h = 25/A$ for \code{poisson}, whose hotspot severity is insensitive to $h$ over that range.
 All time fields are initialized as linear ramps from the bottom of the design volume to the top (\autoref{fig:tf_time_init}), to make the results more comparable to a full STTO run where the geometry is not known a priori.
 
 \begin{figure}[ht!]
@@ -441,7 +441,8 @@ The presented approach represents a framework for addressing overheating; howeve
 
 Theoretically, local minima (corresponding to unsupported material) on the final part design are still possible, because the mathematical guarantee against internal local minima applies to the entire design volume, including void elements.
 Therefore, elements on the boundary between solid and void could still have local minima when considering only the time field within the part.
-In practice, this rarely happens, because the material would likely violate the hotspot severity constraint, since there would be no surrounding material printed earlier in time and $F(\Delta t) \approx 0$ (as defined in \autoref{sec:hotspot_formulation}).
+Local minima are also possible on the design domain boundary, where the time field is the designed boundary condition $b$ rather than a solution of \autoref{eqn:time_field_laplace}.
+In practice, either case rarely happens, because the material would likely violate the hotspot severity constraint, since there would be no surrounding material printed earlier in time and $F(\Delta t) \approx 0$ (as defined in \autoref{sec:hotspot_formulation}).
 This suggests that this approach, or a simple variant, could be used in other STTO formulations as a measure against designing unsupported material rather than for reducing overheating risk.
 
 A limitation of the time field formulation is that saddle points are not ruled out in the time field.
@@ -483,32 +484,32 @@ The argument follows \cite{richter1981inverse}, who used it to recover a diffusi
     Let $t$ be a twice continuously differentiable time field on a bounded domain $\Omega$, with $t = 0$ on the build plate $\partial\Omega_p$ and $\abs{\nabla t} \geq m > 0$ everywhere.
     Then there is a diffusivity $\chi$ with $e^{-Q} \leq \chi \leq e^{Q}$, where
     \[
-        Q = \frac{\left(\max t - \min t\right) \max \abs{\Delta t}}{m^2},
+        Q = \frac{\left(\max t - \min t\right) \max \abs{\nabla^2 t}}{m^2},
     \]
     for which $t$ is the solution of \autoref{eqn:time_field_laplace} with $b = t$ on $\partial\Omega \backslash \partial\Omega_p$.
 \end{proposition}
 
 \begin{proof}
     \emph{Step 1: an equation for $\chi$.}
-    Writing $\chi = e^{w}$,
+    Writing $\chi = e^{\omega}$,
     \[
-        \nabla \cdot \left(\chi \nabla t\right) = e^{w} \left(\Delta t + \nabla w \cdot \nabla t\right),
+        \nabla \cdot \left(\chi \nabla t\right) = e^{\omega} \left(\nabla^2 t + \nabla \omega \cdot \nabla t\right),
     \]
     so \autoref{eqn:time_field_laplace} holds if and only if
     \begin{equation}
-        \nabla t \cdot \nabla w = -\Delta t.
+        \nabla t \cdot \nabla \omega = -\nabla^2 t.
         \label{eqn:transport}
     \end{equation}
-    Here $t$ is known and $w$ is unknown.
+    Here $t$ is known and $\omega$ is unknown.
 
     \emph{Step 2: solve along streamlines.}
-    The left side of \autoref{eqn:transport} is the rate of change of $w$ along $\nabla t$, so it can be solved one streamline of $\nabla t$ at a time: the curves everywhere tangent to $\nabla t$, crossing the layers perpendicularly. As $\chi \nabla t$ points the same way, these are also the streamlines of the flux\footnote{In the language of partial differential equations, these streamlines are the \emph{characteristics} of \autoref{eqn:transport}.}.
+    The left side of \autoref{eqn:transport} is the rate of change of $\omega$ along $\nabla t$, so it can be solved one streamline of $\nabla t$ at a time: the curves everywhere tangent to $\nabla t$, crossing the layers perpendicularly. As $\chi \nabla t$ points the same way, these are also the streamlines of the flux\footnote{In the language of partial differential equations, these streamlines are the \emph{characteristics} of \autoref{eqn:transport}.}.
     Measuring progress along a streamline by the print time $t$ itself, \autoref{eqn:transport} becomes an ordinary differential equation along each streamline:
     \[
-        \frac{\mathrm{d}w}{\mathrm{d}t} = -\frac{\Delta t}{\abs{\nabla t}^2}.
+        \frac{\mathrm{d}\omega}{\mathrm{d}t} = -\frac{\nabla^2 t}{\abs{\nabla t}^2}.
     \]
     Since $\nabla t$ never vanishes, $t$ increases steadily along every streamline, so each streamline starts and ends on the domain boundary and covers a time range of at most $\max t - \min t$.
-    Setting $w = 0$ where each streamline starts and integrating gives $\abs{w} \leq Q$, hence the bounds on $\chi$\footnote{Neighbouring streamlines can start on different parts of the boundary, so $\chi$ can jump between them. This is harmless: the jump runs along streamlines of the flux, which no flux crosses, and \autoref{eqn:time_field_laplace} still holds in its usual integral (weak) form.}.
+    Setting $\omega = 0$ where each streamline starts and integrating gives $\abs{\omega} \leq Q$, hence the bounds on $\chi$\footnote{Neighbouring streamlines can start on different parts of the boundary, so $\chi$ can jump between them. This is harmless: the jump runs along streamlines of the flux, which no flux crosses, and \autoref{eqn:time_field_laplace} still holds in its usual integral (weak) form.}.
 
     \emph{Step 3: $t$ is the solution.}
     With $b = t$ on $\partial\Omega \backslash \partial\Omega_p$, and $t = 0$ on $\partial\Omega_p$ by assumption, $t$ satisfies both the equation and the boundary conditions of \autoref{eqn:time_field_laplace}.
@@ -517,11 +518,11 @@ The argument follows \cite{richter1981inverse}, who used it to recover a diffusi
 
 \paragraph{The build plate.}
 The plate value $t = 0$ is fixed by the formulation rather than designed, so a representable time field must satisfy it; it does not restrict the choice of $\chi$.
-$\chi$ is also not unique: other starting values of $w$ in Step 2, or scaling $\chi$ by a constant, represent the same $t$.
+$\chi$ is also not unique: other starting values of $\omega$ in Step 2, or scaling $\chi$ by a constant, represent the same $t$.
 
 \paragraph{Critical points.}
 Requiring $\nabla t \neq 0$ everywhere is stronger than having no interior local minima or maxima: it also excludes saddle points, which is where two print fronts merge.
-It cannot simply be dropped: at a point where $\nabla t = 0$, \autoref{eqn:time_field_laplace} with a smooth $\chi$ reduces to $\chi \Delta t = 0$, so only saddles with $\Delta t = 0$ there (e.g.\ $t = x_1^2 - x_2^2$ with $\chi = 1$) are representable.
+It cannot simply be dropped: at a point where $\nabla t = 0$, \autoref{eqn:time_field_laplace} with a smooth $\chi$ reduces to $\chi \nabla^2 t = 0$, so only saddles with $\nabla^2 t = 0$ there (e.g.\ $t = x_1^2 - x_2^2$ with $\chi = 1$) are representable.
 Saddles are treated in \cite{alessandrini1986identification}, but only in two dimensions, so we do not rely on it here.
 
 \paragraph{Range of $\chi$.}
@@ -574,34 +575,11 @@ The interior values solve
 \]
 with $\mathbf{K}$ assembled from $\gamma_e = \chi_e$ and the scalar Q4 element matrix $\mathbf{k}_t$ for unit diffusivity.
 This is \autoref{sec:adjoint} with $\mathbf{f} = -\mathbf{K}_{IB}\mathbf{t}_B$, which also depends on $\chi$.
-Solving $\mathbf{K}_{II}\bm{\psi}_I = \partial\mathcal{L}/\partial\mathbf{t}_I$ and setting $\bm{\psi}_B = 0$, the sensitivities of a scalar $\mathcal{L}(\mathbf{t}_r)$ are
-\[
-    \frac{\partial \mathcal{L}}{\partial \chi_e} = -\bm{\psi}_e^T \mathbf{k}_t \mathbf{t}_{r,e},
-    \qquad
-    \frac{\partial \mathcal{L}}{\partial \mathbf{t}_B} = \left.\frac{\partial \mathcal{L}}{\partial \mathbf{t}_B}\right|_{\text{explicit}} - \mathbf{K}_{BI}\bm{\psi}_I,
-\]
-where $\mathbf{t}_{r,e}$ includes the element's boundary values, and the explicit term is the direct dependence of $\mathcal{L}$ on the boundary values of $t_r$.
-The second term is the flux response: raising $b$ at a boundary node changes $t_r$ in the interior in proportion to the adjoint near that node.
-
-The design variables then enter through
-\[
-    \frac{\partial \chi_e}{\partial \mu_e} = \chi_e \ln C,
-    \qquad
-    \frac{\partial \chi_e}{\partial \rho_e} =
-    \begin{cases}
-        a \chi_e / \rho_e & \rho_e^a > 10^{-5} \\
-        0                 & \text{otherwise}
-    \end{cases}
-\]
-so $\partial\mathcal{L}/\partial\mu_e = -\chi_e \ln C \bm{\psi}_e^T \mathbf{k}_t \mathbf{t}_{r,e}$ is a relative change in $\chi_e$, of the same scale at any value of $\chi_e$.
-The boundary filter is linear, so $\partial\mathcal{L}/\partial b_r$ is its transpose applied to $\partial\mathcal{L}/\partial b$; the sign-flipped reflection near the build plate makes the reflected weights enter with a negative sign.
-
-The scale $t_{max}$ is treated as a constant when differentiating, so $\partial t / \partial t_r = 1 / t_{max}$.
-Its true derivative is concentrated on the single element attaining the maximum, and changes discontinuously as that element changes.
 
 \subsection{Modified gradients}
-The objective's sensitivities depart from its exact gradient in two places:
+The objective's sensitivities depart from its exact gradient in three places:
 \begin{itemize}
+    \item The scale $t_{max}$ is treated as a constant, so $\partial t / \partial t_r = 1 / t_{max}$. Its true derivative is concentrated on the single element attaining the maximum, and changes discontinuously as that element changes.
     \item The hotspot severity term $w_S S$ contributes only to the sensitivities of $\mu$ and $b_r$; its sensitivity to $\rho_d$, including through $\chi$, is dropped.
     \item The calibration term $\delta_S$ depends on the severities but is treated as a constant, so the sensitivity of $S$ to each element's severity is the softmax weight
           \[
