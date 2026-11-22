@@ -441,7 +441,8 @@ The presented approach represents a framework for addressing overheating; howeve
 
 Theoretically, local minima (corresponding to unsupported material) on the final part design are still possible, because the mathematical guarantee against internal local minima applies to the entire design volume, including void elements.
 Therefore, elements on the boundary between solid and void could still have local minima when considering only the time field within the part.
-In practice, this rarely happens, because the material would likely violate the hotspot severity constraint, since there would be no surrounding material printed earlier in time and $F(\Delta t) \approx 0$ (as defined in \autoref{sec:hotspot_formulation}).
+Local minima are also possible on the design domain boundary, where the time field is the designed boundary condition $b$ rather than a solution of \autoref{eqn:time_field_laplace}.
+In practice, either case rarely happens, because the material would likely violate the hotspot severity constraint, since there would be no surrounding material printed earlier in time and $F(\Delta t) \approx 0$ (as defined in \autoref{sec:hotspot_formulation}).
 This suggests that this approach, or a simple variant, could be used in other STTO formulations as a measure against designing unsupported material rather than for reducing overheating risk.
 
 A limitation of the time field formulation is that saddle points are not ruled out in the time field.
