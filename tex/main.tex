@@ -242,16 +242,13 @@ where $\delta_{S,n}$ is the value of $\delta_S$ on iteration $n$, and $\alpha$ i
 
 
 \subsection{Optimization problem}
-We optimize over the density field $\rho$ and the time-field design variables $\mu$ and $b_r$, solving the optimization problem:
-\todo{@Claude below formulation might also need variable maximum/minimum constraints of 0 and 1 for the relevant variables}
-\[
-    \min_{\rho,\mu,b_r}\quad
-    \log c(\rho) + w_u U(\rho, t)
-    + w_\Phi \Phi(\rho, t)
-    + w_S S\big(\operatorname{sg}[\rho], \mu, b_r\big)
-    \quad\text{s.t.}\quad
-    g_V = \frac{1}{N_e \bar V}\sum_e \rho_e - 1 \le 0.
-\]
+We optimize over the density design variable $\rho_d$ and the time-field design variables $\mu$ and $b_r$, solving the optimization problem:
+\begin{align*}
+    \min_{\rho_d,\mu,b_r}\quad & \log c(\rho) + w_u U(\rho, t) + w_\Phi \Phi(\rho, t) + w_S S\left(\operatorname{sg}[\rho], \mu, b_r\right) \\
+    \text{s.t.}\quad           & g_V = \frac{1}{N_e \bar V}\sum_e \rho_e - 1 \le 0,                                                     \\
+                               & 0 \le \rho_d \le 1, \quad 0 \le \mu \le 1, \quad 0 \le b_r \le 1,
+\end{align*}
+where the bounds hold for every element (or designed boundary node, for $b_r$), and $\rho$ and $t$ are computed from the design variables as described above.
 \begin{itemize}
     \item $c(\rho)$ is the compliance. We optimize $\log c(\rho)$ so that gradients are scale-invariant and weighting hyperparameters generalize better across different problems.
     \item $U(\rho, t)$ is the density-weighted coefficient of variation of the time gradient $g=\abs{\nabla t}$ and acts as a layer uniformity regularizer:
