@@ -461,7 +461,7 @@ By simultaneously optimizing the fabrication sequence and topology, manufacturin
 % (1 page) Discussion and reflection on project execution and own functioning.
 The project execution was ultimately successful. There were a few choices made early on which helped to reduce iteration time and improve the chances of success:
 \begin{itemize}
-    \item The research code was implemented in Python using PyTorch, enabling automatic differentiation (autograd) and GPU acceleration. Autograd substantially reduced the effort needed to try new formulations and the likelihood of bugs from incorrect sensitivity derivations. GPU acceleration tightened the iteration loop of developing a new formulation and seeing the effects.
+    \item The research code was implemented in Python using PyTorch, enabling automatic differentiation (autograd) and GPU acceleration. Autograd (\autoref{sec:sensitivities}) substantially reduced the effort needed to try new formulations and the likelihood of bugs from incorrect sensitivity derivations. GPU acceleration tightened the iteration loop of developing a new formulation and seeing the effects.
     \item Coding agents were used to accelerate implementation, review, and testing.
     \item Initial efforts were done on the simplified problem of sequence-only optimization on a fixed geometry, which helped to isolate and identify flaws in the hotspot severity and time optimization formulations, before they got coupled with variable topology.
 \end{itemize}
@@ -527,10 +527,89 @@ Saddles are treated in \cite{alessandrini1986identification}, but only in two di
 In solid material ($\rho = 1$), the implementation restricts $\chi = C^{\mu - 0.5}$ with $\mu \in [0, 1]$ to a window spanning a factor $C$.
 As scaling $\chi$ by a constant does not change $t$, \autoref{prop:generality} shows that a time field over a fully solid domain is representable within this window whenever $e^{2Q} \leq C$; this is a sufficient, generally conservative, condition.
 
-\todo{Appendix for high-level sensitivities}
+\section{Sensitivities}
+\label{sec:sensitivities}
+
+All sensitivities are computed by reverse-mode automatic differentiation, with two exceptions: the two linear solves (the displacement field and the raw time field).
+Differentiating through the iterations of the conjugate gradient solver would store every iterate and give a derivative of the solver rather than of the solution, so both solves instead use the adjoint method below.
+This appendix lists those sensitivities and the places where the gradient is deliberately modified; everything else (e.g.\ filtering, projection, and the hotspot severity) follows from the chain rule.
+
+\subsection{Adjoint of a finite element solve}
+\label{sec:adjoint}
+Both solves have the form $\mathbf{K}\mathbf{u} = \mathbf{f}$, restricted to the free degrees of freedom, with a symmetric positive definite matrix assembled from a fixed element matrix $\mathbf{k}$ scaled by a per-element coefficient $\gamma_e$:
+\[
+    \mathbf{K} = \sum_e \gamma_e \mathbf{A}_e^T \mathbf{k} \mathbf{A}_e,
+\]
+where $\mathbf{A}_e$ gathers the degrees of freedom of element $e$.
+For a scalar $\mathcal{L}(\mathbf{u})$, differentiating $\mathbf{K}\mathbf{u} = \mathbf{f}$ gives $\mathrm{d}\mathbf{u} = \mathbf{K}^{-1}\left(\mathrm{d}\mathbf{f} - \mathrm{d}\mathbf{K}\mathbf{u}\right)$, so with the adjoint solution $\bm{\psi}$ of
+\[
+    \mathbf{K}\bm{\psi} = \frac{\partial \mathcal{L}}{\partial \mathbf{u}},
+\]
+the sensitivities are
+\begin{equation}
+    \frac{\partial \mathcal{L}}{\partial \mathbf{f}} = \bm{\psi},
+    \qquad
+    \frac{\partial \mathcal{L}}{\partial \gamma_e} = -\bm{\psi}_e^T \mathbf{k} \mathbf{u}_e,
+    \label{eqn:adjoint}
+\end{equation}
+where $\bm{\psi}_e$ and $\mathbf{u}_e$ are the element vectors.
+As $\mathbf{K}$ is symmetric, the adjoint solve reuses the forward solve's matrix and multigrid preconditioner.
+It is warm-started from the multiple of $\mathbf{u}$ closest to $\bm{\psi}$ in the least-squares sense, $\bm{\psi}_0 = \mathbf{u} \left(\mathbf{u}^T \partial\mathcal{L}/\partial\mathbf{u}\right) / \left(\mathbf{u}^T\mathbf{f}\right)$, which is exact for compliance.
+
+\subsection{Compliance}
+For compliance, $\mathcal{L} = c = \mathbf{f}^T\mathbf{U}$, so $\partial c / \partial \mathbf{U} = \mathbf{f}$ and the problem is self-adjoint: $\bm{\psi} = \mathbf{U}$, and the adjoint solve converges at its warm start without any iterations.
+With $\gamma_e = E_e(\rho_e)$ and $\mathbf{k} = \mathbf{k}_0$, \autoref{eqn:adjoint} gives the standard result
+\[
+    \frac{\partial \log c}{\partial \rho_e}
+    = -\frac{p}{c} \rho_e^{p-1}\left(E_0 - E_{min}\right) \mathbf{u}_e^T \mathbf{k}_0 \mathbf{u}_e .
+\]
+
+\subsection{Time field}
+The time field solve has non-homogeneous Dirichlet conditions on every node of $\partial\Omega$.
+Partition the nodes into interior nodes $I$ and boundary nodes $B$, with $\mathbf{t}_B$ equal to $b$ on the designed boundary and 0 on the build plate.
+The interior values solve
+\[
+    \mathbf{K}_{II}\mathbf{t}_I = -\mathbf{K}_{IB}\mathbf{t}_B,
+\]
+with $\mathbf{K}$ assembled from $\gamma_e = \chi_e$ and the scalar Q4 element matrix $\mathbf{k}_t$ for unit diffusivity.
+This is \autoref{sec:adjoint} with $\mathbf{f} = -\mathbf{K}_{IB}\mathbf{t}_B$, which also depends on $\chi$.
+Solving $\mathbf{K}_{II}\bm{\psi}_I = \partial\mathcal{L}/\partial\mathbf{t}_I$ and setting $\bm{\psi}_B = 0$, the sensitivities of a scalar $\mathcal{L}(\mathbf{t}_r)$ are
+\[
+    \frac{\partial \mathcal{L}}{\partial \chi_e} = -\bm{\psi}_e^T \mathbf{k}_t \mathbf{t}_{r,e},
+    \qquad
+    \frac{\partial \mathcal{L}}{\partial \mathbf{t}_B} = \left.\frac{\partial \mathcal{L}}{\partial \mathbf{t}_B}\right|_{\text{explicit}} - \mathbf{K}_{BI}\bm{\psi}_I,
+\]
+where $\mathbf{t}_{r,e}$ includes the element's boundary values, and the explicit term is the direct dependence of $\mathcal{L}$ on the boundary values of $t_r$.
+The second term is the flux response: raising $b$ at a boundary node changes $t_r$ in the interior in proportion to the adjoint near that node.
+
+The design variables then enter through
+\[
+    \frac{\partial \chi_e}{\partial \mu_e} = \chi_e \ln C,
+    \qquad
+    \frac{\partial \chi_e}{\partial \rho_e} =
+    \begin{cases}
+        a \chi_e / \rho_e & \rho_e^a > 10^{-5} \\
+        0                 & \text{otherwise}
+    \end{cases}
+\]
+so $\partial\mathcal{L}/\partial\mu_e = -\chi_e \ln C \bm{\psi}_e^T \mathbf{k}_t \mathbf{t}_{r,e}$ is a relative change in $\chi_e$, of the same scale at any value of $\chi_e$.
+The boundary filter is linear, so $\partial\mathcal{L}/\partial b_r$ is its transpose applied to $\partial\mathcal{L}/\partial b$; the sign-flipped reflection near the build plate makes the reflected weights enter with a negative sign.
+
+The scale $t_{max}$ is treated as a constant when differentiating, so $\partial t / \partial t_r = 1 / t_{max}$.
+Its true derivative is concentrated on the single element attaining the maximum, and changes discontinuously as that element changes.
+
+\subsection{Modified gradients}
+The objective's sensitivities depart from its exact gradient in two places:
+\begin{itemize}
+    \item The hotspot severity term $w_S S$ contributes only to the sensitivities of $\mu$ and $b_r$; its sensitivity to $\rho_d$, including through $\chi$, is dropped.
+    \item The calibration term $\delta_S$ depends on the severities but is treated as a constant, so the sensitivity of $S$ to each element's severity is the softmax weight
+          \[
+              \frac{\partial S}{\partial S_e} = \frac{e^{\beta_S S_e}}{\sum_{j \in \Omega} e^{\beta_S S_j}}.
+          \]
+\end{itemize}
 
 \section{AI Usage Acknowledgement}
-The LLM-based coding agent Claude Code was used to assist in development of the source code. Claude Opus 5.5 wrote the derivation in \autoref{sec:time_field_generality}.
+The LLM-based coding agent Claude Code was used to assist in development of the source code. Claude Opus 5.5 wrote the derivation in \autoref{sec:time_field_generality} and drafted \autoref{sec:sensitivities}.
 
 \printbibliography
 % \todo{Should I be citing the thesis or specific papers when available? If the thesis, should I be separately citing specific chapters?}
