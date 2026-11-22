@@ -356,7 +356,6 @@ We compare four different formulations for the time field:
 We use sink strength $\alpha_T = 1/A$ for \code{sink_term}, with $A$ the design domain area, which gave the lowest hotspot severity in a sweep over $0.3/A$ to $25/A$, and $\alpha_T = 25/A$ for \code{poisson}, whose hotspot severity is insensitive to $\alpha_T$ over that range.
 All time fields are initialized as linear ramps from the bottom of the design volume to the top (\autoref{fig:tf_time_init}), to make the results more comparable to a full STTO run where the geometry is not known a priori.
 
-\todo{@Claude figure (b) caption below is 3 lines tall but there's white space on either side; can we make the caption space wider while keeping the figure size, so (b) caption is only 2 lines tall}
 \begin{figure}[ht!]
     \centering
     \captionsetup[subfigure]{justification=centering}
@@ -366,9 +365,10 @@ All time fields are initialized as linear ramps from the bottom of the design vo
         \caption{Problem definition}
         \label{fig:tf_setup}
     \end{subfigure}\hfill
-    \begin{subfigure}[t]{0.225\textwidth}
+    % Wider than its image (still 0.225\textwidth), so the caption fits on two lines
+    \begin{subfigure}[t]{0.3\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{figures/tf_pure_to.pdf}
+        \includegraphics[width=0.75\textwidth]{figures/tf_pure_to.pdf}
         \caption{Design with compliance minimization objective}
         \label{fig:tf_pure_to}
     \end{subfigure}\hfill
