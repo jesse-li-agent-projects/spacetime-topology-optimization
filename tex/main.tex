@@ -346,14 +346,14 @@ We compare four different formulations for the time field:
 \begin{itemize}
     \item \code{direct}: Directly optimizing the time field
     \item \code{sink_term}: Defining the time field as the solution of a heat equation with a sink term, as done in \cite{Wang2024Regularization}:
-          \[\nabla \cdot (\rho \kappa \nabla \tau) - \alpha_T \tau = 0 \qquad t=1-\tau\]
-          Here, $\tau$ represents a virtual temperature field which decreases monotonically from the print bed, $\kappa$ is the design variable, and $\alpha_T \tau$ is a sink term to ensure the solution is not constant. Scaling the diffusivity by the density $\rho$ prevents the time field from bridging across void regions to form local minima. This PDE has boundary conditions $\tau=1$ on the build plate and zero-flux elsewhere, and represents steady-state heat diffusion.
-    \item \code{poisson}: The same heat equation, followed by a Poisson fit to the direction of $-\nabla \tau$, similar to \cite{Xu2025CurvedLayerSlicing}:
-          \[\nabla \cdot (\rho \nabla t) = \nabla \cdot \left(\rho \mathbf{X}\right) \qquad \mathbf{X} = -\frac{\nabla \tau}{\abs{\nabla \tau}}\]
+          \[\nabla \cdot (\rho \chi \nabla \theta) - h \theta = 0 \qquad t=1-\theta\]
+          Here, $\theta$ represents a virtual temperature field which decreases monotonically from the build plate, the diffusivity $\chi$ is the design variable, and $h \theta$ is a sink term with sink strength $h$, to ensure the solution is not constant. Scaling the diffusivity by the density $\rho$ prevents the time field from bridging across void regions to form local minima. This PDE has boundary conditions $\theta=1$ on the build plate and zero-flux elsewhere, and represents steady-state heat diffusion.
+    \item \code{poisson}: The same heat equation, followed by a Poisson fit to the direction of $-\nabla \theta$, similar to \cite{Xu2025CurvedLayerSlicing}:
+          \[\nabla \cdot (\rho \nabla t) = \nabla \cdot \left(\rho \mathbf{X}\right) \qquad \mathbf{X} = -\frac{\nabla \theta}{\abs{\nabla \theta}}\]
           with $t = 0$ on the build plate and zero flux of $\rho (\nabla t - \mathbf{X})$ elsewhere. This is the least-squares fit of $\nabla t$ to the unit vector field $\mathbf{X}$, so $\abs{\nabla t} \approx 1$ and layers have nearly uniform thickness. \cite{Xu2025CurvedLayerSlicing} use manually-specified non-homogeneous Dirichlet boundary conditions to generate a non-trivial time solution; we use a sink term to avoid needing to manually specify the boundary conditions.
     \item \code{optimized_bc}: Our PDE formulation of time, in \autoref{eqn:time_field_laplace}
 \end{itemize}
-We use sink strength $\alpha_T = 1/A$ for \code{sink_term}, with $A$ the design domain area, which gave the lowest hotspot severity in a sweep over $0.3/A$ to $25/A$, and $\alpha_T = 25/A$ for \code{poisson}, whose hotspot severity is insensitive to $\alpha_T$ over that range.
+We use sink strength $h = 1/A$ for \code{sink_term}, with $A$ the design domain area, which gave the lowest hotspot severity in a sweep over $0.3/A$ to $25/A$, and $h = 25/A$ for \code{poisson}, whose hotspot severity is insensitive to $h$ over that range.
 All time fields are initialized as linear ramps from the bottom of the design volume to the top (\autoref{fig:tf_time_init}), to make the results more comparable to a full STTO run where the geometry is not known a priori.
 
 \begin{figure}[ht!]
