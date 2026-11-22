@@ -575,34 +575,11 @@ The interior values solve
 \]
 with $\mathbf{K}$ assembled from $\gamma_e = \chi_e$ and the scalar Q4 element matrix $\mathbf{k}_t$ for unit diffusivity.
 This is \autoref{sec:adjoint} with $\mathbf{f} = -\mathbf{K}_{IB}\mathbf{t}_B$, which also depends on $\chi$.
-Solving $\mathbf{K}_{II}\bm{\psi}_I = \partial\mathcal{L}/\partial\mathbf{t}_I$ and setting $\bm{\psi}_B = 0$, the sensitivities of a scalar $\mathcal{L}(\mathbf{t}_r)$ are
-\[
-    \frac{\partial \mathcal{L}}{\partial \chi_e} = -\bm{\psi}_e^T \mathbf{k}_t \mathbf{t}_{r,e},
-    \qquad
-    \frac{\partial \mathcal{L}}{\partial \mathbf{t}_B} = \left.\frac{\partial \mathcal{L}}{\partial \mathbf{t}_B}\right|_{\text{explicit}} - \mathbf{K}_{BI}\bm{\psi}_I,
-\]
-where $\mathbf{t}_{r,e}$ includes the element's boundary values, and the explicit term is the direct dependence of $\mathcal{L}$ on the boundary values of $t_r$.
-The second term is the flux response: raising $b$ at a boundary node changes $t_r$ in the interior in proportion to the adjoint near that node.
-
-The design variables then enter through
-\[
-    \frac{\partial \chi_e}{\partial \mu_e} = \chi_e \ln C,
-    \qquad
-    \frac{\partial \chi_e}{\partial \rho_e} =
-    \begin{cases}
-        a \chi_e / \rho_e & \rho_e^a > 10^{-5} \\
-        0                 & \text{otherwise}
-    \end{cases}
-\]
-so $\partial\mathcal{L}/\partial\mu_e = -\chi_e \ln C \bm{\psi}_e^T \mathbf{k}_t \mathbf{t}_{r,e}$ is a relative change in $\chi_e$, of the same scale at any value of $\chi_e$.
-The boundary filter is linear, so $\partial\mathcal{L}/\partial b_r$ is its transpose applied to $\partial\mathcal{L}/\partial b$; the sign-flipped reflection near the build plate makes the reflected weights enter with a negative sign.
-
-The scale $t_{max}$ is treated as a constant when differentiating, so $\partial t / \partial t_r = 1 / t_{max}$.
-Its true derivative is concentrated on the single element attaining the maximum, and changes discontinuously as that element changes.
 
 \subsection{Modified gradients}
-The objective's sensitivities depart from its exact gradient in two places:
+The objective's sensitivities depart from its exact gradient in three places:
 \begin{itemize}
+    \item The scale $t_{max}$ is treated as a constant, so $\partial t / \partial t_r = 1 / t_{max}$. Its true derivative is concentrated on the single element attaining the maximum, and changes discontinuously as that element changes.
     \item The hotspot severity term $w_S S$ contributes only to the sensitivities of $\mu$ and $b_r$; its sensitivity to $\rho_d$, including through $\chi$, is dropped.
     \item The calibration term $\delta_S$ depends on the severities but is treated as a constant, so the sensitivity of $S$ to each element's severity is the softmax weight
           \[
