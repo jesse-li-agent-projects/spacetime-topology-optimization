@@ -71,7 +71,7 @@
 \title{Internal Research Project: Space-time topology optimization for overheating prevention in metal additive manufacturing}
 
 \author{Jesse Li (6399053)}
-\date{2026}
+\date{November 2026}
 
 
 \begin{document}
@@ -90,7 +90,7 @@ Moreover, by using a topology optimization formulation that is aware of the fabr
 Wang et al. \cite{wang2020spacetime} introduce space-time topology optimization (STTO), which simultaneously optimizes a density field (defining the part geometry) and a time field (defining the fabrication sequence), and use it to minimize compliance of intermediate structures as well as the final structure.
 \cite{das2023thesis} introduces a physically-motivated geometric method to efficiently estimate overheating severity, including a simplified approach suitable for STTO, and designs parts subject to a maximum overheating constraint.
 % Note: Manav's approach uses direct time formulation
-\todo{Should I be citing Manav's thesis, which already has an early STTO formulation? Or Manav's paper, which just focuses on TO with planar fabrication?}
+% \todo{Should I be citing Manav's thesis, which already has an early STTO formulation? Or Manav's paper, which just focuses on TO with planar fabrication?}
 
 A key requirement for physically realizable time fields is that they have no interior local minima or maxima.
 A local minimum in the time field corresponds to unsupported material, while a local maximum corresponds to fully surrounded material that cannot be physically accessed for material deposition.
@@ -555,8 +555,8 @@ the sensitivities are
     \label{eqn:adjoint}
 \end{equation}
 where $\bm{\psi}_e$ and $\mathbf{u}_e$ are the element vectors.
-As $\mathbf{K}$ is symmetric, the adjoint solve reuses the forward solve's matrix and multigrid preconditioner.
-It is warm-started from the multiple of $\mathbf{u}$ closest to $\bm{\psi}$ in the least-squares sense, $\bm{\psi}_0 = \mathbf{u} \left(\mathbf{u}^T \partial\mathcal{L}/\partial\mathbf{u}\right) / \left(\mathbf{u}^T\mathbf{f}\right)$, which is exact for compliance.
+% As $\mathbf{K}$ is symmetric, the adjoint solve reuses the forward solve's matrix and multigrid preconditioner.
+% It is warm-started from the multiple of $\mathbf{u}$ closest to $\bm{\psi}$ in the least-squares sense, $\bm{\psi}_0 = \mathbf{u} \left(\mathbf{u}^T \partial\mathcal{L}/\partial\mathbf{u}\right) / \left(\mathbf{u}^T\mathbf{f}\right)$, which is exact for compliance.
 
 \subsection{Compliance}
 For compliance, $\mathcal{L} = c = \mathbf{f}^T\mathbf{U}$, so $\partial c / \partial \mathbf{U} = \mathbf{f}$ and the problem is self-adjoint: $\bm{\psi} = \mathbf{U}$, and the adjoint solve converges at its warm start without any iterations.
